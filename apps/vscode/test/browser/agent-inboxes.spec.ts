@@ -118,7 +118,7 @@ test("the inspector reads host-bound inboxes and keeps peer markup inert", async
   await expect(inbox.locator("article")).toHaveCount(1);
   await expect(inbox.locator("pre")).toHaveText("<script>peerText()</script>");
   await expect(inbox.locator("script, img, a")).toHaveCount(0);
-  await expect(inbox).toContainText("Included in prepared turn 2");
+  await expect(inbox).toContainText("Included · turn 2");
   await inbox.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(inbox.locator("article")).toHaveCount(1);
   const actions = await page.evaluate(

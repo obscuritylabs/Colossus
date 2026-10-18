@@ -11,7 +11,7 @@ import {
   IconArrowsMaximize,
   IconArrowsMinimize,
   IconExternalLink,
-  IconWorld,
+  IconBrowser,
   IconLoader2,
   IconPlus,
   IconRefresh,
@@ -204,7 +204,7 @@ export function BrowserPane({
         <div className="browser-tabs" role="group" aria-label="Browser tabs">
           {snapshot.tabs.length === 0 ? (
             <span className="browser-tab-placeholder">
-              <IconWorld size={15} aria-hidden="true" />
+              <IconBrowser size={15} aria-hidden="true" />
               Browser
             </span>
           ) : null}
@@ -227,7 +227,7 @@ export function BrowserPane({
                     aria-hidden="true"
                   />
                 ) : (
-                  <IconWorld size={14} aria-hidden="true" />
+                  <IconBrowser size={14} aria-hidden="true" />
                 )}
                 <span>{tab.title || "New tab"}</span>
               </button>
@@ -363,10 +363,12 @@ export function BrowserPane({
             className={`browser-empty${import.meta.env.DEV && fixture && active?.url && !active.error ? " browser-fixture-page" : ""}`}
             role={active?.error ? "alert" : undefined}
           >
-            <IconWorld size={32} />
+            <IconBrowser size={32} />
             <h3>
               {active?.error
-                ? "Unable to display this page"
+                ? readOnly
+                  ? "Agent browser unavailable"
+                  : "Unable to display this page"
                 : !active?.url
                   ? "Browse beside your work"
                   : import.meta.env.DEV
@@ -374,7 +376,9 @@ export function BrowserPane({
                     : ""}
             </h3>
             <p>
-              {active?.error ||
+              {(active?.error && readOnly
+                ? "The agent's browser cannot be displayed. Open a fresh copy of this page to continue browsing."
+                : active?.error) ||
                 (!active?.url
                   ? "Open a website or local preview in the address bar."
                   : import.meta.env.DEV
@@ -386,10 +390,14 @@ export function BrowserPane({
                 className="button secondary"
                 type="button"
                 onClick={() =>
-                  void command({ type: "reload", tabId: active.id })
+                  void command(
+                    readOnly
+                      ? { type: "new", url: active.url }
+                      : { type: "reload", tabId: active.id },
+                  )
                 }
               >
-                Retry
+                {readOnly ? "Open page in new tab" : "Retry"}
               </button>
             ) : (
               <span>

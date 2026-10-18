@@ -2825,30 +2825,51 @@ export function ManagedSettingsPane({
     setTelemetryEditor(null);
   }
 
-  async function createCredential() {
-    if (busy || !credentialLabel.trim()) return false;
+  async function createCredential(forProvider?: ProviderEditorDraft) {
+    const label = forProvider
+      ? `${forProvider.label.trim() || "Provider"} API key`
+      : credentialLabel.trim();
+    if (busy || !label) return false;
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
-      label: credentialLabel.trim(),
-      kind: credentialKind,
+      label,
+      kind: forProvider ? ("api_key" as const) : credentialKind,
+    };
+    const previousIds = new Set(
+      snapshot.globalConfiguration.credentials.map(({ id }) => id),
+    );
+    let createdId: string | undefined;
+    const rememberCredential = (next: ManagedSettingsSnapshot) => {
+      createdId = next.globalConfiguration.credentials.find(
+        ({ id }) => !previousIds.has(id),
+      )?.id;
+      return next;
     };
     const saved = await perform(
-      () => createManagedCredential(request),
+      async () => rememberCredential(await createManagedCredential(request)),
       () =>
-        fixtureRevision((draft) => {
-          const id = crypto.randomUUID();
-          draft.globalConfiguration.credentials.push({
-            id,
-            label: request.label,
-            kind: request.kind,
-            backend: "desktop",
-            createdAtMs: Date.now(),
-          });
-          draft.credentialAvailability[id] = "available";
-        }),
+        rememberCredential(
+          fixtureRevision((draft) => {
+            const id = crypto.randomUUID();
+            draft.globalConfiguration.credentials.push({
+              id,
+              label: request.label,
+              kind: request.kind,
+              backend: "desktop",
+              createdAtMs: Date.now(),
+            });
+            draft.credentialAvailability[id] = "available";
+          }),
+        ),
       "Credential stored securely.",
     );
     if (saved) setCredentialLabel("");
+    if (saved && forProvider && createdId) {
+      const credentialId = createdId;
+      setProviderEditor((current) =>
+        current === forProvider ? { ...current, credentialId } : current,
+      );
+    }
     return saved;
   }
 
@@ -3123,6 +3144,9 @@ export function ManagedSettingsPane({
             providerEditor={providerEditor}
             setProviderEditor={setProviderEditor}
             onSaveProvider={() => void saveProvider()}
+            onAddProviderCredential={() =>
+              providerEditor && void createCredential(providerEditor)
+            }
             onDeleteCatalogEntry={(kind, resourceId, trigger) => {
               setFailure("");
               catalogDeleteTrigger.current = trigger;
@@ -3337,6 +3361,7 @@ function GlobalSettingsBody({
   providerEditor,
   setProviderEditor,
   onSaveProvider,
+  onAddProviderCredential,
   modelEditor,
   setModelEditor,
   onSaveModel,
@@ -3394,6 +3419,7 @@ function GlobalSettingsBody({
   providerEditor: ProviderEditorDraft | null;
   setProviderEditor: (draft: ProviderEditorDraft | null) => void;
   onSaveProvider: () => void;
+  onAddProviderCredential: () => void;
   modelEditor: ModelEditorDraft | null;
   setModelEditor: (draft: ModelEditorDraft | null) => void;
   onSaveModel: () => void;
@@ -4163,7 +4189,7 @@ function GlobalSettingsBody({
                       ? "Credential saved"
                       : provider.credentialRequired
                         ? "Needs API key"
-                        : "No key required"}
+                        : "No credential selected"}
                 </>
               ),
               usage: `${models.length} ${models.length === 1 ? "model" : "models"}`,
@@ -4195,7 +4221,7 @@ function GlobalSettingsBody({
                               ? "Credential unavailable"
                               : provider.credentialRequired
                                 ? "Needs API key"
-                                : "No key required"))}
+                                : "No credential selected"))}
                       </dd>
                       <dt>Request timeout</dt>
                       <dd>
@@ -4253,6 +4279,7 @@ function GlobalSettingsBody({
               onChange={setProviderEditor}
               onCancel={() => setProviderEditor(null)}
               onSave={onSaveProvider}
+              onAddCredential={onAddProviderCredential}
             />
           ) : null}
         </CatalogInventory>
@@ -6928,6 +6955,7 @@ function ProviderEditor({
   onChange,
   onCancel,
   onSave,
+  onAddCredential,
 }: {
   draft: ProviderEditorDraft;
   credentials: ManagedSettingsSnapshot["globalConfiguration"]["credentials"];
@@ -6935,6 +6963,7 @@ function ProviderEditor({
   onChange: (draft: ProviderEditorDraft) => void;
   onCancel: () => void;
   onSave: () => void;
+  onAddCredential: () => void;
 }) {
   const [readingIcon, setReadingIcon] = useState(false);
   const busy = externalBusy || readingIcon;
@@ -7047,6 +7076,7 @@ function ProviderEditor({
               label: draft.label || preset.label,
               profile: draft.profile || preset.id,
               credentialId: "",
+              credentialRequired: Boolean(preset.credentialEnv),
             })
           }
         />
@@ -7103,37 +7133,57 @@ function ProviderEditor({
           <p>Choose a saved credential when this provider requires one.</p>
         </div>
         <div className="provider-auth-grid">
-          <label>
-            <span>Credential reference</span>
-            <DropdownSelect
-              value={codex ? "" : draft.credentialId}
-              disabled={busy || codex}
-              aria-describedby="provider-credential-help"
-              onChange={(event) =>
-                onChange({ ...draft, credentialId: event.target.value })
-              }
-            >
-              <option value="">
-                {draft.credentialRequired
-                  ? "Add API key later"
-                  : "No API key required"}
-              </option>
-              {credentials.map((credential) => (
-                <option key={credential.id} value={credential.id}>
-                  {credential.label}
+          <div className="provider-credential-control">
+            <label>
+              <span>Credential reference</span>
+              <DropdownSelect
+                value={codex ? "" : draft.credentialId}
+                disabled={busy || codex}
+                aria-describedby="provider-credential-help"
+                onChange={(event) =>
+                  onChange({ ...draft, credentialId: event.target.value })
+                }
+              >
+                <option value="">
+                  {codex
+                    ? "Codex account"
+                    : draft.credentialRequired
+                      ? "Add API key later"
+                      : "No API key selected"}
                 </option>
-              ))}
-            </DropdownSelect>
-            <small id="provider-credential-help">
-              {codex
-                ? "Uses your signed-in Codex account instead."
-                : "The credential value stays in secure system storage."}
-            </small>
-          </label>
+                {credentials.map((credential) => (
+                  <option key={credential.id} value={credential.id}>
+                    {credential.label}
+                  </option>
+                ))}
+              </DropdownSelect>
+              <small id="provider-credential-help">
+                {codex
+                  ? "Uses your signed-in Codex account instead."
+                  : "The credential value stays in secure system storage."}
+              </small>
+            </label>
+            {!codex && (
+              <button
+                className="button secondary"
+                type="button"
+                disabled={busy}
+                onClick={onAddCredential}
+              >
+                <IconKey size={16} aria-hidden="true" /> Add API key securely
+              </button>
+            )}
+          </div>
           <div className="provider-auth-note">
             <IconShield size={18} aria-hidden="true" />
             <span>
-              <strong>{codex ? "Codex account" : "Stored securely"}</strong>
+              <strong>
+                {codex
+                  ? "Codex account"
+                  : draft.credentialId
+                    ? "Stored securely"
+                    : "Connect an API key"}
+              </strong>
               <small>
                 {codex
                   ? "Uses your existing Codex subscription sign-in."

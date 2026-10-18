@@ -34,8 +34,11 @@ impl PresentationSurface {
                 let result = (|| {
                     let mut probe = ffi::WindowsScreen::default();
                     // SAFETY: live opaque identity on its UI thread and correctly sized output.
-                    if unsafe { ffi::colossus_presenter_screen_probe(handle, &raw mut probe) } != 0
-                    {
+                    let status = unsafe {
+                        ffi::colossus_presenter_screen_probe(handle, &raw mut probe)
+                    };
+                    if status != 0 {
+                        eprintln!("EVIDENCE Windows screen probe failed status={status}");
                         return Err(BrowserError::Unavailable);
                     }
                     let bytes =
@@ -47,7 +50,7 @@ impl PresentationSurface {
                             .ok_or(BrowserError::Unavailable)?;
                     let mut pixels = vec![0; bytes];
                     // SAFETY: bounded owned output and exact dimensions just measured by Windows.
-                    if unsafe {
+                    let status = unsafe {
                         ffi::colossus_presenter_screen_capture(
                             handle,
                             probe.width,
@@ -55,8 +58,12 @@ impl PresentationSurface {
                             pixels.as_mut_ptr(),
                             pixels.len(),
                         )
-                    } != 0
-                    {
+                    };
+                    if status != 0 {
+                        eprintln!(
+                            "EVIDENCE Windows screen capture failed status={status} foreground={} visible={} hit_test={} width={} height={}",
+                            probe.foreground, probe.visible, probe.hit_test, probe.width, probe.height
+                        );
                         return Err(BrowserError::Unavailable);
                     }
                     Ok(WindowsScreenEvidence {

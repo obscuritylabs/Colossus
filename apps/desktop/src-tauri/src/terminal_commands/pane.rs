@@ -1,7 +1,11 @@
 //! Main may position a terminal view; only the terminal document can control PTYs.
 use super::{TERMINAL_WEBVIEW, shell_terminal_workspace, terminal_navigation_allowed};
 use crate::{
-    browser::{commands::require_controller, dto::BrowserRect, viewport::valid_rect},
+    browser::{
+        commands::require_controller,
+        dto::BrowserRect,
+        viewport::{valid_rect, window_can_present},
+    },
     dto::{CommandErrorDto, ShowTerminalInput},
     state::AppState,
     terminal::{TerminalError, TerminalKind},
@@ -206,9 +210,7 @@ pub(crate) async fn terminal_pane_viewport(
 ) -> Result<(), CommandErrorDto> {
     require_controller(&caller)?;
     let window = app.get_window("main").ok_or_else(unavailable)?;
-    let active = colossus_native_browser::is_active(&caller)
-        .await
-        .unwrap_or(false);
+    let visible_window = window_can_present(&window);
     let size = window
         .inner_size()
         .map_err(|_| unavailable())?
@@ -223,7 +225,7 @@ pub(crate) async fn terminal_pane_viewport(
     if view.window().label() != "main" {
         return Err(unavailable());
     }
-    let visible = active
+    let visible = visible_window
         && data.scope == scope
         && state.terminal_enabled()
         && state.terminal_context_is_current(data.context);

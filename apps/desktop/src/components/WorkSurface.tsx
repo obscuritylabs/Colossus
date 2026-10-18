@@ -5,7 +5,7 @@ import {
   IconFiles,
   IconArrowsMaximize,
   IconArrowsMinimize,
-  IconWorld,
+  IconBrowser,
   IconFolderOpen,
   IconTerminal2,
   IconGitCompare,
@@ -988,7 +988,9 @@ export function WorkSurface({
   }
 
   const composerVisible =
-    sessionWorkspaceView !== "topology" && sessionWorkspaceView !== "activity";
+    sessionWorkspaceView !== "topology" &&
+    sessionWorkspaceView !== "activity" &&
+    sessionWorkspaceView !== "inboxes";
   const gitControl = git.available ? (
     <span className="composer-git-control" ref={gitTriggerRef}>
       <GitIndicator
@@ -1018,7 +1020,7 @@ export function WorkSurface({
         : browser.loading
           ? "Checking browser availability…"
           : browser.error || "Browser preview is not enabled in this build",
-      icon: IconWorld,
+      icon: IconBrowser,
       disabled: !browser.snapshot.available,
     },
     ...(shellScope
@@ -1172,7 +1174,7 @@ export function WorkSurface({
                   aria-expanded={activeDrawer === "browser"}
                   onClick={() => toggleDrawer("browser")}
                 >
-                  <IconWorld size={18} aria-hidden="true" />
+                  <IconBrowser size={18} aria-hidden="true" />
                 </button>
               ) : null}
               {browserScope &&
@@ -1265,7 +1267,7 @@ export function WorkSurface({
         }
       >
         <section
-          className={`work-thread${sessionWorkspaceView === "topology" ? " is-topology-view" : ""}${sessionWorkspaceView === "activity" ? " is-activity-view" : ""}`}
+          className={`work-thread${sessionWorkspaceView === "topology" ? " is-topology-view" : ""}${sessionWorkspaceView === "activity" ? " is-activity-view" : ""}${sessionWorkspaceView === "inboxes" ? " is-inboxes-view" : ""}`}
           aria-label="Work conversation"
         >
           <div className="work-feed-frame">

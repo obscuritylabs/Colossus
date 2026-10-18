@@ -263,7 +263,8 @@ impl Drop for ClientOwner {
     }
 }
 
-/// Native-only private client. Dropped dispatched callers close the channel and revoke input.
+/// Native-only private client. Dropped effects revoke input; abandoned reads drain
+/// their authenticated replies within the original deadline to preserve framing.
 #[derive(Clone)]
 pub struct PresentationClient(Arc<ClientOwner>);
 impl PresentationClient {
@@ -302,6 +303,8 @@ impl PresentationClient {
                     continue;
                 }
                 let read_only_frame = matches!(&call.command, PresentationCommand::Poll { .. });
+                let read_only =
+                    read_only_frame || matches!(&call.command, PresentationCommand::Observe { .. });
                 let budget = if read_only_frame {
                     FRAME_OPERATION_TIMEOUT
                 } else {
@@ -373,7 +376,12 @@ impl PresentationClient {
                     Ok((reply, frame))
                 };
                 let result = tokio::select! {
-                    _ = call.response.closed() => break,
+                    // A UI snapshot can expire while Observe is already dispatched,
+                    // or while a frame is being transferred. Neither read changes
+                    // authority. Finish validating its bounded reply before taking
+                    // the next call; abandoning it mid-frame would desynchronize the
+                    // stream and unnecessarily kill an otherwise healthy viewer.
+                    _ = call.response.closed(), if !read_only => break,
                     result = tokio::time::timeout(budget, operation) => match result {
                         Ok(Ok(reply)) => Ok(reply),
                         // Poll has no human effect. Preserve a verified parser's

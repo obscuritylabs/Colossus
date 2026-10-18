@@ -22,20 +22,24 @@ export function AgentInboxesView({
     : currentRunId;
   return (
     <>
-      <label className="agent-inbox">
-        Execution
-        <DropdownSelect
-          aria-label="Execution"
-          value={selected}
-          onChange={(event) => setRunId(event.target.value)}
-        >
-          {views.map((view) => (
-            <option key={view.run.runId} value={view.run.runId}>
-              {view.run.runId} · {view.run.status}
-            </option>
-          ))}
-        </DropdownSelect>
-      </label>
+      {views.length > 1 && (
+        <label className="agent-inbox-scope">
+          Execution
+          <DropdownSelect
+            aria-label="Execution"
+            value={selected}
+            onChange={(event) => setRunId(event.target.value)}
+          >
+            {views.map((view) => (
+              <option key={view.run.runId} value={view.run.runId}>
+                {view.run.title || "Execution"} ·{" "}
+                {new Date(view.run.createdAt).toLocaleString()} ·{" "}
+                {view.run.status}
+              </option>
+            ))}
+          </DropdownSelect>
+        </label>
+      )}
       <AgentInboxInspector
         rootRunId={selected}
         available={inbox?.available ?? false}

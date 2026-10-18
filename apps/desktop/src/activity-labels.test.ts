@@ -12,6 +12,19 @@ function activity(
 }
 
 describe("activity labels", () => {
+  it("identifies browser actions separately from terminal commands", () => {
+    for (const tool of [
+      "browser.snapshot",
+      "browser.back",
+      "browser.cdp",
+      "browser.close",
+    ]) {
+      expect(presentToolActivity(activity(tool)).kind).toBe("browser");
+    }
+    expect(presentToolActivity(activity("command.run")).kind).not.toBe(
+      "browser",
+    );
+  });
   it("names filesystem work from released structured input", () => {
     expect(
       presentToolActivity(

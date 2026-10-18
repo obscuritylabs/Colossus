@@ -1,10 +1,28 @@
 .agent-inbox {
-  padding: 1rem;
+  padding: clamp(1rem, 3vw, 1.75rem);
   min-width: 0;
   color: var(--text);
   font-size: var(--font-size-body);
   font-family: var(--font-sans);
   line-height: var(--line-height-body);
+}
+.agent-inbox-scope {
+  display: grid;
+  gap: 0.4rem;
+  padding: 1rem 1.75rem 0;
+  font-size: var(--font-size-body-sm);
+  color: var(--muted);
+}
+.agent-inbox-heading {
+  align-items: flex-start;
+  margin-bottom: 1.25rem;
+}
+.agent-inbox-heading > div {
+  flex: 1;
+  min-width: 12rem;
+}
+.agent-inbox-heading .agent-inbox-help {
+  margin: 0.35rem 0 0;
 }
 .agent-inbox-heading,
 .agent-inbox-message-heading {
@@ -21,10 +39,39 @@
 .agent-inbox-help,
 .agent-inbox-meta {
   color: var(--muted);
+  font-size: var(--font-size-body-sm);
+}
+.agent-inbox-recipient {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 1rem;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.agent-inbox-recipient > label {
+  flex: 1;
+  min-width: min(100%, 14rem);
+}
+.agent-inbox-status,
+.agent-inbox-results {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+  min-height: var(--control-height-compact);
+}
+.agent-inbox-results {
+  justify-content: space-between;
+  margin-top: 1rem;
 }
 .agent-inbox-controls {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
   gap: 0.75rem;
   margin-block: 1rem;
 }
@@ -32,6 +79,67 @@
   display: grid;
   gap: 0.4rem;
   min-width: 0;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+}
+.agent-inbox-search {
+  position: relative;
+  min-width: 0;
+}
+.agent-inbox-search > svg {
+  position: absolute;
+  left: 0.65rem;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.agent-inbox-search input {
+  padding-left: 2rem;
+  width: 100%;
+}
+.agent-inbox-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+}
+.agent-inbox-badge[data-state="open"],
+.agent-inbox-badge[data-state="included_in_turn"] {
+  color: var(--green-text);
+  background: var(--green-soft);
+  border-color: var(--green-border);
+}
+.agent-inbox-badge[data-state="accepted"] {
+  color: var(--amber-text);
+  background: var(--amber-soft);
+  border-color: var(--amber-border);
+}
+.agent-inbox-badge[data-state="not_delivered"] {
+  color: var(--red-text);
+  background: var(--red-soft);
+  border-color: var(--red-border);
+}
+.agent-inbox-empty {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 0.5rem;
+  padding: 2.5rem 1rem;
+  color: var(--muted);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  margin-block: 1rem;
+}
+.agent-inbox-empty strong {
+  color: var(--text);
+}
+.agent-inbox-empty p {
+  margin: 0;
 }
 .agent-inbox summary:focus-visible {
   outline: 2px solid var(--blue);
@@ -43,12 +151,29 @@
   display: grid;
   gap: 0.75rem;
 }
-.agent-inbox article,
-.agent-inbox-details {
-  padding: 0.75rem;
+.agent-inbox article {
+  padding: 1rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+}
+.agent-inbox-details {
+  margin-top: 0.75rem;
+}
+.agent-inbox article details {
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border);
+}
+.agent-inbox article summary,
+.agent-inbox-details summary {
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+}
+.agent-inbox-meta {
+  margin: 0.25rem 0 0;
+}
+.agent-inbox-message-heading strong {
+  overflow-wrap: anywhere;
 }
 .agent-inbox pre {
   font: inherit;
@@ -71,4 +196,15 @@
 }
 .agent-inbox summary {
   cursor: pointer;
+}
+@media (max-width: 700px) {
+  .agent-inbox-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .agent-inbox dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .agent-inbox dd {
+    margin-bottom: 0.5rem;
+  }
 }

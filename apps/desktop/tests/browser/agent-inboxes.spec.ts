@@ -48,7 +48,35 @@ test("inboxes retain receipts, page in order, and display peer text without exec
   await recipient.focus();
   await expect(recipient).toBeFocused();
   await inbox.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(inbox).toContainText("No messages have been accepted");
+  await expect(recipient).toContainText("attempt 2");
+});
+
+test("inbox has room to read while approvals wait and filters can be cleared", async ({
+  page,
+}) => {
+  await open(page);
+  const inbox = page.getByRole("region", {
+    name: "Agent inboxes",
+    exact: true,
+  });
+  await expect(page.locator(".work-composer-dock")).toHaveCount(0);
+  await expect(
+    inbox.getByRole("heading", { name: "Agent inboxes" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("combobox", { name: "Execution", exact: true }),
+  ).toHaveCount(0);
+  await inbox
+    .getByRole("textbox", { name: "Search loaded messages" })
+    .fill("missing phrase");
+  await expect(inbox).toContainText("No matching messages");
+  await inbox.getByRole("button", { name: "Clear filters" }).click();
   await expect(inbox.locator("article")).toHaveCount(16);
+  await page.getByRole("button", { name: "Conversation", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Apply the hardened bootstrap changes" }),
+  ).toBeVisible();
 });
 
 test("an unavailable connection is distinguishable from an empty inbox", async ({

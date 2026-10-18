@@ -10,6 +10,11 @@ use std::{
 };
 use tauri::{AppHandle, Manager as _};
 
+/// Display follows the window's visibility, while native input remains focus-bound.
+pub(crate) fn window_can_present(window: &tauri::Window) -> bool {
+    window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(true)
+}
+
 pub(crate) fn valid_rect(rect: BrowserRect, width: f64, height: f64) -> bool {
     [rect.x, rect.y, rect.width, rect.height, width, height]
         .iter()
@@ -32,12 +37,7 @@ impl BrowserManager {
         let window = app
             .get_window("main")
             .ok_or_else(|| error("The Desktop window has closed."))?;
-        let controller = app
-            .get_webview("main")
-            .ok_or_else(|| error("The Desktop controller has closed."))?;
-        let active = colossus_native_browser::is_active(&controller)
-            .await
-            .unwrap_or(false);
+        let visible_window = window_can_present(&window);
         let scale = window
             .scale_factor()
             .map_err(|_| error("The browser viewport is unavailable."))?;
@@ -62,7 +62,7 @@ impl BrowserManager {
                 .tabs
                 .iter_mut()
                 .map(|tab| {
-                    let visible = active
+                    let visible = visible_window
                         && tab.scope == scope
                         && Some(&tab.dto.id) == request.tab_id.as_ref()
                         && request.tab_id == selected
@@ -139,20 +139,6 @@ pub(crate) fn handle_window_event(window: &tauri::Window, event: &tauri::WindowE
     if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
         window.state::<AppState>().browser.hide_all();
         crate::terminal_commands::pane::hide(window.app_handle(), false);
-    } else if matches!(event, tauri::WindowEvent::Focused(false)) {
-        let app = window.app_handle().clone();
-        tauri::async_runtime::spawn(async move {
-            let active = match app.get_webview("main") {
-                Some(view) => colossus_native_browser::is_active(&view)
-                    .await
-                    .unwrap_or(false),
-                None => false,
-            };
-            if !active {
-                app.state::<AppState>().browser.hide_all();
-                crate::terminal_commands::pane::hide(&app, false);
-            }
-        });
     }
 }
 

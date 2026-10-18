@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { IconInbox, IconRefresh, IconSearch } from "@tabler/icons-react";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { DropdownSelect } from "./components/DropdownSelect";
@@ -57,12 +58,36 @@ export type AgentInboxProps = {
 function receiptLabel(message: InboxMessage) {
   switch (message.receipt.state) {
     case "accepted":
-      return "Accepted · awaiting input inclusion";
+      return "Waiting for next turn";
     case "included_in_turn":
-      return `Included in prepared turn ${message.receipt.turn}`;
+      return `Included · turn ${message.receipt.turn}`;
     case "not_delivered":
       return `Undelivered · ${message.receipt.reason.replaceAll("_", " ")}`;
   }
+}
+
+function participantLabel(item: InboxParticipant, items: InboxParticipant[]) {
+  if (!item.parent_id) return "Lead agent";
+  const jobs = [
+    ...new Set(
+      items
+        .filter((entry) => entry.parent_id)
+        .map((entry) => entry.subagent_id ?? entry.id),
+    ),
+  ];
+  return `Agent ${jobs.indexOf(item.subagent_id ?? item.id) + 1}`;
+}
+
+function receivedAt(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
 }
 
 /** Released records only. The host owns authentication, transport and capability decisions. */
@@ -85,16 +110,24 @@ export function AgentInboxInspector({
   const [revision, setRevision] = useState(0);
   const generation = useRef(0);
   const inboxGeneration = useRef(0);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const scope = useRef("");
   // Host callbacks may be recreated during rendering; only scope changes invalidate reads.
   const loaders = useRef({ loadParticipants, loadMessages });
   loaders.current = { loadParticipants, loadMessages };
   useEffect(() => {
     const current = ++generation.current;
-    setParticipants([]);
-    setSelected("");
-    setMessages([]);
-    setCursor(0);
-    setHasMore(false);
+    if (scope.current !== rootRunId || !available) {
+      scope.current = rootRunId;
+      setParticipants([]);
+      setSelected("");
+      setMessages([]);
+      setCursor(0);
+      setHasMore(false);
+      setQuery("");
+      setState("all");
+    }
     setError("");
     setParticipantsBusy(false);
     if (!available || !loaders.current.loadParticipants) return;
@@ -104,7 +137,11 @@ export function AgentInboxInspector({
       .then((items) => {
         if (generation.current !== current) return;
         setParticipants(items);
-        setSelected(items[0]?.id ?? "");
+        setSelected(
+          items.some((item) => item.id === selectedRef.current)
+            ? selectedRef.current
+            : (items[0]?.id ?? ""),
+        );
       })
       .catch(() => {
         if (generation.current === current)
@@ -175,16 +212,34 @@ export function AgentInboxInspector({
         .toLocaleLowerCase()
         .includes(needle),
   );
+  const filtered = query !== "" || state !== "all";
+  function senderLabel(message: InboxMessage) {
+    if (message.sender.kind === "application")
+      return message.sender.application_id === "desktop-managed-local"
+        ? "Desktop"
+        : message.sender.application_id;
+    const id = message.sender.participant_id;
+    const sender = participants.find((item) => item.id === id);
+    return sender
+      ? participantLabel(sender, participants)
+      : `Agent · ${id.slice(-8)}`;
+  }
   return (
     <section className="agent-inbox" aria-label="Agent inboxes">
       <div className="agent-inbox-heading">
-        <h2>Agent inboxes</h2>
+        <div>
+          <h2>Agent inboxes</h2>
+          <p className="agent-inbox-help">
+            Follow messages between agents and see when they reach a turn.
+          </p>
+        </div>
         <Button
           type="button"
+          variant="outline"
           disabled={!available || busy || participantsBusy}
           onClick={() => setRevision((value) => value + 1)}
         >
-          Refresh
+          <IconRefresh size={16} aria-hidden="true" /> Refresh
         </Button>
       </div>
       {!available ? (
@@ -194,11 +249,7 @@ export function AgentInboxInspector({
         </p>
       ) : (
         <>
-          <p className="agent-inbox-help">
-            Receipts distinguish accepted text from text included in a prepared
-            turn. Refresh to read the latest receipts.
-          </p>
-          <div className="agent-inbox-controls">
+          <div className="agent-inbox-recipient">
             <label>
               Recipient attempt
               <DropdownSelect
@@ -212,20 +263,35 @@ export function AgentInboxInspector({
                 )}
                 {participants.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.parent_id ? "Child" : "Root"} · attempt{" "}
-                    {item.generation} · {item.id} ·{" "}
-                    {item.open ? "open" : "closed"}
+                    {participantLabel(item, participants)} · attempt{" "}
+                    {item.generation} · {item.open ? "open" : "closed"}
                   </option>
                 ))}
               </DropdownSelect>
             </label>
+            {participant && (
+              <div className="agent-inbox-status" aria-label="Inbox status">
+                <span
+                  className="agent-inbox-badge"
+                  data-state={participant.open ? "open" : "closed"}
+                >
+                  {participant.open ? "Open" : "Closed"}
+                </span>
+                <span>{participant.pending_messages} pending</span>
+              </div>
+            )}
+          </div>
+          <div className="agent-inbox-controls">
             <label>
               Search loaded messages
-              <Input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Sender, message ID, or text"
-              />
+              <span className="agent-inbox-search">
+                <IconSearch size={16} aria-hidden="true" />
+                <Input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search messages…"
+                />
+              </span>
             </label>
             <label>
               Receipt
@@ -235,7 +301,7 @@ export function AgentInboxInspector({
                 onChange={(event) => setState(event.target.value)}
               >
                 <option value="all">All receipts</option>
-                <option value="accepted">Accepted</option>
+                <option value="accepted">Waiting for next turn</option>
                 <option value="included_in_turn">Included in a turn</option>
                 <option value="not_delivered">Undelivered</option>
               </DropdownSelect>
@@ -243,12 +309,7 @@ export function AgentInboxInspector({
           </div>
           {participant && (
             <details className="agent-inbox-details">
-              <summary>
-                {participant.open
-                  ? "Open"
-                  : `Closed · ${participant.closed_reason?.replaceAll("_", " ") ?? "finished"}`}{" "}
-                · {participant.pending_messages} pending
-              </summary>
+              <summary>Recipient details</summary>
               <dl>
                 <dt>Participant</dt>
                 <dd>{participant.id}</dd>
@@ -260,34 +321,76 @@ export function AgentInboxInspector({
                 <dd>{participant.session_id}</dd>
                 <dt>Created</dt>
                 <dd>{participant.created_at}</dd>
+                {!participant.open && (
+                  <>
+                    <dt>Closed</dt>
+                    <dd>
+                      {participant.closed_reason?.replaceAll("_", " ") ??
+                        "finished"}
+                    </dd>
+                  </>
+                )}
               </dl>
             </details>
           )}
           {error && <p role="alert">{error}</p>}
           {(busy || participantsBusy) && <p role="status">Loading inbox…</p>}
+          <div className="agent-inbox-results">
+            <span role="status">
+              {visible.length} {visible.length === 1 ? "message" : "messages"}
+              {filtered ? ` of ${messages.length} loaded` : " loaded"}
+            </span>
+            {filtered && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setQuery("");
+                  setState("all");
+                }}
+              >
+                Clear filters
+              </Button>
+            )}
+          </div>
           {!busy && !participantsBusy && !error && visible.length === 0 && (
-            <p>
-              {messages.length
-                ? "No loaded messages match these filters."
-                : "No messages have been accepted in this inbox."}
-            </p>
+            <div className="agent-inbox-empty">
+              <IconInbox size={28} stroke={1.5} aria-hidden="true" />
+              <strong>
+                {filtered
+                  ? "No matching messages"
+                  : participants.length
+                    ? "No messages yet"
+                    : "No agent inboxes yet"}
+              </strong>
+              <p>
+                {filtered
+                  ? "Try another search or clear the filters."
+                  : participants.length
+                    ? "No messages have been accepted in this inbox."
+                    : "Inboxes appear when agents join this execution."}
+              </p>
+            </div>
           )}
           <ol className="agent-inbox-messages">
             {visible.map((message) => (
               <li key={message.id}>
                 <article>
                   <div className="agent-inbox-message-heading">
-                    <strong>Message {message.sequence}</strong>
-                    <span>{receiptLabel(message)}</span>
+                    <strong>{senderLabel(message)}</strong>
+                    <span
+                      className="agent-inbox-badge"
+                      data-state={message.receipt.state}
+                    >
+                      {receiptLabel(message)}
+                    </span>
                   </div>
                   <p className="agent-inbox-meta">
-                    From{" "}
-                    {message.sender.kind === "participant"
-                      ? message.sender.participant_id
-                      : message.sender.application_id}{" "}
-                    ·{" "}
-                    <time dateTime={message.accepted_at}>
-                      {message.accepted_at}
+                    Message {message.sequence} ·{" "}
+                    <time
+                      dateTime={message.accepted_at}
+                      title={message.accepted_at}
+                    >
+                      {receivedAt(message.accepted_at)}
                     </time>
                   </p>
                   <pre>{message.text}</pre>
@@ -296,6 +399,12 @@ export function AgentInboxInspector({
                     <dl>
                       <dt>Message</dt>
                       <dd>{message.id}</dd>
+                      <dt>Sender</dt>
+                      <dd>
+                        {message.sender.kind === "participant"
+                          ? message.sender.participant_id
+                          : message.sender.application_id}
+                      </dd>
                       <dt>Recipient</dt>
                       <dd>{message.recipient_id}</dd>
                       {message.reply_to && (
@@ -325,6 +434,14 @@ export function AgentInboxInspector({
               `Showing messages ${messages[0]?.sequence}–${messages.at(-1)?.sequence}. `}
             Filters apply to the {messages.length} loaded messages.
           </p>
+          <details className="agent-inbox-help">
+            <summary>About delivery status</summary>
+            <p>
+              Waiting messages have been accepted. Included messages are part of
+              a prepared model turn; this does not confirm that the agent acted
+              on them. Refresh to read the latest receipts.
+            </p>
+          </details>
           {hasMore && (
             <Button type="button" disabled={busy} onClick={() => void more()}>
               Load more messages
