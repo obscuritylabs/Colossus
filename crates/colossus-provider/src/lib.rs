@@ -60,6 +60,7 @@ use tool_names::*;
 
 mod streaming;
 use streaming::*;
+mod stream_diagnostics;
 
 mod profile;
 pub use profile::*;

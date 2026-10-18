@@ -824,7 +824,10 @@ impl Runtime {
                     ProviderReadinessCheck {
                         name: "generation".into(),
                         status: "fail".into(),
-                        detail: format!("provider endpoint returned HTTP {}", diagnostic.status),
+                        detail: match colossus_provider::classify_response_diagnostic(&diagnostic) {
+                            Some(failure) if failure.http_status.is_none() => failure.to_string(),
+                            _ => format!("provider endpoint returned HTTP {}", diagnostic.status),
+                        },
                         provider_response: Some(diagnostic),
                     }
                 } else {

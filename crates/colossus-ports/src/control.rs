@@ -94,7 +94,7 @@ pub enum ModelProviderError {
     /// The display text remains body-free so durable errors and ordinary observers cannot
     /// disclose the diagnostic accidentally. Trusted local interfaces may inspect the typed
     /// value after the run has terminated.
-    #[error("provider turn failed: endpoint returned HTTP {}", diagnostic.status)]
+    #[error("provider turn failed: {}", response_diagnostic_message(.failure, .diagnostic))]
     ResponseDiagnostic {
         /// Safe classification of the explicitly released diagnostic, when recognized.
         failure: Option<colossus_contracts::ProviderFailure>,
@@ -107,6 +107,19 @@ pub enum ModelProviderError {
     /// The external outcome cannot be proven and must not be retried.
     #[error("provider outcome is unknown: {0}")]
     OutcomeUnknown(String),
+}
+
+fn response_diagnostic_message(
+    failure: &Option<colossus_contracts::ProviderFailure>,
+    diagnostic: &colossus_contracts::ProviderResponseDiagnostic,
+) -> String {
+    if let Some(failure) = failure
+        && failure.http_status.is_none()
+    {
+        failure.to_string()
+    } else {
+        format!("endpoint returned HTTP {}", diagnostic.status)
+    }
 }
 
 impl ModelProviderError {

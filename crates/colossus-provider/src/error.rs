@@ -53,13 +53,28 @@ impl From<url::ParseError> for ProviderError {
     }
 }
 
-/// Classify bounded HTTP evidence without releasing provider-controlled text.
+/// Classify bounded transport evidence without releasing provider-controlled text.
 ///
 /// Runtime composition also uses this after explicit diagnostic output has passed
-/// post-effect policy. Unknown or malformed codes remain ordinary HTTP failures.
+/// post-effect policy. Unknown stream errors remain categorical rejections;
+/// unknown HTTP error codes remain ordinary HTTP failures.
 pub fn classify_response_diagnostic(
     diagnostic: &ProviderResponseDiagnostic,
 ) -> Option<ProviderFailure> {
+    // A terminal event inside a successful HTTP stream is a logical provider
+    // rejection, not an HTTP error. The bounded diagnostic can contain a valid
+    // reduced error envelope even when its original event was truncated.
+    if (200..300).contains(&diagnostic.status)
+        && diagnostic.body_encoding == "utf8"
+        && diagnostic.body.len() <= super::MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES
+        && let Ok(value) = serde_json::from_str::<Value>(&diagnostic.body)
+        && super::stream_diagnostics::terminal_error_event(&value)
+    {
+        return Some(ProviderFailure {
+            reason: provider_failure_reason(&value).unwrap_or(ProviderFailureReason::Other),
+            http_status: None,
+        });
+    }
     let reason = match diagnostic.status {
         413 => Some(ProviderFailureReason::RequestTooLarge),
         _ if !diagnostic.body_truncated

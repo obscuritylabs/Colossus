@@ -78,13 +78,17 @@ turn:
 /provider diagnostics on
 ```
 
-If a provider returns a non-success HTTP response on any model turn, the TUI error card
-shows:
+If a provider returns a non-success HTTP response or a terminal error inside a streamed
+response on any model turn, the TUI error card shows:
 
 - the response status, content type, and up to 16 KiB of response body;
 - the offered provider-facing tool aliases as a compact list (for example,
   `filesystem_write` for canonical `filesystem.write`);
 - the exact provider-facing JSON request, including structured tool-call history.
+
+A streamed error can arrive after HTTP 200 and after partial text. HTTP 200 describes
+the transport response; the terminal event still rejects the model turn. In this case,
+the response body contains the bounded terminal error event rather than the full stream.
 
 The configured provider credential is redacted and the evidence must pass post-effect
 policy before display. The request can still contain user messages, session context, and
