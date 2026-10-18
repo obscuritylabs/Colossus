@@ -286,7 +286,14 @@ pub(super) async fn agent_click_indicator(
         tokio::time::sleep(Duration::from_millis(30)).await;
     };
     save(&marked, home, "windows-agent-cursor-foreground.png")?;
-    tokio::time::sleep(Duration::from_millis(2400)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let retained = view.acceptance_windows_screen().await?;
+    let index = cursor_edge(&retained)?;
+    ensure!(
+        retained.pixels.get(index..index + 4) == Some(&[0, 0, 0, 255]),
+        "agent cursor disappeared between actions before its eight-second deadline"
+    );
+    tokio::time::sleep(Duration::from_millis(5400)).await;
     let cleared = view
         .acceptance_windows_screen()
         .await

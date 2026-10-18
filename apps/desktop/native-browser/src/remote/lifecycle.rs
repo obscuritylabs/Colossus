@@ -34,6 +34,8 @@ pub(super) fn hide(owner: &Arc<Owner>) -> Result<(), BrowserError> {
 }
 pub(super) async fn close(owner: &Arc<Owner>) -> Result<(), BrowserError> {
     owner.closing.store(true, Ordering::Release);
+    #[cfg(windows)]
+    owner.completed.clear();
     hide(owner)?;
     let _operation = owner.operation.lock().await;
     let (surface, lease) = {

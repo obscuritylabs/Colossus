@@ -6,7 +6,7 @@ namespace colossus {
 bool AgentIndicator::Set(uint32_t kind, double x, double y, double left, double top,
                          double width, double height, Clock::time_point now, uint32_t ttl_ms) {
   if (kind == 0) { Clear(); return true; }
-  if (kind > 2 || width <= 0 || height <= 0 || !ttl_ms || ttl_ms > 2200) return false;
+  if (kind > 2 || width <= 0 || height <= 0 || !ttl_ms || ttl_ms > kMaxLifetimeMs) return false;
   for (double value : {x, y, left, top, width, height})
     if (!std::isfinite(value) || std::abs(value) > 1000000) return false;
   kind_ = kind; x_ = x; y_ = y; left_ = left; top_ = top;

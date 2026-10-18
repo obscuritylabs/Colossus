@@ -66,7 +66,8 @@ impl BrowserManager {
                         && tab.scope == scope
                         && Some(&tab.dto.id) == request.tab_id.as_ref()
                         && request.tab_id == selected
-                        && tab.dto.error.is_none();
+                        && tab.dto.error.is_none()
+                        && (tab.dto.control != "completed" || tab.dto.completed_snapshot);
                     let rect = request
                         .rect
                         .filter(|rect| visible && valid_rect(*rect, size.width, size.height));

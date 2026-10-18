@@ -8,6 +8,9 @@ use colossus_sdk::{GetRunRequest, RunStatus};
 use std::time::Duration;
 use tauri::{AppHandle, Manager as _};
 
+mod close_intent;
+mod completed;
+
 fn terminal(status: RunStatus) -> bool {
     matches!(
         status,
@@ -44,11 +47,21 @@ impl BrowserManager {
                 (
                     tab.dto.id.clone(),
                     tab.dto.error.as_deref() == Some(CRASHED_MESSAGE),
+                    tab.dto.control == "completed",
+                    tab.dto.session_id.clone(),
+                    tab.close_requested,
                 )
             });
-        let Some((id, crashed)) = existing else {
+        let Some((id, crashed, completed, session_id, close_requested)) = existing else {
             return Ok(true);
         };
+        if close_requested {
+            self.close(scope, &id).await?;
+            return Ok(false);
+        }
+        if completed {
+            return Ok(false);
+        }
         let state = app.state::<AppState>();
         let Some(target) = state.target(scope).await else {
             return Ok(true);
@@ -71,10 +84,17 @@ impl BrowserManager {
             return Ok(true);
         }
         if terminal(response.run.status) {
-            // Ending a viewer is distinct from claiming browser cleanup. Detach
-            // must acknowledge either an active writer's hidden view or Core's
-            // completed cleanup before any Desktop tab metadata is removed.
-            self.close(scope, &id).await?;
+            match close_intent::explicitly_closed(&target.client, &response.run, &session_id).await
+            {
+                Some(true) => self.close(scope, &id).await?,
+                closed => {
+                    // Unknown/over-budget close evidence retains only the URL
+                    // already displayed by Desktop, with a fresh-session path.
+                    // It cannot authorize a new private pixel copy.
+                    self.retain_completed_agent(scope, &id, closed == Some(false))
+                        .await?;
+                }
+            }
             self.lock()?.viewer_recoveries.remove(run_id);
             return Ok(false);
         }

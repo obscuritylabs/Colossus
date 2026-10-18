@@ -1725,15 +1725,87 @@ async fn exercise_owned(
             .await
             .map_err(|error| anyhow::anyhow!(error.message))?;
         #[cfg(feature = "windows-browser-development")]
-        ensure!(
+        {
+            let completed_view = {
+                let registry = state
+                    .browser
+                    .lock()
+                    .map_err(|error| anyhow::anyhow!(error.message))?;
+                ensure!(
+                    registry.tabs.len() == 1 && registry.selected.get(SPACE) == Some(&tab),
+                    "a completed run removed or replaced its selected Desktop tab"
+                );
+                let completed = registry
+                    .tabs
+                    .iter()
+                    .find(|entry| entry.dto.id == tab)
+                    .context("completed Desktop tab is missing")?;
+                ensure!(
+                    completed.dto.control == "completed"
+                        && completed.dto.completed_snapshot
+                        && completed.dto.page.url == format!("{}/agent", fixture.origin)
+                        && completed.dto.page.title == "Agent controlled page"
+                        && !completed.dto.page.loading
+                        && !completed.dto.page.can_go_back
+                        && !completed.dto.page.can_go_forward
+                        && completed.dto.error.is_none()
+                        && completed.dto.popup_url.is_none(),
+                    "completed tab lost its retained page or kept live navigation state"
+                );
+                ensure!(
+                    matches!(&completed.view, BrowserView::Snapshot(_))
+                        && !completed.view.human_control_available()
+                        && completed.view.contained_session_id().is_none(),
+                    "completed page retained native browser or human input authority"
+                );
+                completed.view.clone()
+            };
+            ensure!(
+                completed_view.inspect().await.is_err()
+                    && completed_view
+                        .control(colossus_native_browser::NavigationAction::Reload)
+                        .await
+                        .is_err()
+                    && completed_view
+                        .navigate(tauri::Url::parse(&format!("{}/first", fixture.origin))?)
+                        .is_err()
+                    && completed_view.handoff(&run.run_id).await.is_err(),
+                "completed snapshot admitted native observation, navigation, control or handoff"
+            );
+            state.select_target(None).await;
+            state.select_target(Some(SPACE.into())).await;
             state
                 .browser
-                .lock()
-                .map_err(|error| anyhow::anyhow!(error.message))?
-                .tabs
-                .is_empty(),
-            "a completed run left its viewer marked as a crashed tab"
-        );
+                .watch_agent(app, SPACE, &run.run_id, &conversation)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+            let selected = action(
+                app,
+                BrowserAction::Select {
+                    tab_id: tab.clone(),
+                },
+            )
+            .await?;
+            ensure!(
+                selected.tabs.len() == 1
+                    && selected.selected_tab_id.as_deref() == Some(tab.as_str())
+                    && selected.tabs[0].id == tab
+                    && selected.tabs[0].control == "completed"
+                    && selected.tabs[0].completed_snapshot
+                    && selected.tabs[0].error.is_none(),
+                "selection or context reconciliation removed the completed snapshot tab"
+            );
+            println!(
+                "PASS completed Core run retained its selected read-only page snapshot across context reconciliation without native browser authority"
+            );
+            action(
+                app,
+                BrowserAction::Close {
+                    tab_id: tab.clone(),
+                },
+            )
+            .await?;
+        }
     }
     if !close_after_completion() {
         #[cfg(windows)]
@@ -1833,7 +1905,7 @@ async fn exercise_owned(
     if close_after_completion() {
         #[cfg(feature = "windows-browser-development")]
         println!(
-            "PASS completed Core run automatically retired its viewer through acknowledged detach without a crashed tab"
+            "PASS explicit close removed the completed page snapshot after acknowledged native detach"
         );
         #[cfg(not(feature = "windows-browser-development"))]
         println!(

@@ -97,6 +97,22 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
         super::trace_frame_channel_failure("viewport_observe", error, observed_at.elapsed());
         presentation_error(error)
     })?;
+    #[cfg(windows)]
+    let page = crate::PageState {
+        url: state.url.clone(),
+        title: state.title.clone(),
+        loading: state.loading,
+        can_go_back: state.can_go_back,
+        can_go_forward: state.can_go_forward,
+    };
+    #[cfg(windows)]
+    if owner.read_only.load(Ordering::Acquire) && state.target == configure.target {
+        owner.completed.observed(lease, page.clone());
+    }
+    #[cfg(windows)]
+    if state.target != configure.target {
+        owner.completed.invalidate(lease);
+    }
     let ttl = remaining(owner, revision)
         .inspect_err(|error| trace_apply("viewport_ttl_after_observe", *error))?;
     if applied == Some(bounds)
@@ -139,6 +155,27 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
         .await
         .map_err(presentation_error)
         .inspect_err(|error| trace_apply("viewport_configure", *error))?;
+    let next = create_replacement(owner, revision, lease, bounds).await?;
+    let mut state = owner.state.lock().map_err(|_| BrowserError::Closed)?;
+    state.configure = configure;
+    state.lease = lease;
+    #[cfg(windows)]
+    if owner.read_only.load(Ordering::Acquire) {
+        owner.completed.observed(lease, page);
+    }
+    state.applied = (owner.revision.load(Ordering::Acquire) == revision).then_some(bounds);
+    state.surface = Some(Arc::new(next));
+    Ok(())
+}
+
+/// Initialize the replacement under the caller's viewport operation lock.
+/// All awaits preserve the original trusted heartbeat deadline.
+async fn create_replacement(
+    owner: &Arc<Owner>,
+    revision: u64,
+    lease: colossus_browser_presentation::Lease,
+    bounds: super::Bounds,
+) -> Result<crate::presentation::PresentationSurface, BrowserError> {
     let next = create_surface(
         &owner.window,
         &owner.client,
@@ -146,6 +183,8 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
         lease,
         owner.digest,
         !owner.read_only.load(Ordering::Acquire),
+        #[cfg(windows)]
+        &owner.completed,
     )
     .await
     .inspect_err(|error| trace_apply("viewport_create_surface", *error))?;
@@ -167,12 +206,7 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
         next.hide_confirmed().await?;
         lifecycle::hide_host(owner, lease).await?;
     }
-    let mut state = owner.state.lock().map_err(|_| BrowserError::Closed)?;
-    state.configure = configure;
-    state.lease = lease;
-    state.applied = (owner.revision.load(Ordering::Acquire) == revision).then_some(bounds);
-    state.surface = Some(Arc::new(next));
-    Ok(())
+    Ok(next)
 }
 fn set_native_bounds(
     surface: &crate::presentation::PresentationSurface,

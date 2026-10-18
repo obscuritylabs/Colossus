@@ -4,6 +4,10 @@ use super::{BrowserDriverControl, Host, Value, ffi, json};
 use colossus_browser_presentation::Lease;
 use std::time::{Duration, Instant};
 
+// Keep the last admitted target visible between tool calls without refreshing
+// its lifetime on observations or extending any control/presentation lease.
+const INDICATOR_TTL_MS: u32 = 8000;
+
 #[derive(Clone, Copy)]
 pub(super) struct Pending {
     tab: u64,
@@ -68,7 +72,7 @@ impl Host {
                 control_generation: self.presentation.control_generation,
                 geometry: self.presentation.geometry(),
                 indicator: *indicator,
-                expires: Instant::now() + Duration::from_millis(2200),
+                expires: Instant::now() + Duration::from_millis(u64::from(indicator.ttl_ms)),
             });
         }
         paint(native, document, indicator);
@@ -148,7 +152,7 @@ fn geometry(model: &Value, viewport: (u32, u32), kind: u32) -> Option<ffi::Agent
     }
     (right > left && bottom > top).then_some(ffi::AgentIndicator {
         kind,
-        ttl_ms: 2200,
+        ttl_ms: INDICATOR_TTL_MS,
         x,
         y,
         left,
@@ -181,10 +185,10 @@ mod tests {
             geometry: (832, 520, 1000),
             indicator: ffi::AgentIndicator {
                 kind: 1,
-                ttl_ms: 2200,
+                ttl_ms: INDICATOR_TTL_MS,
                 ..Default::default()
             },
-            expires: now + Duration::from_millis(2200),
+            expires: now + Duration::from_millis(u64::from(INDICATOR_TTL_MS)),
         };
         let recovered = Lease {
             viewport_generation: 4,
@@ -195,11 +199,11 @@ mod tests {
                 .replay(
                     recovered,
                     (832, 520, 1000),
-                    now + Duration::from_millis(900)
+                    now + Duration::from_millis(3000)
                 )
                 .unwrap()
                 .ttl_ms,
-            1300
+            5000
         );
         for changed in [
             Lease { tab: 2, ..lease },
@@ -225,7 +229,7 @@ mod tests {
                 .replay(
                     recovered,
                     (832, 520, 1000),
-                    now + Duration::from_millis(2200)
+                    now + Duration::from_millis(u64::from(INDICATOR_TTL_MS))
                 )
                 .is_none()
         );
@@ -238,6 +242,7 @@ mod tests {
             "border": [10, 20, 110, 20, 110, 60, 10, 60]
         }});
         let target = geometry(&model, (800, 600), 1).unwrap();
+        assert_eq!(target.ttl_ms, 8000);
         assert_eq!((target.x, target.y), (60.0, 40.0));
         assert_eq!(
             (target.left, target.top, target.width, target.height),

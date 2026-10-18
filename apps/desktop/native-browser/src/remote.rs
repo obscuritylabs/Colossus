@@ -62,6 +62,8 @@ struct Owner {
     updating: AtomicBool,
     read_only: AtomicBool,
     operation: tokio::sync::Mutex<()>,
+    #[cfg(windows)]
+    completed: Arc<crate::presentation::CompletedCache>,
 }
 
 // Source-only, closed-vocabulary attach evidence. These enum variants contain
@@ -306,18 +308,33 @@ impl RemoteSurface {
                 BrowserError::Closed
             })?;
         let (events, receiver) = mpsc::channel(input_queue::CAPACITY);
-        let surface = actor::create_surface(window, &client, &events, lease, digest, !read_only)
-            .await
-            .inspect_err(|failure| {
-                #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
-                trace_attach_failure(AttachFailure::NativeView(*failure));
-                #[cfg(not(all(
-                    target_os = "macos",
-                    feature = "native-test-driver",
-                    debug_assertions
-                )))]
-                let _ = failure;
-            })?;
+        #[cfg(windows)]
+        let completed = Arc::new(crate::presentation::CompletedCache::default());
+        #[cfg(windows)]
+        if read_only {
+            completed.activate(lease);
+        }
+        let surface = actor::create_surface(
+            window,
+            &client,
+            &events,
+            lease,
+            digest,
+            !read_only,
+            #[cfg(windows)]
+            &completed,
+        )
+        .await
+        .inspect_err(|failure| {
+            #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+            trace_attach_failure(AttachFailure::NativeView(*failure));
+            #[cfg(not(all(
+                target_os = "macos",
+                feature = "native-test-driver",
+                debug_assertions
+            )))]
+            let _ = failure;
+        })?;
         let viewport = configure.viewport_generation;
         let owner = Arc::new(Owner {
             window: window.clone(),
@@ -342,6 +359,8 @@ impl RemoteSurface {
             updating: AtomicBool::new(false),
             read_only: AtomicBool::new(read_only),
             operation: tokio::sync::Mutex::new(()),
+            #[cfg(windows)]
+            completed,
         });
         actor::start(&owner, receiver);
         pending.0.take();
@@ -467,6 +486,31 @@ impl RemoteSurface {
     #[must_use]
     pub fn human_control_available(&self) -> bool {
         !self.0.read_only.load(Ordering::Acquire)
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn completed_snapshot(
+        &self,
+    ) -> Result<Option<crate::presentation::CompletedSurface>, BrowserError> {
+        if !self.0.read_only.load(Ordering::Acquire) || self.0.closing.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        let lease = self.0.state.lock().map_err(|_| BrowserError::Closed)?.lease;
+        let snapshot = crate::presentation::CompletedSurface::from_cache(
+            &self.0.window,
+            &self.0.completed,
+            lease,
+        )
+        .await?;
+        if self.0.closing.load(Ordering::Acquire)
+            || !self.0.state.lock().is_ok_and(|state| state.lease == lease)
+        {
+            if let Some(snapshot) = snapshot {
+                snapshot.close().await?;
+            }
+            return Ok(None);
+        }
+        Ok(snapshot)
     }
 
     /// Canonical conversation retained by this exact native runtime admission.

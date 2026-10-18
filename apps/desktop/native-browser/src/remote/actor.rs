@@ -15,12 +15,13 @@ pub(super) async fn create_surface(
     lease: Lease,
     digest: [u8; 32],
     human_input: bool,
+    #[cfg(windows)] completed: &Arc<crate::presentation::CompletedCache>,
 ) -> Result<PresentationSurface, BrowserError> {
     let inputs = events.clone();
     let focuses = events.clone();
     let input_client = client.clone();
     let focus_client = client.clone();
-    PresentationSurface::create(
+    let surface = PresentationSurface::create(
         window,
         lease,
         digest,
@@ -47,7 +48,12 @@ pub(super) async fn create_surface(
             }
         },
     )
-    .await
+    .await?;
+    #[cfg(windows)]
+    if !human_input {
+        surface.retain_completed_in(Arc::clone(completed))?;
+    }
+    Ok(surface)
 }
 pub(super) fn start(owner: &Arc<Owner>, events: mpsc::Receiver<Event>) {
     start_events(owner, events);
@@ -253,11 +259,23 @@ pub(super) async fn inspect(owner: &Arc<Owner>) -> Result<PageState, BrowserErro
             | colossus_browser_presentation::PresentationError::Hidden => BrowserError::Stale,
             _ => BrowserError::Closed,
         })?;
-    Ok(PageState {
+    let page = PageState {
         url: state.url,
         title: state.title,
         loading: state.loading,
         can_go_back: state.can_go_back,
         can_go_forward: state.can_go_forward,
-    })
+    };
+    #[cfg(windows)]
+    if owner.read_only.load(Ordering::Acquire)
+        && let Ok(current) = owner.state.lock()
+        && current.lease == lease
+    {
+        if current.configure.target == state.target {
+            owner.completed.observed(lease, page.clone());
+        } else {
+            owner.completed.invalidate(lease);
+        }
+    }
+    Ok(page)
 }

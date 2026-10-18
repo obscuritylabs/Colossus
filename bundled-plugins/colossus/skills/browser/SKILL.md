@@ -48,7 +48,11 @@ Report a policy limitation accurately instead of repeatedly reloading the page.
 - Use browser upload/download tools for file transfers, respecting workspace
   permissions. `browser.evaluate` and `browser.cdp` are bounded read-only
   inspection tools, not alternate mutation or network channels.
-- Sessions are temporary. Do not promise persistent login, history, or reuse of
-  the user's personal browser. Run completion and cancellation close agent-owned
-  sessions. Capture a screenshot before finishing when the user needs a visual
-  record; a later human inspection requires a fresh session.
+- Leave the final page selected when finished so the user can inspect the result.
+  Use `browser.close` when the user requests closure or the task requires it;
+  do not close a session as routine end-of-task housekeeping.
+- Sessions are temporary. Run completion and cancellation clean up the live
+  agent-owned browser. Supported Desktop builds retain its last displayed view
+  for inspection; Continue browsing opens that address in a fresh human session.
+  Do not promise retained login, forms, history, or reuse of the user's personal
+  browser. Capture a screenshot when the user needs a shareable visual record.

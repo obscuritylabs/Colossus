@@ -1,8 +1,16 @@
 //! Trusted owned native pixel views for a separately contained offscreen host.
 //! This adapter does not grant browser authority or enable production automation.
 mod callbacks;
+#[cfg(windows)]
+mod completed;
+#[cfg(windows)]
+mod completed_cache;
 mod ffi;
 mod lifecycle;
+#[cfg(windows)]
+pub use completed::CompletedSurface;
+#[cfg(windows)]
+pub(crate) use completed_cache::CompletedCache;
 #[cfg(all(windows, feature = "native-test-driver"))]
 mod windows_acceptance;
 use crate::BrowserError;
@@ -30,6 +38,8 @@ struct Owner {
     focus: Box<dyn Fn(Lease, bool) + Send + Sync>,
     frames: Mutex<LatestFrames>,
     scheduled: AtomicBool,
+    #[cfg(windows)]
+    completed: Mutex<Option<Arc<CompletedCache>>>,
     #[cfg(feature = "native-test-driver")]
     accepted_frame: Mutex<Option<AcceptedNativeFrame>>,
 }
@@ -117,6 +127,18 @@ pub struct PresentationSurface {
     codec: Mutex<FrameCodec>,
 }
 impl PresentationSurface {
+    #[cfg(windows)]
+    pub(crate) fn retain_completed_in(
+        &self,
+        cache: Arc<CompletedCache>,
+    ) -> Result<(), BrowserError> {
+        *self
+            .owner
+            .completed
+            .lock()
+            .map_err(|_| BrowserError::Closed)? = Some(cache);
+        Ok(())
+    }
     /// Create a hidden native view from the trusted application window and enrollment.
     ///
     /// # Errors
@@ -140,6 +162,8 @@ impl PresentationSurface {
             focus: Box::new(focus),
             frames: Mutex::new(frames),
             scheduled: AtomicBool::new(false),
+            #[cfg(windows)]
+            completed: Mutex::new(None),
             #[cfg(feature = "native-test-driver")]
             accepted_frame: Mutex::new(None),
         });
@@ -456,7 +480,14 @@ fn schedule(window: &Window, owner: &Arc<Owner>, handle: usize) -> Result<(), Br
                             count,
                         });
                     }
-                    #[cfg(not(feature = "native-test-driver"))]
+                    #[cfg(windows)]
+                    if shown
+                        && let Ok(cache) = owner.completed.lock()
+                        && let Some(cache) = cache.as_ref()
+                    {
+                        cache.accepted(frame);
+                    }
+                    #[cfg(not(any(windows, feature = "native-test-driver")))]
                     let _ = shown;
                 }
             } else {

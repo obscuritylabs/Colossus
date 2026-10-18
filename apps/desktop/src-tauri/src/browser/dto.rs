@@ -8,6 +8,7 @@ pub(crate) struct BrowserTabDto {
     pub(crate) session_id: String,
     pub(crate) conversation_id: Option<String>,
     pub(crate) control: &'static str,
+    pub(crate) completed_snapshot: bool,
     #[serde(flatten)]
     pub(crate) page: PageState,
     pub(crate) error: Option<String>,

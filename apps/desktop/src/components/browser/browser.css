@@ -108,8 +108,50 @@
 .browser-viewport {
   flex: 1;
   min-height: 0;
+  border: 3px solid transparent;
+}
+.browser-viewport.is-agent-controlled {
+  border-color: var(--blue);
+}
+.browser-page {
+  height: 100%;
   position: relative;
   overflow: hidden;
+}
+.browser-agent-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--accent-border);
+  background: var(--blue-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.browser-agent-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: currentColor;
+}
+.browser-completed-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-control);
+}
+.browser-completed-status p {
+  width: 100%;
+  margin: 0;
+  color: var(--muted);
 }
 .browser-empty {
   height: 100%;

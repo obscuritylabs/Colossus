@@ -132,6 +132,10 @@ if(COLOSSUS_CEF_TEST_CUSTODY)
 endif()
 if(OS_WINDOWS)
   target_sources(colossus_cef PRIVATE src/windows_entry.cc src/platform_win.cc src/agent_indicator_win.cc src/annotation_win.cc src/annotation_png_win.cc)
+  add_executable(colossus-browser-presenter-snapshot-test EXCLUDE_FROM_ALL
+    tests/presenter_snapshot_test.cc)
+  target_include_directories(colossus-browser-presenter-snapshot-test PRIVATE src)
+  target_compile_options(colossus-browser-presenter-snapshot-test PRIVATE /W4 /WX)
   add_executable(colossus-browser-agent-indicator-test EXCLUDE_FROM_ALL
     tests/agent_indicator_win_test.cc src/agent_indicator_win.cc)
   target_include_directories(colossus-browser-agent-indicator-test PRIVATE src)

@@ -23,9 +23,41 @@ pub enum BrowserView {
         any(windows, target_os = "macos")
     ))]
     Remote(crate::remote::RemoteSurface),
+    /// Completed agent image, with no live browser, navigation or input authority.
+    #[cfg(all(windows, feature = "cef-preview", colossus_cef_linked))]
+    Snapshot(crate::presentation::CompletedSurface),
 }
 
 impl BrowserView {
+    /// Retain an input-free last view before positively closing an agent context.
+    /// Canonical run completion must be verified by the Desktop owner first.
+    ///
+    /// # Errors
+    /// Reports native child creation failure; missing or stale frames return None.
+    #[cfg_attr(
+        not(all(windows, feature = "cef-preview", colossus_cef_linked)),
+        allow(clippy::unused_async)
+    )]
+    pub async fn completed_snapshot(&self) -> Result<Option<Self>, BrowserError> {
+        #[cfg(all(windows, feature = "cef-preview", colossus_cef_linked))]
+        if let Self::Remote(view) = self {
+            return view
+                .completed_snapshot()
+                .await
+                .map(|snapshot| snapshot.map(Self::Snapshot));
+        }
+        Ok(None)
+    }
+
+    /// Bounded native metadata belonging to this completed image's accepted frame.
+    #[must_use]
+    pub fn completed_page(&self) -> Option<PageState> {
+        #[cfg(all(windows, feature = "cef-preview", colossus_cef_linked))]
+        if let Self::Snapshot(view) = self {
+            return view.page();
+        }
+        None
+    }
     /// Exact canonical conversation of an independently admitted browser context.
     #[must_use]
     pub fn conversation_id(&self) -> Option<&str> {
@@ -82,6 +114,10 @@ impl BrowserView {
     /// Whether the native attachment admits human navigation and keyboard input.
     #[must_use]
     pub fn human_control_available(&self) -> bool {
+        #[cfg(all(windows, feature = "cef-preview", colossus_cef_linked))]
+        if matches!(self, Self::Snapshot(_)) {
+            return false;
+        }
         #[cfg(all(
             feature = "cef-preview",
             colossus_cef_linked,
@@ -107,6 +143,8 @@ impl BrowserView {
     pub fn navigate(&self, url: Url) -> Result<(), BrowserError> {
         match self {
             Self::Empty => Err(BrowserError::Unavailable),
+            #[cfg(all(windows, feature = "cef-preview", colossus_cef_linked))]
+            Self::Snapshot(_) => Err(BrowserError::Unavailable),
             Self::System(view) => view.navigate(url).map_err(|_| BrowserError::Closed),
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.navigate(&url),
@@ -126,6 +164,8 @@ impl BrowserView {
     pub fn hide(&self) -> Result<(), BrowserError> {
         match self {
             Self::Empty => Ok(()),
+            #[cfg(all(windows, feature = "cef-preview", colossus_cef_linked))]
+            Self::Snapshot(view) => view.hide(),
             Self::System(view) => view.hide().map_err(|_| BrowserError::Closed),
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.hide(),
@@ -145,6 +185,8 @@ impl BrowserView {
     pub fn show(&self) -> Result<(), BrowserError> {
         match self {
             Self::Empty => Ok(()),
+            #[cfg(all(windows, feature = "cef-preview", colossus_cef_linked))]
+            Self::Snapshot(view) => view.show(),
             Self::System(view) => view.show().map_err(|_| BrowserError::Closed),
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.show(),
@@ -164,6 +206,8 @@ impl BrowserView {
     pub fn set_bounds(&self, bounds: Rect) -> Result<(), BrowserError> {
         match self {
             Self::Empty => Ok(()),
+            #[cfg(all(windows, feature = "cef-preview", colossus_cef_linked))]
+            Self::Snapshot(view) => view.set_bounds(bounds),
             Self::System(view) => view.set_bounds(bounds).map_err(|_| BrowserError::Closed),
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.set_bounds(bounds),
@@ -183,6 +227,8 @@ impl BrowserView {
     pub async fn close(&self) -> Result<(), BrowserError> {
         match self {
             Self::Empty => Ok(()),
+            #[cfg(all(windows, feature = "cef-preview", colossus_cef_linked))]
+            Self::Snapshot(view) => view.close().await,
             Self::System(view) => {
                 let _ = crate::release(view).await;
                 view.close().map_err(|_| BrowserError::Closed)
@@ -205,6 +251,8 @@ impl BrowserView {
     pub async fn inspect(&self) -> Result<PageState, BrowserError> {
         match self {
             Self::Empty => Ok(PageState::default()),
+            #[cfg(all(windows, feature = "cef-preview", colossus_cef_linked))]
+            Self::Snapshot(_) => Err(BrowserError::Unavailable),
             Self::System(view) => crate::inspect(view).await,
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.inspect().await,
@@ -224,6 +272,8 @@ impl BrowserView {
     pub async fn control(&self, action: NavigationAction) -> Result<(), BrowserError> {
         match self {
             Self::Empty => Err(BrowserError::Unavailable),
+            #[cfg(all(windows, feature = "cef-preview", colossus_cef_linked))]
+            Self::Snapshot(_) => Err(BrowserError::Unavailable),
             Self::System(view) => crate::control(view, action).await,
             #[cfg(feature = "cef-preview")]
             Self::Chromium(view) => view.control(action).await,
@@ -241,6 +291,8 @@ impl BrowserView {
     pub fn system_view(&self) -> Option<&Webview> {
         match self {
             Self::Empty => None,
+            #[cfg(all(windows, feature = "cef-preview", colossus_cef_linked))]
+            Self::Snapshot(_) => None,
             Self::System(view) => Some(view),
             #[cfg(feature = "cef-preview")]
             Self::Chromium(_) => None,

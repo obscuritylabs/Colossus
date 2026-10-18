@@ -17,6 +17,10 @@ pub(super) const CRASHED_MESSAGE: &str =
 pub(super) struct Tab {
     pub(super) scope: String,
     pub(super) view: BrowserView,
+    #[cfg(feature = "windows-browser-development")]
+    pub(super) pending_completed_view: Option<BrowserView>,
+    #[cfg(feature = "windows-browser-development")]
+    pub(super) close_requested: bool,
     pub(super) agent_run_id: Option<String>,
     pub(super) policy: NavigationPolicy,
     pub(super) dto: BrowserTabDto,
@@ -88,6 +92,11 @@ impl Registry {
         let Some(tab) = self.tabs.iter_mut().find(|t| t.dto.id == id) else {
             return;
         };
+        // A late callback belongs to the retired live attachment. A static
+        // completed view has no page event stream and must remain inspectable.
+        if tab.dto.control == "completed" {
+            return;
+        }
         match event {
             BrowserEvent::Loading(loading) => {
                 tab.dto.page.loading = loading;
