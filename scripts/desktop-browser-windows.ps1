@@ -46,6 +46,15 @@ function Invoke-Logged([string]$Command, [string[]]$Arguments, [string]$Log) {
     Get-Content -LiteralPath (Join-Path $Evidence $Log) -Tail 24
     if ($Status -ne 0) { throw "Native Windows development failed: $Command ($Log)" }
 }
+function Invoke-DesktopAcceptance([string]$Log) {
+    # A native keyboard regression can deadlock the fixture's UI thread. The
+    # external owner bounds and terminates only its own disposable test process;
+    # timeout remains failure, and retained state never becomes cleanup evidence.
+    Invoke-Logged python @('-B', '-c',
+        'import subprocess,sys; sys.exit(subprocess.run(sys.argv[1:], timeout=180, check=False).returncode)',
+        'apps/desktop/src-tauri/target/debug/examples/browser-acceptance.exe',
+        'http://127.0.0.1:53713/') $Log
+}
 $Passed = $false
 Push-Location $Repository
 try {
@@ -90,7 +99,7 @@ try {
     $env:COLOSSUS_BROWSER_ACCEPTANCE_NATIVE_INPUT = $null
     $env:COLOSSUS_BROWSER_ACCEPTANCE_VISUAL_HOLD_MS = '0'
     $env:COLOSSUS_BROWSER_ACCEPTANCE_CLOSE_AFTER_COMPLETION = $null
-    Invoke-Logged 'apps/desktop/src-tauri/target/debug/examples/browser-acceptance.exe' @('http://127.0.0.1:53713/') 'desktop.log'
+    Invoke-DesktopAcceptance 'desktop.log'
     foreach ($Name in @('windows-human-foreground.png', 'windows-overlay-foreground.png', 'windows-agent-foreground.png',
         'windows-agent-cursor-foreground.png', 'windows-agent-cursor-expired.png')) {
         Copy-Item -LiteralPath (Join-Path $env:COLOSSUS_HOME $Name) -Destination (Join-Path $Evidence $Name)
@@ -98,7 +107,7 @@ try {
     $env:COLOSSUS_BROWSER_ACCEPTANCE_OWNED_TABS = $null
     $env:COLOSSUS_BROWSER_ACCEPTANCE_CLOSE_AFTER_COMPLETION = '1'
     $env:COLOSSUS_HOME = Join-Path $Development 'desktop-after-completion-home'
-    Invoke-Logged 'apps/desktop/src-tauri/target/debug/examples/browser-acceptance.exe' @('http://127.0.0.1:53713/') 'desktop-after-completion.log'
+    Invoke-DesktopAcceptance 'desktop-after-completion.log'
     Invoke-Logged python @('-B', 'native/browser/scripts/component.py', 'verify', '--root', $Component) 'inventory-after.log'
     if (@(Get-ChildItem -LiteralPath (Join-Path $Development 'state') -Force).Count -ne 0) {
         throw 'Supervised native state survived acknowledged Desktop shutdown.'

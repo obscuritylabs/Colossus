@@ -63,6 +63,8 @@ unsafe extern "C" {
     ) -> i32;
     #[cfg(all(windows, feature = "native-test-driver"))]
     pub(super) fn colossus_presenter_fixture_input(view: usize) -> i32;
+    #[cfg(all(windows, feature = "native-test-driver"))]
+    pub(super) fn colossus_presenter_fixture_keyboard_reentrancy(view: usize) -> i32;
     #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
     pub(super) fn colossus_presenter_acceptance_activate_parent(parent: usize) -> i32;
     #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]

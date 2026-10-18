@@ -237,3 +237,8 @@ extern "C" int32_t colossus_presenter_fixture_input(uintptr_t handle) {
   auto* view = Lookup(handle);
   return view && Live(*view) ? colossus::PresenterFixtureInput(reinterpret_cast<uintptr_t>(view->window)) : COLOSSUS_CEF_DENIED;
 }
+extern "C" int32_t colossus_presenter_fixture_keyboard_reentrancy(uintptr_t handle) {
+  auto* view = Lookup(handle);
+  return view && Live(*view) ? colossus::PresenterFixtureKeyboardReentrancy(
+      reinterpret_cast<uintptr_t>(GetAncestor(view->window, GA_ROOT))) : COLOSSUS_CEF_DENIED;
+}

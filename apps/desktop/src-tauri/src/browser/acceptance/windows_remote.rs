@@ -199,6 +199,13 @@ pub(super) async fn human(
     let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
     heartbeat.resume(tab, rect).await?;
     background_visibility(app, tab, view, rect).await?;
+    view.acceptance_windows_keyboard_reentrancy()
+        .await
+        .context("Tao parent Return key reentrancy did not acknowledge completion")?;
+    // A returning native call alone is insufficient: require a fresh UI dispatch
+    // and visible browser pixels after the sent keyup re-entered Tao's keyboard handler.
+    let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
+    println!("PASS Tao parent Return key handles nested cross-thread keyup and remains responsive");
     view.acceptance_windows_input().await?;
     title(view, "Human input Ab3Ω😀").await?;
     println!(

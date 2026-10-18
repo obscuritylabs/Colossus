@@ -103,4 +103,23 @@ impl PresentationSurface {
             .then_some(())
             .ok_or(BrowserError::Unavailable)
     }
+
+    pub(crate) async fn fixture_keyboard_reentrancy(&self) -> Result<(), BrowserError> {
+        let handle = self.handle.load(Ordering::Acquire);
+        let (send, receive) = oneshot::channel();
+        self.window
+            .run_on_main_thread(move || {
+                // SAFETY: closed source-only Return sequence, deriving only this
+                // presenter's same-process foreground root on its owning UI thread.
+                let status = unsafe { ffi::colossus_presenter_fixture_keyboard_reentrancy(handle) };
+                let _ = send.send(status == 0);
+            })
+            .map_err(|_| BrowserError::Closed)?;
+        tokio::time::timeout(Duration::from_secs(3), receive)
+            .await
+            .map_err(|_| BrowserError::TimedOut)?
+            .map_err(|_| BrowserError::Closed)?
+            .then_some(())
+            .ok_or(BrowserError::Unavailable)
+    }
 }
