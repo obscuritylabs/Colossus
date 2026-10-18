@@ -7,6 +7,8 @@ use crate::BrowserError;
 #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
 use std::time::Instant;
 use std::{
+    future::Future,
+    sync::Mutex,
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
@@ -155,18 +157,54 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
         .await
         .map_err(presentation_error)
         .inspect_err(|error| trace_apply("viewport_configure", *error))?;
-    let next = create_replacement(owner, revision, lease, bounds).await?;
+    let next = initialize_configured(&owner.state, configure, lease, async {
+        #[cfg(windows)]
+        if owner.read_only.load(Ordering::Acquire) {
+            owner.completed.observed(lease, page);
+        }
+        create_replacement(owner, revision, lease, bounds).await
+    })
+    .await?;
     let mut state = owner.state.lock().map_err(|_| BrowserError::Closed)?;
-    state.configure = configure;
-    state.lease = lease;
-    #[cfg(windows)]
-    if owner.read_only.load(Ordering::Acquire) {
-        owner.completed.observed(lease, page);
-    }
     state.applied = (owner.revision.load(Ordering::Acquire) == revision).then_some(bounds);
     state.surface = Some(Arc::new(next));
     Ok(())
 }
+
+/// Retain authenticated native ownership before any fallible UI initialization.
+/// The old, already-hidden surface stays owned until a replacement is installed.
+async fn initialize_configured<T>(
+    state: &Mutex<super::State>,
+    configure: colossus_browser_presentation::Configure,
+    lease: colossus_browser_presentation::Lease,
+    initialize: impl Future<Output = Result<T, BrowserError>>,
+) -> Result<T, BrowserError> {
+    configure.validate().map_err(|_| BrowserError::Closed)?;
+    lease.validate().map_err(|_| BrowserError::Closed)?;
+    {
+        let mut state = state.lock().map_err(|_| BrowserError::Closed)?;
+        let same_tab = state.configure.target.tab_id == configure.target.tab_id;
+        if !configure.accepts(lease)
+            || configure.session != state.configure.session
+            || configure.control_generation != state.configure.control_generation
+            || lease.session_generation != state.lease.session_generation
+            || lease.viewport_generation <= state.lease.viewport_generation
+            || same_tab
+                && (lease.tab != state.lease.tab
+                    || lease.document_generation < state.lease.document_generation)
+        {
+            return Err(BrowserError::Closed);
+        }
+        state.configure = configure;
+        state.lease = lease;
+        state.applied = None;
+    }
+    initialize.await
+}
+
+#[cfg(test)]
+#[path = "viewport_tests.rs"]
+mod tests;
 
 /// Initialize the replacement under the caller's viewport operation lock.
 /// All awaits preserve the original trusted heartbeat deadline.

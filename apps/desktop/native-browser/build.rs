@@ -3,6 +3,25 @@
 use std::{env, path::PathBuf};
 
 fn main() {
+    configure_windows_manifest();
+    link_native_preview();
+}
+
+fn configure_windows_manifest() {
+    // Tauri's Windows dialog code imports TaskDialogIndirect. Library tests and
+    // standalone executables need their own Common Controls v6 activation;
+    // Desktop's application manifest does not propagate to dependency targets.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!(
+            "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
+        );
+    }
+}
+
+fn link_native_preview() {
     println!("cargo:rustc-check-cfg=cfg(colossus_cef_linked)");
     println!("cargo:rerun-if-env-changed=COLOSSUS_CEF_NATIVE_LIB_DIR");
     println!("cargo:rerun-if-env-changed=COLOSSUS_CEF_ROOT");

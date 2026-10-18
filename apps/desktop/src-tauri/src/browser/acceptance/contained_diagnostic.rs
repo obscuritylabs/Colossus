@@ -1597,12 +1597,9 @@ async fn exercise_owned(
     title(&view, "Agent controlled page").await?;
     #[cfg(windows)]
     println!("EVIDENCE Core navigation title acknowledged; awaiting matching native frame");
-    let page = view.inspect().await?;
-    ensure!(
-        page.url == format!("{}/agent", fixture.origin),
-        "Core navigation reached the wrong page: {}",
-        page.url
-    );
+    // Core may begin its next finite observation after the title receipt. The
+    // authenticated frame loop below tolerates transient Stale receipts and
+    // independently requires the exact URL, Core target and current page pixels.
     let core_target = fixture.state.navigated_target().await?;
     let probe = accepted_frame(
         app,
@@ -1987,8 +1984,8 @@ pub(super) async fn exercise(
             }
         );
     }
-    fixture.state.check()?;
     exercise?;
+    fixture.state.check()?;
     drain.map_err(|error| anyhow::anyhow!(error.message))?;
     close?;
     println!(
