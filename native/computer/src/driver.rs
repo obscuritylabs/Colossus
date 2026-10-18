@@ -204,11 +204,15 @@ impl Child {
         let mut command = tokio::process::Command::new(path);
         command
             .arg(protocol::HELPER_ARGUMENT)
-            .env_clear()
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            .stderr(if cfg!(feature = "native-test-driver") {
+                std::process::Stdio::inherit()
+            } else {
+                std::process::Stdio::null()
+            })
             .kill_on_drop(true);
+        crate::platform::configure_environment(command.as_std_mut())?;
         colossus_windows_native::configure_suspended_process(command.as_std_mut());
         let mut child = command.spawn().map_err(|_| Error::Unavailable)?;
         let input = child.stdin.take();

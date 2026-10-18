@@ -63,6 +63,8 @@ pub(crate) fn entry() -> Result<(), Error> {
     .map_err(|_| Error::Failed)?;
     match &bootstrap.role {
         Role::Read { window, query } => {
+            #[cfg(feature = "native-test-driver")]
+            eprintln!("COMPUTER_NATIVE_READ phase=started");
             let result = match query {
                 ReadQuery::Snapshot { max_nodes } => {
                     super::semantics::snapshot(window, &bootstrap.context, *max_nodes)
@@ -833,6 +835,8 @@ impl Broker {
             worker.cleanup()?;
         }
         self.worker = None;
+        #[cfg(feature = "native-test-driver")]
+        eprintln!("COMPUTER_NATIVE_READ phase=spawn");
         let path = std::env::current_exe().map_err(|_| Error::Failed)?;
         let image = colossus_windows_native::BoundPath::open_immutable_file(&path)
             .map_err(|_| Error::Failed)?;
@@ -840,10 +844,14 @@ impl Broker {
         let mut command = std::process::Command::new(&path);
         command
             .arg(protocol::HELPER_ARGUMENT)
-            .env_clear()
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
+            .stderr(if cfg!(feature = "native-test-driver") {
+                std::process::Stdio::inherit()
+            } else {
+                std::process::Stdio::null()
+            });
+        super::configure_environment(&mut command)?;
         colossus_windows_native::configure_suspended_process(&mut command);
         let nonce = protocol::opaque("cu_p_")?;
         self.worker = Some(ReadWorker {
@@ -860,6 +868,8 @@ impl Broker {
             )
             .map_err(|_| Error::Failed)?;
             worker.job = Some(job);
+            #[cfg(feature = "native-test-driver")]
+            eprintln!("COMPUTER_NATIVE_READ phase=enrolled");
             let mut input = worker.child.stdin.take().ok_or(Error::Failed)?;
             wire::write(
                 &mut input,
@@ -877,6 +887,8 @@ impl Broker {
             )
             .map_err(|_| Error::Failed)?;
             drop(input);
+            #[cfg(feature = "native-test-driver")]
+            eprintln!("COMPUTER_NATIVE_READ phase=bootstrapped");
             let mut output = worker.child.stdout.take().ok_or(Error::Failed)?;
             let (sender, receiver) = mpsc::sync_channel(1);
             worker.reader = Some(std::thread::spawn(move || {
@@ -889,10 +901,14 @@ impl Broker {
                     {
                         return Err(wire::invalid());
                     }
+                    #[cfg(feature = "native-test-driver")]
+                    eprintln!("COMPUTER_NATIVE_READ phase=ready");
                     let (response, binary) = wire::read::<Response>(&mut output)?;
                     if response.nonce != nonce || response.sequence != 1 {
                         return Err(wire::invalid());
                     }
+                    #[cfg(feature = "native-test-driver")]
+                    eprintln!("COMPUTER_NATIVE_READ phase=acknowledged");
                     Ok((response, binary))
                 })();
                 let _ = sender.send(result);

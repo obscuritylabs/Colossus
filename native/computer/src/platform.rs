@@ -1,6 +1,8 @@
 //! Audited Windows FFI boundary. No Desktop UI thread enters this module.
 mod broker;
 mod capture;
+mod environment;
+pub(crate) use environment::configure as configure_environment;
 pub(crate) mod identity;
 mod indicator;
 mod input;
