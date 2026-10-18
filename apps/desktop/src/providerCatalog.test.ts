@@ -4,6 +4,7 @@ import {
   filterCatalogModels,
   matchingProviderPreset,
   presetProviderKind,
+  providerCredentialLabel,
   resetModelMetadata,
   selectCatalogModel,
 } from "./providerCatalog";
@@ -20,6 +21,24 @@ const configured: ManagedModelConfiguration = {
 };
 
 describe("provider catalog selection", () => {
+  it("keeps generated credential labels within the native UTF-8 limit", () => {
+    expect(providerCredentialLabel(" OpenRouter ")).toBe("OpenRouter API key");
+    expect(providerCredentialLabel(" ")).toBe("Provider API key");
+    for (const provider of [
+      "x".repeat(96),
+      "路由".repeat(16),
+      "🚀".repeat(24),
+    ]) {
+      const label = providerCredentialLabel(provider);
+      expect(new TextEncoder().encode(label).length).toBeLessThanOrEqual(96);
+      expect(label).toMatch(/ API key$/u);
+      expect(label).not.toContain("�");
+      expect(provider.startsWith(label.slice(0, -" API key".length))).toBe(
+        true,
+      );
+    }
+  });
+
   it("keeps native Anthropic selection separate from Chat Completions", () => {
     const preset = {
       id: "anthropic",

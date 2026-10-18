@@ -9,10 +9,12 @@ use std::os::windows::fs::OpenOptionsExt as _;
 static NATIVE_CREDENTIAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn fixture() -> (tempfile::TempDir, std::path::PathBuf) {
-    let parent = directories::BaseDirs::new()
-        .unwrap()
-        .data_local_dir()
-        .to_owned();
+    // Packaged hosts can redirect new LocalAppData children into a different
+    // canonical hierarchy. Keep the fixture's retained ancestry stable.
+    let parent = std::env::var_os("USERPROFILE")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .expect("absolute Windows user profile");
     let guard = tempfile::Builder::new()
         .prefix("ColossusUninstallTest-")
         .tempdir_in(parent)

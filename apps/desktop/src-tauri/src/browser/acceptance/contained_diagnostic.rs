@@ -29,7 +29,8 @@ use colossus_sdk::{
     ApiMajor, AppPrivateInstanceDir, CancelRunRequest, Colossus, CreateRunRequest, GetRunRequest,
     IdempotencyKey, InputContentPart, InstanceId, ManagedAccessProfile, ManagedExecutionBoundary,
     ManagedFieldOverride, ManagedProviderKind, ManagedRuntimeConfig, NativeSidecarLifecycle,
-    RunMode, RunStatus, SidecarApplicationGrant, SidecarBootstrapConfig, SidecarOptions,
+    RunMode, RunStatus, RunTerminal, SidecarApplicationGrant, SidecarBootstrapConfig,
+    SidecarOptions,
 };
 use serde_json::{Value, json};
 use tauri::Manager as _;
@@ -697,6 +698,10 @@ fn managed_runtime(origin: &str, visual_hold: Duration) -> ManagedRuntimeConfig 
         90_000
     };
     runtime.models[0].model = "mac-browser-fixture".into();
+    // Unknown model names deliberately use conservative image token estimates.
+    // Leave room for the real screenshot and bounded tool transcript so this
+    // native acceptance reaches the model without bypassing context accounting.
+    runtime.models[0].context_window_tokens = 131_072;
     runtime.models[0].capabilities.streaming = false.into();
     runtime.models[0].capabilities.image_inputs = true.into();
     runtime.field_overrides = vec![
@@ -1632,9 +1637,38 @@ async fn exercise_owned(
         if fixture.state.screenshot_seen.load(Ordering::Acquire) {
             break;
         }
+        let observed_run = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.get_run(GetRunRequest {
+                run_id: run.run_id.clone(),
+            }),
+        )
+        .await
+        .context("Core screenshot continuation run status timed out")??
+        .run;
+        if fixture.state.screenshot_seen.load(Ordering::Acquire) {
+            break;
+        }
+        if matches!(
+            observed_run.status,
+            RunStatus::Completed
+                | RunStatus::Failed
+                | RunStatus::Cancelled
+                | RunStatus::Interrupted
+                | RunStatus::OutcomeUnknown
+        ) {
+            let reason = match observed_run.terminal.as_ref() {
+                Some(RunTerminal::Failure(failure)) => failure.reason.as_str(),
+                _ => "no released failure",
+            };
+            anyhow::bail!(
+                "Core browser run ended with {:?} before screenshot reached the model: {reason}",
+                observed_run.status
+            );
+        }
         ensure!(
             tokio::time::Instant::now() < deadline,
-            "Core browser.screenshot did not publish its verified PNG"
+            "Core browser.screenshot did not reach the model with verified PNG metadata and image bytes"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

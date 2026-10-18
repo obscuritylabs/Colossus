@@ -136,6 +136,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import {
   presetProviderKind,
+  providerCredentialLabel,
   resetModelMetadata,
   selectCatalogModel,
 } from "../providerCatalog";
@@ -2827,7 +2828,7 @@ export function ManagedSettingsPane({
 
   async function createCredential(forProvider?: ProviderEditorDraft) {
     const label = forProvider
-      ? `${forProvider.label.trim() || "Provider"} API key`
+      ? providerCredentialLabel(forProvider.label)
       : credentialLabel.trim();
     if (busy || !label) return false;
     const request = {
