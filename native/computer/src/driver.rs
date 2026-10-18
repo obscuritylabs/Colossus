@@ -144,11 +144,15 @@ impl ComputerDriver for NativeComputerDriver {
     ) -> Result<ComputerDriverReply, Error> {
         request.validate().map_err(|_| Error::InvalidInput)?;
         if control.is_cancelled() {
+            #[cfg(feature = "native-test-driver")]
+            eprintln!("COMPUTER_NATIVE_CONTROL phase=host_cancelled");
             self.revoke_run(&request.binding);
             return Err(Error::Denied);
         }
         let owner = self.owner(&request.binding, control)?;
         if owner.revoked.load(Ordering::Acquire) {
+            #[cfg(feature = "native-test-driver")]
+            eprintln!("COMPUTER_NATIVE_CONTROL phase=host_revoked");
             return Err(Error::Denied);
         }
         let (sender, response) = tokio::sync::oneshot::channel();

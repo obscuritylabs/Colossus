@@ -32,6 +32,10 @@ pub(crate) struct Signals {
     pub foreign_injected_mouse: AtomicU64,
     #[cfg(feature = "native-test-driver")]
     pub foreign_matching_low_tag: AtomicU64,
+    #[cfg(feature = "native-test-driver")]
+    pub foreign_key: AtomicU64,
+    #[cfg(feature = "native-test-driver")]
+    pub foreign_injected_key: AtomicU64,
     hwnd: AtomicPtr<std::ffi::c_void>,
 }
 pub(crate) struct Indicator {
@@ -61,6 +65,10 @@ impl Indicator {
             foreign_injected_mouse: AtomicU64::new(0),
             #[cfg(feature = "native-test-driver")]
             foreign_matching_low_tag: AtomicU64::new(0),
+            #[cfg(feature = "native-test-driver")]
+            foreign_key: AtomicU64::new(0),
+            #[cfg(feature = "native-test-driver")]
+            foreign_injected_key: AtomicU64::new(0),
             hwnd: AtomicPtr::new(null_mut()),
         });
         let class = wide("ColossusComputerOperatorV1");
@@ -306,6 +314,13 @@ unsafe extern "system" fn key_hook(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         // SAFETY: WH_KEYBOARD_LL supplies this fixed event during the callback.
         let event = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
         if event.dwExtraInfo != signals.tag {
+            #[cfg(feature = "native-test-driver")]
+            {
+                signals.foreign_key.fetch_add(1, Ordering::Relaxed);
+                if event.flags & LLKHF_INJECTED != 0 {
+                    signals.foreign_injected_key.fetch_add(1, Ordering::Relaxed);
+                }
+            }
             signals.human.fetch_add(1, Ordering::AcqRel);
         }
     }

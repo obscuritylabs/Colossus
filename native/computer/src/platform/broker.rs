@@ -294,6 +294,21 @@ impl Broker {
         }
         if let Some((state, reason)) = transition {
             if session.summary.state != state || session.summary.reason != Some(reason) {
+                #[cfg(feature = "native-test-driver")]
+                if let Some(card) = session.indicator.as_ref() {
+                    eprintln!(
+                        "COMPUTER_NATIVE_CONTROL phase=transition state={state:?} reason={reason:?} human_changed={} own_mouse={} foreign_mouse={} foreign_injected_mouse={} foreign_matching_low_tag={} foreign_key={} foreign_injected_key={}",
+                        card.signals.human.load(Ordering::Acquire) != session.human,
+                        card.signals.own_mouse.load(Ordering::Relaxed),
+                        card.signals.foreign_mouse.load(Ordering::Relaxed),
+                        card.signals.foreign_injected_mouse.load(Ordering::Relaxed),
+                        card.signals
+                            .foreign_matching_low_tag
+                            .load(Ordering::Relaxed),
+                        card.signals.foreign_key.load(Ordering::Relaxed),
+                        card.signals.foreign_injected_key.load(Ordering::Relaxed)
+                    );
+                }
                 session.summary.control_generation += 1;
             }
             session.summary.state = state;
@@ -318,6 +333,14 @@ impl Broker {
             || session.summary.control_generation != generation
             || self.cancel.load(Ordering::Acquire)
         {
+            #[cfg(feature = "native-test-driver")]
+            eprintln!(
+                "COMPUTER_NATIVE_CONTROL phase=active_denied state_active={} generation_matches={} cancelled={} reason={:?}",
+                session.summary.state == ComputerControlState::Active,
+                session.summary.control_generation == generation,
+                self.cancel.load(Ordering::Acquire),
+                session.summary.reason
+            );
             return Err(Error::Denied);
         }
         Ok(session)
@@ -448,7 +471,11 @@ impl Broker {
         if !self.lifetimes.alive(root_life.0, root_life.1) {
             return Err(Error::Stale);
         }
-        let root = identity::inspect(session.root.hwnd(), &self.bootstrap.context)?;
+        let root = identity::inspect(session.root.hwnd(), &self.bootstrap.context).inspect_err(|_error| {
+            #[cfg(feature = "native-test-driver")]
+            eprintln!("COMPUTER_NATIVE_CONTROL phase=root_inspection_failed denied={} stale={} unavailable={}",
+                matches!(_error,Error::Denied),matches!(_error,Error::Stale),matches!(_error,Error::Unavailable));
+        })?;
         if root.process != session.root.process {
             return Err(Error::Stale);
         }
@@ -474,6 +501,8 @@ impl Broker {
     fn execute(&mut self, request: ComputerDriverRequest) -> Result<(Reply, Vec<u8>), Error> {
         self.refresh();
         if self.cancel.load(Ordering::Acquire) {
+            #[cfg(feature = "native-test-driver")]
+            eprintln!("COMPUTER_NATIVE_CONTROL phase=broker_cancelled");
             return Err(Error::Denied);
         }
         match request.command {
