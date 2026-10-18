@@ -752,6 +752,11 @@ impl Broker {
                     },
                 )?;
                 self.refresh();
+                #[cfg(feature = "native-test-driver")]
+                eprintln!(
+                    "COMPUTER_NATIVE_INPUT phase=broker_post_action active={}",
+                    self.active(&session_id, control_generation).is_ok()
+                );
                 Ok((
                     Reply::Applied(
                         self.active(&session_id, control_generation)

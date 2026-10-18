@@ -80,6 +80,22 @@ impl Gate<'_> {
             return Err(Error::InvalidInput);
         }
         self.started = true;
+        #[cfg(feature = "native-test-driver")]
+        let before = (
+            self.signals.own_mouse.load(Ordering::Relaxed),
+            self.signals.foreign_mouse.load(Ordering::Relaxed),
+            self.signals.foreign_injected_mouse.load(Ordering::Relaxed),
+            self.signals
+                .foreign_matching_low_tag
+                .load(Ordering::Relaxed),
+        );
+        #[cfg(feature = "native-test-driver")]
+        let send_started = std::time::Instant::now();
+        #[cfg(feature = "native-test-driver")]
+        eprintln!(
+            "COMPUTER_NATIVE_INPUT phase=send_begin requested={}",
+            events.len()
+        );
         // SAFETY: fixed typed balanced native events backed by this slice, all carry our marker.
         let accepted = unsafe {
             SendInput(
@@ -88,11 +104,40 @@ impl Gate<'_> {
                 std::mem::size_of::<INPUT>() as i32,
             )
         };
+        #[cfg(feature = "native-test-driver")]
+        eprintln!(
+            "COMPUTER_NATIVE_INPUT phase=send_receipt requested={} accepted={accepted} elapsed_ms={}",
+            events.len(),
+            send_started.elapsed().as_millis()
+        );
         if accepted != events.len() as u32 {
             balance_prefix(&events[..accepted.min(events.len() as u32) as usize]);
             return Err(Error::OutcomeUnknown);
         }
         indicator::pump();
+        #[cfg(feature = "native-test-driver")]
+        eprintln!(
+            "COMPUTER_NATIVE_INPUT phase=post_send cancelled={} control_action={} human_changed={} own_mouse={} foreign_mouse={} foreign_injected_mouse={} foreign_matching_low_tag={}",
+            self.cancel.load(Ordering::Acquire),
+            self.signals.action.load(Ordering::Acquire) != 0,
+            self.signals.human.load(Ordering::Acquire) != self.human,
+            self.signals
+                .own_mouse
+                .load(Ordering::Relaxed)
+                .saturating_sub(before.0),
+            self.signals
+                .foreign_mouse
+                .load(Ordering::Relaxed)
+                .saturating_sub(before.1),
+            self.signals
+                .foreign_injected_mouse
+                .load(Ordering::Relaxed)
+                .saturating_sub(before.2),
+            self.signals
+                .foreign_matching_low_tag
+                .load(Ordering::Relaxed)
+                .saturating_sub(before.3)
+        );
         // Full balanced insertion is the terminal effect receipt. An app may
         // legitimately open its owned modal or resize in response. A subsequent
         // action must observe that state afresh; do not relabel accepted input

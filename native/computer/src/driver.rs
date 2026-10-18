@@ -479,9 +479,23 @@ async fn actor(
                     let deadline = tokio::time::sleep(Duration::from_secs(10));
                     tokio::pin!(deadline);
                     loop {
-                        tokio::select! {value=&mut operation=>break value,_=&mut deadline=>break Err(Error::OutcomeUnknown),_=tokio::time::sleep(Duration::from_millis(10))=>{
-                            if revoked.load(Ordering::Acquire)||control.is_cancelled()||reply.is_closed(){revoked.store(true,Ordering::Release);break Err(Error::OutcomeUnknown)}
-                        }}
+                        tokio::select! {
+                            value=&mut operation=>break value,
+                            _=&mut deadline=>{
+                                #[cfg(feature="native-test-driver")]
+                                eprintln!("COMPUTER_NATIVE_INPUT phase=host_transport_deadline");
+                                break Err(Error::OutcomeUnknown)
+                            },
+                            _=tokio::time::sleep(Duration::from_millis(10))=>{
+                                if revoked.load(Ordering::Acquire)||control.is_cancelled()||reply.is_closed(){
+                                    #[cfg(feature="native-test-driver")]
+                                    eprintln!("COMPUTER_NATIVE_INPUT phase=host_control_cancel revoked={} cancelled={} receiver_closed={}",
+                                        revoked.load(Ordering::Acquire),control.is_cancelled(),reply.is_closed());
+                                    revoked.store(true,Ordering::Release);
+                                    break Err(Error::OutcomeUnknown)
+                                }
+                            }
+                        }
                     }
                 };
                 let result = result.and_then(|(meta, binary)| meta.into_public(binary));

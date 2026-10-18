@@ -24,6 +24,14 @@ pub(crate) struct Signals {
     pub tracked: AtomicU64,
     root: u64,
     pub tag: usize,
+    #[cfg(feature = "native-test-driver")]
+    pub own_mouse: AtomicU64,
+    #[cfg(feature = "native-test-driver")]
+    pub foreign_mouse: AtomicU64,
+    #[cfg(feature = "native-test-driver")]
+    pub foreign_injected_mouse: AtomicU64,
+    #[cfg(feature = "native-test-driver")]
+    pub foreign_matching_low_tag: AtomicU64,
     hwnd: AtomicPtr<std::ffi::c_void>,
 }
 pub(crate) struct Indicator {
@@ -45,6 +53,14 @@ impl Indicator {
             tracked: AtomicU64::new(root),
             root,
             tag: u64::from_le_bytes(bytes) as usize,
+            #[cfg(feature = "native-test-driver")]
+            own_mouse: AtomicU64::new(0),
+            #[cfg(feature = "native-test-driver")]
+            foreign_mouse: AtomicU64::new(0),
+            #[cfg(feature = "native-test-driver")]
+            foreign_injected_mouse: AtomicU64::new(0),
+            #[cfg(feature = "native-test-driver")]
+            foreign_matching_low_tag: AtomicU64::new(0),
             hwnd: AtomicPtr::new(null_mut()),
         });
         let class = wide("ColossusComputerOperatorV1");
@@ -243,6 +259,10 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
     {
         // SAFETY: WH_MOUSE_LL supplies this fixed event while the hook executes.
         let event = unsafe { &*(lparam as *const MSLLHOOKSTRUCT) };
+        #[cfg(feature = "native-test-driver")]
+        if event.dwExtraInfo == signals.tag {
+            signals.own_mouse.fetch_add(1, Ordering::Relaxed);
+        }
         if event.dwExtraInfo != signals.tag {
             let hwnd = signals.hwnd.load(Ordering::Acquire);
             let mut rect = RECT::default();
@@ -255,6 +275,20 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
                 && event.pt.y >= rect.top
                 && event.pt.y < rect.bottom;
             if !own {
+                #[cfg(feature = "native-test-driver")]
+                {
+                    signals.foreign_mouse.fetch_add(1, Ordering::Relaxed);
+                    if event.flags & LLMHF_INJECTED != 0 {
+                        signals
+                            .foreign_injected_mouse
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    if event.dwExtraInfo as u32 == signals.tag as u32 {
+                        signals
+                            .foreign_matching_low_tag
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                }
                 signals.human.fetch_add(1, Ordering::AcqRel);
             }
         }
