@@ -860,6 +860,7 @@ impl BrowserManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[tokio::test]
     async fn expired_view_preserves_address_and_cannot_be_revived_by_late_events() {
