@@ -379,6 +379,44 @@ async fn abandoned_reads_drain_replies_and_preserve_the_authenticated_viewer() {
 }
 
 #[tokio::test]
+async fn slow_metadata_does_not_disconnect_a_healthy_viewer_or_extend_input_deadlines() {
+    let host = host();
+    let (client, serving) = pair(Arc::clone(&host)).await;
+    client.configure(configure()).await.unwrap();
+    host.blocked.store(true, Ordering::Release);
+    let reader = client.clone();
+    let read = tokio::spawn(async move { reader.observe(lease()).await });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !host.entered.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    // A real page can keep the CEF UI thread busy beyond the input deadline.
+    tokio::time::sleep(std::time::Duration::from_millis(950)).await;
+    host.blocked.store(false, Ordering::Release);
+    host.release.notify_one();
+    assert_eq!(read.await.unwrap().unwrap().title, "Fixture");
+    assert!(!host.revoked.load(Ordering::Acquire));
+    assert_eq!(host.effects.load(Ordering::Acquire), 0);
+    assert!(client.next_frame(lease()).await.unwrap().is_some());
+
+    host.entered.store(false, Ordering::Release);
+    host.blocked.store(true, Ordering::Release);
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        client.focus(lease(), true),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, Err(PresentationError::OutcomeUnknown));
+    assert_eq!(host.effects.load(Ordering::Acquire), 0);
+    assert!(serving.await.unwrap().is_err());
+    assert!(host.revoked.load(Ordering::Acquire));
+}
+
+#[tokio::test]
 async fn dropped_dispatched_caller_revokes_private_channel_without_retry() {
     let host = host();
     let (client, serving) = pair(Arc::clone(&host)).await;

@@ -69,7 +69,21 @@ pub(super) async fn hide_host(
             colossus_browser_presentation::PresentationError::Stale
             | colossus_browser_presentation::PresentationError::Hidden,
         ) => Ok(()),
-        Err(_) => Err(BrowserError::Closed),
+        Err(error) => {
+            #[cfg(all(
+                any(windows, target_os = "macos"),
+                feature = "native-test-driver",
+                debug_assertions
+            ))]
+            super::trace_frame_channel_failure("hide_host", error, std::time::Duration::ZERO);
+            #[cfg(not(all(
+                any(windows, target_os = "macos"),
+                feature = "native-test-driver",
+                debug_assertions
+            )))]
+            let _ = error;
+            Err(BrowserError::Closed)
+        }
     }
 }
 pub(super) async fn hide_surface(
