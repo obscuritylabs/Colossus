@@ -76,6 +76,7 @@ pub(super) async fn owned(
     let mut instance_nonce = [0; 16];
     getrandom::fill(&mut instance_nonce).map_err(|_| BrowserDriverError::Unavailable)?;
     let enrollment = BrowserBridgeEnrollment {
+        public_web: request.options.public_web,
         binding: request.binding.clone(),
         mode: request.options.mode,
         profile: request.options.profile.clone(),
@@ -204,10 +205,11 @@ async fn start(
         .map(|pki| pki.stage(&resources.control, request))
         .transpose()?;
     resources.egress = Some(
-        BrowserEgressLease::start(
+        BrowserEgressLease::start_with_public_web(
             request.session_id.clone(),
             enrollment.allowed_origins.clone(),
             resources.installation.limits.egress,
+            enrollment.public_web,
         )
         .await
         .map_err(|_| BrowserDriverError::Unavailable)?,

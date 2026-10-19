@@ -34,6 +34,19 @@ pub(super) struct WindowsScreen {
     pub center_bgra: [u8; 4],
 }
 unsafe extern "C" {
+    #[cfg(windows)]
+    pub(super) fn colossus_presenter_snapshot_create(parent: usize) -> usize;
+    #[cfg(windows)]
+    pub(super) fn colossus_presenter_snapshot_show(
+        view: usize,
+        epoch: u64,
+        display_ms: u32,
+        bounds: Bounds,
+        width: u32,
+        height: u32,
+        pixels: *const u8,
+        bytes: usize,
+    ) -> i32;
     pub(super) fn colossus_presenter_create(
         parent: usize,
         owner: *mut c_void,
@@ -63,6 +76,8 @@ unsafe extern "C" {
     ) -> i32;
     #[cfg(all(windows, feature = "native-test-driver"))]
     pub(super) fn colossus_presenter_fixture_input(view: usize) -> i32;
+    #[cfg(all(windows, feature = "native-test-driver"))]
+    pub(super) fn colossus_presenter_fixture_keyboard_reentrancy(view: usize) -> i32;
     #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
     pub(super) fn colossus_presenter_acceptance_activate_parent(parent: usize) -> i32;
     #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]

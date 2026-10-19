@@ -175,6 +175,27 @@ uses the existing SDK/sidecar/worker channels. This exception does not enable
 publisher release modes, private CA/client identity capabilities or installed
 signed-package acceptance.
 
+The separate `windows-browser-functional-preview` edition packages this same
+ordinary-user boundary for Windows x64 Developer Previews. It is explicitly
+selected at compilation and cannot be enabled in an ordinary stable build or
+by runtime environment variables. The native CEF host is separate from Desktop;
+Desktop links only the Win32 pixel presenter. The installer includes the pinned
+host, helpers, libraries, resources and notices. All executable/DLL signing
+finishes before a fresh false-mode component inventory is sealed. The subsequently
+signed sidecar embeds that exact inventory digest and a fixed installation-relative
+location; the signed Desktop bundle independently binds the sidecar. Runtime state
+is a fresh private allocation beneath the authenticated worker instance.
+
+This edition retains Chromium's sandbox, whole-Job supervision, authenticated
+native channels, typed authority and temporary sessions. It reports
+`restrictive_egress: false` and offers no private CA, client identity or persistent
+profile capability. It does not promote production component modes or claim
+AppContainer/WFP containment. Missing, changed or untrusted installed bytes fail
+closed. An unavailable ordinary-user desktop prerequisite leaves the capability
+unavailable without selecting a contained or personal-browser fallback. Signed
+installed ordinary-user functional acceptance remains a distinct release gate;
+source or unsigned staging tests cannot establish that evidence.
+
 Temporary profiles remain the default. The Linux native store implements explicit
 opaque workspace/application profiles, one retained kernel writer lease, exact
 CEF/Chromium/protocol compatibility, durable active/dirty state, and reset after
@@ -282,7 +303,7 @@ and custody crash recovery remain unaccepted. Reproduction and evidence scope ar
 | Windows contained host | AppContainer/Job/WFP supervisor, private I/O, pinned helper/client staging and native frame/input fixtures; source checks | Actual Windows SDK/OS execution, browser/network-service/helper denial, full-tree cleanup, native input and installed signing acceptance |
 | PKI | Native exact-origin reviewed identity selection; Linux owned NSS provisioning and actual Core per-request fixtures. A signed Mac no-CEF fixture passed private Keychain import, server-observed native mTLS, socket drainage and durable exact-generation removal while default/search metadata stayed unchanged | Linux broker custody remains unaccepted. Mac Core enrollment, full-component key isolation and custody crash recovery require acceptance; Windows owned-store and broker acceptance remain incomplete. Existing OS-user stores are not isolated by a temporary browser profile |
 | Persistent profiles | Linux native store, exclusive lease, compatibility/dirty/reset behavior and independent tool filesystem denial; actual five-host cookie restart/reset/temporary-isolation proof | Encryption and disk quota, native management and Desktop controls. Production configuration remains disabled |
-| Human multi-origin login | Native human admission binds the initial URL's exact origin | Trusted review/admission of additional origins; cross-origin SSO redirects are currently denied in an owned human context |
+| Multi-origin browsing | Runtime defaults request public HTTPS browsing; the effect gateway narrows this to the permit's network authority. The immutable native enrollment and proxy bind that grant, while private destinations still need exact admission | Native public-page acceptance on each supported platform; interactive expansion of restricted origin lists remains future work |
 | Shipping package | Shared verifier, compiler-bound publisher seal and offline Linux package builder | Independently reviewed signed component/image receipts and accepted distribution. Headless and Embedded modes stay disabled until their own acceptance passes |
 
 These include implementation work as well as platform tests. Enabling an inventory

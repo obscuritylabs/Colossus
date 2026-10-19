@@ -137,7 +137,10 @@ async fn tunnel(
     {
         return Err(());
     }
-    if !origins.contains(&url.origin().ascii_serialization()) {
+    if colossus_policy::network_destination_match(origins, url.as_str())
+        .map_err(|_| ())?
+        .is_none()
+    {
         return forbidden(&mut client).await;
     }
     let host = url.host_str().ok_or(())?;

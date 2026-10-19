@@ -29,6 +29,10 @@ mod control;
 pub use control::*;
 mod communication;
 pub use communication::*;
+mod computer;
+pub use computer::*;
+mod computer_artifact;
+pub use computer_artifact::*;
 
 mod browser;
 pub use browser::*;

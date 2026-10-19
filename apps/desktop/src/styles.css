@@ -2004,8 +2004,13 @@ p {
 }
 
 .work-thread.is-topology-view,
+.work-thread.is-inboxes-view,
 .work-thread.is-activity-view {
   grid-template-rows: minmax(0, 1fr);
+}
+
+.work-thread.is-inboxes-view .work-feed-scroll {
+  padding: 0;
 }
 
 .work-thread.is-topology-view .work-feed-scroll,
@@ -10215,6 +10220,17 @@ textarea {
 
 .provider-auth-grid {
   grid-template-columns: minmax(280px, 1fr) minmax(260px, 0.8fr);
+}
+
+.provider-credential-control {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: var(--space-3, 12px);
+}
+
+.provider-credential-control > label {
+  width: 100%;
 }
 
 .provider-editor label > small,

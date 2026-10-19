@@ -43,6 +43,7 @@ pub(crate) fn enrollment() -> BrowserBridgeEnrollment {
     capabilities.limits.action_timeout_ms = 2000;
     capabilities.limits.navigation_timeout_ms = 2000;
     BrowserBridgeEnrollment {
+        public_web: false,
         binding: BrowserSessionBinding {
             runtime_id: "runtime".into(),
             workspace_id: "workspace".into(),
@@ -69,6 +70,7 @@ pub(crate) fn open_request() -> BrowserDriverOpenRequest {
         tab_id: BrowserTabId::parse(format!("bt_{}", "2".repeat(32))).expect("tab"),
         document_id: BrowserDocumentId::parse(format!("bd_{}", "3".repeat(32))).expect("document"),
         options: BrowserOpenOptions {
+            public_web: false,
             profile: Default::default(),
             mode: BrowserMode::Headless,
             allowed_origins: enrollment().allowed_origins,
@@ -289,7 +291,7 @@ async fn authentic_transport_binds_native_owner_without_child_capability_discove
 #[tokio::test]
 async fn mismatched_owner_scope_mode_and_origin_never_reach_native_allocation() {
     let fixture = fixture().await;
-    for case in 0..6 {
+    for case in 0..7 {
         let mut open = open_request();
         match case {
             0 => open.binding.runtime_id = "other-runtime".into(),
@@ -301,6 +303,7 @@ async fn mismatched_owner_scope_mode_and_origin_never_reach_native_allocation() 
                 }
             }
             4 => open.options.mode = BrowserMode::Embedded,
+            5 => open.options.public_web = true,
             _ => {
                 open.options.allowed_origins =
                     vec![BrowserOrigin::parse("https://other.test").expect("origin")]

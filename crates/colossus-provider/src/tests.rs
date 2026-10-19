@@ -34,12 +34,16 @@ use tokio_rustls::TlsAcceptor;
 
 #[path = "anthropic/gateway_tests.rs"]
 mod anthropic_gateway_tests;
+#[path = "codex_catalog_tests.rs"]
+mod codex_catalog_tests;
 #[path = "error/gateway_tests.rs"]
 mod failure_tests;
 #[path = "image_view_tests.rs"]
 mod image_view_tests;
 #[path = "retry_tests.rs"]
 mod retry_tests;
+#[path = "stream_diagnostics_tests.rs"]
+mod stream_diagnostics_tests;
 
 struct CountingCredentialResolver {
     calls: AtomicUsize,

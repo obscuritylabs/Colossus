@@ -38,6 +38,11 @@ Model discovery follows bounded catalog pagination. Missing model metadata remai
 unknown. Native input limits are used as conservative context budgets with an
 additional output and safety reservation.
 
+Tool schemas omit top-level `oneOf`, `anyOf`, and `allOf` from the definitions sent
+to Anthropic, which rejects those keywords at the root. Nested schemas remain
+intact. Colossus still validates every tool call against the full original schema
+before execution.
+
 Leave reasoning effort unset to use the model's default. Explicit `low`, `medium`,
 `high`, `xhigh`, or `max` requests use native adaptive thinking and effort controls;
 the selected model must support the combination. `none` requests disabled thinking

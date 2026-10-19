@@ -143,6 +143,7 @@ struct Host {
     effects: AtomicU64,
     fenced: AtomicBool,
     bad_fence: AtomicBool,
+    release: tokio::sync::Notify,
 }
 #[async_trait]
 impl PresentationHost for Host {
@@ -152,9 +153,19 @@ impl PresentationHost for Host {
     ) -> Result<PresentationReply, PresentationError> {
         if self.blocked.load(Ordering::Acquire) {
             self.entered.store(true, Ordering::Release);
-            std::future::pending::<()>().await;
+            self.release.notified().await;
         }
         match command {
+            PresentationCommand::Observe { lease: value } if value == lease() => {
+                Ok(PresentationReply::State(PageState {
+                    target: configure().target,
+                    url: "https://fixture.invalid/".into(),
+                    title: "Fixture".into(),
+                    loading: false,
+                    can_go_back: false,
+                    can_go_forward: false,
+                }))
+            }
             PresentationCommand::Configure(request) => {
                 if request.control_generation != 0
                     || request.session != configure().session
@@ -212,6 +223,10 @@ impl PresentationHost for Host {
         }
     }
     async fn frame(&self, value: Lease) -> Result<Option<Frame>, PresentationError> {
+        if self.blocked.load(Ordering::Acquire) {
+            self.entered.store(true, Ordering::Release);
+            self.release.notified().await;
+        }
         if value != lease() {
             return Err(PresentationError::Stale);
         }
@@ -240,6 +255,7 @@ fn host() -> Arc<Host> {
         effects: AtomicU64::new(0),
         fenced: AtomicBool::new(false),
         bad_fence: AtomicBool::new(false),
+        release: tokio::sync::Notify::new(),
     })
 }
 async fn pair(
@@ -316,6 +332,88 @@ async fn ack_only_method_rejects_queries_before_native_dispatch() {
     assert_eq!(host.effects.load(Ordering::Acquire), 1);
     client.disconnect();
     assert!(serving.await.unwrap().is_err());
+}
+
+#[tokio::test]
+async fn abandoned_reads_drain_replies_and_preserve_the_authenticated_viewer() {
+    for frame in [false, true] {
+        let host = host();
+        let (client, serving) = pair(Arc::clone(&host)).await;
+        client.configure(configure()).await.unwrap();
+        host.blocked.store(true, Ordering::Release);
+        let reader = client.clone();
+        let read = tokio::spawn(async move {
+            if frame {
+                reader.next_frame(lease()).await.map(|_| ())
+            } else {
+                reader.observe(lease()).await.map(|_| ())
+            }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !host.entered.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        read.abort();
+        let _ = read.await;
+        host.blocked.store(false, Ordering::Release);
+        host.release.notify_one();
+        // The next operation must receive its own reply, not the abandoned
+        // state/frame response. Both frame authentication and effects still work.
+        assert_eq!(client.observe(lease()).await.unwrap().title, "Fixture");
+        let bytes = client.next_frame(lease()).await.unwrap().unwrap();
+        assert!(
+            FrameCodec::new(client.surface_key(), [2; 32], lease())
+                .unwrap()
+                .decode(bytes)
+                .is_ok()
+        );
+        client.focus(lease(), true).await.unwrap();
+        assert_eq!(host.effects.load(Ordering::Acquire), 1);
+        assert!(!host.revoked.load(Ordering::Acquire));
+        client.disconnect();
+        assert!(serving.await.unwrap().is_err());
+    }
+}
+
+#[tokio::test]
+async fn slow_metadata_does_not_disconnect_a_healthy_viewer_or_extend_input_deadlines() {
+    let host = host();
+    let (client, serving) = pair(Arc::clone(&host)).await;
+    client.configure(configure()).await.unwrap();
+    host.blocked.store(true, Ordering::Release);
+    let reader = client.clone();
+    let read = tokio::spawn(async move { reader.observe(lease()).await });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !host.entered.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    // A real page can keep the CEF UI thread busy beyond the input deadline.
+    tokio::time::sleep(std::time::Duration::from_millis(950)).await;
+    host.blocked.store(false, Ordering::Release);
+    host.release.notify_one();
+    assert_eq!(read.await.unwrap().unwrap().title, "Fixture");
+    assert!(!host.revoked.load(Ordering::Acquire));
+    assert_eq!(host.effects.load(Ordering::Acquire), 0);
+    assert!(client.next_frame(lease()).await.unwrap().is_some());
+
+    host.entered.store(false, Ordering::Release);
+    host.blocked.store(true, Ordering::Release);
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        client.focus(lease(), true),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, Err(PresentationError::OutcomeUnknown));
+    assert_eq!(host.effects.load(Ordering::Acquire), 0);
+    assert!(serving.await.unwrap().is_err());
+    assert!(host.revoked.load(Ordering::Acquire));
 }
 
 #[tokio::test]

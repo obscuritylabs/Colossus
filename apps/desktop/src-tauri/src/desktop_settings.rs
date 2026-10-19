@@ -2588,7 +2588,7 @@ mod tests {
         #[cfg(windows)]
         let parent_guard = PrivateTestRoot::in_target("home-parent");
         #[cfg(windows)]
-        let parent = parent_guard.path().to_path_buf();
+        let parent = fs::canonicalize(parent_guard.path()).expect("canonical home parent");
         #[cfg(not(windows))]
         let parent_guard = tempfile::tempdir().expect("home parent");
         #[cfg(not(windows))]

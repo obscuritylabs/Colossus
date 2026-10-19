@@ -1,0 +1,54 @@
+[package]
+name = "colossus-native-computer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+license = "Apache-2.0"
+
+[workspace]
+resolver = "3"
+
+[features]
+native-test-driver = []
+
+[[example]]
+name = "computer_window_fixture"
+required-features = ["native-test-driver"]
+
+[[example]]
+name = "computer_acceptance"
+required-features = ["native-test-driver"]
+
+[dependencies]
+async-trait = "0.1.89"
+colossus-contracts = { version = "=0.11.8", path = "../../crates/colossus-contracts" }
+colossus-ports = { version = "=0.11.8", path = "../../crates/colossus-ports" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.10.9"
+getrandom = "0.4.3"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+tokio = { version = "1.49.0", features = ["process", "io-util", "rt", "sync", "time", "macros"] }
+
+[target.'cfg(windows)'.dependencies]
+colossus-windows-native = { version = "=0.11.8", path = "../../crates/colossus-windows-native" }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_System_LibraryLoader", "Win32_System_StationsAndDesktops", "Win32_System_SystemInformation", "Win32_System_RemoteDesktop", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "=0.62.2", features = [
+  "Foundation", "Graphics_Capture", "Graphics_DirectX_Direct3D11",
+  "Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi",
+  "Win32_Security_Authorization", "Win32_System_Com", "Win32_System_Ole",
+  "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_LibraryLoader", "Win32_System_StationsAndDesktops", "Win32_System_SystemInformation",
+  "Win32_System_WinRT_Direct3D11", "Win32_System_WinRT_Graphics_Capture",
+  "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging"
+] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "deny"

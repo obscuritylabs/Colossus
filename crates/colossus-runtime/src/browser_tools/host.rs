@@ -17,6 +17,10 @@ pub struct RuntimeBrowserHost {
 }
 
 impl RuntimeBrowserHost {
+    pub(crate) fn capabilities(&self) -> colossus_contracts::BrowserCapabilities {
+        self.driver.capabilities()
+    }
+
     /// Bind a driver selected and verified by the trusted runtime host.
     #[must_use]
     pub fn new(driver: Arc<dyn BrowserDriver>) -> Self {

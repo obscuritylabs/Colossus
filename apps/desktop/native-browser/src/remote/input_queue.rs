@@ -50,16 +50,17 @@ mod tests {
             .chars()
             .enumerate()
             .flat_map(|(index, character)| {
+                let code = 65 + u16::try_from(index).expect("short input fixture");
                 [
                     Input::Key {
-                        code: 65 + index as u16,
+                        code,
                         pressed: true,
                     },
                     Input::ImeCommit {
                         text: character.to_string(),
                     },
                     Input::Key {
-                        code: 65 + index as u16,
+                        code,
                         pressed: false,
                     },
                 ]

@@ -8,6 +8,30 @@ export function latestBrowserFixtureViewport() {
   return latestViewport;
 }
 
+export function completeBrowserFixtureAgentSession(tabId: string) {
+  for (const session of sessions.values()) {
+    const tab = session.tabs.find((entry) => entry.id === tabId);
+    if (tab) {
+      tab.control = "completed";
+      tab.loading = false;
+      tab.error = null;
+      tab.completedSnapshot = true;
+    }
+  }
+}
+
+export function endBrowserFixtureAgentSession(tabId: string) {
+  for (const session of sessions.values()) {
+    const tab = session.tabs.find((entry) => entry.id === tabId);
+    if (tab) {
+      tab.control = "agent";
+      tab.loading = false;
+      tab.error =
+        "This browser tab stopped responding. Close it and open a new tab.";
+    }
+  }
+}
+
 export function browserFixture(scope: string): BrowserApi {
   if (!sessions.has(scope))
     sessions.set(scope, {

@@ -140,11 +140,12 @@ impl BrowserBridgeDriver {
                     && observation.tab.tab_id == tab
                     && observation.snapshot.is_none()
                     && observation.tab.title.len() <= 1024
-                    && observation
-                        .tab
-                        .origin
-                        .as_ref()
-                        .is_none_or(|origin| self.enrollment.allowed_origins.contains(origin))
+                    && observation.tab.origin.as_ref().is_none_or(|origin| {
+                        origin.admitted_by(
+                            &self.enrollment.allowed_origins,
+                            self.enrollment.public_web,
+                        )
+                    })
                     && crate::validation::bounded_observation(
                         &observation,
                         self.enrollment.capabilities.limits.max_observation_bytes as usize,
@@ -197,6 +198,7 @@ impl BrowserBridgeDriver {
                     &descriptor,
                     &command,
                     &self.enrollment.allowed_origins,
+                    self.enrollment.public_web,
                 )
                 .is_ok() =>
             {

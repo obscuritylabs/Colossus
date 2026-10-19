@@ -11,6 +11,8 @@ pub(super) struct NativeRelay {
     client: PresentationClient,
     revoked: AtomicBool,
     frames: Mutex<Option<(Lease, FrameCodec)>>,
+    #[cfg(all(windows, debug_assertions))]
+    observe_diagnostics: std::sync::atomic::AtomicU8,
 }
 impl NativeRelay {
     pub(super) fn new(
@@ -23,9 +25,25 @@ impl NativeRelay {
             session,
             revoked: AtomicBool::new(false),
             frames: Mutex::new(None),
+            #[cfg(all(windows, debug_assertions))]
+            observe_diagnostics: std::sync::atomic::AtomicU8::new(0),
+        }
+    }
+    #[cfg(all(windows, debug_assertions))]
+    fn trace_observe(&self, bit: u8, stage: &'static str) {
+        if self.observe_diagnostics.fetch_or(bit, Ordering::AcqRel) & bit == 0 {
+            // Fixed provenance categories only: no target, page or native payload.
+            eprintln!("EVIDENCE native-relay-observe stage={stage}");
         }
     }
     fn active(&self) -> Result<(), PresentationError> {
+        if self
+            .session
+            .is_expired()
+            .map_err(|_| PresentationError::OutcomeUnknown)?
+        {
+            return Err(PresentationError::Expired);
+        }
         if !self.revoked.load(Ordering::Acquire) && self.service.authorized() {
             Ok(())
         } else {
@@ -35,6 +53,13 @@ impl NativeRelay {
     fn acknowledged(&self) -> Result<(), PresentationError> {
         // Losing authority after dispatch cannot be reported as a no-effect rejection.
         self.active().map_err(|_| PresentationError::OutcomeUnknown)
+    }
+    fn read_error(&self, error: PresentationError) -> PresentationError {
+        if self.session.is_expired().unwrap_or(false) {
+            PresentationError::Expired
+        } else {
+            error
+        }
     }
     async fn configure(&self, value: Configure) -> Result<PresentationReply, PresentationError> {
         let current = self
@@ -98,19 +123,29 @@ impl PresentationHost for NativeRelay {
         match command {
             PresentationCommand::Configure(value) => self.configure(value).await,
             PresentationCommand::Observe { lease } => {
-                let state = self.client.observe(lease).await?;
+                let state = self.client.observe(lease).await.map_err(|error| {
+                    #[cfg(all(windows, debug_assertions))]
+                    self.trace_observe(1, "native_rejected");
+                    self.read_error(error)
+                })?;
                 self.session
                     .confirm_presentation_state(lease, &state)
-                    .map_err(|error| match error {
-                        // A concurrent handoff, viewport or document transition
-                        // can retire this read-only observation. Retire its view
-                        // without classifying a known stale query as a lost effect.
-                        colossus_runtime::RuntimeNativeBrowserError::Stale => {
-                            PresentationError::Stale
+                    .map_err(|error| {
+                        #[cfg(all(windows, debug_assertions))]
+                        self.trace_observe(2, "runtime_rejected");
+                        match error {
+                            // A concurrent handoff, viewport or document transition
+                            // can retire this read-only observation. Retire its view
+                            // without classifying a known stale query as a lost effect.
+                            colossus_runtime::RuntimeNativeBrowserError::Stale => {
+                                PresentationError::Stale
+                            }
+                            _ => PresentationError::OutcomeUnknown,
                         }
-                        _ => PresentationError::OutcomeUnknown,
                     })?;
-                self.acknowledged()?;
+                self.active()?;
+                #[cfg(all(windows, debug_assertions))]
+                self.trace_observe(4, "accepted");
                 Ok(PresentationReply::State(state))
             }
             // Handoff is exclusively Runtime's gateway operation over its retained native client.
@@ -126,10 +161,15 @@ impl PresentationHost for NativeRelay {
     }
     async fn frame(&self, lease: Lease) -> Result<Option<Frame>, PresentationError> {
         self.active()?;
-        let Some(bytes) = self.client.next_frame(lease).await? else {
+        let Some(bytes) = self
+            .client
+            .next_frame(lease)
+            .await
+            .map_err(|error| self.read_error(error))?
+        else {
             return Ok(None);
         };
-        self.acknowledged()?;
+        self.active()?;
         let mut frames = self
             .frames
             .lock()

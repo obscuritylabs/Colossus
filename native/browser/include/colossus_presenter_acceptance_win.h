@@ -17,6 +17,10 @@ int32_t colossus_presenter_screen_capture(uintptr_t view, uint32_t width, uint32
   uint8_t* bgra, size_t bytes);
 /* Fixed synthetic field location and key/Unicode sequence; no general OS input API. */
 int32_t colossus_presenter_fixture_input(uintptr_t view);
+/* Fixed parent-window Return sequence with a reentrant sent keyup. This addresses
+ * only the foreground root of this exact owned presenter, never another app.
+ */
+int32_t colossus_presenter_fixture_keyboard_reentrancy(uintptr_t view);
 #ifdef __cplusplus
 }
 namespace colossus {
@@ -24,6 +28,7 @@ int32_t PresenterScreenProbe(uintptr_t window, colossus_presenter_screen* screen
 int32_t PresenterScreenCapture(uintptr_t window, uint32_t width, uint32_t height,
   uint8_t* bgra, size_t bytes);
 int32_t PresenterFixtureInput(uintptr_t window);
+int32_t PresenterFixtureKeyboardReentrancy(uintptr_t window);
 }
 #endif
 #endif

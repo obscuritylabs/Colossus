@@ -723,6 +723,7 @@ mod tests {
 
         Configuration {
             enrollment: BrowserBridgeEnrollment {
+                public_web: false,
                 binding: BrowserSessionBinding {
                     runtime_id: "synthetic-runtime".into(),
                     workspace_id: "synthetic-workspace".into(),

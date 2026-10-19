@@ -151,7 +151,10 @@ async fn runtime_command(
     }
     let mut runtime_options = RuntimeOpenOptions::for_workspace(&cli.workspace)?
         .with_colossus_home(home.root())?
-        .with_browser_artifact_publisher(Arc::new(colossus_api::ReleasedBrowserArtifactPublisher));
+        .with_browser_artifact_publisher(Arc::new(colossus_api::ReleasedBrowserArtifactPublisher))
+        .with_computer_artifact_publisher(Arc::new(
+            colossus_api::ReleasedComputerArtifactPublisher,
+        ));
     let workspace_identity = detect_workspace_identity(&runtime_options.workspace)?;
     if workspace_identity.canonical_path() != runtime_options.workspace {
         return Err("workspace identity canonicalization changed unexpectedly".into());
@@ -253,6 +256,18 @@ async fn runtime_command(
     }
     let config =
         source_config.resolve_storage_paths(&runtime_options.workspace, &home_workspace)?;
+    #[cfg(windows)]
+    if config.computer.enabled {
+        let context = colossus_native_computer::TrustedComputerContext::for_current_host()?;
+        let driver = optional_computer_host(colossus_native_computer::NativeComputerDriver::new(
+            std::env::current_exe()?,
+            context,
+        ))?;
+        if let Some(driver) = driver {
+            runtime_options = runtime_options
+                .with_computer_host(colossus_runtime::RuntimeComputerHost::new(Arc::new(driver)));
+        }
+    }
     let config_resolution = config_resolution_report(
         &config_selection,
         &home,
@@ -269,7 +284,9 @@ async fn runtime_command(
                 && worker.revoke_credential.is_none() =>
         {
             #[cfg(target_os = "linux")]
-            if let Some(owner) = browser_bundle::discover(&home_workspace).await? {
+            if config.browser.enabled
+                && let Some(owner) = browser_bundle::discover(&home_workspace).await?
+            {
                 runtime_options = runtime_options.with_browser_host(owner.host());
                 *browser = Some(owner);
             }
@@ -455,7 +472,9 @@ async fn runtime_command(
         );
     }
     #[cfg(target_os = "linux")]
-    if let Some(owner) = browser_bundle::discover(&home_workspace).await? {
+    if config.browser.enabled
+        && let Some(owner) = browser_bundle::discover(&home_workspace).await?
+    {
         runtime_options = runtime_options.with_browser_host(owner.host());
         *browser = Some(owner);
     }
@@ -1371,6 +1390,16 @@ async fn runtime_command(
     } else {
         command_result
     };
+    runtime.stop_computer_sessions();
+    let command_result = match runtime.drain_computer_sessions().await {
+        Ok(()) => command_result,
+        Err(cleanup) => Err(match command_result {
+            Ok(_) => format!("computer cleanup remains unacknowledged: {cleanup}").into(),
+            Err(command) => {
+                format!("{command}; computer cleanup remains unacknowledged: {cleanup}").into()
+            }
+        }),
+    };
     finalize_runtime_command(
         command_result,
         || runtime.checkpoint(),
@@ -1381,6 +1410,19 @@ async fn runtime_command(
             Ok(())
         },
     )
+}
+
+#[cfg(windows)]
+fn optional_computer_host<T>(
+    candidate: Result<T, colossus_ports::ComputerDriverError>,
+) -> Result<Option<T>, colossus_ports::ComputerDriverError> {
+    // The native constructor proves the executable/context first. Only the ordinary
+    // interactive desktop prerequisite is optional; trust failures remain fatal.
+    match candidate {
+        Ok(host) => Ok(Some(host)),
+        Err(colossus_ports::ComputerDriverError::Unavailable) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn runtime_open_error(error: colossus_runtime::RuntimeError) -> Box<dyn Error> {
@@ -1404,5 +1446,30 @@ fn worker_open_error(error: colossus_worker::WorkerError) -> Box<dyn Error> {
         Box::new(cli_error("runtime writer lease is already held"))
     } else {
         Box::new(error)
+    }
+}
+
+#[cfg(all(test, windows))]
+mod computer_host_tests {
+    use super::optional_computer_host;
+    use colossus_ports::ComputerDriverError;
+
+    #[test]
+    fn optional_computer_host_preserves_other_cli_work_only_for_unavailable_desktop() {
+        assert_eq!(optional_computer_host(Ok(7)), Ok(Some(7)));
+        assert_eq!(
+            optional_computer_host::<()>(Err(ComputerDriverError::Unavailable)),
+            Ok(None)
+        );
+        for failure in [
+            ComputerDriverError::Denied,
+            ComputerDriverError::InvalidInput,
+            ComputerDriverError::Failed,
+            ComputerDriverError::Busy,
+            ComputerDriverError::Stale,
+            ComputerDriverError::OutcomeUnknown,
+        ] {
+            assert_eq!(optional_computer_host::<()>(Err(failure)), Err(failure));
+        }
     }
 }

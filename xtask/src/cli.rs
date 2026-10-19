@@ -18,7 +18,7 @@ Components:
   mobile        Mobile renderer, native client tests, and wrapper formatting
   web           Cloud web renderer audit, checks, tests, and build
   docs          Documentation build and verification
-  dependencies  Root, fuzz, desktop, and mobile dependency policy
+  dependencies  Root, fuzz, Desktop, Mobile, and standalone native dependency policy
   workflows     CI classification contracts and workflow lint
 ";
 

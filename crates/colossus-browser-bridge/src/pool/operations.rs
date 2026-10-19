@@ -90,10 +90,12 @@ async fn allocate(
     if tab.tab_id != entry.request.tab_id
         || tab.document_id != entry.request.document_id
         || tab.title.len() > 1024
-        || tab
-            .origin
-            .as_ref()
-            .is_some_and(|origin| !entry.request.options.allowed_origins.contains(origin))
+        || tab.origin.as_ref().is_some_and(|origin| {
+            !origin.admitted_by(
+                &entry.request.options.allowed_origins,
+                entry.request.options.public_web,
+            )
+        })
     {
         return Err(BrowserDriverError::OutcomeUnknown);
     }

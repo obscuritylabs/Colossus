@@ -47,6 +47,15 @@ impl EffectExecutor for BrowserEffect<'_> {
             .authority(&run, &invocation)
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         let obligations = permit.obligations();
+        if authority
+            .as_ref()
+            .is_some_and(|authority| authority.public_web)
+            && !super::service::permits_public_web(obligations)
+        {
+            return Err(ExecutionError::Failed(
+                "browser public network grant is no longer authorized".into(),
+            ));
+        }
         if obligations.max_output_bytes
             < u64::from(
                 self.browser
@@ -78,8 +87,8 @@ impl EffectExecutor for BrowserEffect<'_> {
                     .origins
             }
         };
-        // Native egress remains this exact immutable envelope, even when the
-        // surrounding runtime acknowledges ambient resources or a public wildcard.
+        // Exact destinations always require policy. Public browsing is separately
+        // narrowed to the permit's network grant before native allocation.
         for origin in origins {
             let allowed =
                 colossus_policy::http_transport_authority_match(obligations, origin.as_str())
@@ -111,7 +120,8 @@ impl EffectExecutor for BrowserEffect<'_> {
                 }
                 json!({"sessions":sessions})
             }
-            BrowserInvocation::Open { options } => {
+            BrowserInvocation::Open { mut options } => {
+                options.public_web &= super::service::permits_public_web(obligations);
                 let summary = self
                     .browser
                     .coordinator
@@ -141,6 +151,7 @@ impl EffectExecutor for BrowserEffect<'_> {
                         BrowserSessionAuthority {
                             lease: lease.clone(),
                             origins: options.allowed_origins,
+                            public_web: options.public_web,
                         },
                     )
                     .is_err()

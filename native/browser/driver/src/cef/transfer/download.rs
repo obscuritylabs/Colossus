@@ -36,12 +36,7 @@ impl Host {
             .map_err(|_| BrowserDriverError::Denied)?;
         url.set_fragment(None);
         let url = BrowserUrl::parse(url.as_str()).map_err(|_| BrowserDriverError::Denied)?;
-        if !self
-            .callbacks
-            .origins
-            .lock()
-            .is_ok_and(|origins| origins.contains(&url.origin()))
-        {
+        if !self.callbacks.admits_origin(&url.origin()) {
             return Err(BrowserDriverError::Denied);
         }
         let reservation = self
@@ -141,12 +136,7 @@ impl Host {
             .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
         let final_url =
             BrowserUrl::parse(final_url).map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-        if !self
-            .callbacks
-            .origins
-            .lock()
-            .is_ok_and(|origins| origins.contains(&final_url.origin()))
-        {
+        if !self.callbacks.admits_origin(&final_url.origin()) {
             return Err(BrowserDriverError::OutcomeUnknown);
         }
         let bytes = self

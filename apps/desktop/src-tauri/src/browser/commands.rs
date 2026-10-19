@@ -50,7 +50,10 @@ pub(crate) async fn browser_context(
     state.browser.selection_changed(selected.clone());
     #[cfg(any(
         feature = "macos-contained-browser-diagnostic",
-        feature = "windows-browser-development"
+        any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )
     ))]
     if let (Some(scope), Some(run), Some(conversation)) =
         (selected.clone(), run_id, conversation_id)
@@ -62,7 +65,10 @@ pub(crate) async fn browser_context(
     }
     #[cfg(not(any(
         feature = "macos-contained-browser-diagnostic",
-        feature = "windows-browser-development"
+        any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )
     )))]
     let _ = (app, run_id, conversation_id);
     state.browser.snapshot().await

@@ -71,6 +71,7 @@ mod directory_creation;
 pub use directory_creation::PrivateDirectoryCreation;
 pub(super) mod enrolled;
 mod file_retirement;
+mod job_accounting;
 mod mandatory;
 mod window_station;
 pub use window_station::OwnedAppContainerWindowStation;
@@ -501,6 +502,10 @@ impl KillOnCloseJob {
         } else {
             Ok(())
         }
+    }
+
+    pub(super) fn active_processes(&self) -> Result<u32, WindowsNativeError> {
+        job_accounting::active_processes(&self.handle)
     }
 }
 

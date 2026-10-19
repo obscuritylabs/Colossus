@@ -155,6 +155,12 @@ messages, request content, or response bodies.
 An in-run diagnostic request can contain user, session, and tool-result content, so the
 TUI warns the operator to review it before sharing.
 
+An opted-in terminal streaming rejection captures only its bounded error event, even
+when partial model events were already released. A successful HTTP transport status is
+retained as diagnostic metadata and does not become an HTTP failure status for that
+rejection. The terminal error event receives the same credential redaction, output
+limits, and post-effect release as a non-success HTTP response.
+
 Canonical tool identities are never renamed to accommodate a provider. Network adapters
 build a request-local, one-to-one transport alias map that projects `.` to `_` under the
 portable 64-byte function-name grammar. Definitions and continuation history use that
@@ -895,8 +901,11 @@ fences the session and reports an unknown outcome. These internal lifecycle comm
 are fixed native operations and cannot be selected through `browser.cdp`.
 
 The Linux OCI adapter runs the entire host tree in a networkless namespace, with
-read-only verified component bytes, bounded cgroups and a private exact-origin
-egress relay. Its supervisor verifies native process identity before delivering
+read-only verified component bytes, bounded cgroups and a private permit-bound
+egress relay. The session's immutable network scope combines admitted exact origins
+with a public HTTPS grant only when both configuration and the execution permit allow
+it. Public browsing retains private-address denial, DNS pinning and TLS verification.
+Its supervisor verifies native process identity before delivering
 bootstrap secrets and retains uncertain cleanup. The standalone CEF preview does
 not establish whole-host containment. Production availability requires an accepted
 publisher-bound installed component; source fixtures cannot enable an ordinary

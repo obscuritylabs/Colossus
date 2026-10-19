@@ -81,3 +81,41 @@ pub fn spawn_user_browser_with_private_channels(
     }
     super::windows_impl::spawn_user_browser(request, count)
 }
+
+/// Verify that this fixed functional-preview context is an interactive ordinary
+/// user: Medium integrity, no elevation, AppContainer, package or capabilities.
+/// This query never changes the caller's token or weakens a contained launch.
+#[cfg(all(
+    windows,
+    target_arch = "x86_64",
+    feature = "windows-browser-functional-preview"
+))]
+pub fn validate_functional_browser_context() -> Result<(), WindowsProcessError> {
+    super::windows_impl::validate_functional_browser_context()
+}
+
+/// Explicit functional-preview browser launch with owned Job and private pipes.
+/// Chromium must keep its own sandbox. This ordinary-user edition cannot request
+/// AppContainer/WFP, and cannot satisfy production containment acceptance.
+#[cfg(all(
+    windows,
+    target_arch = "x86_64",
+    feature = "windows-browser-functional-preview"
+))]
+pub fn spawn_functional_browser_with_private_channels(
+    request: &SpawnRequest,
+    count: usize,
+) -> Result<SupervisedChild, WindowsProcessError> {
+    super::api::validate_launch(request)?;
+    validate_channels(request, count)?;
+    if !request.appcontainer_sid.is_empty()
+        || request.proxy_port.is_some()
+        || request.network_filter_id.is_some()
+    {
+        return Err(WindowsProcessError::Invalid(
+            "functional browser preview cannot request AppContainer or WFP".into(),
+        ));
+    }
+    validate_functional_browser_context()?;
+    super::windows_impl::spawn_user_browser(request, count)
+}

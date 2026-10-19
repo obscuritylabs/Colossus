@@ -6,7 +6,10 @@ use std::path::PathBuf;
     feature = "embedded-chromium-preview",
     any(
         feature = "macos-contained-browser-diagnostic",
-        feature = "windows-browser-development"
+        any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )
     )
 )))]
 use colossus_native_browser::BrowserEvent;
@@ -16,7 +19,10 @@ use tauri::{AppHandle, Manager as _, Webview};
     feature = "embedded-chromium-preview",
     any(
         feature = "macos-contained-browser-diagnostic",
-        feature = "windows-browser-development"
+        any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )
     )
 )))]
 use tauri::{
@@ -56,12 +62,18 @@ pub(super) async fn create(
         policy,
         sink,
     } = request;
+    if initial_url.is_none() {
+        return Ok(BrowserView::Empty);
+    }
     let window = app
         .get_window("main")
         .ok_or_else(|| error("The Desktop window has closed."))?;
     #[cfg(any(
         feature = "macos-contained-browser-diagnostic",
-        feature = "windows-browser-development"
+        any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )
     ))]
     {
         let _ = (directory, source);
@@ -129,7 +141,10 @@ pub(super) async fn create(
         feature = "embedded-chromium-preview",
         any(
             feature = "macos-contained-browser-diagnostic",
-            feature = "windows-browser-development"
+            any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            )
         )
     )))]
     {
@@ -179,5 +194,33 @@ pub(super) async fn create(
             return Err(error(&failure.to_string()));
         }
         Ok(BrowserView::System(view))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn empty_tab_has_no_navigation_or_handoff_authority() {
+        let view = BrowserView::Empty;
+        assert!(view.conversation_id().is_none());
+        assert!(view.contained_session_id().is_none());
+        assert!(view.system_view().is_none());
+        let page = view.inspect().await.unwrap();
+        assert!(page.url.is_empty() && !page.loading);
+        assert_eq!(
+            view.navigate("https://example.com".parse().unwrap()),
+            Err(engine::BrowserError::Unavailable)
+        );
+        assert_eq!(
+            view.control(engine::NavigationAction::Reload).await,
+            Err(engine::BrowserError::Unavailable)
+        );
+        assert_eq!(
+            view.handoff("run").await,
+            Err(engine::BrowserError::Unavailable)
+        );
+        view.close().await.unwrap();
     }
 }

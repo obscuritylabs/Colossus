@@ -37,4 +37,25 @@ impl RemoteSurface {
             .ok_or(BrowserError::Unavailable)?;
         surface.fixture_input().await
     }
+
+    /// Exercise reentrant Return messages in this presenter's own Tao parent.
+    ///
+    /// # Errors
+    /// Requires human control, the exact foreground parent, an observed nested
+    /// callback and a subsequent main-thread acknowledgement. The external native
+    /// acceptance runner must bound its disposable process if Tao self-deadlocks.
+    pub async fn acceptance_windows_keyboard_reentrancy(&self) -> Result<(), BrowserError> {
+        if !self.human_control_available() {
+            return Err(BrowserError::Unavailable);
+        }
+        let surface = self
+            .0
+            .state
+            .lock()
+            .map_err(|_| BrowserError::Closed)?
+            .surface
+            .clone()
+            .ok_or(BrowserError::Unavailable)?;
+        surface.fixture_keyboard_reentrancy().await
+    }
 }

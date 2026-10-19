@@ -24,6 +24,7 @@ fn request() -> BrowserDriverOpenRequest {
         tab_id: BrowserTabId::parse(format!("bt_{}", "b".repeat(32))).unwrap(),
         document_id: BrowserDocumentId::parse(format!("bd_{}", "c".repeat(32))).unwrap(),
         options: BrowserOpenOptions {
+            public_web: false,
             profile: Default::default(),
             mode: BrowserMode::Headless,
             allowed_origins: vec![BrowserOrigin::parse("https://allowed.example").unwrap()],

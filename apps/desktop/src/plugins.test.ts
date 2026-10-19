@@ -10,6 +10,19 @@ const skills = ["coding", "plugin-authoring"].map((name) => ({
   allowed_tools: null,
 }));
 describe("leading plugin mention completion", () => {
+  it("offers @browser only from the available bundled skill inventory", () => {
+    const browser = { ...skills[0]!, id: "colossus/browser", name: "browser" };
+    expect(
+      pluginMentionSuggestions("@browser", [...skills, browser])[0]?.command,
+    ).toBe("@colossus/browser ");
+    expect(pluginMentionSuggestions("@browser", skills)).toEqual([]);
+    expect(
+      pluginMentionSuggestions("@colossus/browser @browser", [
+        ...skills,
+        browser,
+      ]),
+    ).toEqual([]);
+  });
   it("offers qualified skills and preserves preceding known selections", () => {
     expect(pluginMentionSuggestions("@colossus/pl", skills)[0]?.command).toBe(
       "@colossus/plugin-authoring ",

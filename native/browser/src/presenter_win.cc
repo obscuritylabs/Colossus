@@ -1,5 +1,6 @@
 #include "colossus_browser_presenter.h"
 #include "colossus_presenter_acceptance_win.h"
+#include "presenter_policy_win.h"
 #include <windows.h>
 #include <windowsx.h>
 #include <imm.h>
@@ -15,6 +16,7 @@ struct View {
   void* owner = nullptr;
   colossus_presenter_input_fn input = nullptr;
   colossus_presenter_focus_fn focus = nullptr;
+  bool snapshot = false;
   uint32_t width = 0, height = 0;
   std::vector<uint8_t> pixels;
   uint64_t epoch = 0;
@@ -51,19 +53,19 @@ LRESULT CALLBACK Procedure(HWND window, UINT message, WPARAM wparam, LPARAM lpar
     // before callbacks, so a recycled HWND cannot reach the previous owner.
     const auto owner = view.owner; const auto focus = view.focus;
     windows.erase(identity); views.erase(found); KillTimer(window, 1);
-    delete &view; focus(owner, 0);
+    delete &view; if (focus) focus(owner, 0);
     return DefWindowProcW(window, message, wparam, lparam);
   }
   if (message == WM_TIMER && wparam == 1 && !Live(view) && IsWindowVisible(window)) {
     const auto owner = view.owner; const auto focus = view.focus;
     view.high_surrogate = 0; view.pixels.clear(); view.pixels.shrink_to_fit();
-    focus(owner, 0);
+    if (focus) focus(owner, 0);
     if (Lookup(handle)) ShowWindow(window, SW_HIDE);
     return 0;
   }
   if (message == WM_SETFOCUS || message == WM_KILLFOCUS) {
     if (message == WM_KILLFOCUS) view.high_surrogate = 0;
-    view.focus(view.owner, message == WM_SETFOCUS && Live(view) ? 1 : 0);
+    if (view.focus) view.focus(view.owner, message == WM_SETFOCUS && Live(view) ? 1 : 0);
     return 0;
   }
   if (message == WM_PAINT) {
@@ -78,7 +80,9 @@ LRESULT CALLBACK Procedure(HWND window, UINT message, WPARAM wparam, LPARAM lpar
     } else FillRect(dc, &paint.rcPaint, static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
     EndPaint(window, &paint); return 0;
   }
-  if (!Live(view) || !IsWindowVisible(window) || GetAncestor(window, GA_ROOT) != GetForegroundWindow())
+  if (view.snapshot && message == WM_MOUSEACTIVATE) return MA_NOACTIVATE;
+  if (!colossus::PresenterRoutesInput(view.snapshot, Live(view), IsWindowVisible(window) != FALSE,
+      GetAncestor(window, GA_ROOT) == GetForegroundWindow()))
     return DefWindowProcW(window, message, wparam, lparam);
   colossus_cef_input input{}; input.version = COLOSSUS_CEF_PRESENTATION_VERSION; input.modifiers = Modifiers();
   if (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST) {
@@ -143,10 +147,11 @@ LRESULT CALLBACK Procedure(HWND window, UINT message, WPARAM wparam, LPARAM lpar
   return DefWindowProcW(window, message, wparam, lparam);
 }
 }
-extern "C" uintptr_t colossus_presenter_create(uintptr_t parent, void* owner,
-    colossus_presenter_input_fn input, colossus_presenter_focus_fn focus) {
+namespace {
+uintptr_t Create(uintptr_t parent, void* owner, colossus_presenter_input_fn input,
+    colossus_presenter_focus_fn focus, bool snapshot) {
   HWND native_parent = reinterpret_cast<HWND>(parent); DWORD pid = 0;
-  if (!owner || !input || !focus || GetWindowThreadProcessId(native_parent, &pid) != GetCurrentThreadId() ||
+  if ((!snapshot && (!owner || !input || !focus)) || GetWindowThreadProcessId(native_parent, &pid) != GetCurrentThreadId() ||
       pid != GetCurrentProcessId()) return 0;
   DWORD expected = 0;
   if (!owner_thread.compare_exchange_strong(expected, GetCurrentThreadId()) && expected != GetCurrentThreadId()) return 0;
@@ -155,7 +160,8 @@ extern "C" uintptr_t colossus_presenter_create(uintptr_t parent, void* owner,
   registration.hInstance = GetModuleHandleW(nullptr); registration.lpszClassName = kClass;
   registration.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   if (!RegisterClassW(&registration) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return 0;
-  HWND window = CreateWindowExW(WS_EX_LAYERED, kClass, L"", WS_CHILD | WS_TABSTOP | WS_CLIPSIBLINGS, 0, 0, 16, 16,
+  HWND window = CreateWindowExW(WS_EX_LAYERED | (snapshot ? WS_EX_NOACTIVATE : 0), kClass, L"",
+      WS_CHILD | WS_CLIPSIBLINGS | (snapshot ? WS_DISABLED : WS_TABSTOP), 0, 0, 16, 16,
       native_parent, nullptr, registration.hInstance, nullptr);
   if (!window) return 0;
   // WebView2 uses a compositor surface. Give the GDI pixel child its own opaque
@@ -166,11 +172,20 @@ extern "C" uintptr_t colossus_presenter_create(uintptr_t parent, void* owner,
   const uintptr_t handle = next_handle++;
   auto* view = new View{}; view->window = window; view->thread = GetCurrentThreadId();
   view->owner = owner; view->input = input; view->focus = focus;
+  view->snapshot = snapshot;
   views.emplace(handle, view); windows.emplace(window, handle);
   if (!SetTimer(window, 1, 50, nullptr)) {
     DestroyWindow(window); return 0;
   }
   return handle;
+}
+}
+extern "C" uintptr_t colossus_presenter_create(uintptr_t parent, void* owner,
+    colossus_presenter_input_fn input, colossus_presenter_focus_fn focus) {
+  return Create(parent, owner, input, focus, false);
+}
+extern "C" uintptr_t colossus_presenter_snapshot_create(uintptr_t parent) {
+  return Create(parent, nullptr, nullptr, nullptr, true);
 }
 extern "C" int32_t colossus_presenter_bounds(uintptr_t handle, colossus_cef_bounds rect) {
   auto* view = Lookup(handle);
@@ -197,9 +212,9 @@ extern "C" int32_t colossus_presenter_visible(uintptr_t handle, int32_t visible)
   if (!visible) {
     view->pixels.clear(); view->pixels.shrink_to_fit(); view->high_surrogate = 0;
     view->deadline = {}; ShowWindow(window, SW_HIDE);
-    if (Lookup(handle) && GetFocus() == window) SetFocus(GetParent(window));
+    if (Lookup(handle) && !view->snapshot && GetFocus() == window) SetFocus(GetParent(window));
     view = Lookup(handle);
-    if (view) view->focus(view->owner, 0);
+    if (view && view->focus) view->focus(view->owner, 0);
     return COLOSSUS_CEF_OK;
   }
   // The Tauri controller owns another native child. Put the admitted browser
@@ -224,6 +239,23 @@ extern "C" int32_t colossus_presenter_lease(uintptr_t handle, uint64_t epoch, ui
   view->epoch = epoch; view->deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ttl);
   return COLOSSUS_CEF_OK;
 }
+extern "C" int32_t colossus_presenter_snapshot_show(uintptr_t handle, uint64_t epoch, uint32_t ttl,
+    colossus_cef_bounds bounds, uint32_t width, uint32_t height, const uint8_t* pixels, size_t bytes) {
+  auto* view = Lookup(handle);
+  if (!view || !view->snapshot || !colossus::SnapshotDisplayPulse(view->epoch, epoch, ttl))
+    return COLOSSUS_CEF_DENIED;
+  const HWND parent = GetParent(view->window);
+  if (!IsWindowVisible(parent) || IsIconic(GetAncestor(parent, GA_ROOT))) {
+    colossus_presenter_visible(handle, 0); return COLOSSUS_CEF_DENIED;
+  }
+  if (colossus_presenter_bounds(handle, bounds) != COLOSSUS_CEF_OK ||
+      colossus_presenter_lease(handle, epoch, ttl) != COLOSSUS_CEF_OK ||
+      colossus_presenter_frame(handle, width, height, pixels, bytes) != COLOSSUS_CEF_OK ||
+      colossus_presenter_visible(handle, 1) != COLOSSUS_CEF_OK) {
+    colossus_presenter_visible(handle, 0); return COLOSSUS_CEF_CLOSED;
+  }
+  return COLOSSUS_CEF_OK;
+}
 extern "C" int32_t colossus_presenter_screen_probe(uintptr_t handle, colossus_presenter_screen* screen) {
   auto* view = Lookup(handle);
   return view ? colossus::PresenterScreenProbe(reinterpret_cast<uintptr_t>(view->window), screen) : COLOSSUS_CEF_CLOSED;
@@ -236,4 +268,9 @@ extern "C" int32_t colossus_presenter_screen_capture(uintptr_t handle, uint32_t 
 extern "C" int32_t colossus_presenter_fixture_input(uintptr_t handle) {
   auto* view = Lookup(handle);
   return view && Live(*view) ? colossus::PresenterFixtureInput(reinterpret_cast<uintptr_t>(view->window)) : COLOSSUS_CEF_DENIED;
+}
+extern "C" int32_t colossus_presenter_fixture_keyboard_reentrancy(uintptr_t handle) {
+  auto* view = Lookup(handle);
+  return view && Live(*view) ? colossus::PresenterFixtureKeyboardReentrancy(
+      reinterpret_cast<uintptr_t>(GetAncestor(view->window, GA_ROOT))) : COLOSSUS_CEF_DENIED;
 }

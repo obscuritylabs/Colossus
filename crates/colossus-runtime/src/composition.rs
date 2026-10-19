@@ -148,6 +148,7 @@ pub struct Runtime {
     pub(super) process_executor: Arc<dyn EffectExecutor>,
     pub(super) process_sessions: Arc<ProcessSessions>,
     pub(super) browser: Option<Arc<crate::browser_tools::RuntimeBrowserTools>>,
+    pub(super) computer: Option<Arc<crate::computer_tools::RuntimeComputerTools>>,
     pub(super) http_executor: Arc<HttpExecutor>,
     pub(super) sandbox_executor_config: SandboxExecutorConfig,
     pub(super) sandbox_backend: String,
@@ -244,6 +245,8 @@ impl Runtime {
         codex_auth: Option<CodexAuthStore>,
     ) -> Result<Self, RuntimeError> {
         validate_storage_config(&config.storage)?;
+        config.browser.validate()?;
+        config.computer.validate()?;
         validate_builtin_plugin_trust_identity(&config.plugins)?;
         let storage_adapter = match config.storage.adapter {
             StorageAdapter::Redb => "redb",
@@ -272,6 +275,8 @@ impl Runtime {
         let automatic_agent_instructions = options.automatic_agent_instructions;
         let model_network_tools = options.model_network_tools;
         let browser_host = options.browser_host.clone();
+        let computer_host = options.computer_host.clone();
+        let computer_artifacts = options.computer_artifacts.clone();
         let browser_artifacts = options.browser_artifacts.clone();
         match (&colossus_home, &colossus_home_root) {
             (None, None) => {}
@@ -448,6 +453,14 @@ impl Runtime {
             Arc::clone(&instruction_snapshots),
         )?);
         let plugin_catalog = Arc::new(PluginCatalogSource {
+            computer_available: config.computer.enabled
+                && computer_host
+                    .as_ref()
+                    .is_some_and(|host| host.capabilities().available),
+            browser_available: config.browser.enabled
+                && browser_host.as_ref().is_some_and(|host| {
+                    crate::browser_tools::supports_tool(Some(&host.capabilities()), "browser.open")
+                }),
             store: plugin_store.clone(),
             workspace_plugins: Arc::clone(&workspace_plugins),
             configuration: Arc::new(plugin_configuration.clone()),
@@ -540,18 +553,35 @@ impl Runtime {
             &tls_roots,
             Arc::clone(&provider_credentials),
         )?);
-        let browser = browser_host.as_ref().map(|host| {
-            Arc::new(crate::browser_tools::RuntimeBrowserTools::new(
-                host,
-                workspace_identity.clone(),
-                repository_id.clone(),
-                colossus_contracts::BrowserLimits::default(),
-                browser_artifacts.clone(),
-            ))
-        });
+        let browser = browser_host
+            .as_ref()
+            .filter(|_| config.browser.enabled)
+            .map(|host| {
+                Arc::new(crate::browser_tools::RuntimeBrowserTools::new(
+                    host,
+                    workspace_identity.clone(),
+                    repository_id.clone(),
+                    &config.browser,
+                    browser_artifacts.clone(),
+                ))
+            });
         let browser_capabilities = browser
             .as_ref()
             .map(|browser| browser.coordinator.capabilities());
+        let computer = computer_host
+            .as_ref()
+            .filter(|host| config.computer.enabled && host.capabilities().available)
+            .map(|host| {
+                crate::computer_tools::RuntimeComputerTools::new(
+                    host,
+                    workspace_identity.clone(),
+                    repository_id.clone(),
+                    &config.computer,
+                    computer_artifacts.clone(),
+                )
+                .map(Arc::new)
+            })
+            .transpose()?;
         let AccessPolicyComposition {
             candidate_tool_specs,
             access,
@@ -570,6 +600,7 @@ impl Runtime {
             model_network_tools,
             interactive: user_prompts.is_some(),
             browser_capabilities: browser_capabilities.as_ref(),
+            computer_available: computer.is_some(),
         })?;
         let mut permit_key = [0_u8; 32];
         getrandom::fill(&mut permit_key).map_err(|_| {
@@ -962,6 +993,17 @@ impl Runtime {
                 .flatten()
                 .collect(),
         });
+        let gateway_tool_executor: Arc<dyn ToolExecutor> = if let Some(computer) = &computer {
+            Arc::new(crate::computer_tools::ComputerToolExecutor {
+                gateway: Arc::clone(&gateway),
+                registry: Arc::clone(&tool_registry),
+                computer: Arc::clone(computer),
+                journal: Arc::clone(&journal),
+                inner: gateway_tool_executor,
+            })
+        } else {
+            gateway_tool_executor
+        };
         let gateway_tool_executor: Arc<dyn ToolExecutor> = if let Some(browser) = &browser {
             Arc::new(crate::browser_tools::BrowserToolExecutor {
                 gateway: Arc::clone(&gateway),
@@ -1015,14 +1057,11 @@ impl Runtime {
             inner: scheduled_tool_executor,
         });
         let run_lifecycle: Arc<dyn colossus_ports::AgentRunLifecycle> =
-            if let Some(browser) = &browser {
-                Arc::new(crate::browser_tools::RuntimeRunLifecycle {
-                    processes: Arc::clone(&process_sessions),
-                    browser: Arc::clone(browser),
-                })
-            } else {
-                Arc::clone(&process_sessions) as Arc<dyn colossus_ports::AgentRunLifecycle>
-            };
+            Arc::new(crate::run_lifecycle::RuntimeRunLifecycle::new(
+                Arc::clone(&process_sessions),
+                browser.clone(),
+                computer.clone(),
+            ));
         let agent = Arc::new(
             AgentService::new(
                 Arc::clone(&journal),
@@ -1118,6 +1157,7 @@ impl Runtime {
             process_executor,
             process_sessions,
             browser,
+            computer,
             http_executor,
             sandbox_executor_config,
             sandbox_backend: config.sandbox.backend.clone(),

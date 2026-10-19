@@ -16,6 +16,7 @@ default = ["dictation"]
 plugin-test-bridge = []
 approval-test-bridge = []
 browser-preview = []
+windows-browser-functional-preview = ["browser-preview", "colossus-native-browser/windows-browser-functional-preview", "tauri/custom-protocol"]
 embedded-chromium-preview = ["browser-preview", "colossus-native-browser/cef-preview"]
 browser-test-bridge = ["browser-preview", "colossus-native-browser/native-test-driver"]
 # Separate-host Debug lane: link only the native pixel adapter; never bootstrap
@@ -53,7 +54,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.10.9"
-tauri-build = { version = "=2.6.3", features = [] }
+tauri-build = { version = "=2.7.3", features = [] }
 
 [dependencies]
 async-trait = "0.1.89"
@@ -88,7 +89,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde-saphyr = "0.0.29"
 sha2 = "0.10.9"
-tauri = { version = "=2.11.5", features = ["unstable"] }
+tauri = { version = "=2.12.4", features = ["unstable"] }
 tauri-plugin-dialog = "2.7.2"
 # Shipped Windows updates are signed raw NSIS installers; legacy ZIP extraction is disabled.
 tauri-plugin-updater = { version = "=2.9.0", default-features = false, features = ["rustls-tls"] }
@@ -107,15 +108,13 @@ rustix = { version = "1.1.4", features = ["fs", "process"] }
 [target.'cfg(windows)'.dependencies]
 colossus-windows-native = { version = "=0.11.8", path = "../../../crates/colossus-windows-native" }
 keyring-core = "=1.0.0"
-tauri-plugin-single-instance = "=2.4.2"
 windows-native-keyring-store = "=1.1.0"
 
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
-tauri = { version = "=2.11.5", features = ["tray-icon", "image-png"] }
-tauri-plugin-notification = "=2.4.0"
+tauri = { version = "=2.12.4", features = ["tray-icon", "image-png"] }
+notify-rust = { version = "=4.18.1", default-features = false }
 
 [dev-dependencies]
-keyring = "4.1.4"
 rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 tempfile = "3.23.0"

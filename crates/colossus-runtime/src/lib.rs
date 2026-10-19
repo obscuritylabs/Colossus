@@ -14,11 +14,13 @@ mod adapter_composition;
 mod agent_runs;
 mod agent_tools;
 mod browser_tools;
+mod computer_tools;
 pub use browser_tools::{
     NativeBrowserOpenRequest, RuntimeBrowserHost, RuntimeBrowserPresenter,
     RuntimeNativeBrowserAuthority, RuntimeNativeBrowserError, RuntimeNativeBrowserGranted,
     RuntimeNativeBrowserSession,
 };
+pub use computer_tools::RuntimeComputerHost;
 pub mod browser_package;
 mod communication;
 mod composition;
@@ -73,6 +75,7 @@ mod repository_tools;
 mod research_gateway;
 mod research_mcp;
 mod research_skill_effects;
+mod run_lifecycle;
 mod runtime_helpers;
 mod sandbox_boundary;
 mod security_posture;
@@ -110,11 +113,12 @@ pub use colossus_observability::{
 };
 pub use composition::Runtime;
 pub use config::{
-    AgentConfig, AuditConfig, AuditExporterConfig, BundlesConfig, KeyConfig, MemoryConfig,
-    MemoryEmbeddingConfig, ModelProfileConfig, ModelsConfig, NetworkConfig, PluginMcpServerConfig,
-    PluginsConfig, PolicyConfig, ProviderProfileConfig, ProvidersConfig, ResearchConfig,
-    RuntimeConfig, SandboxConfig, SearchConfig, SearchProfileConfig, SemanticMemoryConfig,
-    StorageAdapter, StorageConfig, StorageLocation, SubagentConfig, WorkflowLibraryConfig,
+    AgentConfig, AuditConfig, AuditExporterConfig, BrowserConfig, BundlesConfig, ComputerConfig,
+    KeyConfig, MemoryConfig, MemoryEmbeddingConfig, ModelProfileConfig, ModelsConfig,
+    NetworkConfig, PluginMcpServerConfig, PluginsConfig, PolicyConfig, ProviderProfileConfig,
+    ProvidersConfig, ResearchConfig, RuntimeConfig, SandboxConfig, SearchConfig,
+    SearchProfileConfig, SemanticMemoryConfig, StorageAdapter, StorageConfig, StorageLocation,
+    SubagentConfig, WorkflowLibraryConfig,
 };
 pub use diagnostics::format_provider_response_diagnostic;
 pub use error::RuntimeError;

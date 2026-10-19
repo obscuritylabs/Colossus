@@ -132,6 +132,13 @@ Git's `core.symlinks=true`); a checkout that materializes a text file containing
     cargo xtask check rust
     ```
 
+    This also checks the isolated `native/computer` workspace with its own locked
+    dependency graph. Its default tests validate portable protocol and lifecycle
+    behavior without opening windows, capturing the desktop or sending input.
+    The selected Desktop gate runs the same checks on the Linux PR runner; real
+    Windows capture, accessibility and input require the separate
+    [computer control acceptance](testing.md#windows-computer-control-acceptance).
+
 5. Before opening or updating a pull request, run change-selected validation against
    the target branch:
 

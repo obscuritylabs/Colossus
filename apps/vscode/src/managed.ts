@@ -47,7 +47,42 @@ export interface ManagedSetup {
   access: "minimal" | "development";
 }
 
-export function runtimeConfiguration(setup: ManagedSetup) {
+export interface BrowserSettings {
+  enabled: boolean;
+  publicWeb: boolean;
+  maxSessions: number;
+  maxTabs: number;
+  maxSnapshotNodes: number;
+}
+
+export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
+  enabled: true,
+  publicWeb: true,
+  maxSessions: 4,
+  maxTabs: 8,
+  maxSnapshotNodes: 1024,
+};
+
+export function runtimeConfiguration(
+  setup: ManagedSetup,
+  browser = DEFAULT_BROWSER_SETTINGS,
+) {
+  if (
+    typeof browser.enabled !== "boolean" ||
+    typeof browser.publicWeb !== "boolean" ||
+    ![
+      [browser.maxSessions, 4],
+      [browser.maxTabs, 8],
+      [browser.maxSnapshotNodes, 1024],
+    ].every(
+      ([value, maximum]) =>
+        Number.isInteger(value) && value! >= 1 && value! <= maximum!,
+    )
+  ) {
+    throw new UserError(
+      "Correct the Colossus browser settings before starting Managed Local.",
+    );
+  }
   if (
     setup.version !== 1 ||
     !["minimal", "development"].includes(setup.access) ||
@@ -70,7 +105,10 @@ export function runtimeConfiguration(setup: ManagedSetup) {
     search_roles: {},
     mcp_servers: [],
     telemetry: null,
-    field_overrides: [],
+    field_overrides: Object.entries(browser).map(([name, value]) => ({
+      field_id: `browser.${name}`,
+      value,
+    })),
   };
 }
 
@@ -173,13 +211,14 @@ export class ManagedRuntime {
     workspace: string;
     home: string;
     setup: ManagedSetup;
+    browser?: BrowserSettings;
     credentials: { id: string; secret: string }[];
     stopped: () => void;
     restarted: () => void;
   }): Promise<ManagedConnection> {
     const generation = ++this.generation;
     await this.closeOwned();
-    const runtime = runtimeConfiguration(options.setup);
+    const runtime = runtimeConfiguration(options.setup, options.browser);
     const bundle = await verifyNativeBundle(options.bundle);
     if (generation !== this.generation)
       throw new UserError("Managed Local startup was cancelled.");

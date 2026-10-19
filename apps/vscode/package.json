@@ -155,6 +155,42 @@
     "configuration": {
       "title": "Colossus",
       "properties": {
+        "colossus.browser.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Allow browser tools when a verified native browser is available. Disconnect and start Managed Local again after changing browser settings."
+        },
+        "colossus.browser.publicWeb": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Load public HTTPS pages and their dependencies when workspace network policy permits. Turn off for exact session-origin restrictions. Restart Managed Local to apply."
+        },
+        "colossus.browser.maxSessions": {
+          "type": "integer",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 4,
+          "scope": "resource",
+          "description": "Maximum simultaneous temporary browser sessions per Managed Local runtime. Restart Managed Local to apply."
+        },
+        "colossus.browser.maxTabs": {
+          "type": "integer",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 8,
+          "scope": "resource",
+          "description": "Maximum total browser tabs per Managed Local runtime. Restart Managed Local to apply."
+        },
+        "colossus.browser.maxSnapshotNodes": {
+          "type": "integer",
+          "default": 1024,
+          "minimum": 1,
+          "maximum": 1024,
+          "scope": "resource",
+          "description": "Maximum page elements returned by a browser snapshot. Restart Managed Local to apply."
+        },
         "colossus.composer.sendShortcut": {
           "type": "string",
           "enum": [

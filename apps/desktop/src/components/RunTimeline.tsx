@@ -6,6 +6,7 @@ import {
   IconAlertTriangle,
   IconArrowRight,
   IconBrain,
+  IconBrowser,
   IconBooks,
   IconCheck,
   IconChevronDown,
@@ -431,6 +432,8 @@ function toolActivityInputValue(group: ToolActivityGroup): string | null {
 
 function ToolActivityIcon({ kind }: { kind: ActivityLabelKind }) {
   switch (kind) {
+    case "browser":
+      return <IconBrowser size={16} stroke={1.7} />;
     case "image":
       return <IconPhoto size={16} stroke={1.7} />;
     case "read":
@@ -505,6 +508,13 @@ function ToolActivityItem({
           images={images}
           createdAt={latest.createdAt}
           load={onLoadViewedImage}
+          screenshot={
+            activity.toolName === "computer.screenshot"
+              ? "computer"
+              : activity.toolName.startsWith("browser.screenshot")
+                ? "browser"
+                : undefined
+          }
         />
       </Suspense>
     );

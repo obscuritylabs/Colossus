@@ -93,12 +93,13 @@ impl CredentialProvider for KeyringCredentialProvider {
         let service = self.service.clone();
         let account = self.account.clone();
         self.read_with(MAX_KEYRING_WAIT, move || {
-            let bytes = keyring::Entry::new(&service, &account)
-                .and_then(|entry| entry.get_secret())
-                .map_err(|_| SdkError::Authentication)?;
+            let mut bytes = colossus_credentials::SystemCredentialEntry::new(&service, &account)
+                .and_then(|entry| entry.read())
+                .map_err(|_| SdkError::Authentication)?
+                .ok_or(SdkError::Authentication)?;
             // Even if the caller has canceled, the completed task owns a
             // zeroizing secret; no detached plaintext Vec outlives this read.
-            Secret::new(bytes)
+            Secret::new(std::mem::take(&mut *bytes))
         })
         .await
     }

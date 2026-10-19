@@ -9,7 +9,10 @@ pub(crate) mod commands;
     feature = "embedded-chromium-preview",
     any(
         feature = "macos-contained-browser-diagnostic",
-        feature = "windows-browser-development"
+        any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )
     )
 ))]
 pub(crate) mod contained;
@@ -22,7 +25,10 @@ mod registry;
 pub(crate) mod viewport;
 #[cfg(all(windows, feature = "embedded-chromium-preview"))]
 mod windows_entry;
-#[cfg(feature = "windows-browser-development")]
+#[cfg(any(
+    feature = "windows-browser-development",
+    feature = "windows-browser-functional-preview"
+))]
 mod windows_viewer;
 
 pub(crate) use manager::BrowserManager;

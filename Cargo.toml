@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-exclude = ["native/browser/driver", "native/browser/pki", "native/browser/process-broker", "native/browser/tls-broker"]
+exclude = ["native/browser/driver", "native/browser/pki", "native/browser/process-broker", "native/browser/tls-broker", "native/computer"]
 members = [
     "crates/colossus-control-plane-client",
     "crates/colossus-cloud",
@@ -122,7 +122,6 @@ globset = "0.4.18"
 ignore = "0.4.28"
 jiff = { version = "0.2.32", default-features = false, features = ["std", "tzdb-bundle-always"] }
 jsonschema = "0.33.0"
-keyring = "4.1.4"
 nono = { version = "=0.67.1", default-features = false }
 nix = { version = "0.31.3", features = ["sched"] }
 postgres = { version = "0.19.14", features = ["with-serde_json-1"] }

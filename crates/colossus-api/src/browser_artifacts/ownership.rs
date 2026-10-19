@@ -7,19 +7,32 @@ pub(super) fn resolve(
     journal: &dyn EventJournal,
     binding: &BrowserSessionBinding,
 ) -> Result<String, BrowserArtifactError> {
-    if let BrowserScope::Workflow { id } = &binding.scope {
-        if binding.application_id != *id {
+    let workflow_id = match &binding.scope {
+        BrowserScope::Workflow { id } => Some(id.as_str()),
+        BrowserScope::Conversation { .. } => None,
+    };
+    resolve_owner(journal, &binding.application_id, workflow_id)
+}
+
+/// Shared provenance resolver for trusted native media publishers.
+pub(crate) fn resolve_owner(
+    journal: &dyn EventJournal,
+    application_id: &str,
+    workflow_id: Option<&str>,
+) -> Result<String, BrowserArtifactError> {
+    if let Some(id) = workflow_id {
+        if application_id != id {
             return Err(BrowserArtifactError::Invalid);
         }
         return workflow(journal, id, &mut BTreeSet::new(), 0);
     }
-    if binding.application_id == "terminal-user" {
+    if application_id == "terminal-user" {
         return Ok("app:colossus-cli".into());
     }
-    if binding.application_id.starts_with("app:") {
+    if application_id.starts_with("app:") {
         return application(&Actor {
             actor_type: ActorType::Application,
-            id: binding.application_id.clone(),
+            id: application_id.into(),
         });
     }
     Err(BrowserArtifactError::Invalid)

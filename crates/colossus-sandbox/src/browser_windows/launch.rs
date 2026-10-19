@@ -51,6 +51,7 @@ pub(super) async fn owned(
         return Err(BrowserDriverError::Unavailable);
     }
     let enrollment = BrowserBridgeEnrollment {
+        public_web: request.options.public_web,
         binding: request.binding.clone(),
         mode: request.options.mode,
         profile: request.options.profile.clone(),
@@ -137,10 +138,11 @@ async fn start(
             .map_err(|_| BrowserDriverError::OutcomeUnknown)?,
     );
     resource.egress = Some(
-        BrowserEgressLease::start(
+        BrowserEgressLease::start_with_public_web(
             request.session_id.clone(),
             enrollment.allowed_origins.clone(),
             installation.limits.egress,
+            enrollment.public_web,
         )
         .await
         .map_err(|_| BrowserDriverError::Unavailable)?,

@@ -119,6 +119,7 @@ impl Runtime {
             },
         };
         let options = BrowserOpenOptions {
+            public_web: browser.public_web,
             profile: Default::default(),
             mode: BrowserMode::Embedded,
             allowed_origins: vec![input.url.origin()],
@@ -243,7 +244,7 @@ async fn open_owned(
             .initial_url
             .as_ref()
             .map_or("browser:session", |url| url.as_str()),
-        json!({"operation":"native_open","mode":"embedded","allowed_origins":options.allowed_origins,"initial_url":options.initial_url}),
+        json!({"operation":"native_open","mode":"embedded","allowed_origins":options.allowed_origins,"public_web":options.public_web,"initial_url":options.initial_url}),
     );
     request.capabilities = vec!["browser.open".into()];
     request.context.session_id = Some(entry.conversation_id.clone());
@@ -284,6 +285,7 @@ async fn open_owned(
         .as_ref()
         .ok_or(RuntimeNativeBrowserError::Unavailable)?;
     let (client, digest) = provider.acquire(&original).await?;
+    super::expiry::track(browser, entry, provider.expires_at(&original).await?)?;
     if entry.control.is_cancelled() || browser.native.stopped.load(Ordering::Acquire) {
         client.disconnect();
         return Err(RuntimeNativeBrowserError::Denied);
@@ -369,14 +371,12 @@ impl EffectExecutor for HumanOpenEffect<'_> {
                 ));
             }
         }
+        let mut options = self.options.clone();
+        options.public_web &= super::super::service::permits_public_web(permit.obligations());
         let summary = self
             .browser
             .coordinator
-            .open(
-                &self.entry.binding,
-                self.options.clone(),
-                &self.entry.control,
-            )
+            .open(&self.entry.binding, options, &self.entry.control)
             .await
             .map_err(super::super::service::execution_error)?;
         let bytes =

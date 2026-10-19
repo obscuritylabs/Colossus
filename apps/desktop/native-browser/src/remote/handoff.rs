@@ -33,6 +33,8 @@ pub(super) async fn transfer(owner: &Arc<Owner>, run_id: &str) -> Result<(), Bro
         .configure(configure.clone())
         .await
         .map_err(|_| BrowserError::Closed)?;
+    #[cfg(windows)]
+    owner.completed.activate(lease);
     let next = actor::create_surface(
         &owner.window,
         &owner.client,
@@ -40,6 +42,8 @@ pub(super) async fn transfer(owner: &Arc<Owner>, run_id: &str) -> Result<(), Bro
         lease,
         owner.digest,
         false,
+        #[cfg(windows)]
+        &owner.completed,
     )
     .await?;
     owner

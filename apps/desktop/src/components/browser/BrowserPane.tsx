@@ -11,7 +11,7 @@ import {
   IconArrowsMaximize,
   IconArrowsMinimize,
   IconExternalLink,
-  IconWorld,
+  IconBrowser,
   IconLoader2,
   IconPlus,
   IconRefresh,
@@ -87,17 +87,32 @@ export function BrowserPane({
             ? "Chromium preview"
             : "Chromium",
           owned_chromium: "Chromium (development)",
+          owned_chromium_functional_preview: "Chromium preview",
           webview2: "WebView2",
           webkit: "WebKit",
           unavailable: "Browser unavailable",
         }[snapshot.engine?.kind ?? "unavailable"];
+  const supervisedAgentControl =
+    snapshot.engine?.agentControlAvailable &&
+    (!snapshot.engine.preview ||
+      snapshot.engine.kind === "owned_chromium_functional_preview");
   const controlLabel = {
     human: "Human control",
     agent: "Agent control",
     paused: "Paused",
+    completed: "Agent finished",
+    expired: "Session expired",
     unavailable: "Control unavailable",
   }[ready ? (active?.control ?? "human") : "unavailable"];
-  const readOnly = active?.control === "agent" || active?.control === "paused";
+  const completed = active?.control === "completed";
+  const expired = active?.control === "expired";
+  const readOnly =
+    active?.control === "agent" ||
+    active?.control === "paused" ||
+    completed ||
+    expired;
+  const agentControlling =
+    ready && active?.control === "agent" && !!active.url && !active.error;
 
   useEffect(() => {
     setAddress(active?.url ?? "");
@@ -116,7 +131,14 @@ export function BrowserPane({
 
   useEffect(() => {
     const element = viewportRef.current;
-    if (!element || !active || !active.url || active.error !== null) return;
+    if (
+      !element ||
+      !active ||
+      !active.url ||
+      active.error !== null ||
+      (completed && !active.completedSnapshot)
+    )
+      return;
     let disposed = false;
     let sending = false;
     const generation = snapshot.generation;
@@ -184,7 +206,15 @@ export function BrowserPane({
         target.removeEventListener(event, update);
       void hide();
     };
-  }, [active?.id, active?.url, active?.error, snapshot.generation, viewport]);
+  }, [
+    active?.id,
+    active?.url,
+    active?.error,
+    active?.completedSnapshot,
+    completed,
+    snapshot.generation,
+    viewport,
+  ]);
 
   useEffect(() => {
     function focusAddress(event: KeyboardEvent) {
@@ -204,7 +234,7 @@ export function BrowserPane({
         <div className="browser-tabs" role="group" aria-label="Browser tabs">
           {snapshot.tabs.length === 0 ? (
             <span className="browser-tab-placeholder">
-              <IconWorld size={15} aria-hidden="true" />
+              <IconBrowser size={15} aria-hidden="true" />
               Browser
             </span>
           ) : null}
@@ -227,7 +257,7 @@ export function BrowserPane({
                     aria-hidden="true"
                   />
                 ) : (
-                  <IconWorld size={14} aria-hidden="true" />
+                  <IconBrowser size={14} aria-hidden="true" />
                 )}
                 <span>{tab.title || "New tab"}</span>
               </button>
@@ -266,7 +296,7 @@ export function BrowserPane({
           event.preventDefault();
           if (snapshot.available && address.trim() && !readOnly)
             void command(
-              active?.url
+              active
                 ? { type: "navigate", tabId: active.id, url: address }
                 : { type: "new", url: address },
             );
@@ -351,61 +381,109 @@ export function BrowserPane({
           />
         </div>
       ) : null}
-      <div className="browser-viewport" ref={viewportRef} aria-label="Web page">
-        {showCertificates ? (
-          <BrowserCertificates
-            controller={controller}
-            onClose={() => setShowCertificates(false)}
-          />
-        ) : null}
-        {active?.error || !active?.url || (import.meta.env.DEV && fixture) ? (
-          <div
-            className={`browser-empty${import.meta.env.DEV && fixture && active?.url && !active.error ? " browser-fixture-page" : ""}`}
-            role={active?.error ? "alert" : undefined}
+      {agentControlling ? (
+        <div className="browser-agent-status" role="status">
+          <span className="browser-agent-dot" aria-hidden="true" />
+          Agent controlling
+        </div>
+      ) : null}
+      {completed ? (
+        <div className="browser-completed-status" role="status">
+          <strong>
+            Agent finished{active.completedSnapshot ? " · Last view" : ""}
+          </strong>
+          <button
+            className="button secondary compact"
+            type="button"
+            disabled={!ready || busy}
+            onClick={() => void command({ type: "new", url: active.url })}
           >
-            <IconWorld size={32} />
-            <h3>
-              {active?.error
-                ? "Unable to display this page"
-                : !active?.url
-                  ? "Browse beside your work"
-                  : import.meta.env.DEV
-                    ? active.title
-                    : ""}
-            </h3>
-            <p>
-              {active?.error ||
-                (!active?.url
-                  ? "Open a website or local preview in the address bar."
-                  : import.meta.env.DEV
-                    ? active.url
-                    : "")}
-            </p>
-            {active?.error ? (
-              <button
-                className="button secondary"
-                type="button"
-                onClick={() =>
-                  void command({ type: "reload", tabId: active.id })
-                }
-              >
-                Retry
-              </button>
-            ) : (
-              <span>
-                {!active?.url
-                  ? "This session ends when you close its last tab or exit Colossus."
-                  : import.meta.env.DEV
-                    ? "Native page content appears here in the Desktop app."
-                    : ""}
-              </span>
-            )}
-          </div>
-        ) : null}
+            Continue browsing
+          </button>
+          <p>Opens this address in a fresh browser session.</p>
+        </div>
+      ) : null}
+      <div
+        className={`browser-viewport${agentControlling ? " is-agent-controlled" : ""}`}
+      >
+        <div className="browser-page" ref={viewportRef} aria-label="Web page">
+          {showCertificates ? (
+            <BrowserCertificates
+              controller={controller}
+              onClose={() => setShowCertificates(false)}
+            />
+          ) : null}
+          {completed && !active.completedSnapshot ? (
+            <div className="browser-empty">
+              <IconBrowser size={32} />
+              <h3>Last view unavailable</h3>
+              <p>The agent finished without a retained view of this page.</p>
+            </div>
+          ) : active?.error ||
+            !active?.url ||
+            (import.meta.env.DEV && fixture) ? (
+            <div
+              className={`browser-empty${import.meta.env.DEV && fixture && active?.url && !active.error ? " browser-fixture-page" : ""}`}
+              role={active?.error ? "alert" : undefined}
+            >
+              <IconBrowser size={32} />
+              <h3>
+                {expired
+                  ? "Browser session expired"
+                  : active?.error
+                    ? readOnly
+                      ? "Agent browser unavailable"
+                      : "Unable to display this page"
+                    : !active?.url
+                      ? "Browse beside your work"
+                      : import.meta.env.DEV
+                        ? active.title
+                        : ""}
+              </h3>
+              <p>
+                {(active?.error && readOnly && !expired
+                  ? "The agent's browser cannot be displayed. Open a fresh copy of this page to continue browsing."
+                  : active?.error) ||
+                  (!active?.url
+                    ? "Open a website or local preview in the address bar."
+                    : import.meta.env.DEV
+                      ? active.url
+                      : "")}
+              </p>
+              {active?.error ? (
+                <button
+                  className="button secondary"
+                  type="button"
+                  onClick={() =>
+                    void command(
+                      readOnly
+                        ? { type: "new", url: active.url }
+                        : { type: "reload", tabId: active.id },
+                    )
+                  }
+                >
+                  {expired
+                    ? "Continue browsing"
+                    : readOnly
+                      ? "Open page in new tab"
+                      : "Retry"}
+                </button>
+              ) : (
+                <span>
+                  {!active?.url
+                    ? "This session ends when you close its last tab or exit Colossus."
+                    : import.meta.env.DEV
+                      ? "Native page content appears here in the Desktop app."
+                      : ""}
+                </span>
+              )}
+            </div>
+          ) : null}
+        </div>
       </div>
       <footer className="browser-footer">
         <span role="status">
-          {ready && active?.loading ? (
+          {ready && active?.loading && !completed ? (
             <>
               <IconLoader2
                 size={13}
@@ -420,8 +498,7 @@ export function BrowserPane({
             </>
           )}
         </span>
-        {snapshot.engine?.agentControlAvailable &&
-        !snapshot.engine.preview &&
+        {supervisedAgentControl &&
         active?.control === "human" &&
         run &&
         active.conversationId === run.sessionId ? (
@@ -439,8 +516,7 @@ export function BrowserPane({
             Give agent control
           </button>
         ) : null}
-        {snapshot.engine?.agentControlAvailable &&
-        !snapshot.engine.preview &&
+        {supervisedAgentControl &&
         active?.control === "human" &&
         active.conversationId &&
         active.conversationId !== run?.sessionId &&

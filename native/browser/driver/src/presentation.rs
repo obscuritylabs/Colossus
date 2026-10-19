@@ -31,6 +31,8 @@ pub struct Adapter {
 pub(crate) struct Lane {
     receiver: mpsc::Receiver<Command>,
     revoked: Arc<AtomicBool>,
+    #[cfg(all(windows, debug_assertions))]
+    waiting_observation_diagnosed: bool,
 }
 
 pub(crate) trait Target {
@@ -44,7 +46,12 @@ pub(crate) trait Target {
 
 impl Lane {
     pub(crate) fn new(receiver: mpsc::Receiver<Command>, revoked: Arc<AtomicBool>) -> Self {
-        Self { receiver, revoked }
+        Self {
+            receiver,
+            revoked,
+            #[cfg(all(windows, debug_assertions))]
+            waiting_observation_diagnosed: false,
+        }
     }
     pub(crate) fn service(&mut self, host: &mut impl Target, waiting: bool) {
         if self.revoked.load(Ordering::Acquire) {
@@ -63,13 +70,31 @@ impl Lane {
                         PresentationCommand::Hide { .. }
                             | PresentationCommand::Focus { focused: false, .. }
                     );
-                    let allowed = closing || matches!(command, PresentationCommand::Renew { .. });
+                    // Agent readers use only cached metadata and the existing
+                    // exact native document/lease/frame validators. They do not
+                    // pump CEF, await DevTools or adopt the writer's document.
+                    let agent_observation = matches!(
+                        command,
+                        PresentationCommand::Observe { lease } if lease.control_generation > 0
+                    );
+                    let allowed = closing
+                        || agent_observation
+                        || matches!(command, PresentationCommand::Renew { .. });
                     let result = if self.revoked.load(Ordering::Acquire) && !closing {
                         Err(PresentationError::Hidden)
                     } else if waiting && !allowed {
-                        // Retire read-only queries and unexecuted mutations as
-                        // known stale, rather than leaving their channel to time
-                        // out behind this potentially long data operation.
+                        #[cfg(all(windows, debug_assertions))]
+                        if matches!(command, PresentationCommand::Observe { .. })
+                            && !self.waiting_observation_diagnosed
+                        {
+                            self.waiting_observation_diagnosed = true;
+                            eprintln!(
+                                "EVIDENCE native-host-observe rejected=core_wait_in_progress"
+                            );
+                        }
+                        // Human observation can adopt native documents, while
+                        // configuration/input/handoff can change the page owner.
+                        // Reject them before dispatch during a Core operation.
                         Err(PresentationError::Stale)
                     } else {
                         host.control(command)
@@ -79,7 +104,7 @@ impl Lane {
                 Command::Frame(lease, sender) if !sender.is_closed() => {
                     let result = if self.revoked.load(Ordering::Acquire) {
                         Err(PresentationError::Hidden)
-                    } else if waiting {
+                    } else if waiting && lease.control_generation == 0 {
                         Err(PresentationError::Stale)
                     } else {
                         host.frame(lease)

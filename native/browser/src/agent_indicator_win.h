@@ -9,8 +9,9 @@ namespace colossus {
 class AgentIndicator {
  public:
   using Clock = std::chrono::steady_clock;
+  static constexpr uint32_t kMaxLifetimeMs = 8000;
   bool Set(uint32_t kind, double x, double y, double left, double top,
-           double width, double height, Clock::time_point now, uint32_t ttl_ms = 2200);
+           double width, double height, Clock::time_point now, uint32_t ttl_ms = kMaxLifetimeMs);
   bool Clear();
   bool Expire(Clock::time_point now);
   void Paint(std::vector<uint8_t>& pixels, uint32_t width, uint32_t height,

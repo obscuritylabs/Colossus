@@ -8,6 +8,7 @@ pub(crate) struct BrowserTabDto {
     pub(crate) session_id: String,
     pub(crate) conversation_id: Option<String>,
     pub(crate) control: &'static str,
+    pub(crate) completed_snapshot: bool,
     #[serde(flatten)]
     pub(crate) page: PageState,
     pub(crate) error: Option<String>,
@@ -50,12 +51,15 @@ impl BrowserEngineDto {
         }
         #[cfg(any(
             feature = "macos-contained-browser-diagnostic",
-            feature = "windows-browser-development"
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
         ))]
         {
             let ready = colossus_native_browser::contained::native_presentation_available();
             Self {
-                kind: if cfg!(feature = "windows-browser-development") {
+                kind: if cfg!(feature = "windows-browser-functional-preview") {
+                    "owned_chromium_functional_preview"
+                } else if cfg!(feature = "windows-browser-development") {
                     "owned_chromium"
                 } else {
                     "contained_chromium"
@@ -70,7 +74,8 @@ impl BrowserEngineDto {
             feature = "embedded-chromium-preview",
             any(
                 feature = "macos-contained-browser-diagnostic",
-                feature = "windows-browser-development"
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
             )
         )))]
         Self {
@@ -162,4 +167,17 @@ pub(crate) struct BrowserViewportRequest {
     pub(crate) generation: u64,
     pub(crate) tab_id: Option<String>,
     pub(crate) rect: Option<BrowserRect>,
+}
+
+#[cfg(all(test, feature = "windows-browser-functional-preview"))]
+mod functional_preview_tests {
+    use super::BrowserEngineDto;
+
+    #[test]
+    fn functional_preview_does_not_claim_production_or_an_attached_agent() {
+        let engine = BrowserEngineDto::current();
+        assert_eq!(engine.kind, "owned_chromium_functional_preview");
+        assert!(engine.preview);
+        assert!(!engine.agent_control_available);
+    }
 }

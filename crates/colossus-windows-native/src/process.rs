@@ -53,6 +53,18 @@ impl KillOnCloseJob {
     pub fn terminate(&self) -> Result<(), WindowsNativeError> {
         self.0.terminate()
     }
+
+    /// Read the kernel's active-process count for this exact private Job,
+    /// including its nested child Jobs. A query failure returns an error.
+    ///
+    /// This observation does not fence future process creation. To establish a
+    /// terminal cleanup barrier, first stop or positively observe the exit of
+    /// the retained root process, then require this count to reach zero while
+    /// retaining the Job. No process selectors or raw handles are exposed.
+    /// See [nested resource accounting](https://learn.microsoft.com/en-us/windows/win32/procthread/nested-jobs#resource-accounting-for-nested-jobs).
+    pub fn active_processes(&self) -> Result<u32, WindowsNativeError> {
+        self.0.active_processes()
+    }
 }
 
 /// Prove that a connected named-pipe server is talking to the exact spawned process.

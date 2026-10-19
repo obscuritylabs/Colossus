@@ -170,7 +170,21 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 #[cfg(windows)]
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> std::process::ExitCode {
+    if let Some(code) = colossus_native_computer::run_if_requested() {
+        return code;
+    }
+    match windows_main() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_main() -> Result<(), Box<dyn Error>> {
     if sandbox_helper_requested(std::env::args_os()) {
         colossus_sandbox::run_helper_stdio()?;
         return Ok(());

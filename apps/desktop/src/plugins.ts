@@ -139,6 +139,19 @@ export function pluginMentionSuggestions(
   if (selected.some((id) => !known.has(id))) return [];
   const query = match[2] ?? "";
   const remaining = skills.filter((skill) => !selected.includes(skill.id));
+  const browser = remaining.find((skill) => skill.id === "colossus/browser");
+  if (browser && query && "browser".startsWith(query)) {
+    return [
+      {
+        command: `${prefix}@${browser.id} `,
+        label: "Browser",
+        plugin: browser.plugin,
+        icon: browser.icon_data_url,
+        description: browser.description,
+        group: "Skill",
+      },
+    ];
+  }
   if (!query.includes("/")) {
     const groups = new Map<string, PluginSkill[]>();
     for (const skill of remaining) {

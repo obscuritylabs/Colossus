@@ -155,6 +155,11 @@ impl<'de> Deserialize<'de> for BrowserUrl {
 pub struct BrowserOrigin(String);
 
 impl BrowserOrigin {
+    /// Match the immutable browser grant. Public HTTPS still requires the native
+    /// proxy to resolve and pin exclusively public addresses before connecting.
+    pub fn admitted_by(&self, exact: &[Self], public_web: bool) -> bool {
+        exact.contains(self) || (public_web && self.as_str().starts_with("https://"))
+    }
     /// Accept an exact HTTP(S) origin, with only an optional trailing slash.
     pub fn parse(value: impl AsRef<str>) -> Result<Self, BrowserValidationError> {
         let parsed = web_url(value.as_ref())?;

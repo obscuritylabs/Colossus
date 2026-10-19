@@ -24,6 +24,10 @@ mod cleanup;
 #[path = "credential_acceptance_fixture.rs"]
 mod fixture;
 
+#[cfg(windows)]
+#[path = "computer_discovery_acceptance.rs"]
+mod computer_discovery_acceptance;
+
 const CHILD: &str = "managed_runtime::credential_acceptance::native_backend_process_child";
 const ROOT_PREFIX: &str = ".colossus-desktop-credential-acceptance-";
 const CREDENTIAL_ID: &str = "synthetic-large-token";

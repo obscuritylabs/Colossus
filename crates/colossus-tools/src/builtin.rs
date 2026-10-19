@@ -18,6 +18,7 @@ pub fn builtin_specs() -> Vec<ToolSpec> {
     specs.extend(super::process_sessions::session_specs());
     specs.extend(super::workflows::workflow_specs());
     specs.extend(super::browser::browser_specs());
+    specs.extend(super::computer::computer_specs());
     specs
 }
 
@@ -64,7 +65,7 @@ fn core_builtin_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "tool.search".into(),
-            description: "Search the active strict tool catalog by name and description.".into(),
+            description: "Search only tools offered for this turn by whitespace-separated terms in names and descriptions. Every term must match. One attached leading '+' is optional; other punctuation is literal.".into(),
             input_schema: object_schema(
                 json!({
                     "query": {"type": "string", "minLength": 1, "maxLength": 512},

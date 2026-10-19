@@ -26,6 +26,28 @@ function read(relative) {
   return readFileSync(join(repository, relative), "utf8");
 }
 
+test(
+  "native computer diagnostics retain bounded stdout and stderr failure tails",
+  { skip: process.platform !== "win32" },
+  () => {
+    const result = spawnSync(
+      "pwsh",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        join(repository, "scripts/ci/computer-child-output.test.ps1"),
+      ],
+      { encoding: "utf8", timeout: 15000, maxBuffer: 32768, windowsHide: true },
+    );
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+    assert.match(
+      result.stdout,
+      /PASS bounded stdout\/stderr retain UTF-8 failure tails/u,
+    );
+  },
+);
+
 function filesUnder(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
@@ -849,6 +871,21 @@ test("Space search indexes only bounded released thread metadata", () => {
 
 test("Managed Local trusted tool ceiling exactly matches declared built-ins", () => {
   const builtinSource = read("crates/colossus-tools/src/builtin.rs");
+  const builtinSpecs = builtinSource.match(
+    /pub fn builtin_specs\(\)[^{]*\{(?<body>[\s\S]*?)\n\}/u,
+  );
+  assert.notEqual(builtinSpecs, null);
+  const extensionCalls = [
+    ...builtinSpecs.groups.body.matchAll(
+      /specs\s*\.\s*extend\s*\((?<expression>[\s\S]*?)\)\s*;/gu,
+    ),
+  ].map((match) => match.groups.expression.replace(/\s+/gu, ""));
+  assert.deepEqual(extensionCalls.sort(), [
+    "super::browser::browser_specs()",
+    "super::computer::computer_specs()",
+    "super::process_sessions::session_specs()",
+    "super::workflows::workflow_specs()",
+  ]);
   const builtinNames = [
     ...builtinSource.matchAll(/name: "([a-z][a-z0-9_.-]+)"\.into\(\)/gu),
   ].map((match) => match[1]);
@@ -890,16 +927,31 @@ test("Managed Local trusted tool ceiling exactly matches declared built-ins", ()
         .map((match) => match[1]),
     );
   }
+  assert.match(
+    builtinSource,
+    /specs\.extend\(super::computer::computer_specs\(\)\)/u,
+  );
+  const computerSpecs = read("crates/colossus-tools/src/computer.rs").match(
+    /fn computer_specs\(\)[^{]*\{(?<body>[\s\S]*?)\n\}/u,
+  );
+  assert.notEqual(computerSpecs, null);
+  builtinNames.push(
+    ...[
+      ...computerSpecs.groups.body.matchAll(
+        /(?:tool)?\(\s*"(computer\.[a-z_.]+)"/gu,
+      ),
+    ].map((match) => match[1]),
+  );
 
   const runtimeSource = read("apps/desktop/src-tauri/src/managed_runtime.rs");
   const grantStart = runtimeSource.indexOf("const TRUSTED_BUILTIN_TOOL_GRANT");
   const grantEnd = runtimeSource.indexOf("];", grantStart);
   assert.ok(grantStart >= 0 && grantEnd > grantStart);
-  const grantNames = [
-    ...runtimeSource
-      .slice(grantStart, grantEnd)
-      .matchAll(/"([a-z][a-z0-9_.-]+)"/gu),
-  ].map((match) => match[1]);
+  const grantSource = runtimeSource.slice(grantStart, grantEnd);
+  assert.doesNotMatch(grantSource, /"[^"]*\*[^"]*"/u);
+  const grantNames = [...grantSource.matchAll(/"([a-z][a-z0-9_.-]+)"/gu)].map(
+    (match) => match[1],
+  );
 
   assert.deepEqual(new Set(grantNames), new Set(builtinNames));
   assert.equal(grantNames.length, new Set(grantNames).size);
@@ -1198,6 +1250,12 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
   );
   assert.match(windows, /steps\.windows_sdk_path\.outcome/u);
   assert.match(windows, /steps\.worker_acceptance\.outcome/u);
+  assert.match(windows, /steps\.computer_portable\.outcome/u);
+  assert.match(windows, /"windows-computer-protocol-and-build=\$COMPUTER_OUTCOME"/u);
+  assert.match(windows, /cargo test --locked --manifest-path native\/computer\/Cargo\.toml --all-targets/u);
+  assert.match(windows, /cargo clippy --locked --manifest-path native\/computer\/Cargo\.toml --all-targets --all-features -- -D warnings/u);
+  assert.match(windows, /cargo build --locked --manifest-path native\/computer\/Cargo\.toml --features native-test-driver --examples/u);
+  assert.doesNotMatch(windows, /run: \.\/scripts\/ci\/computer-windows-native\.ps1/u);
   assert.match(windowsDesktop, /steps\.desktop_prepare\.outcome/u);
   assert.match(windowsDesktop, /steps\.native_clippy\.outcome/u);
   assert.match(windowsDesktop, /steps\.native_tests\.outcome/u);
@@ -1310,8 +1368,76 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
   assert.match(signedWindowsJob, /environment: release-signing/u);
   assert.match(signedWindowsJob, /id-token: write/u);
   assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC/u);
-  assert.match(signedWindowsJob, /azure\/login@[0-9a-f]{40}/u);
-  assert.equal((signedWindowsJob.match(/azure\/artifact-signing-action@[0-9a-f]{40}/gu) ?? []).length, 1);
+  const signedSteps = signedWindowsJob
+    .replaceAll("\r\n", "\n")
+    .split(/^      - /mu)
+    .slice(1);
+  const signingStepIndex = (name) => {
+    const matches = signedSteps.flatMap((step, index) =>
+      step.startsWith(`name: ${name}\n`) ? [index] : [],
+    );
+    assert.equal(matches.length, 1, `Expected one signed Windows step: ${name}`);
+    return matches[0];
+  };
+  const previewGuard = "env.COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW == '1'";
+  for (const [buildName, authName, signingName, guard] of [
+    [
+      "Build pinned functional-preview browser without launching it",
+      "Authenticate browser signing with fresh GitHub OIDC",
+      "Sign functional-preview browser binaries before inventory",
+      previewGuard,
+    ],
+    [
+      "Build unsigned desktop inputs",
+      "Authenticate nested binary signing with fresh GitHub OIDC",
+      "Sign bundled sidecar, CLI, and ripgrep",
+      null,
+    ],
+    [
+      "Bind signed nested binaries into the desktop executable",
+      "Authenticate installer signing with fresh GitHub OIDC",
+      "Bundle NSIS and sign patched app, uninstaller, and installer",
+      null,
+    ],
+  ]) {
+    const authIndex = signingStepIndex(authName);
+    assert.equal(
+      authIndex,
+      signingStepIndex(buildName) + 1,
+      `${authName} must follow its build/bind boundary`,
+    );
+    assert.equal(
+      signingStepIndex(signingName),
+      authIndex + 1,
+      `${authName} must immediately precede signing`,
+    );
+    const auth = signedSteps[authIndex];
+    assert.match(
+      auth,
+      /^        uses: azure\/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906(?: # v3)?$/mu,
+    );
+    for (const [input, secret] of [
+      ["client-id", "AZURE_CLIENT_ID"],
+      ["tenant-id", "AZURE_TENANT_ID"],
+      ["subscription-id", "AZURE_SUBSCRIPTION_ID"],
+    ]) {
+      assert.ok(
+        auth.split("\n").includes("          " + input + ": ${{ secrets." + secret + " }}"),
+        `${authName} must retain its ${input} binding`,
+      );
+    }
+    const authGuard = auth.match(/^        if: (.+)$/mu)?.[1] ?? null;
+    const signingGuard = signedSteps[authIndex + 1].match(/^        if: (.+)$/mu)?.[1] ?? null;
+    assert.equal(authGuard, guard, `${authName} must run exactly when signing runs`);
+    assert.equal(signingGuard, guard, `${signingName} guard changed`);
+  }
+  assert.equal((signedWindowsJob.match(/azure\/login@/gu) ?? []).length, 3);
+  assert.equal((signedWindowsJob.match(/azure\/artifact-signing-action@[0-9a-f]{40}/gu) ?? []).length, 2);
+  const browserSign = signedWindowsJob.indexOf("Sign functional-preview browser binaries before inventory");
+  const browserSeal = signedWindowsJob.indexOf("Seal exact signed browser bytes for independent sidecar compilation");
+  assert.ok(browserSign > 0 && browserSign < browserSeal);
+  assert.ok(browserSeal < signedWindowsJob.indexOf("-Phase build", browserSeal));
+  assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW == '1'/u);
   const signedBuild = signedWindowsJob.indexOf("-Phase build");
   const nestedSign = signedWindowsJob.indexOf("Sign bundled sidecar, CLI, and ripgrep");
   const bind = signedWindowsJob.indexOf("-Phase bind");

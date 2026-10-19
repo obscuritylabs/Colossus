@@ -41,8 +41,11 @@ fn delete_native_test_key(account: &str) {
 
 #[cfg(not(target_os = "macos"))]
 fn delete_native_test_key(account: &str) {
-    if let Ok(entry) = keyring::Entry::new("com.obscuritylabs.colossus.managed-runtime", account) {
-        let _ = entry.delete_credential();
+    if let Ok(entry) = colossus_credentials::SystemCredentialEntry::new(
+        "com.obscuritylabs.colossus.managed-runtime",
+        account,
+    ) {
+        let _ = entry.delete();
     }
 }
 

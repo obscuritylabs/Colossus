@@ -16,6 +16,54 @@ fn gateway(profile: &ProviderProfile, post: bool) -> EffectGateway {
     )
 }
 
+fn builtin_tool_request(profile: &ProviderProfile) -> EffectRequest {
+    let mut model = model_request();
+    model.tools = colossus_tools::builtin_specs()
+        .into_iter()
+        .map(|spec| ModelToolDefinition {
+            name: spec.name,
+            description: spec.description,
+            input_schema: spec.input_schema,
+        })
+        .collect();
+    for (name, keyword) in [
+        ("shell.run", "oneOf"),
+        ("user.ask", "allOf"),
+        ("workflow.schedule.create", "allOf"),
+    ] {
+        let schema = &model
+            .tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap()
+            .input_schema;
+        assert!(
+            schema.get(keyword).is_some(),
+            "{name} lost its canonical {keyword}"
+        );
+    }
+    let mut request = provider_request(profile);
+    request.content["request"] = serde_json::to_value(model).unwrap();
+    request
+}
+
+fn assert_builtin_tool_wire(wire: &str) {
+    let (_, body) = wire.split_once("\r\n\r\n").unwrap();
+    let payload: Value = serde_json::from_str(body).unwrap();
+    let tools = payload["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), colossus_tools::builtin_specs().len());
+    for tool in tools {
+        assert_eq!(tool["input_schema"]["type"], "object");
+        for keyword in ["oneOf", "anyOf", "allOf"] {
+            assert!(
+                tool["input_schema"].get(keyword).is_none(),
+                "{} retained unsupported root {keyword}",
+                tool["name"]
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn anthropic_json_uses_native_headers_and_policy_release() {
     let (url, server) = one_response_server(json!({"id":"msg-test","type":"message","role":"assistant",
@@ -33,13 +81,14 @@ async fn anthropic_json_uses_native_headers_and_policy_release() {
     let credentials = Arc::new(CountingCredentialResolver::new());
     let executor = ProviderExecutor::with_credentials(profile.clone(), credentials.clone());
     let released = gateway(&profile, true)
-        .execute(provider_request(&profile), &executor)
+        .execute(builtin_tool_request(&profile), &executor)
         .await
         .unwrap();
     let turn: ProviderTurn = serde_json::from_slice(&released.bytes).unwrap();
     assert_eq!(turn.provider, "anthropic_messages");
     assert!(!String::from_utf8_lossy(&released.bytes).contains("PRIVATE_THOUGHT"));
     let wire = server.await.unwrap();
+    assert_builtin_tool_wire(&wire);
     assert!(wire.contains("POST /v1/messages HTTP/1.1"));
     let headers = wire.split("\r\n\r\n").next().unwrap().to_ascii_lowercase();
     assert!(headers.contains("x-api-key: unit-secret"));
@@ -74,13 +123,15 @@ async fn anthropic_sse_crosses_gateway_with_exact_text_and_cumulative_usage() {
     let executor = ProviderExecutor::new(profile.clone());
     let mut items = ReleasedItems::default();
     gateway(&profile, true)
-        .execute_stream(provider_request(&profile), &executor, &mut items)
+        .execute_stream(builtin_tool_request(&profile), &executor, &mut items)
         .await
         .unwrap();
     let encoded = serde_json::to_string(&items.0).unwrap();
     assert!(encoded.contains("hello 🌍"));
     assert!(encoded.contains("\"total_tokens\":8"));
-    assert!(server.await.unwrap().contains("POST /v1/messages"));
+    let wire = server.await.unwrap();
+    assert!(wire.contains("POST /v1/messages"));
+    assert_builtin_tool_wire(&wire);
 }
 
 #[test]

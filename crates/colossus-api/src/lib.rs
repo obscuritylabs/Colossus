@@ -10,6 +10,8 @@ mod agent_tasks;
 mod artifacts;
 mod browser_artifacts;
 pub use browser_artifacts::ReleasedBrowserArtifactPublisher;
+mod computer_artifacts;
+pub use computer_artifacts::ReleasedComputerArtifactPublisher;
 mod communication;
 pub use agent_tasks::*;
 pub use communication::*;

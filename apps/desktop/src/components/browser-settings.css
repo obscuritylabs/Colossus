@@ -1,0 +1,155 @@
+.browser-capability-settings {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.browser-settings-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-panel);
+}
+
+.browser-settings-group > header {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.browser-settings-group h4,
+.browser-setting-copy label,
+.browser-skill-note strong {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--font-size-body-sm);
+  font-weight: 600;
+  line-height: var(--line-height-body);
+}
+
+.browser-settings-group p,
+.browser-skill-note p,
+.browser-settings-apply-note {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+
+[data-native-capability="computer"]
+  .browser-setting-control
+  input[type="number"] {
+  width: 8em;
+}
+
+.browser-setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 24px;
+  padding: 14px 16px;
+}
+
+.browser-setting-row + .browser-setting-row {
+  border-top: 1px solid var(--border);
+}
+
+.browser-setting-access {
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.browser-setting-copy {
+  min-width: 0;
+}
+
+.browser-setting-copy label {
+  cursor: pointer;
+}
+
+.browser-setting-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+
+.browser-setting-source .ui-button {
+  min-height: var(--icon-control-size);
+  padding: 0 4px;
+  font-size: inherit;
+  line-height: var(--line-height-body);
+  color: var(--accent-text);
+}
+
+.browser-setting-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.browser-setting-control input[type="number"] {
+  width: 7em;
+  min-height: var(--control-height-compact);
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.browser-setting-control .switch-input:focus-visible,
+.browser-setting-row.is-search-target {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+}
+
+.browser-skill-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 0 4px;
+}
+
+.browser-skill-note code {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  padding: 4px 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  background: var(--blue-soft);
+  color: var(--accent-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+}
+
+.browser-settings-apply-note {
+  padding-inline: 4px;
+}
+
+[data-browser-settings] .desktop-browser-settings {
+  margin: 0;
+  border-radius: var(--radius);
+  background: var(--surface-panel);
+}
+
+@media (max-width: 760px) {
+  .browser-setting-row {
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .browser-settings-group > header {
+    padding: 12px;
+  }
+
+  .browser-setting-control input[type="number"] {
+    width: 5.5em;
+  }
+
+  .browser-skill-note {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}

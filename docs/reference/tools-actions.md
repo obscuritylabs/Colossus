@@ -32,7 +32,7 @@ and output bounds.
 | Context | `context.show`, `context.compact`, `context.snapshots`, `context.restore` | Encrypted immutable snapshots |
 | Plugins | `plugin.list`, `plugin.inspect`, `plugin.skill.read`, `plugin.resource.list`, `plugin.resource.read` | Bounded metadata, selected Agent Skill instructions, and contained resources from the run snapshot |
 | Search and fetch | `web.search`, `web.fetch`, `docs.fetch`, `network.http` | Search needs an explicit route; generic fetch needs host activation plus declared or ambient HTTP(S) authority; quarantined output |
-| Browser | `browser.open`, `browser.status`, `browser.tabs`, `browser.tab.open`, `browser.tab.select`, `browser.tab.close`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.reload`, `browser.stop`, `browser.snapshot`, `browser.screenshot`, `browser.click`, `browser.upload`, `browser.download`, `browser.fill`, `browser.select`, `browser.press`, `browser.scroll`, `browser.wait`, `browser.close` | Owned run-scoped sessions; exact origin ceilings, generation-bound control and fresh document/element handles; unavailable without an accepted host backend |
+| Browser | `browser.open`, `browser.status`, `browser.tabs`, `browser.tab.open`, `browser.tab.select`, `browser.tab.close`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.reload`, `browser.stop`, `browser.snapshot`, `browser.screenshot`, `browser.click`, `browser.upload`, `browser.download`, `browser.fill`, `browser.select`, `browser.press`, `browser.scroll`, `browser.wait`, `browser.close` | Owned run-scoped sessions; policy-bound network scope, generation-bound control and fresh document/element handles; unavailable without an accepted host backend |
 | Browser interactions | `browser.hover`, `browser.double_click`, `browser.right_click`, `browser.drag`, `browser.click_at`, `browser.drag_at` | Current owned document and snapshot; coordinate input also binds exact physical viewport dimensions |
 | Browser annotations | `browser.annotate`, `browser.annotation.clear`, `browser.screenshot.annotated` | Native presentation marks; annotated PNGs use the ordinary screenshot custody and release boundary |
 | Browser inspection | `browser.evaluate`, `browser.cdp` | Bounded native side-effect-checked evaluation or closed page-inspection methods; current snapshot, native admission and post-effect release |
@@ -68,6 +68,31 @@ they enter durable tool history; `preview_truncated` is true when either the lin
 encoded-byte ceiling was reached. This keeps generated or minified long lines from
 consuming an entire model input budget.
 
+## Windows computer tools
+
+`computer.windows`, `computer.open`, `computer.status`, `computer.snapshot`,
+`computer.screenshot`, `computer.focus`, `computer.move`, `computer.click`,
+`computer.drag`, `computer.scroll`, `computer.type`, `computer.press`, and
+`computer.close` require enabled [computer access](configuration/limits.md#windows-computer-access-and-limits)
+and a verified native Windows host. Enumeration, status, snapshots, and screenshots
+are Read actions; opening and closing control are Local state; input is Execution
+because it can affect apps outside the workspace. Every action requires post-effect
+release. An enabled capability does not grant effect permission.
+
+Select a returned opaque window ID with `computer.open`. The host binds runtime,
+workspace, application, scope, and run; none are model-supplied owner arguments.
+Mutations require the current session, control generation, and a fresh, consumed
+observation ID. Screenshots capture the selected window, including while occluded,
+and release actual validated PNG bytes through owner-only output artifacts and
+model image parts. Coordinates are physical pixels local to that capture.
+
+Input revalidates process birth, window identity, desktop, geometry, foreground,
+and hit target. Native window controls let the human pause, resume, or stop;
+the model cannot resume or reopen past a human Stop. `computer.close` releases
+automation and leaves the app running. Unknown outcomes cannot be retried
+automatically. Run completion and cancellation revoke input and supervise helper
+cleanup, including runs that only enumerated windows.
+
 ## Browser tools
 
 The first-party browser catalog is a runtime foundation. Shipping CLI and Desktop
@@ -89,8 +114,13 @@ through quarantine and post-effect release. Ordinary observations have a 64 KiB
 ceiling; screenshot and download tool output ceilings are 4 MiB.
 
 `browser.open` takes `mode` (`embedded` or `headless`), `allowed_origins` (one to 32
-unique HTTP(S) origins), and an optional `initial_url`. Requested origins narrow the
+unique HTTP(S) origins), and an optional `initial_url`. Requested origins must fit the
 configured sandbox and run authority; they grant no additional network access.
+With the default `browser.publicWeb: true`, an ambient or public-wildcard policy permit
+also admits public HTTPS pages and their supporting assets. The host binds this grant
+at session creation; model arguments cannot enable it. Private and metadata destinations
+remain blocked unless separately authorized by an exact origin. With `publicWeb: false`
+or a restricted policy, the requested origins remain the complete network scope.
 URLs are limited to 4096 UTF-8 bytes and reject user information. Origins contain
 no path other than an optional trailing slash, query, or fragment.
 
@@ -181,7 +211,7 @@ certificate-store formats are refused. There is no path or encoded payload argum
 
 `browser.download` requires a fresh link element and accepts no URL, save path or
 destination argument. Native code owns the current link URL and private staging;
-redirects remain within the immutable origin envelope. The complete file of at most
+redirects remain within the immutable network scope. The complete file of at most
 4 MiB enters post-effect policy before an owner-bound RunOutput artifact is released.
 Empty downloads are supported. Unsolicited page downloads and save dialogs remain
 blocked. Released download artifacts can be upload inputs under fresh authorization;

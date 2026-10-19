@@ -1,5 +1,9 @@
 use super::*;
 use colossus_home::{ConfinedFile, ConfinedRoot};
+mod browser;
+pub use browser::BrowserConfig;
+mod computer;
+pub use computer::ComputerConfig;
 
 /// Strict fresh Rust runtime configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -15,6 +19,12 @@ pub struct RuntimeConfig {
     /// Shared outbound-network trust and brokered HTTP redirect settings.
     #[serde(default)]
     pub network: NetworkConfig,
+    /// Native browser availability and bounded resource settings.
+    #[serde(default)]
+    pub browser: BrowserConfig,
+    /// Opt-in normal-user native Windows computer control and resource bounds.
+    #[serde(default)]
+    pub computer: ComputerConfig,
     /// Optional durable external audit evidence export.
     #[serde(default)]
     pub audit: AuditConfig,
@@ -1076,6 +1086,8 @@ impl RuntimeConfig {
         )
         .map_err(|error| RuntimeError::Config(error.to_string()))?;
         validate_storage_config(&config.storage)?;
+        config.browser.validate()?;
+        config.computer.validate()?;
         if config.storage.location == StorageLocation::HomeWorkspace
             && !confined_relative_storage_path(&config.storage.path)
         {
@@ -1398,6 +1410,8 @@ impl RuntimeConfig {
                 resolved_home_workspace: None,
             },
             network: NetworkConfig::default(),
+            browser: BrowserConfig::default(),
+            computer: ComputerConfig::default(),
             audit: AuditConfig::default(),
             observability: ObservabilityConfig::default(),
             policy: PolicyConfig::default(),

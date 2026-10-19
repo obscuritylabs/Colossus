@@ -51,7 +51,8 @@ export type SettingsAction =
         | "showConnectionLog"
         | "openWork"
         | "openThemeSettings"
-        | "openUserSettings";
+        | "openUserSettings"
+        | "openBrowserSettings";
     }
   | { type: "setPreference"; name: "sendShortcut"; value: "enter" | "modEnter" }
   | { type: "setPreference"; name: "defaultMode"; value: WorkMode }
@@ -79,6 +80,7 @@ export function parseSettingsAction(
       "openWork",
       "openThemeSettings",
       "openUserSettings",
+      "openBrowserSettings",
     ].includes(input.type)
   )
     return input as SettingsAction;

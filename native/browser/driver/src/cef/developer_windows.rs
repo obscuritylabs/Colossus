@@ -153,8 +153,11 @@ impl Host {
                 .state
                 .lock()
                 .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-            state.expected = Some(command);
-            state.result = None;
+            state.pending = vec![super::devtools::Pending {
+                tab: native,
+                command,
+                result: None,
+            }];
         }
         // This exact fixed cleanup is independent of request cancellation.
         // Debugger.disable removes pending pauses and resumes a paused program.
@@ -171,7 +174,8 @@ impl Host {
         });
         let completed = dispatched.and_then(|()| {
             self.until(None, Duration::from_secs(1), |state| {
-                state.result.is_some() || state.failed.contains(&native)
+                state.pending.iter().all(|pending| pending.result.is_some())
+                    || state.failed.contains(&native)
             })
         });
         let mut state = self
@@ -179,8 +183,9 @@ impl Host {
             .state
             .lock()
             .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
-        state.expected = None;
-        let result = state.result.take();
+        let result = std::mem::take(&mut state.pending)
+            .pop()
+            .and_then(|pending| pending.result);
         completed?;
         if state.failed.contains(&native) {
             return Err(BrowserDriverError::OutcomeUnknown);

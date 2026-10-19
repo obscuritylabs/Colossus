@@ -924,7 +924,13 @@ export default function App() {
         ? developmentFixtures().buildProviderRetryFixture()
         : FIXTURE_SCENARIO === "activity-comparison"
           ? FIXTURE_QUERY.get("imageViews") === "1"
-            ? developmentFixtures().buildImageViewFixture()
+            ? developmentFixtures().buildImageViewFixture(
+                FIXTURE_QUERY.get("computerScreenshot") === "1"
+                  ? "computer"
+                  : FIXTURE_QUERY.get("browserScreenshot") === "1"
+                    ? "browser"
+                    : undefined,
+              )
             : developmentFixtures().buildActivityComparisonFixture()
           : FIXTURE_SCENARIO === "plan-workflow"
             ? developmentFixtures().buildPlanWorkflowFixture()
@@ -2413,6 +2419,7 @@ export default function App() {
       return next;
     });
     setSurface("work");
+    setActiveSessionWorkspaceView("conversation");
     dispatch({ type: "select_run", runId: null });
     setRunLoadError("");
     setActionError(null);
@@ -6098,7 +6105,14 @@ export default function App() {
             if (FIXTURE_MODE) {
               if (FIXTURE_QUERY.get("imageViews") === "1")
                 return Promise.resolve(
-                  developmentFixtures().buildImageViewActivityFixture(request),
+                  developmentFixtures().buildImageViewActivityFixture(
+                    request,
+                    FIXTURE_QUERY.get("computerScreenshot") === "1"
+                      ? "computer"
+                      : FIXTURE_QUERY.get("browserScreenshot") === "1"
+                        ? "browser"
+                        : undefined,
+                  ),
                 );
               let liveActivityCount = 0;
               if (FIXTURE_ACTIVITY_LIVE && request.pageToken === "") {

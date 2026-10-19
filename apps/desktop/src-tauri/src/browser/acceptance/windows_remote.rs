@@ -84,6 +84,50 @@ fn cursor_edge(screen: &WindowsScreenEvidence) -> anyhow::Result<usize> {
     Ok(usize::try_from((y * u64::from(screen.width) + x) * 4)?)
 }
 
+async fn background_visibility(
+    app: &tauri::AppHandle,
+    tab: &str,
+    view: &RemoteSurface,
+    rect: BrowserRect,
+) -> anyhow::Result<()> {
+    let other = tauri::WindowBuilder::new(app, "browser-focus-fixture")
+        .title("Browser focus acceptance")
+        .inner_size(160.0, 100.0)
+        .build()?;
+    other.set_focus()?;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    let result = async {
+        let controller = app
+            .get_webview("main")
+            .context("Desktop controller missing")?;
+        ensure!(
+            !colossus_native_browser::is_active(&controller).await?,
+            "fixture must transfer foreground focus"
+        );
+        present(app, tab, rect).await?;
+        ensure!(
+            view.acceptance_probe().await?.visible,
+            "switching apps hid the browser pixels"
+        );
+        ensure!(
+            !colossus_native_browser::is_active(&controller).await?,
+            "background presentation stole foreground focus"
+        );
+        ensure!(
+            view.acceptance_windows_input().await.is_err(),
+            "background browser accepted human input"
+        );
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    other.close()?;
+    super::focus(app).await?;
+    result?;
+    let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
+    println!("PASS background browser retains visible pixels without accepting human input");
+    Ok(())
+}
+
 pub(super) async fn human(
     app: &tauri::AppHandle,
     tab: &str,
@@ -154,6 +198,14 @@ pub(super) async fn human(
     controller.eval("document.getElementById('owned-windows-overlay')?.remove();")?;
     let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
     heartbeat.resume(tab, rect).await?;
+    background_visibility(app, tab, view, rect).await?;
+    view.acceptance_windows_keyboard_reentrancy()
+        .await
+        .context("Tao parent Return key reentrancy did not acknowledge completion")?;
+    // A returning native call alone is insufficient: require a fresh UI dispatch
+    // and visible browser pixels after the sent keyup re-entered Tao's keyboard handler.
+    let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
+    println!("PASS Tao parent Return key handles nested cross-thread keyup and remains responsive");
     view.acceptance_windows_input().await?;
     title(view, "Human input Ab3Ω😀").await?;
     println!(
@@ -234,8 +286,18 @@ pub(super) async fn agent_click_indicator(
         tokio::time::sleep(Duration::from_millis(30)).await;
     };
     save(&marked, home, "windows-agent-cursor-foreground.png")?;
-    tokio::time::sleep(Duration::from_millis(2400)).await;
-    let cleared = view.acceptance_windows_screen().await?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let retained = view.acceptance_windows_screen().await?;
+    let index = cursor_edge(&retained)?;
+    ensure!(
+        retained.pixels.get(index..index + 4) == Some(&[0, 0, 0, 255]),
+        "agent cursor disappeared between actions before its eight-second deadline"
+    );
+    tokio::time::sleep(Duration::from_millis(5400)).await;
+    let cleared = view
+        .acceptance_windows_screen()
+        .await
+        .context("stage=agent-cursor-expiry-capture")?;
     let index = cursor_edge(&cleared)?;
     ensure!(
         cleared.pixels.get(index..index + 4) == Some(&[255, 241, 231, 255]),
@@ -243,7 +305,7 @@ pub(super) async fn agent_click_indicator(
     );
     save(&cleared, home, "windows-agent-cursor-expired.png")?;
     println!(
-        "PASS Core click shows agent cursor/target outline in actual foreground Windows pixels and removes it after expiry"
+        "PASS Core click keeps agent cursor/target outline through a subsequent snapshot in actual foreground Windows pixels and removes it after expiry"
     );
     Ok(())
 }

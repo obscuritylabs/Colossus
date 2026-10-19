@@ -6,3 +6,5 @@ test-full = "test --workspace"
 [env]
 # Dictation binaries must run on machines other than the build host.
 GGML_NATIVE = { value = "OFF", force = false }
+# Keep vendored C atomics inline for the baseline ARMv8 musl static runtime.
+CFLAGS_aarch64_unknown_linux_musl = { value = "-mno-outline-atomics", force = false }

@@ -887,14 +887,17 @@ fn windows_platform_secret_round_trip() {
     let account = format!("round-trip:{}", uuid::Uuid::now_v7());
     let secret = platform_secret(service, &account).expect("create Windows platform secret");
     assert_ne!(secret, [0; 32]);
-    let entry = keyring::Entry::new(service, &account).expect("open Windows platform secret");
+    let entry = colossus_credentials::SystemCredentialEntry::new(service, &account)
+        .expect("open Windows platform secret");
     assert_eq!(
-        entry.get_secret().expect("read Windows platform secret"),
+        entry
+            .read()
+            .expect("read Windows platform secret")
+            .expect("existing key")
+            .as_slice(),
         secret
     );
-    entry
-        .delete_credential()
-        .expect("delete Windows platform secret");
+    entry.delete().expect("delete Windows platform secret");
 }
 
 #[test]

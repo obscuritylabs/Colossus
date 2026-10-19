@@ -1,6 +1,7 @@
 //! Sealed application-native human admission. No wire DTO carries authority here.
 mod allocation;
 pub(super) mod driver;
+mod expiry;
 mod handoff;
 pub(super) mod lifecycle;
 pub(super) mod selection;

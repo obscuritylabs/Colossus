@@ -22,6 +22,36 @@ const activity: ToolActivity = {
 };
 
 describe("viewed image activity", () => {
+  it.each([
+    "browser.screenshot",
+    "browser.screenshot.annotated",
+    "computer.screenshot",
+  ])(
+    "previews the released artifact from %s with the same image validation",
+    (toolName) => {
+      const captured = {
+        ...activity,
+        toolName,
+        preview: JSON.stringify({ artifact: image }),
+      };
+      expect(viewedImages(captured)).toEqual(viewedImages(activity));
+      expect(viewedImages({ ...captured, state: "failed" })).toEqual([]);
+      expect(
+        viewedImages({
+          ...captured,
+          preview: JSON.stringify({
+            artifact: {
+              ...image,
+              artifact_id: "https://example.test/image.png",
+            },
+          }),
+        }),
+      ).toEqual([]);
+      expect(
+        viewedImages({ ...captured, preview: activity.preview ?? null }),
+      ).toEqual([]);
+    },
+  );
   it("uses completed released metadata and accurate singular and plural labels", () => {
     expect(viewedImages(activity)).toMatchObject([
       {

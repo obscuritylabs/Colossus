@@ -29,7 +29,8 @@ use colossus_sdk::{
     ApiMajor, AppPrivateInstanceDir, CancelRunRequest, Colossus, CreateRunRequest, GetRunRequest,
     IdempotencyKey, InputContentPart, InstanceId, ManagedAccessProfile, ManagedExecutionBoundary,
     ManagedFieldOverride, ManagedProviderKind, ManagedRuntimeConfig, NativeSidecarLifecycle,
-    RunMode, RunStatus, SidecarApplicationGrant, SidecarBootstrapConfig, SidecarOptions,
+    RunMode, RunStatus, RunTerminal, SidecarApplicationGrant, SidecarBootstrapConfig,
+    SidecarOptions,
 };
 use serde_json::{Value, json};
 use tauri::Manager as _;
@@ -56,6 +57,8 @@ use windows_frames::{accepted_frame, focus};
 mod native_input;
 mod owned_tabs;
 mod viewport_heartbeat;
+#[cfg(windows)]
+mod wait_continuity;
 use viewport_heartbeat::ViewportHeartbeat;
 
 const SPACE: &str = if cfg!(windows) {
@@ -63,11 +66,12 @@ const SPACE: &str = if cfg!(windows) {
 } else {
     "mac-contained-acceptance"
 };
-const TOOLS: [&str; 11] = [
+const TOOLS: [&str; 12] = [
     "browser.open",
     "browser.status",
     "browser.snapshot",
     "browser.click",
+    "browser.wait",
     "browser.navigate",
     "browser.screenshot",
     "browser.close",
@@ -107,6 +111,7 @@ struct FixtureState {
     phase: AtomicUsize,
     model_seen: AtomicBool,
     handoff_done: AtomicBool,
+    post_click_snapshot: AtomicBool,
     click_observed: AtomicBool,
     navigation_observed: AtomicBool,
     screenshot_seen: AtomicBool,
@@ -116,6 +121,8 @@ struct FixtureState {
     navigated_target: Mutex<Option<BrowserTarget>>,
     run_id: Mutex<Option<String>>,
     failure: Mutex<Option<String>>,
+    #[cfg(windows)]
+    wait_continuity: wait_continuity::State,
 }
 
 fn close_after_completion() -> bool {
@@ -320,7 +327,7 @@ async fn serve(
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/first") => {
             let page: &[u8] = if cfg!(windows) {
-                br#"<!doctype html><html><head><title>Human fixture</title></head><body style="background:#e7f1ff"><h1>Human fixture</h1><input aria-label="Native Windows input" autocomplete="off" style="position:absolute;left:40px;top:80px;width:300px;height:40px" oninput="document.title='Human input '+this.value"><button style="position:absolute;left:40px;top:160px" onclick="document.title='Agent click received';document.querySelector('output').textContent='Agent clicked'">Agent click</button><output>Waiting for Core</output></body></html>"#
+                include_bytes!("contained_diagnostic/wait_continuity.html")
             } else if state.native_input {
                 include_bytes!("native_input.html")
             } else {
@@ -344,24 +351,38 @@ async fn serve(
         ("GET", "/favicon.ico") => {
             respond(&mut stream, 200, "image/x-icon", &[]).await?;
         }
+        #[cfg(windows)]
+        ("GET", "/wait-release") => {
+            wait_continuity::release_response(&mut stream, state).await?;
+        }
         ("POST", "/v1/chat/completions") => {
             let body: Value = serde_json::from_slice(&request.body)?;
             ensure!(
                 body["stream"] == false,
                 "fixture requires non-streaming model"
             );
-            let phase = state.phase.fetch_add(1, Ordering::AcqRel);
+            let turn = state.phase.fetch_add(1, Ordering::AcqRel);
             ensure!(
-                phase <= if state.native_tabs { 11 } else { 7 },
-                "unexpected extra model turn {phase}"
+                turn <= (if state.native_tabs { 11 } else { 7 }) + usize::from(cfg!(windows)),
+                "unexpected extra model turn {turn}"
             );
+            #[cfg(windows)]
+            let phase = wait_continuity::logical_phase(turn);
+            #[cfg(not(windows))]
+            let phase = turn;
             state.signal(&state.model_seen);
             if phase == 0 {
                 state
                     .wait(&state.handoff_done, "native human-to-agent handoff")
                     .await?;
             }
-            if phase == 3 {
+            if phase == 4 {
+                let observed = tool_result(&body, "fixture-3")?;
+                ensure!(
+                    observed["snapshot"]["snapshot_id"].is_string(),
+                    "missing post-click snapshot"
+                );
+                state.signal(&state.post_click_snapshot);
                 state
                     .wait(&state.click_observed, "visible Core click")
                     .await?;
@@ -375,6 +396,16 @@ async fn serve(
                     .wait(&state.navigation_observed, "visible Core navigation")
                     .await?;
             }
+            #[cfg(windows)]
+            let response = if turn == 4 {
+                wait_continuity::model_wait(&body, state)?
+            } else {
+                if turn == 5 {
+                    wait_continuity::verify_result(&body, state)?;
+                }
+                model_response(phase, &body, origin, state).await?
+            };
+            #[cfg(not(windows))]
             let response = model_response(phase, &body, origin, state).await?;
             let encoded = serde_json::to_vec(&response)?;
             respond(&mut stream, 200, "application/json", &encoded).await?;
@@ -609,6 +640,18 @@ async fn model_response(
                         .is_some_and(|hash| hash.len() == 64),
                 "Core screenshot did not publish verified PNG artifact metadata"
             );
+            ensure!(
+                body["messages"]
+                    .as_array()
+                    .is_some_and(|messages| messages.iter().any(|message| message["content"]
+                        .as_array()
+                        .is_some_and(|parts| parts.iter().any(|part| part["type"]
+                            == "image_url"
+                            && part["image_url"]["url"].as_str().is_some_and(
+                                |url| url.starts_with("data:image/png;base64,iVBOR")
+                            ))))),
+                "Screenshot metadata reached the model but its PNG image did not"
+            );
             state.signal(&state.screenshot_seen);
             if state.native_tabs {
                 return owned_tabs::response(phase, body, origin, state).await;
@@ -678,7 +721,12 @@ fn managed_runtime(origin: &str, visual_hold: Duration) -> ManagedRuntimeConfig 
         90_000
     };
     runtime.models[0].model = "mac-browser-fixture".into();
+    // Unknown model names deliberately use conservative image token estimates.
+    // Leave room for the real screenshot and bounded tool transcript so this
+    // native acceptance reaches the model without bypassing context accounting.
+    runtime.models[0].context_window_tokens = 131_072;
     runtime.models[0].capabilities.streaming = false.into();
+    runtime.models[0].capabilities.image_inputs = true.into();
     runtime.field_overrides = vec![
         ManagedFieldOverride {
             field_id: "access.tools.include".into(),
@@ -693,6 +741,7 @@ fn managed_runtime(origin: &str, visual_hold: Duration) -> ManagedRuntimeConfig 
                 "browser.status",
                 "browser.snapshot",
                 "browser.click",
+                "browser.wait",
                 "browser.navigate",
                 "browser.screenshot",
                 "browser.close",
@@ -1329,7 +1378,7 @@ fn request(conversation_id: String) -> anyhow::Result<CreateRunRequest> {
         research_sources: Vec::new(),
         plan_action: None,
         branch: None,
-        max_turns: 12,
+        max_turns: 12 + u32::from(cfg!(windows)),
         idempotency_key: IdempotencyKey::new(format!(
             "mac-contained-browser-{}",
             uuid::Uuid::now_v7()
@@ -1374,15 +1423,46 @@ async fn exercise_owned(
 ) -> anyhow::Result<()> {
     let state = app.state::<AppState>();
     state.select_target(Some(SPACE.into())).await;
-    let snapshot = action(
+    let blank = action(
         app,
         BrowserAction::New {
             conversation_id: None,
+            url: String::new(),
+        },
+    )
+    .await?;
+    let blank_id = blank.selected_tab_id.context("blank tab missing")?;
+    let blank_record = blank
+        .tabs
+        .iter()
+        .find(|tab| tab.id == blank_id)
+        .context("blank record missing")?;
+    ensure!(
+        blank_record.session_id.is_empty()
+            && !blank_record.page.loading
+            && blank_record.error.is_none(),
+        "address-entry tab allocated a native session or reported loading"
+    );
+    ensure!(
+        app.webviews().len() == 1,
+        "blank tab allocated a guest webview"
+    );
+    let snapshot = action(
+        app,
+        BrowserAction::Navigate {
+            tab_id: blank_id,
             url: format!("{}/first", fixture.origin),
         },
     )
     .await
     .context("stage=desktop-new-native-admission")?;
+    ensure!(
+        snapshot.tabs.len() == 1,
+        "first navigation retained its empty tab"
+    );
+    println!(
+        "PASS empty new tab allocates no guest and first navigation replaces it through native admission"
+    );
     ensure!(
         snapshot.engine.kind
             == if cfg!(windows) {
@@ -1527,19 +1607,25 @@ async fn exercise_owned(
     println!("PASS authenticated native human-to-agent handoff");
 
     title(&view, "Agent click received").await?;
+    fixture
+        .state
+        .wait(
+            &fixture.state.post_click_snapshot,
+            "Core snapshot after click",
+        )
+        .await?;
     #[cfg(windows)]
     windows::agent_click_indicator(app, &tab, &view, rect, home).await?;
     fixture.state.signal(&fixture.state.click_observed);
     println!("PASS Core browser.snapshot and browser.click changed the visible page");
+    #[cfg(windows)]
+    wait_continuity::checkpoint(client, &run.run_id, &view, fixture, heartbeat).await?;
     title(&view, "Agent controlled page").await?;
     #[cfg(windows)]
     println!("EVIDENCE Core navigation title acknowledged; awaiting matching native frame");
-    let page = view.inspect().await?;
-    ensure!(
-        page.url == format!("{}/agent", fixture.origin),
-        "Core navigation reached the wrong page: {}",
-        page.url
-    );
+    // Core may begin its next finite observation after the title receipt. The
+    // authenticated frame loop below tolerates transient Stale receipts and
+    // independently requires the exact URL, Core target and current page pixels.
     let core_target = fixture.state.navigated_target().await?;
     let probe = accepted_frame(
         app,
@@ -1574,9 +1660,38 @@ async fn exercise_owned(
         if fixture.state.screenshot_seen.load(Ordering::Acquire) {
             break;
         }
+        let observed_run = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.get_run(GetRunRequest {
+                run_id: run.run_id.clone(),
+            }),
+        )
+        .await
+        .context("Core screenshot continuation run status timed out")??
+        .run;
+        if fixture.state.screenshot_seen.load(Ordering::Acquire) {
+            break;
+        }
+        if matches!(
+            observed_run.status,
+            RunStatus::Completed
+                | RunStatus::Failed
+                | RunStatus::Cancelled
+                | RunStatus::Interrupted
+                | RunStatus::OutcomeUnknown
+        ) {
+            let reason = match observed_run.terminal.as_ref() {
+                Some(RunTerminal::Failure(failure)) => failure.reason.as_str(),
+                _ => "no released failure",
+            };
+            anyhow::bail!(
+                "Core browser run ended with {:?} before screenshot reached the model: {reason}",
+                observed_run.status
+            );
+        }
         ensure!(
             tokio::time::Instant::now() < deadline,
-            "Core browser.screenshot did not publish its verified PNG"
+            "Core browser.screenshot did not reach the model with verified PNG metadata and image bytes"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -1633,15 +1748,87 @@ async fn exercise_owned(
             .await
             .map_err(|error| anyhow::anyhow!(error.message))?;
         #[cfg(feature = "windows-browser-development")]
-        ensure!(
+        {
+            let completed_view = {
+                let registry = state
+                    .browser
+                    .lock()
+                    .map_err(|error| anyhow::anyhow!(error.message))?;
+                ensure!(
+                    registry.tabs.len() == 1 && registry.selected.get(SPACE) == Some(&tab),
+                    "a completed run removed or replaced its selected Desktop tab"
+                );
+                let completed = registry
+                    .tabs
+                    .iter()
+                    .find(|entry| entry.dto.id == tab)
+                    .context("completed Desktop tab is missing")?;
+                ensure!(
+                    completed.dto.control == "completed"
+                        && completed.dto.completed_snapshot
+                        && completed.dto.page.url == format!("{}/agent", fixture.origin)
+                        && completed.dto.page.title == "Agent controlled page"
+                        && !completed.dto.page.loading
+                        && !completed.dto.page.can_go_back
+                        && !completed.dto.page.can_go_forward
+                        && completed.dto.error.is_none()
+                        && completed.dto.popup_url.is_none(),
+                    "completed tab lost its retained page or kept live navigation state"
+                );
+                ensure!(
+                    matches!(&completed.view, BrowserView::Snapshot(_))
+                        && !completed.view.human_control_available()
+                        && completed.view.contained_session_id().is_none(),
+                    "completed page retained native browser or human input authority"
+                );
+                completed.view.clone()
+            };
+            ensure!(
+                completed_view.inspect().await.is_err()
+                    && completed_view
+                        .control(colossus_native_browser::NavigationAction::Reload)
+                        .await
+                        .is_err()
+                    && completed_view
+                        .navigate(tauri::Url::parse(&format!("{}/first", fixture.origin))?)
+                        .is_err()
+                    && completed_view.handoff(&run.run_id).await.is_err(),
+                "completed snapshot admitted native observation, navigation, control or handoff"
+            );
+            state.select_target(None).await;
+            state.select_target(Some(SPACE.into())).await;
             state
                 .browser
-                .lock()
-                .map_err(|error| anyhow::anyhow!(error.message))?
-                .tabs
-                .is_empty(),
-            "a completed run left its viewer marked as a crashed tab"
-        );
+                .watch_agent(app, SPACE, &run.run_id, &conversation)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+            let selected = action(
+                app,
+                BrowserAction::Select {
+                    tab_id: tab.clone(),
+                },
+            )
+            .await?;
+            ensure!(
+                selected.tabs.len() == 1
+                    && selected.selected_tab_id.as_deref() == Some(tab.as_str())
+                    && selected.tabs[0].id == tab
+                    && selected.tabs[0].control == "completed"
+                    && selected.tabs[0].completed_snapshot
+                    && selected.tabs[0].error.is_none(),
+                "selection or context reconciliation removed the completed snapshot tab"
+            );
+            println!(
+                "PASS completed Core run retained its selected read-only page snapshot across context reconciliation without native browser authority"
+            );
+            action(
+                app,
+                BrowserAction::Close {
+                    tab_id: tab.clone(),
+                },
+            )
+            .await?;
+        }
     }
     if !close_after_completion() {
         #[cfg(windows)]
@@ -1741,7 +1928,7 @@ async fn exercise_owned(
     if close_after_completion() {
         #[cfg(feature = "windows-browser-development")]
         println!(
-            "PASS completed Core run automatically retired its viewer through acknowledged detach without a crashed tab"
+            "PASS explicit close removed the completed page snapshot after acknowledged native detach"
         );
         #[cfg(not(feature = "windows-browser-development"))]
         println!(
@@ -1823,8 +2010,8 @@ pub(super) async fn exercise(
             }
         );
     }
-    fixture.state.check()?;
     exercise?;
+    fixture.state.check()?;
     drain.map_err(|error| anyhow::anyhow!(error.message))?;
     close?;
     println!(

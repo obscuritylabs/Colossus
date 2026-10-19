@@ -298,9 +298,11 @@ test("browser → production native adapter → authenticated worker: offline co
     expect(listed).toContain("disabled");
     await detail.getByRole("button", { name: "Activate this digest" }).click();
     await continueOperation("enable");
+    // Native activation completes before the renderer's separate inventory
+    // refresh. Allow that command's bounded budget for the enabled state.
     await expect(
       detail.getByRole("button", { name: "Disable", exact: true }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 45_000 });
     await expect(detail.locator(".plugin-icon img")).toHaveJSProperty(
       "naturalWidth",
       128,

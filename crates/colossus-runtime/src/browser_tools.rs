@@ -14,7 +14,6 @@ mod transfer;
 
 pub(super) use execution::BrowserToolExecutor;
 pub use host::RuntimeBrowserHost;
-pub(super) use lifecycle::RuntimeRunLifecycle;
 pub use native::{
     NativeBrowserOpenRequest, RuntimeBrowserPresenter, RuntimeNativeBrowserAuthority,
     RuntimeNativeBrowserError, RuntimeNativeBrowserGranted, RuntimeNativeBrowserSession,

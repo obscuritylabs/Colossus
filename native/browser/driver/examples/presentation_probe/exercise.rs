@@ -56,6 +56,7 @@ pub async fn run() -> Result<(), &'static str> {
     let mut nonce = [0_u8; 16];
     getrandom::fill(&mut nonce).map_err(|_| "fixture nonce unavailable")?;
     let enrollment = BrowserBridgeEnrollment {
+        public_web: false,
         binding: binding.clone(),
         mode: BrowserMode::Embedded,
         profile: Default::default(),
@@ -198,6 +199,7 @@ async fn exercise(
         tab_id,
         document_id: target.document_id.clone(),
         options: BrowserOpenOptions {
+            public_web: false,
             profile: Default::default(),
             mode: BrowserMode::Embedded,
             allowed_origins: vec![origin],

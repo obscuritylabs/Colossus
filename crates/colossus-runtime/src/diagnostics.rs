@@ -215,6 +215,8 @@ impl Runtime {
             "instruction_sources": self.instruction_source_diagnostics()?,
             "security_posture": self.security_posture,
             "browser": self.browser_capabilities(),
+            "computer": self.computer_capabilities(),
+            "computer_active_work": self.computer_active_work(),
             "browser_active_work": self.browser_active_work(),
             "writer_lease": writer_lease,
             "projection_store": {
@@ -824,7 +826,10 @@ impl Runtime {
                     ProviderReadinessCheck {
                         name: "generation".into(),
                         status: "fail".into(),
-                        detail: format!("provider endpoint returned HTTP {}", diagnostic.status),
+                        detail: match colossus_provider::classify_response_diagnostic(&diagnostic) {
+                            Some(failure) if failure.http_status.is_none() => failure.to_string(),
+                            _ => format!("provider endpoint returned HTTP {}", diagnostic.status),
+                        },
                         provider_response: Some(diagnostic),
                     }
                 } else {

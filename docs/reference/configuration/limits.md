@@ -7,6 +7,110 @@ type: reference
 
 # Runtime limits configuration
 
+## Browser access and limits
+
+```yaml
+browser:
+  enabled: true
+  publicWeb: true
+  maxSessions: 4
+  maxTabs: 8
+  maxSnapshotNodes: 1024
+```
+
+These defaults preserve browser availability on hosts with a verified native
+component. Set `browser.enabled: false` to disable browser startup, native browser
+admission, model-visible `browser.*` tools, and the bundled `colossus/browser`
+skill. Enabling it cannot install a component, bypass platform acceptance, or
+override access policy. Each runtime enforces its own limits; native host limits
+may narrow them further.
+
+| Field | Default | Range |
+| --- | --- | --- |
+| `browser.enabled` | `true` | Boolean |
+| `browser.publicWeb` | `true` | Boolean; subject to workspace network policy |
+| `browser.maxSessions` | `4` | `1..=4` |
+| `browser.maxTabs` | `8` | `1..=8`, aggregated across sessions |
+| `browser.maxSnapshotNodes` | `1024` | `1..=1024` |
+
+In Desktop, use **Settings → Global → Browser** for defaults and
+**Settings → Workspace → Browser** for overrides. Save or apply the change.
+Global reductions wait for active work to finish; enabling a previously disabled
+browser or public browsing requires applying the pending update in Workspace settings. Applying a
+configuration restarts the runtime and closes its temporary browser sessions.
+The new-tab URL on the global Browser page is a separate device preference.
+
+In VS Code, **Colossus Settings → Workspace → Runtime → Browser settings** opens
+the `colossus.browser.*` settings. They support user defaults and workspace
+overrides. Finish active work, disconnect, and start Managed Local again to apply
+them. External workers (including those used by web clients) read `browser.*`
+from their own YAML and must be restarted by their operator.
+
+Browser settings do not select executables, transports, profiles, or certificate
+material. Browser sessions remain temporary; this does not control ordinary web
+search or HTTP tools.
+
+Public browsing loads HTTPS pages, redirects, styles, scripts, and images across
+public origins without a per-site asset list. It requires public wildcard or
+acknowledged ambient network authority in the actual execution permit. A
+restricted workspace narrows the session to its listed origins. Set
+`browser.publicWeb: false` to require that exact-origin mode even in a workspace
+with public network access. The proxy still rejects private and metadata
+destinations unless an exact origin was independently admitted, pins validated
+DNS results, and preserves TLS verification. Plain HTTP remains limited to exact
+loopback origins. The model cannot enable public browsing through tool arguments.
+
+## Windows computer access and limits
+
+```yaml
+computer:
+  enabled: false
+  maxWindows: 64
+  maxSnapshotNodes: 512
+  maxScreenshotBytes: 8388608
+  maxScreenshotPixels: 8388608
+  actionTimeoutMs: 5000
+  sessionTimeoutMs: 300000
+  observationMaxAgeMs: 10000
+```
+
+Computer use is disabled by default. It requires a verified Windows CLI or managed
+sidecar and an unlocked ordinary-user desktop. It does not require administrator
+privileges or request elevation. The model cannot enable it. Enabling exposes
+permitted `computer.*` tools and the bundled `colossus/computer-use` skill;
+ordinary access policy and per-effect authorization still apply.
+
+| Field | Default | Range |
+| --- | --- | --- |
+| `computer.enabled` | `false` | Boolean |
+| `computer.maxWindows` | `64` | `1..=128` |
+| `computer.maxSnapshotNodes` | `512` | `1..=1024` |
+| `computer.maxScreenshotBytes` | `8388608` | `1..=16777216` |
+| `computer.maxScreenshotPixels` | `8388608` | `1..=16777216` |
+| `computer.actionTimeoutMs` | `5000` | `1..=10000` |
+| `computer.sessionTimeoutMs` | `300000` | `1..=900000`, nonrenewable |
+| `computer.observationMaxAgeMs` | `10000` | `1..=30000` |
+
+Desktop exposes defaults in **Settings → Global → Computer use** and overrides in
+**Settings → Workspace → Computer use**. Enabling requires explicit **Apply** in
+Workspace settings. Applying restarts the runtime and releases its automation;
+the user's apps remain open. Disabling removes both tools and skill availability.
+
+These tools can operate normal-user apps outside the workspace. Filesystem and
+network sandbox rules do not confine effects performed through another app's
+interface. Only one Colossus computer session can own physical input in the same
+Windows user session. The native control card provides Pause/Resume and Stop.
+Physical **Escape** stops computer control; **Ctrl+Alt+P** pauses it. The pause
+shortcut never resumes control: use the card's **Resume** button. Pause blocks
+native computer input without suspending the whole model run. Stop immediately
+revokes computer input; the owning run is cancelled when the runtime receives
+the native stop result. Human input also pauses automation. These shortcuts are
+active only while a computer-control session owns its native card.
+Protected input, elevated apps, UAC, and locked or
+secure desktops require the human. Colossus's own controls are excluded targets.
+
+## Other runtime limits
+
 Colossus uses several independent limits rather than one global runtime budget. The
 `agent` and `subagents` blocks configure model-loop and child-scheduler bounds. Model,
 context, memory, research, sandbox, MCP, and storage limits live with their owning

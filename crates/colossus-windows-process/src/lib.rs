@@ -16,6 +16,14 @@ mod channels;
 #[cfg(all(windows, debug_assertions))]
 pub use channels::spawn_user_browser_with_private_channels;
 pub use channels::{PrivateProcessChannel, SupervisedChild, spawn_with_private_channels};
+#[cfg(all(
+    windows,
+    target_arch = "x86_64",
+    feature = "windows-browser-functional-preview"
+))]
+pub use channels::{
+    spawn_functional_browser_with_private_channels, validate_functional_browser_context,
+};
 
 #[cfg(windows)]
 mod private_io;
