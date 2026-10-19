@@ -30,6 +30,7 @@ pub(super) fn sidecar(repository: &Repository) -> Result<(), String> {
 
 pub(super) fn desktop(repository: &Repository) -> Result<(), String> {
     browser_driver(repository)?;
+    computer(repository)?;
     web(repository)?;
     repository
         .task("node")
@@ -117,6 +118,54 @@ fn browser_driver(repository: &Repository) -> Result<(), String> {
             "--manifest-path",
             MANIFEST,
             "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    )
+}
+
+// The unsafe Windows adapter owns a separate Cargo workspace. Portable checks
+// cover its protocol and unavailable platform stub without capturing a desktop
+// or sending input; real desktop acceptance is an explicit Windows operation.
+pub(super) fn computer(repository: &Repository) -> Result<(), String> {
+    const MANIFEST: &str = "native/computer/Cargo.toml";
+    cargo(
+        repository,
+        ["fmt", "--manifest-path", MANIFEST, "--all", "--", "--check"],
+    )?;
+    repository
+        .task(cargo_program())
+        .args([
+            "metadata",
+            "--locked",
+            "--manifest-path",
+            MANIFEST,
+            "--no-deps",
+            "--format-version",
+            "1",
+        ])
+        .quiet_stdout()
+        .run()?;
+    cargo(
+        repository,
+        [
+            "test",
+            "--locked",
+            "--manifest-path",
+            MANIFEST,
+            "--all-targets",
+        ],
+    )?;
+    cargo(
+        repository,
+        [
+            "clippy",
+            "--locked",
+            "--manifest-path",
+            MANIFEST,
+            "--all-targets",
+            "--all-features",
             "--",
             "-D",
             "warnings",
@@ -411,9 +460,14 @@ pub(super) fn dependencies(repository: &Repository) -> Result<(), String> {
             "native/browser/driver/Cargo.lock",
         ],
     )?;
-    for directory in ["process-broker", "process-broker/fixture", "tls-broker"] {
-        let manifest = format!("native/browser/{directory}/Cargo.toml");
-        let lockfile = format!("native/browser/{directory}/Cargo.lock");
+    for directory in [
+        "native/browser/process-broker",
+        "native/browser/process-broker/fixture",
+        "native/browser/tls-broker",
+        "native/computer",
+    ] {
+        let manifest = format!("{directory}/Cargo.toml");
+        let lockfile = format!("{directory}/Cargo.lock");
         repository
             .task(cargo_program())
             .args([

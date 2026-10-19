@@ -22,7 +22,11 @@ const activity: ToolActivity = {
 };
 
 describe("viewed image activity", () => {
-  it.each(["browser.screenshot", "browser.screenshot.annotated"])(
+  it.each([
+    "browser.screenshot",
+    "browser.screenshot.annotated",
+    "computer.screenshot",
+  ])(
     "previews the released artifact from %s with the same image validation",
     (toolName) => {
       const captured = {

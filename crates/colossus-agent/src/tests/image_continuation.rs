@@ -1,5 +1,7 @@
 use super::*;
-use colossus_contracts::{ModelImageDetail, ModelImageReference};
+use colossus_contracts::{
+    ImageInputBudget, ImageViewOutput, ModelImageDetail, ModelImageReference,
+};
 
 struct ImageProvider {
     inner: ScriptedProvider,
@@ -24,14 +26,23 @@ impl ModelProvider for ImageProvider {
     }
 }
 
-struct ReleasedScreenshot;
+#[derive(Clone, Copy)]
+struct ReleasedScreenshot {
+    name: &'static str,
+    size_bytes: u64,
+}
 
-fn image() -> ModelImageReference {
+fn image(name: &str, size_bytes: u64) -> ModelImageReference {
     ModelImageReference {
         artifact_id: format!("artifact-{}", "a".repeat(64)),
-        file_name: "browser-screenshot.png".into(),
+        file_name: if name == "computer.screenshot" {
+            "computer-screenshot.png"
+        } else {
+            "browser-screenshot.png"
+        }
+        .into(),
         media_type: "image/png".into(),
-        size_bytes: 1024,
+        size_bytes,
         sha256: "b".repeat(64),
         width_pixels: 32,
         height_pixels: 24,
@@ -46,30 +57,27 @@ impl ToolExecutor for ReleasedScreenshot {
         call: ToolCall,
         _context: ExecutionContext,
     ) -> Result<ToolResult, ToolError> {
-        assert_eq!(call.name, "browser.screenshot");
+        assert_eq!(call.name, self.name);
         Ok(ToolResult {
             call_id: call.call_id,
             name: call.name,
             output: "{\"captured\":true}".into(),
             exit_code: 0,
-            images: vec![image()],
+            images: vec![image(self.name, self.size_bytes)],
         })
     }
 }
 
-async fn verify_continuation(image_inputs: bool) {
+async fn verify_continuation(image_inputs: bool, name: &'static str, size_bytes: u64) {
+    let expected_image = image(name, size_bytes);
+    let executor = ReleasedScreenshot { name, size_bytes };
     let provider = Arc::new(ImageProvider {
         images: image_inputs,
         inner: ScriptedProvider::new(vec![
             turn(vec![ProviderEvent::ToolCallRequested {
                 call_id: "capture-current-page".into(),
-                name: "browser.screenshot".into(),
-                arguments: json!({
-                    "session_id": format!("bs_{}", "a".repeat(32)),
-                    "control_generation": 1,
-                    "tab_id": format!("bt_{}", "a".repeat(32)),
-                    "document_id": format!("bd_{}", "a".repeat(32)),
-                }),
+                name: name.into(),
+                arguments: capture_arguments(name),
             }]),
             turn(vec![ProviderEvent::FinalOutput {
                 text: "Page captured.".into(),
@@ -81,8 +89,8 @@ async fn verify_continuation(image_inputs: bool) {
     let service = AgentService::new(
         Arc::clone(&journal),
         Arc::clone(&provider) as Arc<dyn ModelProvider>,
-        Arc::new(StaticToolRegistry::builtins(&["browser.screenshot".into()]).unwrap()),
-        Arc::new(ReleasedScreenshot),
+        Arc::new(StaticToolRegistry::builtins(&[name.into()]).unwrap()),
+        Arc::new(executor),
         Arc::clone(&sessions) as Arc<dyn SessionRepository>,
     );
     let result = service
@@ -104,7 +112,7 @@ async fn verify_continuation(image_inputs: bool) {
             );
             assert_eq!(
                 observation.content.images().collect::<Vec<_>>(),
-                vec![&image()]
+                vec![&expected_image]
             );
             assert!(!observation.begins_user_turn());
         }
@@ -118,7 +126,7 @@ async fn verify_continuation(image_inputs: bool) {
         .expect("released observation survives canonical journal reconstruction");
     assert_eq!(
         observation.message.content.images().collect::<Vec<_>>(),
-        vec![&image()]
+        vec![&expected_image]
     );
     let next = Arc::new(ImageProvider {
         images: true,
@@ -129,8 +137,8 @@ async fn verify_continuation(image_inputs: bool) {
     let restarted = AgentService::new(
         journal,
         Arc::clone(&next) as Arc<dyn ModelProvider>,
-        Arc::new(StaticToolRegistry::builtins(&["browser.screenshot".into()]).unwrap()),
-        Arc::new(ReleasedScreenshot),
+        Arc::new(StaticToolRegistry::builtins(&[name.into()]).unwrap()),
+        Arc::new(executor),
         restored,
     );
     restarted
@@ -149,16 +157,167 @@ async fn verify_continuation(image_inputs: bool) {
             && message
                 .content
                 .images()
-                .any(|reference| reference == &image())
+                .any(|reference| reference == &expected_image)
     }));
 }
 
 #[tokio::test]
 async fn released_screenshot_reaches_the_next_turn_and_survives_restart() {
-    verify_continuation(true).await;
+    verify_continuation(true, "browser.screenshot", 1024).await;
+    verify_continuation(true, "computer.screenshot", 16 * 1_048_576).await;
 }
 
 #[tokio::test]
 async fn text_only_continuation_preserves_capture_for_later_image_models() {
-    verify_continuation(false).await;
+    verify_continuation(false, "browser.screenshot", 1024).await;
+    verify_continuation(false, "computer.screenshot", 16 * 1_048_576).await;
+}
+
+fn capture_arguments(name: &str) -> Value {
+    match name {
+        "image.view" => json!({"paths":["fixture.png"]}),
+        "computer.screenshot" => {
+            json!({"session_id":format!("cu_s_{}","a".repeat(32)),"control_generation":1})
+        }
+        _ => json!({
+            "session_id": format!("bs_{}", "a".repeat(32)),
+            "control_generation": 1,
+            "tab_id": format!("bt_{}", "a".repeat(32)),
+            "document_id": format!("bd_{}", "a".repeat(32)),
+        }),
+    }
+}
+
+struct BudgetRecordingTools {
+    sizes: Vec<u64>,
+    budgets: Mutex<Vec<ImageInputBudget>>,
+}
+
+#[async_trait]
+impl ToolExecutor for BudgetRecordingTools {
+    async fn execute(
+        &self,
+        call: ToolCall,
+        context: ExecutionContext,
+    ) -> Result<ToolResult, ToolError> {
+        let mut budgets = self.budgets.lock().unwrap();
+        let size_bytes = self.sizes[budgets.len()];
+        let budget = context.image_input_budget.unwrap();
+        let admitted = budget.remaining_count > 0 && budget.remaining_bytes >= size_bytes;
+        budgets.push(budget);
+        let images = if admitted {
+            vec![image(&call.name, size_bytes)]
+        } else {
+            Vec::new()
+        };
+        let output = if call.name == "image.view" && admitted {
+            serde_json::to_string(&ImageViewOutput {
+                images: images.clone(),
+            })
+            .unwrap()
+        } else {
+            json!({"captured":admitted}).to_string()
+        };
+        Ok(ToolResult {
+            call_id: call.call_id,
+            name: call.name.clone(),
+            output,
+            exit_code: if admitted { 0 } else { 1 },
+            images: if call.name == "image.view" {
+                Vec::new()
+            } else {
+                images
+            },
+        })
+    }
+}
+
+#[tokio::test]
+async fn pending_image_budget_counts_mixed_screenshots_and_image_views_before_each_dispatch() {
+    let cases = [
+        vec![
+            ("browser.screenshot", 4 * 1_048_576),
+            ("computer.screenshot", 16 * 1_048_576),
+            ("image.view", 12 * 1_048_576),
+        ],
+        (0..17)
+            .map(|index| {
+                (
+                    if index % 2 == 0 {
+                        "computer.screenshot"
+                    } else {
+                        "browser.screenshot"
+                    },
+                    1024,
+                )
+            })
+            .collect(),
+    ];
+    for captures in cases {
+        let tools = Arc::new(BudgetRecordingTools {
+            sizes: captures.iter().map(|(_, size)| *size).collect(),
+            budgets: Mutex::new(Vec::new()),
+        });
+        let provider = Arc::new(ImageProvider {
+            images: true,
+            inner: ScriptedProvider::new(vec![
+                turn(
+                    captures
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (name, _))| ProviderEvent::ToolCallRequested {
+                            call_id: format!("capture-{index}"),
+                            name: (*name).into(),
+                            arguments: capture_arguments(name),
+                        })
+                        .collect(),
+                ),
+                turn(vec![ProviderEvent::FinalOutput {
+                    text: "Captures reviewed.".into(),
+                }]),
+            ]),
+        });
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let sessions = Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+        let service = AgentService::new(
+            journal,
+            provider.clone(),
+            Arc::new(
+                StaticToolRegistry::builtins(&[
+                    "browser.screenshot".into(),
+                    "computer.screenshot".into(),
+                    "image.view".into(),
+                ])
+                .unwrap(),
+            ),
+            tools.clone(),
+            sessions,
+        );
+        service
+            .run("primary", "Observe the app", "Capture it", 2)
+            .await
+            .unwrap();
+        let mut remaining = ImageInputBudget {
+            remaining_count: 16,
+            remaining_bytes: 32 * 1_048_576,
+        };
+        for (actual, (_, size)) in tools.budgets.lock().unwrap().iter().zip(&captures) {
+            assert_eq!(actual, &remaining);
+            if remaining.remaining_count > 0 && remaining.remaining_bytes >= *size {
+                remaining.remaining_count -= 1;
+                remaining.remaining_bytes -= size;
+            }
+        }
+        let requests = provider.inner.requests.lock().unwrap();
+        let images = requests[1]
+            .messages
+            .iter()
+            .flat_map(|message| message.content.images())
+            .collect::<Vec<_>>();
+        assert_eq!(images.len(), 16 - remaining.remaining_count);
+        assert_eq!(
+            images.iter().map(|image| image.size_bytes).sum::<u64>(),
+            32 * 1_048_576 - remaining.remaining_bytes
+        );
+    }
 }

@@ -80,6 +80,8 @@ pub enum ToolPrerequisite {
     McpConfigured,
     /// Trusted host composition provides a verified browser backend.
     BrowserAvailable,
+    /// Trusted native composition provides an enabled verified interactive computer host.
+    ComputerAvailable,
 }
 
 /// One model-visible tool's source, family, and static prerequisites.
@@ -135,4 +137,6 @@ pub struct AccessContext {
     pub mcp_configured: bool,
     /// A trusted browser backend is available; this fact never grants browser authority.
     pub browser_available: bool,
+    /// Enabled verified ordinary-user interactive computer host; this fact grants no effect.
+    pub computer_available: bool,
 }

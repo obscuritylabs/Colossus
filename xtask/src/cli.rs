@@ -17,7 +17,7 @@ Components:
   desktop       Desktop renderer audit, checks, tests, and build
   web           Cloud web renderer audit, checks, tests, and build
   docs          Documentation build and verification
-  dependencies  Root, fuzz, and desktop dependency policy
+  dependencies  Root, fuzz, Desktop, and standalone native dependency policy
   workflows     CI classification contracts and workflow lint
 ";
 

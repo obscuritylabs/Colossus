@@ -203,6 +203,13 @@ const DESKTOP_PAGES = [
       "browser enabled disabled sessions tabs snapshot skill new tab home page url localhost preview",
   },
   {
+    id: "computer",
+    label: "Computer use",
+    description: "Control Windows desktop access and operation limits.",
+    keywords:
+      "computer desktop windows mouse keyboard screenshot skill automation enable disable",
+  },
+  {
     id: "terminal",
     label: "Terminal",
     description: "Control local terminal access and the default session.",
@@ -237,6 +244,7 @@ type GlobalTab =
   | "defaults"
   | DesktopTab;
 type SpaceTab =
+  | "computer"
   | "browser"
   | "cloud"
   | "runtime"
@@ -398,12 +406,13 @@ const GLOBAL_TABS: ReadonlyArray<{
   { id: "mcp", label: "MCP", group: "Global settings" },
   { id: "plugins", label: "Plugins", group: "Global settings" },
   { id: "browser", label: "Browser", group: "Global settings" },
+  { id: "computer", label: "Computer use", group: "Global settings" },
   { id: "search", label: "Search", group: "Global settings" },
   { id: "telemetry", label: "Telemetry", group: "Global settings" },
   { id: "defaults", label: "Defaults", group: "Global settings" },
-  ...DESKTOP_PAGES.filter(({ id }) => id !== "browser").map(
-    ({ id, label }) => ({ id, label, group: "Desktop" }),
-  ),
+  ...DESKTOP_PAGES.filter(
+    ({ id }) => id !== "browser" && id !== "computer",
+  ).map(({ id, label }) => ({ id, label, group: "Desktop" })),
 ];
 
 const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
@@ -415,6 +424,7 @@ const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
   { id: "browser", label: "Browser" },
+  { id: "computer", label: "Computer use" },
   { id: "access", label: "Access" },
   { id: "sandbox", label: "Sandbox" },
   { id: "search", label: "Search" },
@@ -425,9 +435,19 @@ const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
 ];
 
 export function managedFieldDestination(descriptor: ManagedFieldDescriptor): {
-  tab: "browser" | "sandbox" | "research" | "advanced" | "runtime" | "plugins";
+  tab:
+    | "computer"
+    | "browser"
+    | "sandbox"
+    | "research"
+    | "advanced"
+    | "runtime"
+    | "plugins";
   section: string | null;
 } {
+  if (descriptor.id.startsWith("computer.")) {
+    return { tab: "computer", section: null };
+  }
   if (descriptor.id.startsWith("browser.")) {
     return { tab: "browser", section: null };
   }
@@ -538,6 +558,84 @@ const EMPTY_TELEMETRY_DRAFT: TelemetryEditorDraft = {
 };
 
 const FIELD_DESCRIPTORS: ManagedFieldDescriptor[] = [
+  toggleField(
+    "computer.enabled",
+    "Computer use",
+    "Computer access",
+    "Allow Windows computer tools and the bundled computer-use skill. Agents can operate normal user apps outside the workspace. Disabled by default; enabling requires Apply.",
+    false,
+    false,
+  ),
+  field(
+    "computer.maxWindows",
+    "Computer use",
+    "Window list limit",
+    "Maximum windows returned when choosing an app.",
+    64,
+    false,
+    1,
+    128,
+  ),
+  field(
+    "computer.maxSnapshotNodes",
+    "Computer use",
+    "Snapshot element limit",
+    "Maximum accessible elements returned from the selected window.",
+    512,
+    false,
+    1,
+    1024,
+  ),
+  field(
+    "computer.maxScreenshotBytes",
+    "Computer use",
+    "Screenshot byte limit",
+    "Maximum PNG bytes released for one screenshot.",
+    8388608,
+    false,
+    1,
+    16777216,
+  ),
+  field(
+    "computer.maxScreenshotPixels",
+    "Computer use",
+    "Screenshot pixel limit",
+    "Maximum pixels captured from the selected window.",
+    8388608,
+    false,
+    1,
+    16777216,
+  ),
+  field(
+    "computer.actionTimeoutMs",
+    "Computer use",
+    "Action timeout (ms)",
+    "Maximum time for one native operation.",
+    5000,
+    false,
+    1,
+    10000,
+  ),
+  field(
+    "computer.sessionTimeoutMs",
+    "Computer use",
+    "Session timeout (ms)",
+    "Maximum time before control expires and input stops.",
+    300000,
+    false,
+    1,
+    900000,
+  ),
+  field(
+    "computer.observationMaxAgeMs",
+    "Computer use",
+    "Observation age limit (ms)",
+    "Maximum age of a screenshot or snapshot used for input.",
+    10000,
+    false,
+    1,
+    30000,
+  ),
   toggleField(
     "browser.enabled",
     "Browser",
@@ -2992,7 +3090,7 @@ export function ManagedSettingsPane({
   }, [descriptors, query, snapshot]);
 
   const desktopPage =
-    scope === "global" && globalTab !== "browser"
+    scope === "global" && globalTab !== "browser" && globalTab !== "computer"
       ? DESKTOP_PAGES.find((page) => page.id === globalTab)
       : undefined;
   const externalTargets = desktop.targets.filter(
@@ -3874,37 +3972,56 @@ function GlobalSettingsBody({
       </Suspense>
     );
   }
-  if (tab === "browser") {
-    return (
-      <BrowserSettings>
-        <BrowserCapabilityFields
-          descriptors={descriptors.filter((descriptor) =>
-            descriptor.id.startsWith("browser."),
-          )}
-          values={defaults.fields}
-          effective={new Map()}
-          scope="global"
-          fieldElementId={managedFieldElementId}
-          onChange={(id, value) =>
-            setDefaults({
-              ...defaults,
-              fields: { ...defaults.fields, [id]: value },
-            })
-          }
-          onInherit={(id) => {
-            const fields = { ...defaults.fields };
-            delete fields[id];
-            setDefaults({ ...defaults, fields });
-          }}
-        />
-      </BrowserSettings>
+  if (tab === "browser" || tab === "computer") {
+    const controls = (
+      <BrowserCapabilityFields
+        capability={tab}
+        descriptors={descriptors.filter((descriptor) =>
+          descriptor.id.startsWith(`${tab}.`),
+        )}
+        values={defaults.fields}
+        effective={new Map()}
+        scope="global"
+        fieldElementId={managedFieldElementId}
+        onChange={(id, value) =>
+          setDefaults({
+            ...defaults,
+            fields: { ...defaults.fields, [id]: value },
+          })
+        }
+        onInherit={(id) => {
+          const fields = { ...defaults.fields };
+          delete fields[id];
+          setDefaults({ ...defaults, fields });
+        }}
+      />
+    );
+    return tab === "browser" ? (
+      <BrowserSettings>{controls}</BrowserSettings>
+    ) : (
+      <section
+        className="managed-settings-body desktop-settings"
+        aria-labelledby="computer-settings-heading"
+      >
+        <div className="managed-section-heading">
+          <div>
+            <h3 id="computer-settings-heading">Computer use</h3>
+            <p className="managed-heading-copy">
+              Let agents work with Windows apps. Off until you enable and apply
+              it.
+            </p>
+          </div>
+        </div>
+        {controls}
+      </section>
     );
   }
   if (tab === "defaults") {
     const defaultDescriptors = descriptors.filter(
       (descriptor) =>
         !descriptor.id.startsWith("plugins.") &&
-        !descriptor.id.startsWith("browser."),
+        !descriptor.id.startsWith("browser.") &&
+        !descriptor.id.startsWith("computer."),
     );
     return (
       <section className="managed-settings-body">
@@ -5104,6 +5221,7 @@ export function SpaceSettingsBody({
                   !descriptor.advanced &&
                   !descriptor.id.startsWith("plugins.") &&
                   !descriptor.id.startsWith("browser.") &&
+                  !descriptor.id.startsWith("computer.") &&
                   !descriptor.id.startsWith("research."),
               )}
               values={draft.fields}
@@ -5329,8 +5447,13 @@ export function SpaceSettingsBody({
   }
   const filtered = descriptors.filter((descriptor) => {
     if (descriptor.id.startsWith("plugins.")) return false;
+    if (tab === "computer") return descriptor.id.startsWith("computer.");
     if (tab === "browser") return descriptor.id.startsWith("browser.");
-    if (descriptor.id.startsWith("browser.")) return false;
+    if (
+      descriptor.id.startsWith("browser.") ||
+      descriptor.id.startsWith("computer.")
+    )
+      return false;
     if (tab === "sandbox") return descriptor.id.startsWith("sandbox.");
     if (tab === "research") return descriptor.id.startsWith("research.");
     return descriptor.advanced;
@@ -5340,7 +5463,11 @@ export function SpaceSettingsBody({
       <div className="managed-section-heading">
         <div>
           <p className="eyebrow">Workspace overrides</p>
-          <h3>{tab[0]!.toUpperCase() + tab.slice(1)}</h3>
+          <h3>
+            {tab === "computer"
+              ? "Computer use"
+              : tab[0]!.toUpperCase() + tab.slice(1)}
+          </h3>
           {tab === "browser" ? (
             <p className="managed-heading-copy">
               Customize browser access and limits for this workspace.
@@ -5354,8 +5481,9 @@ export function SpaceSettingsBody({
           ) : null}
         </div>
       </div>
-      {tab === "browser" ? (
+      {tab === "browser" || tab === "computer" ? (
         <BrowserCapabilityFields
+          capability={tab}
           descriptors={filtered}
           values={draft.fields}
           effective={effective}

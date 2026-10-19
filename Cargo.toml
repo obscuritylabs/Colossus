@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-exclude = ["native/browser/driver", "native/browser/pki", "native/browser/process-broker", "native/browser/tls-broker"]
+exclude = ["native/browser/driver", "native/browser/pki", "native/browser/process-broker", "native/browser/tls-broker", "native/computer"]
 members = [
     "crates/colossus-cloud",
     "crates/colossus-cloud-postgres",

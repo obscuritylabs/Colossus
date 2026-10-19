@@ -22,6 +22,7 @@ pub(super) fn dev(repository: &Repository) -> Result<(), String> {
 pub(super) fn full(repository: &Repository) -> Result<(), String> {
     pre_commit(repository)?;
     super::surfaces::browser_brokers(repository)?;
+    super::surfaces::computer(repository)?;
     repository
         .task(cargo())
         .args(["metadata", "--locked", "--no-deps", "--format-version", "1"])

@@ -42,6 +42,26 @@ Where the Desktop build offers it, **Browser** opens websites and local previews
 
 Under **Settings → Global → Browser**, set a new-tab page with a full HTTP or HTTPS address. The default is an empty tab. This preference does not restore tabs or browsing history.
 
+## Computer use
+
+On Windows, **Settings → Global → Computer use** controls the default and
+**Settings → Workspace → Computer use** provides overrides. It starts off.
+Enable it and apply the workspace update to make permitted computer tools and
+the `@computer-use` skill available.
+
+Ask the agent to work with an open app. It selects a window, reads its accessible
+controls or screenshot, and verifies each mouse or keyboard action. Screenshots
+appear inline in the conversation and can be opened at full size. These actions
+can affect apps and data outside your workspace.
+
+A visible native card lets you pause or stop control. Moving the mouse or typing
+pauses automation; use the card to resume. Protected input and Windows elevation
+remain yours to handle. When the task ends, Colossus releases automation and leaves
+the app open for inspection.
+
+Windows may require you to bring the selected app forward before input can begin.
+Colossus respects this foreground restriction and asks for help when focus is refused.
+
 ## Artifacts
 
 **Artifacts** previews files released by the current thread. Switch between artifact tabs to inspect output without leaving Work. **Library** in the left navigation shows metadata for released artifacts across the current Desktop session. A file appears only after the runtime has released it; an unreleased tool result does not automatically become a Desktop artifact.

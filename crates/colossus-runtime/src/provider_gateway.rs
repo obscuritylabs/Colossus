@@ -1,4 +1,7 @@
 use super::*;
+#[cfg(test)]
+#[path = "provider_gateway_tests.rs"]
+mod tests;
 
 pub(super) struct GatewayModelProvider {
     pub(super) gateway: Arc<EffectGateway>,
@@ -753,7 +756,9 @@ impl<'a> ReleasedProviderStream<'a> {
         let expected = expected.item;
         if let ProviderStreamItem::Diagnostic { diagnostic } = expected {
             if include_response_diagnostics
-                && self.events.is_empty()
+                && (self.events.is_empty()
+                    || colossus_provider::classify_response_diagnostic(&diagnostic)
+                        .is_some_and(|failure| failure.http_status.is_none()))
                 && self.completed.is_none()
                 && self.diagnostic.as_ref() == Some(&diagnostic)
             {
@@ -811,7 +816,11 @@ impl ReleasedEffectObserver for ReleasedProviderStream<'_> {
         if let Ok(rejection) =
             serde_json::from_slice::<colossus_provider::ProviderFeatureRejection>(&result.bytes)
         {
-            if self.rejection.is_some() || !self.events.is_empty() || self.completed.is_some() {
+            if self.rejection.is_some()
+                || self.diagnostic.is_some()
+                || !self.events.is_empty()
+                || self.completed.is_some()
+            {
                 return Err(ExecutionError::Failed(
                     "invalid feature rejection sequence".into(),
                 ));
@@ -823,7 +832,7 @@ impl ReleasedEffectObserver for ReleasedProviderStream<'_> {
             serde_json::from_slice(&result.bytes).map_err(|_| {
                 ExecutionError::Failed("released provider stream item violated its contract".into())
             })?;
-        if self.rejection.is_some() {
+        if self.rejection.is_some() || self.diagnostic.is_some() {
             return Err(ExecutionError::Failed(
                 "provider emitted output after rejection".into(),
             ));
@@ -851,7 +860,10 @@ impl ReleasedEffectObserver for ReleasedProviderStream<'_> {
                 self.events.push(event);
             }
             ProviderStreamItem::Diagnostic { diagnostic } => {
-                if self.diagnostic.is_some() || self.completed.is_some() || !self.events.is_empty()
+                if self.completed.is_some()
+                    || (!self.events.is_empty()
+                        && colossus_provider::classify_response_diagnostic(&diagnostic)
+                            .is_none_or(|failure| failure.http_status.is_some()))
                 {
                     return Err(ExecutionError::Failed(
                         "provider stream diagnostic violated its terminal contract".into(),

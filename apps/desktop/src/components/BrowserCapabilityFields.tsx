@@ -7,6 +7,7 @@ import type { ManagedFieldDescriptor } from "../types";
 import "./browser-settings.css";
 
 export function BrowserCapabilityFields({
+  capability = "browser",
   descriptors,
   values,
   effective,
@@ -16,6 +17,7 @@ export function BrowserCapabilityFields({
   onChange,
   onInherit,
 }: {
+  capability?: "browser" | "computer";
   descriptors: ManagedFieldDescriptor[];
   values: Record<string, unknown>;
   effective: Map<string, { value: unknown; source: string }>;
@@ -25,6 +27,7 @@ export function BrowserCapabilityFields({
   onChange: (id: string, value: unknown) => void;
   onInherit: (id: string) => void;
 }) {
+  const computer = capability === "computer";
   function field(descriptor: ManagedFieldDescriptor) {
     const overridden = Object.hasOwn(values, descriptor.id);
     const inherited = effective.get(descriptor.id);
@@ -105,31 +108,53 @@ export function BrowserCapabilityFields({
     );
   }
   return (
-    <div className="browser-capability-settings">
+    <div
+      className="browser-capability-settings"
+      data-native-capability={capability}
+    >
       <div className="browser-settings-group">
         {descriptors.filter(({ control }) => control === "toggle").map(field)}
       </div>
+      {computer ? (
+        <aside className="browser-settings-group">
+          <div className="browser-setting-row">
+            <div className="browser-setting-copy">
+              <h4>You stay in control</h4>
+              <p>
+                Windows only. Agents can read and operate normal user apps,
+                including actions outside the workspace. A visible control card
+                provides Pause and Stop. Protected Windows screens require you.
+              </p>
+            </div>
+          </div>
+        </aside>
+      ) : null}
       <section className="browser-settings-group" aria-label="Resource limits">
         <header>
           <h4>Resource limits</h4>
-          <p>Keep each workspace’s browser usage within these bounds.</p>
+          <p>Keep each workspace’s {capability} usage within these bounds.</p>
         </header>
         {descriptors.filter(({ control }) => control !== "toggle").map(field)}
       </section>
-      <aside className="browser-skill-note" aria-label="Browser skill">
-        <code>@browser</code>
+      <aside className="browser-skill-note" aria-label={`${capability} skill`}>
+        <code>{computer ? "@computer-use" : "@browser"}</code>
         <div>
-          <strong>Built-in browser skill</strong>
+          <strong>
+            Built-in {computer ? "computer-use" : "browser"} skill
+          </strong>
           <p>
-            Guidance for navigation, forms, and page inspection. Available in
-            the composer when browser tools are enabled and permitted.
+            {computer
+              ? "Guidance for selecting windows, reading screenshots, and using mouse and keyboard."
+              : "Guidance for navigation, forms, and page inspection."}{" "}
+            Available when {capability} tools are enabled, available, and
+            permitted.
           </p>
         </div>
       </aside>
       <p className="browser-settings-apply-note">
         {scope === "global"
           ? "Save changes below. Active work finishes before updates apply. Re-enabling access requires Apply in Workspace settings."
-          : "Apply changes below to restart this workspace’s runtime and close temporary browser sessions. Inherit restores its accepted global defaults."}
+          : `Apply changes below to restart this workspace’s runtime and release ${capability} sessions. Inherit restores its accepted global defaults.`}
       </p>
     </div>
   );

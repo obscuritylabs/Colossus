@@ -4,6 +4,34 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use colossus_contracts::{EffectPhase, EffectRequest};
 
 #[test]
+fn computer_screenshot_policy_keeps_complete_image_bytes_and_strict_override() {
+    let mut request = effect_request(
+        system_actor("computer-image-bound"),
+        "computer.screenshot",
+        "computer:session",
+        serde_json::json!({"content_base64":"a".repeat(9 * 1024 * 1024)}),
+    );
+    request.phase = EffectPhase::PostEffect;
+    let kernel = SafetyKernel::new([]);
+    let projected = kernel
+        .policy_projection(&request)
+        .expect("bounded complete PNG projection");
+    assert_eq!(projected.content, request.content);
+    assert!(matches!(
+        SafetyKernel::new([])
+            .with_policy_input_limit(512)
+            .policy_projection(&request),
+        Err(GatewayError::Policy(PolicyError::InputTooLarge {
+            limit: 512
+        }))
+    ));
+    request.action = "browser.snapshot".into();
+    assert!(
+        matches!(kernel.policy_projection(&request),Err(GatewayError::Policy(PolicyError::InputTooLarge {limit})) if limit==8 * 1024 * 1024)
+    );
+}
+
+#[test]
 fn complete_upload_policy_projection_preserves_actual_four_mib_and_other_caps() {
     use base64::Engine as _;
     let bytes = vec![7_u8; 4 * 1024 * 1024];
@@ -112,6 +140,19 @@ async fn browser_observations_cannot_disable_release_with_external_policy() {
         "browser.download",
         "browser.click",
         "browser.open",
+        "computer.windows",
+        "computer.open",
+        "computer.status",
+        "computer.snapshot",
+        "computer.screenshot",
+        "computer.focus",
+        "computer.move",
+        "computer.click",
+        "computer.drag",
+        "computer.scroll",
+        "computer.type",
+        "computer.press",
+        "computer.close",
     ] {
         let request = effect_request(
             system_actor("browser-release-test"),

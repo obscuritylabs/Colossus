@@ -17,6 +17,7 @@ export type ImagePreviewLoader = (
 /** Only successful built-in output supplies image identities; inputs and prose do not. */
 export function viewedImages(activity: ToolActivity): ViewedImage[] {
   const screenshot =
+    activity.toolName === "computer.screenshot" ||
     activity.toolName === "browser.screenshot" ||
     activity.toolName === "browser.screenshot.annotated";
   if (

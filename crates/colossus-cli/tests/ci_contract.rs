@@ -616,8 +616,8 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "windows-desktop"), "timeout-minutes").as_u64(),
-        Some(75),
-        "Windows Desktop acceptance must allow a cold native build"
+        Some(90),
+        "Windows Desktop acceptance must allow cold native builds and browser acceptance"
     );
     assert_eq!(
         field(job(jobs, "gate"), "name").as_str(),
@@ -1169,6 +1169,103 @@ fn every_workflow_action_is_immutably_pinned() {
     }
 }
 
+fn job_timeout_upper_bound(timeout: &serde_json::Value) -> Option<u64> {
+    let bounded = |minutes| (1..=360).contains(&minutes).then_some(minutes);
+    if let Some(minutes) = timeout.as_u64() {
+        return bounded(minutes);
+    }
+
+    // Support only a matrix.target equality choosing between two literal minute
+    // values. Arbitrary expressions cannot establish a bounded job lifetime.
+    let expression = timeout
+        .as_str()?
+        .trim()
+        .strip_prefix("${{")?
+        .strip_suffix("}}")?
+        .trim();
+    let (condition, branches) = expression.split_once("&&")?;
+    let target = condition
+        .trim()
+        .strip_prefix("matrix.target")?
+        .trim_start()
+        .strip_prefix("==")?
+        .trim()
+        .strip_prefix('\'')?
+        .strip_suffix('\'')?;
+    if target.is_empty()
+        || !target
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+    {
+        return None;
+    }
+    let (matching, fallback) = branches.split_once("||")?;
+    let literal_minutes = |value: &str| {
+        let value = value.trim();
+        if value.is_empty()
+            || value.starts_with('0')
+            || !value.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        bounded(value.parse().ok()?)
+    };
+    Some(literal_minutes(matching)?.max(literal_minutes(fallback)?))
+}
+
+#[test]
+fn job_timeouts_bound_numeric_values_and_both_conditional_branches() {
+    for (timeout, expected) in [
+        (serde_json::json!(1), 1),
+        (serde_json::json!(360), 360),
+        (
+            serde_json::json!("${{ matrix.target == 'x86_64-apple-darwin' && 90 || 60 }}"),
+            90,
+        ),
+        (
+            serde_json::json!("${{matrix.target=='aarch64-apple-darwin'&&30||75}}"),
+            75,
+        ),
+        (
+            serde_json::json!(" ${{\n matrix.target\t== 'linux_x64.v1'\n&& 1 || 360\n}} "),
+            360,
+        ),
+    ] {
+        assert_eq!(job_timeout_upper_bound(&timeout), Some(expected));
+    }
+
+    for timeout in [
+        serde_json::Value::Null,
+        serde_json::json!(true),
+        serde_json::json!(0),
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+        serde_json::json!(361),
+        serde_json::json!("60"),
+        serde_json::json!("${{ inputs.timeout }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 0 || 60 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 60 || 0 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 361 || 60 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 60 || 361 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 18446744073709551616 || 60 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && inputs.timeout || 60 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 90 || inputs.timeout }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && '90' || 60 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 90 || '60' }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 090 || 60 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 90 || +60 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 30 + 60 || 60 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 90 || 30 + 30 }}"),
+        serde_json::json!("${{ inputs.target == 'macos' && 90 || 60 }}"),
+        serde_json::json!("${{ matrix.target == '' && 90 || 60 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' || true && 90 || 60 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 90 || 60 || 999 }}"),
+        serde_json::json!("${{ matrix.target == 'macos' && 90 }}"),
+    ] {
+        assert_eq!(job_timeout_upper_bound(&timeout), None, "{timeout}");
+    }
+}
+
 #[test]
 fn workflows_have_bounded_jobs_and_deterministic_concurrency() {
     for name in [
@@ -1187,8 +1284,8 @@ fn workflows_have_bounded_jobs_and_deterministic_concurrency() {
         for (job_name, value) in jobs(&workflow) {
             let job = mapping(value, job_name);
             assert!(
-                field(job, "timeout-minutes").as_u64().is_some(),
-                "{name}:{job_name} is missing a timeout"
+                job_timeout_upper_bound(field(job, "timeout-minutes")).is_some(),
+                "{name}:{job_name} needs a positive timeout of at most 360 minutes in every branch"
             );
         }
     }

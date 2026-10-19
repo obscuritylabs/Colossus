@@ -139,6 +139,7 @@ impl colossus_ports::RunProvenanceProvider for CatalogRunProvenance {
 
 pub(super) struct PluginCatalogSource {
     pub(super) browser_available: bool,
+    pub(super) computer_available: bool,
     pub(super) store: Option<Arc<PluginStore>>,
     pub(super) workspace_plugins: Arc<crate::workspace_plugins::WorkspacePlugins>,
     pub(super) configuration: Arc<PluginsConfig>,
@@ -149,7 +150,16 @@ pub(super) struct PluginCatalogSource {
 }
 
 impl PluginCatalogSource {
-    fn narrow_browser_skills(&self, records: &mut [AgentPluginRecord]) {
+    fn narrow_native_skills(&self, records: &mut [AgentPluginRecord]) {
+        for record in records.iter_mut() {
+            if record.installation.origin == colossus_contracts::PluginOrigin::Bundled
+                && !self.computer_available
+            {
+                record
+                    .skills
+                    .retain(|skill| skill.id != "colossus/computer-use");
+            }
+        }
         if !self.browser_available {
             for record in records {
                 if record.installation.origin == colossus_contracts::PluginOrigin::Bundled {
@@ -241,6 +251,14 @@ impl PluginCatalogSource {
                 }
             }
         }
+        for entry in &mut inventory {
+            if entry.origin == colossus_contracts::PluginOrigin::Bundled && !self.computer_available
+            {
+                entry
+                    .skills
+                    .retain(|skill| skill.id != "colossus/computer-use");
+            }
+        }
         Ok(narrow_plugin_inventory(inventory, &self.configuration))
     }
 
@@ -301,7 +319,7 @@ impl PluginCatalogSource {
                 .capture(&self.configuration, grants, &mut icons)?;
         records.extend(local);
         leases.extend(lease);
-        self.narrow_browser_skills(&mut records);
+        self.narrow_native_skills(&mut records);
         Ok((records, leases))
     }
 
@@ -398,7 +416,7 @@ impl PluginCatalogSource {
         mut records: Vec<AgentPluginRecord>,
         leases: Vec<PluginSnapshotLease>,
     ) -> Result<Arc<PluginRunCatalog>, RuntimeError> {
-        self.narrow_browser_skills(&mut records);
+        self.narrow_native_skills(&mut records);
         let mut names = BTreeSet::new();
         if records
             .iter()

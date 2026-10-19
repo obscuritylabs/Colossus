@@ -127,6 +127,20 @@ configuration must contain only
   upgrade Colossus to a release with a newer reviewed Codex wire contract, then rerun
   `provider doctor`. Updating only the login CLI does not change the protocol version
   pinned in the Colossus adapter.
+- **A newly released model is missing:** refresh the catalog with
+  `provider models codex-provider` or **Load models** in Desktop after upgrading
+  Colossus. Catalog discovery sends the adapter's reviewed Codex client version;
+  models remain subject to the account's rollout, sign-in method, and workspace
+  permissions. Colossus preserves exact returned model IDs, including
+  `gpt-6.1-sol`, without inventing catalog entries. Check
+  [OpenAI's model availability guidance](https://learn.chatgpt.com/docs/models)
+  if a current catalog still omits the model.
+- **The model is in the catalog but absent from Desktop's composer:** the composer
+  lists saved models selected for the workspace. In **Settings → Global → Models**,
+  choose **Add model**, select the Codex provider, use **Load models** to choose the
+  exact model, and save it with **Add model**. In **Workspace → Models**, select
+  that saved model and choose **Apply Workspace changes**. Loading the catalog
+  alone does not change the workspace's saved models or current selection.
 - **The account flow itself fails:** run `codex --version`, update the official Codex
   CLI, and retry `colossus codex login` or the device-code flow.
 - **The model or reasoning level is rejected:** run `provider models codex-provider`,

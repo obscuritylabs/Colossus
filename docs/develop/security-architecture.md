@@ -155,6 +155,12 @@ messages, request content, or response bodies.
 An in-run diagnostic request can contain user, session, and tool-result content, so the
 TUI warns the operator to review it before sharing.
 
+An opted-in terminal streaming rejection captures only its bounded error event, even
+when partial model events were already released. A successful HTTP transport status is
+retained as diagnostic metadata and does not become an HTTP failure status for that
+rejection. The terminal error event receives the same credential redaction, output
+limits, and post-effect release as a non-success HTTP response.
+
 Canonical tool identities are never renamed to accommodate a provider. Network adapters
 build a request-local, one-to-one transport alias map that projects `.` to `_` under the
 portable 64-byte function-name grammar. Definitions and continuation history use that

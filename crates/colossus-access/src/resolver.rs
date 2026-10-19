@@ -153,7 +153,9 @@ pub fn resolve_access(
             if exactly_included
                 && !matches!(
                     requirement,
-                    ToolPrerequisite::Interactive | ToolPrerequisite::BrowserAvailable
+                    ToolPrerequisite::Interactive
+                        | ToolPrerequisite::BrowserAvailable
+                        | ToolPrerequisite::ComputerAvailable
                 )
             {
                 return Err(AccessError::Invalid(format!(
@@ -265,6 +267,7 @@ fn prerequisite_met(requirement: ToolPrerequisite, context: &AccessContext) -> b
         ToolPrerequisite::Interactive => context.interactive,
         ToolPrerequisite::McpConfigured => context.mcp_configured,
         ToolPrerequisite::BrowserAvailable => context.browser_available,
+        ToolPrerequisite::ComputerAvailable => context.computer_available,
     }
 }
 
@@ -280,5 +283,6 @@ fn prerequisite_label(requirement: ToolPrerequisite) -> &'static str {
         ToolPrerequisite::Interactive => "interactive user interface",
         ToolPrerequisite::McpConfigured => "configured MCP server",
         ToolPrerequisite::BrowserAvailable => "verified browser backend",
+        ToolPrerequisite::ComputerAvailable => "enabled verified interactive computer backend",
     }
 }

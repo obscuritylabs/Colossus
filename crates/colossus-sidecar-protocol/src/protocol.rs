@@ -1145,6 +1145,14 @@ fn json_value_depth(value: &Value) -> usize {
 /// Stable RuntimeConfig fields that managed Desktop revisions may override directly.
 /// Complex catalogs and host-owned invariants are intentionally absent.
 pub const MANAGED_EDITABLE_FIELD_IDS: &[&str] = &[
+    "computer.enabled",
+    "computer.maxWindows",
+    "computer.maxSnapshotNodes",
+    "computer.maxScreenshotBytes",
+    "computer.maxScreenshotPixels",
+    "computer.actionTimeoutMs",
+    "computer.sessionTimeoutMs",
+    "computer.observationMaxAgeMs",
     "browser.enabled",
     "browser.publicWeb",
     "browser.maxSessions",

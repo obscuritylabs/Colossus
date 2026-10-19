@@ -167,6 +167,33 @@ dependency_required=false
 sdk_required=false
 desktop_required=false' native/browser-other/component.py
 
+# Check each standalone path independently: a simultaneous CLI change must not
+# conceal a missing native-computer classifier owner.
+for native_computer_path in \
+    native/computer/src/lib.rs native/computer/src/platform/capture.rs \
+    native/computer/examples/computer_window_fixture.rs \
+    native/computer/examples/computer_acceptance.rs native/computer/README.md
+do
+    expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
+desktop_required=true' "$native_computer_path"
+done
+for native_computer_manifest in native/computer/Cargo.toml native/computer/Cargo.lock
+do
+    expect_classification 'rust_required=true
+docs_required=false
+dependency_required=true
+sdk_required=false
+desktop_required=true' "$native_computer_manifest"
+done
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
+desktop_required=false' native/computer-other/src/lib.rs
+
 expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false

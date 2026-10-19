@@ -14,7 +14,7 @@ use colossus_ports::{
 use sha2::{Digest as _, Sha256};
 use std::sync::Arc;
 
-mod ownership;
+pub(crate) mod ownership;
 mod transfer;
 
 /// Stateless adapter. The trusted runtime passes its exact authoritative encrypted journal.

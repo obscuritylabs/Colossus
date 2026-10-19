@@ -50,9 +50,13 @@ impl WorkerServer {
             config,
             approval_interface,
             Some(prompt_interface),
-            options.with_browser_artifact_publisher(Arc::new(
-                colossus_api::ReleasedBrowserArtifactPublisher,
-            )),
+            options
+                .with_browser_artifact_publisher(Arc::new(
+                    colossus_api::ReleasedBrowserArtifactPublisher,
+                ))
+                .with_computer_artifact_publisher(Arc::new(
+                    colossus_api::ReleasedComputerArtifactPublisher,
+                )),
         )?);
         Ok(Self {
             endpoint,
@@ -178,9 +182,13 @@ impl WorkerServer {
             config,
             approval_interface,
             Some(prompt_interface),
-            options.with_browser_artifact_publisher(Arc::new(
-                colossus_api::ReleasedBrowserArtifactPublisher,
-            )),
+            options
+                .with_browser_artifact_publisher(Arc::new(
+                    colossus_api::ReleasedBrowserArtifactPublisher,
+                ))
+                .with_computer_artifact_publisher(Arc::new(
+                    colossus_api::ReleasedComputerArtifactPublisher,
+                )),
             provider_credentials,
             codex_auth,
         )?);
@@ -338,12 +346,15 @@ impl WorkerServer {
         mut self,
         signal: impl std::future::Future<Output = std::io::Result<()>> + Send,
     ) -> Result<(), WorkerError> {
+        let computer_owner = Arc::clone(&self.runtime);
         let browser_owner = self.browser_owner.take();
         let mut native_browser = self
             .native_browser
             .take()
             .map(super::native_browser::PreparedNativeBrowser::start);
         let result = self.serve_bound_with_signal(signal).await;
+        computer_owner.stop_computer_sessions();
+        let computer_result = computer_owner.drain_computer_sessions().await;
         let native_result = match native_browser.as_mut() {
             Some(owner) => owner.shutdown().await,
             None => Ok(()),
@@ -355,6 +366,7 @@ impl WorkerServer {
                 .map_err(|_| WorkerError::BrowserCleanupUnknown)?;
         }
         native_result?;
+        computer_result.map_err(|_| WorkerError::ComputerCleanupUnknown)?;
         result
     }
 

@@ -80,6 +80,15 @@ browser:
   maxSessions: 4
   maxTabs: 8
   maxSnapshotNodes: 1024
+computer:
+  enabled: false
+  maxWindows: 64
+  maxSnapshotNodes: 512
+  maxScreenshotBytes: 8388608
+  maxScreenshotPixels: 8388608
+  actionTimeoutMs: 5000
+  sessionTimeoutMs: 300000
+  observationMaxAgeMs: 10000
 audit:
   exporter:
     kind: disabled

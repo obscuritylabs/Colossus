@@ -853,6 +853,17 @@ describe("ManagedSettingsPane", () => {
       tab: "sandbox",
       section: null,
     });
+    const computer = descriptors.filter(({ id }) => id.startsWith("computer."));
+    expect(computer).toHaveLength(8);
+    expect(
+      computer.find(({ id }) => id === "computer.enabled")?.defaultValue,
+    ).toBe(false);
+    for (const descriptor of computer) {
+      expect(managedFieldDestination(descriptor)).toEqual({
+        tab: "computer",
+        section: null,
+      });
+    }
     for (const descriptor of descriptors.filter(({ id }) =>
       id.startsWith("plugins."),
     )) {

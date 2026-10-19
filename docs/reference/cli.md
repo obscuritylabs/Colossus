@@ -308,6 +308,10 @@ configured provider credential is replaced with `[REDACTED]`. This explicit diag
 output crosses post-effect policy but is not attached to ordinary runs, TUI events, or
 durable audit payloads.
 
+For a terminal error inside a streamed response, the bounded body contains the error
+event. Its transport status may be HTTP 200; that status does not mean the model turn
+succeeded.
+
 A Doctor command exits zero when it successfully produces its diagnostic report, even
 when the report says the checked provider or model is not ready. Automation must inspect
 the JSON readiness field instead of treating process success as readiness:

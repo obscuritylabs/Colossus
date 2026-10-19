@@ -1272,6 +1272,7 @@ dependencies = [
  "colossus-grpc",
  "colossus-home",
  "colossus-journal-redb",
+ "colossus-native-computer",
  "colossus-native-dictation",
  "colossus-observability",
  "colossus-plugins",
@@ -1859,6 +1860,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-native-computer"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "colossus-contracts",
+ "colossus-ports",
+ "colossus-windows-native",
+ "getrandom 0.4.3",
+ "image",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "windows 0.62.2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "colossus-native-dictation"
 version = "0.1.0"
 dependencies = [
@@ -2272,6 +2291,7 @@ dependencies = [
  "colossus-grpc",
  "colossus-home",
  "colossus-mcp",
+ "colossus-native-computer",
  "colossus-network",
  "colossus-observability",
  "colossus-ports",

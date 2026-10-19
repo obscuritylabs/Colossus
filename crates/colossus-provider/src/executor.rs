@@ -63,7 +63,7 @@ impl RequestSecrets {
         }
     }
 
-    fn redact_value(&self, value: &mut Value) {
+    pub(super) fn redact_value(&self, value: &mut Value) {
         for secret in &self.0 {
             redact_value_exact(value, Some(secret.as_str()));
         }
@@ -161,7 +161,10 @@ impl QuarantinedEffectObserver for CollectedProviderStream {
             ProviderStreamItem::Retry { .. } => {}
             ProviderStreamItem::Event { event } => self.events.push(event),
             ProviderStreamItem::Diagnostic { diagnostic } => {
-                if !self.events.is_empty() {
+                if !self.events.is_empty()
+                    && classify_response_diagnostic(&diagnostic)
+                        .is_none_or(|failure| failure.http_status.is_some())
+                {
                     return Err(ExecutionError::Failed(
                         "collected provider stream emitted a diagnostic after model events".into(),
                     ));
@@ -1644,9 +1647,16 @@ impl ProviderExecutor {
         }
         let limit = usize::try_from(permit.obligations().max_output_bytes)
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+        let transport_status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.chars().take(256).collect::<String>());
         let mut decoder = SseDecoder::default();
         let mut state = ProviderStreamState::new(self.profile.kind, tool_names);
         let mut continuation_events = Vec::new();
+        let mut terminal_diagnostic = None;
         let mut raw_bytes = 0_usize;
         let mut stream = response.bytes_stream();
         let mut emitter = ProviderStreamEmitter::new(permit, observer);
@@ -1691,7 +1701,31 @@ impl ProviderExecutor {
                         )))
                     })?;
                     secret.redact_value(&mut value);
-                    for event in state.ingest(value).map_err(provider_execution_error)? {
+                    let diagnostic_event = (metadata.include_response_diagnostics
+                        && crate::stream_diagnostics::terminal_error_event(&value))
+                    .then(|| value.clone());
+                    let events = match state.ingest(value) {
+                        Ok(events) => events,
+                        Err(error) => {
+                            if matches!(error, ProviderError::Rejected(_))
+                                && let Some(event) = diagnostic_event
+                            {
+                                terminal_diagnostic = Some(
+                                    crate::stream_diagnostics::capture(
+                                        endpoint,
+                                        &payload,
+                                        &event,
+                                        transport_status,
+                                        content_type.clone(),
+                                        &secret,
+                                    )
+                                    .map_err(provider_execution_error)?,
+                                );
+                            }
+                            return Err(provider_execution_error(error));
+                        }
+                    };
+                    for event in events {
                         continuation_events.push(event.clone());
                         if self.profile.kind != ProviderKind::AnthropicMessages
                             || matches!(event, ProviderEvent::ModelDelta { .. })
@@ -1715,6 +1749,19 @@ impl ProviderExecutor {
         .await;
         if let Err(error) = stream_result {
             emitter.flush().await?;
+            drop(emitter);
+            if let Some(diagnostic) = terminal_diagnostic {
+                return tokio::time::timeout_at(
+                    generation_deadline,
+                    emit_stream_item(
+                        ProviderStreamItem::Diagnostic { diagnostic },
+                        permit,
+                        observer,
+                    ),
+                )
+                .await
+                .map_err(|_| generation_deadline_error())?;
+            }
             return Err(error);
         }
         emitter.flush().await?;

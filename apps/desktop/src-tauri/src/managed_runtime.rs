@@ -110,6 +110,19 @@ const TRUSTED_BUILTIN_TOOL_GRANT: &[&str] = &[
     "browser.upload",
     "browser.download",
     "browser.close",
+    "computer.windows",
+    "computer.open",
+    "computer.status",
+    "computer.snapshot",
+    "computer.screenshot",
+    "computer.focus",
+    "computer.move",
+    "computer.click",
+    "computer.drag",
+    "computer.scroll",
+    "computer.type",
+    "computer.press",
+    "computer.close",
     "workflow.definition.list",
     "workflow.definition.get",
     "workflow.schedule.list",
@@ -1786,11 +1799,51 @@ mod tests {
 
     #[test]
     fn minimal_grant_only_exposes_echo() {
-        let grant = application_grant(AccessProfileSetting::Minimal).expect("grant");
-        let debug = format!("{grant:?}");
-        assert!(debug.contains("echo"));
-        assert!(!debug.contains("filesystem.read"));
-        assert!(!debug.contains("browser."));
+        for grant in [
+            application_grant(AccessProfileSetting::Minimal).expect("Desktop grant"),
+            connector_application_grant(AccessProfileSetting::Minimal).expect("connector grant"),
+        ] {
+            let debug = format!("{grant:?}");
+            assert!(debug.contains("echo"));
+            assert!(!debug.contains("filesystem.read"));
+            assert!(!debug.contains("browser."));
+            assert!(!debug.contains("computer."));
+        }
+    }
+
+    #[test]
+    fn nonminimal_grants_admit_exact_computer_tools() {
+        let computer_tools = [
+            "computer.windows",
+            "computer.open",
+            "computer.status",
+            "computer.snapshot",
+            "computer.screenshot",
+            "computer.focus",
+            "computer.move",
+            "computer.click",
+            "computer.drag",
+            "computer.scroll",
+            "computer.type",
+            "computer.press",
+            "computer.close",
+        ];
+        for profile in [
+            AccessProfileSetting::Pinned,
+            AccessProfileSetting::Development,
+            AccessProfileSetting::AllowAll,
+        ] {
+            for grant in [
+                application_grant(profile).expect("Desktop grant"),
+                connector_application_grant(profile).expect("connector grant"),
+            ] {
+                let debug = format!("{grant:?}");
+                for tool in computer_tools {
+                    assert!(debug.contains(tool), "{profile:?} grant missing {tool}");
+                }
+                assert!(!debug.contains('*'), "tool grants must remain explicit");
+            }
+        }
     }
 
     #[test]

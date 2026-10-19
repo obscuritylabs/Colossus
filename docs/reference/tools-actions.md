@@ -68,6 +68,31 @@ they enter durable tool history; `preview_truncated` is true when either the lin
 encoded-byte ceiling was reached. This keeps generated or minified long lines from
 consuming an entire model input budget.
 
+## Windows computer tools
+
+`computer.windows`, `computer.open`, `computer.status`, `computer.snapshot`,
+`computer.screenshot`, `computer.focus`, `computer.move`, `computer.click`,
+`computer.drag`, `computer.scroll`, `computer.type`, `computer.press`, and
+`computer.close` require enabled [computer access](configuration/limits.md#windows-computer-access-and-limits)
+and a verified native Windows host. Enumeration, status, snapshots, and screenshots
+are Read actions; opening and closing control are Local state; input is Execution
+because it can affect apps outside the workspace. Every action requires post-effect
+release. An enabled capability does not grant effect permission.
+
+Select a returned opaque window ID with `computer.open`. The host binds runtime,
+workspace, application, scope, and run; none are model-supplied owner arguments.
+Mutations require the current session, control generation, and a fresh, consumed
+observation ID. Screenshots capture the selected window, including while occluded,
+and release actual validated PNG bytes through owner-only output artifacts and
+model image parts. Coordinates are physical pixels local to that capture.
+
+Input revalidates process birth, window identity, desktop, geometry, foreground,
+and hit target. Native window controls let the human pause, resume, or stop;
+the model cannot resume or reopen past a human Stop. `computer.close` releases
+automation and leaves the app running. Unknown outcomes cannot be retried
+automatically. Run completion and cancellation revoke input and supervise helper
+cleanup, including runs that only enumerated windows.
+
 ## Browser tools
 
 The first-party browser catalog is a runtime foundation. Shipping CLI and Desktop
