@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -13,6 +14,7 @@ from unittest.mock import patch
 import component
 import pki_fixture_private
 import stage_windows
+import windows_preview
 
 
 def client_image(*, export=b"RunWinMain", eager=False, machine=0x8664, delayed=True):
@@ -143,6 +145,40 @@ class WindowsStageTests(unittest.TestCase):
         self.assertFalse((self.destination / "colossus-chromium-preview.exe").exists())
         self.assertFalse((self.destination / "dictation").exists())
         self.assertEqual(component.verify_installed(self.destination)["modes"], {"desktop": False, "headless": False})
+
+    def test_publisher_host_can_only_be_sealed_after_its_final_binary_transformation(self):
+        stage_windows.stage(self.source, self.native_build, self.client, self.destination,
+                            host=True, defer_inventory=True)
+        self.assertFalse((self.destination / "browser-component.json").exists())
+        output = self.root / "preview-seal.json"
+        with self.assertRaises((OSError, component.ComponentError)):
+            windows_preview.seal(self.destination, output)
+        # A signing transform changes file bytes. The fresh inventory must bind
+        # those final bytes; this synthetic fixture does not assert a signature.
+        host = self.destination / "colossus-native-browser-host.dll"
+        host.write_bytes(host.read_bytes() + b"publisher-transform-fixture")
+        component.installed_inventory(self.destination, "windows64", "colossus-native-browser-host.exe")
+        windows_preview.seal(self.destination, output)
+        seal = json.loads(output.read_text())
+        self.assertEqual(seal["component_path"], "browser/component")
+        self.assertNotIn(str(self.root), output.read_text())
+        manifest = self.destination / "browser-component.json"
+        self.assertEqual(seal["component_manifest_sha256"], hashlib.sha256(manifest.read_bytes()).hexdigest())
+        self.assertFalse(seal["production_acceptance"])
+        self.assertEqual(seal["capabilities"], {
+            "embedded": True, "headless": False, "restrictive_egress": False,
+            "private_ca_trust": False, "client_identities": False})
+        with self.assertRaises(FileExistsError):
+            windows_preview.seal(self.destination, output)
+        host.write_bytes(host.read_bytes() + b"late-change")
+        with self.assertRaises(component.ComponentError):
+            windows_preview.seal(self.destination, self.root / "changed-seal.json")
+
+    def test_deferred_inventory_never_applies_to_an_in_process_preview(self):
+        with self.assertRaises(component.ComponentError):
+            stage_windows.stage(self.source, self.native_build, self.client, self.destination,
+                                defer_inventory=True)
+        self.assertFalse(self.destination.exists())
 
     def test_private_host_rejects_desktop_resources(self):
         with self.assertRaises(component.ComponentError):

@@ -90,6 +90,44 @@ describe("browser controls", () => {
     ).not.toContain("Give agent control");
   });
 
+  it("keeps the functional preview labeled while requiring accepted agent ownership", () => {
+    const engine = {
+      kind: "owned_chromium_functional_preview" as const,
+      preview: true,
+      ready: true,
+      message: null,
+      agentControlAvailable: true,
+    };
+    const props = { run: { runId: "run-1", sessionId: "conversation-1" } };
+    const html = render(
+      { control: "human", conversationId: "conversation-1" },
+      { engine },
+      props,
+    );
+    expect(html).toContain("Chromium preview");
+    expect(html).toContain("Give agent control");
+    for (const candidate of [
+      { ...engine, agentControlAvailable: false },
+      { ...engine, kind: "embedded_chromium" as const },
+      { ...engine, kind: "contained_chromium" as const },
+    ]) {
+      expect(
+        render(
+          { control: "human", conversationId: "conversation-1" },
+          { engine: candidate },
+          props,
+        ),
+      ).not.toContain("Give agent control");
+    }
+    expect(
+      render(
+        { control: "human", conversationId: "foreign-conversation" },
+        { engine },
+        props,
+      ),
+    ).not.toContain("Give agent control");
+  });
+
   it("makes agent and uncertain handoff views read-only while preserving close", () => {
     for (const control of ["agent", "paused"] as const) {
       const html = render({ control, canGoBack: true, loading: true });

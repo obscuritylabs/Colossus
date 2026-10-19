@@ -1311,7 +1311,12 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
   assert.match(signedWindowsJob, /id-token: write/u);
   assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC/u);
   assert.match(signedWindowsJob, /azure\/login@[0-9a-f]{40}/u);
-  assert.equal((signedWindowsJob.match(/azure\/artifact-signing-action@[0-9a-f]{40}/gu) ?? []).length, 1);
+  assert.equal((signedWindowsJob.match(/azure\/artifact-signing-action@[0-9a-f]{40}/gu) ?? []).length, 2);
+  const browserSign = signedWindowsJob.indexOf("Sign functional-preview browser binaries before inventory");
+  const browserSeal = signedWindowsJob.indexOf("Seal exact signed browser bytes for independent sidecar compilation");
+  assert.ok(browserSign > 0 && browserSign < browserSeal);
+  assert.ok(browserSeal < signedWindowsJob.indexOf("-Phase build", browserSeal));
+  assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW == '1'/u);
   const signedBuild = signedWindowsJob.indexOf("-Phase build");
   const nestedSign = signedWindowsJob.indexOf("Sign bundled sidecar, CLI, and ripgrep");
   const bind = signedWindowsJob.indexOf("-Phase bind");

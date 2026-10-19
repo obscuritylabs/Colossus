@@ -73,6 +73,31 @@ $Main = Join-Path $ReleaseRoot "colossus-desktop.exe"
 $StagedSidecar = Join-Path $Native "binaries/colossus-sidecar-$Target.exe"
 $StagedCli = Join-Path $Native "binaries/colossus-$Target.exe"
 $StagedRipgrep = Join-Path $Native "binaries/rg-$Target.exe"
+$BrowserPreview = $env:COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW -eq '1'
+$BrowserComponent = $env:COLOSSUS_BROWSER_PREVIEW_COMPONENT
+if ($BrowserPreview) {
+    if ($env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -notin @('developer_preview', 'validation_only') -or
+        -not $BrowserComponent -or -not [IO.Path]::IsPathFullyQualified($BrowserComponent) -or
+        -not (Test-Path -LiteralPath (Join-Path $BrowserComponent 'browser-component.json') -PathType Leaf) -or
+        -not $env:COLOSSUS_SIDECAR_WINDOWS_BROWSER_FUNCTIONAL_PREVIEW -or
+        -not $env:COLOSSUS_BROWSER_PRESENTER_NATIVE_LIB_DIR) {
+        Fail 'functional-preview packaging requires its sealed relative descriptor, component, and native presenter'
+    }
+    & python -B (Join-Path $Repository 'native/browser/scripts/component.py') verify --root $BrowserComponent
+    if ($LASTEXITCODE -ne 0) { Fail 'functional-preview component verification failed' }
+    $PreviewSealPath = $env:COLOSSUS_SIDECAR_WINDOWS_BROWSER_FUNCTIONAL_PREVIEW
+    $PreviewSealInfo = Get-Item -LiteralPath $PreviewSealPath
+    if ($PreviewSealInfo.Length -le 0 -or $PreviewSealInfo.Length -gt 4096 -or
+        ($PreviewSealInfo.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        Fail 'functional-preview compiler seal is not one bounded regular file'
+    }
+    $PreviewSeal = Get-Content -LiteralPath $PreviewSealPath -Raw | ConvertFrom-Json
+    $PreviewDigest = (Get-FileHash -LiteralPath (Join-Path $BrowserComponent 'browser-component.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($PreviewSeal.component_manifest_sha256 -cne $PreviewDigest -or
+        $PreviewSeal.component_path -cne 'browser/component') {
+        Fail 'functional-preview compiler seal differs from the packaged component'
+    }
+}
 $Manifest = Join-Path $Native "binaries/colossus-bundle-manifest.json"
 $Tauri = Join-Path $Desktop "node_modules/.bin/tauri.cmd"
 $TypeScript = Join-Path $Desktop "node_modules/.bin/tsc.cmd"
@@ -132,6 +157,11 @@ $TauriOverride = [ordered]@{
         }
     }
 }
+if ($BrowserPreview) {
+    # The signed sidecar discovers only this fixed installation-relative location.
+    # Source paths exist solely in the publisher build configuration.
+    $TauriOverride.bundle.resources[$BrowserComponent.Replace('\', '/') + '/'] = 'browser/component/'
+}
 if ($Phase -eq "bundle") {
     $TauriOverride.bundle["windows"] = [ordered]@{
         signCommand = [ordered]@{
@@ -144,6 +174,12 @@ if ($Phase -eq "bundle") {
                 "%1"
             )
         }
+    }
+}
+if ($BrowserPreview) {
+    if (-not $TauriOverride.bundle.Contains('windows')) { $TauriOverride.bundle['windows'] = [ordered]@{} }
+    $TauriOverride.bundle.windows['nsis'] = [ordered]@{
+        installerHooks = (Join-Path $Native 'installer-browser-preview-hooks.nsh')
     }
 }
 if ($ReleaseVersion) {
@@ -163,6 +199,14 @@ try {
         if ($LASTEXITCODE -ne 0) { Fail "dictation model staging failed" }
         cargo xtask desktop prepare --profile release --target $Target
         if ($LASTEXITCODE -ne 0) { Fail "desktop binary preparation failed" }
+        if ($BrowserPreview) {
+            # Compile after component signing/inventory; the sidecar independently
+            # seals the exact digest before its own publisher signature is applied.
+            cargo build --locked --release --package colossus-sidecar --bin colossus-sidecar `
+                --target $Target --target-dir $TargetRoot --features windows-browser-functional-preview
+            if ($LASTEXITCODE -ne 0) { Fail 'functional-preview sidecar build failed' }
+            Copy-Item -LiteralPath (Join-Path $TargetRoot "$Target/release/colossus-sidecar.exe") -Destination $StagedSidecar -Force
+        }
         node (Join-Path $PSScriptRoot "stage-ripgrep.mjs") `
             --target $Target `
             --output (Join-Path $Native "binaries") `
@@ -191,6 +235,7 @@ try {
                 "--no-bundle",
                 "--config", $TauriOverridePath
             )
+            if ($BrowserPreview) { $BuildArguments += @('--features', 'windows-browser-functional-preview') }
             $BuildArguments += @("--", "--locked")
             & $Tauri @BuildArguments
             if ($LASTEXITCODE -ne 0) { Fail "Tauri application build failed" }

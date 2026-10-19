@@ -15,7 +15,10 @@ use super::{
 };
 #[cfg(not(any(
     feature = "macos-contained-browser-diagnostic",
-    feature = "windows-browser-development"
+    any(
+        feature = "windows-browser-development",
+        feature = "windows-browser-functional-preview"
+    )
 )))]
 use crate::desktop_settings::SettingsStore;
 use crate::dto::CommandErrorDto;
@@ -183,7 +186,10 @@ impl BrowserManager {
         not(feature = "embedded-chromium-preview"),
         not(any(
             feature = "macos-contained-browser-diagnostic",
-            feature = "windows-browser-development"
+            any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            )
         ))
     ))]
     pub(super) fn legacy_tab(
@@ -208,7 +214,10 @@ impl BrowserManager {
             any(
                 feature = "embedded-chromium-preview",
                 feature = "macos-contained-browser-diagnostic",
-                feature = "windows-browser-development"
+                any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                )
             )
         )
     ))]
@@ -487,7 +496,10 @@ impl BrowserManager {
     ) -> Result<(std::path::PathBuf, Option<Webview>), CommandErrorDto> {
         #[cfg(any(
             feature = "macos-contained-browser-diagnostic",
-            feature = "windows-browser-development"
+            any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            )
         ))]
         {
             let state = self.lock()?;
@@ -501,7 +513,10 @@ impl BrowserManager {
         }
         #[cfg(not(any(
             feature = "macos-contained-browser-diagnostic",
-            feature = "windows-browser-development"
+            any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            )
         )))]
         {
             let mut state = self.lock()?;
@@ -657,9 +672,15 @@ impl BrowserManager {
             state.tabs.push(Tab {
                 scope: scope.to_owned(),
                 view: view.clone(),
-                #[cfg(feature = "windows-browser-development")]
+                #[cfg(any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                ))]
                 pending_completed_view: None,
-                #[cfg(feature = "windows-browser-development")]
+                #[cfg(any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                ))]
                 close_requested: false,
                 agent_run_id: None,
                 policy,
@@ -692,7 +713,10 @@ impl BrowserManager {
         // could race the authenticated presentation's first frame.
         #[cfg(not(any(
             feature = "macos-contained-browser-diagnostic",
-            feature = "windows-browser-development"
+            any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            )
         )))]
         if let Some(url) = url
             && view.navigate(url).is_err()
@@ -704,7 +728,10 @@ impl BrowserManager {
 
     #[cfg(any(
         feature = "macos-contained-browser-diagnostic",
-        feature = "windows-browser-development"
+        any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )
     ))]
     pub(super) async fn watch_agent(
         &self,
@@ -713,13 +740,23 @@ impl BrowserManager {
         run_id: &str,
         conversation_id: &str,
     ) -> Result<(), CommandErrorDto> {
-        #[cfg(feature = "windows-browser-development")]
-        if !self
+        #[cfg(any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        ))]
+        let replacement = match self
             .reconcile_windows_agent(app, scope, run_id, conversation_id)
             .await?
         {
-            return Ok(());
-        }
+            super::windows_viewer::AgentViewerPlan::Keep => return Ok(()),
+            super::windows_viewer::AgentViewerPlan::Attach => None,
+            super::windows_viewer::AgentViewerPlan::Replace(id) => Some(id),
+        };
+        #[cfg(not(any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )))]
+        let replacement: Option<String> = None;
         // Dropping an old read-only viewer preserves an active Core writer;
         // confirmed run cleanup has already retired its native owner otherwise.
         let prior = self
@@ -736,15 +773,16 @@ impl BrowserManager {
         for id in prior {
             self.close(scope, &id).await?;
         }
-        if self
-            .lock()?
-            .tabs
-            .iter()
-            .any(|tab| tab.scope == scope && tab.agent_run_id.as_deref() == Some(run_id))
+        if replacement.is_none()
+            && self
+                .lock()?
+                .tabs
+                .iter()
+                .any(|tab| tab.scope == scope && tab.agent_run_id.as_deref() == Some(run_id))
         {
             return Ok(());
         }
-        if self.lock()?.tabs.len() >= MAX_TABS {
+        if replacement.is_none() && self.lock()?.tabs.len() >= MAX_TABS {
             return Err(error("Close a browser tab before attaching another page."));
         }
         let window = app
@@ -760,26 +798,68 @@ impl BrowserManager {
                 state.event(&event_id, event);
             }
         });
-        let Some(view) =
+        let admission = async {
             super::contained::watch_agent(&window, scope, run_id, conversation_id, sink)
                 .await
-                .map_err(engine_error)?
-        else {
+                .map_err(engine_error)
+        };
+        #[cfg(any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        ))]
+        let admitted = if let Some(id) = &replacement {
+            self.recover_agent_presentation(scope, id, admission)
+                .await?
+        } else {
+            admission.await?
+        };
+        #[cfg(not(any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )))]
+        let admitted = admission.await?;
+        let Some(view) = admitted else {
             return Ok(());
         };
+        self.register_agent_view(scope, run_id, conversation_id, id, replacement, view)
+    }
+
+    #[cfg(any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development",
+        feature = "windows-browser-functional-preview"
+    ))]
+    fn register_agent_view(
+        &self,
+        scope: &str,
+        run_id: &str,
+        conversation_id: &str,
+        id: String,
+        replacement: Option<String>,
+        view: BrowserView,
+    ) -> Result<(), CommandErrorDto> {
         let session_id = view
             .contained_session_id()
             .ok_or_else(|| error("The browser session identity is unavailable."))?
             .to_owned();
         self.hide_all();
         let mut state = self.lock()?;
+        if let Some(replaced) = replacement {
+            state.tabs.retain(|tab| tab.dto.id != replaced);
+        }
         state.selected.insert(scope.to_owned(), id.clone());
         state.tabs.push(Tab {
             scope: scope.to_owned(),
             view,
-            #[cfg(feature = "windows-browser-development")]
+            #[cfg(any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            ))]
             pending_completed_view: None,
-            #[cfg(feature = "windows-browser-development")]
+            #[cfg(any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            ))]
             close_requested: false,
             agent_run_id: Some(run_id.to_owned()),
             policy: NavigationPolicy::default(),
@@ -802,7 +882,10 @@ impl BrowserManager {
 
     pub(super) async fn close(&self, scope: &str, id: &str) -> Result<(), CommandErrorDto> {
         let (view, _) = self.tab(id, scope)?;
-        #[cfg(feature = "windows-browser-development")]
+        #[cfg(any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        ))]
         if let Some(tab) = self
             .lock()?
             .tabs
@@ -817,7 +900,10 @@ impl BrowserManager {
         view.close()
             .await
             .map_err(|_| error("This browser tab could not close."))?;
-        #[cfg(feature = "windows-browser-development")]
+        #[cfg(any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        ))]
         {
             let pending = self
                 .lock()?
@@ -871,9 +957,15 @@ mod tests {
             state.tabs.push(Tab {
                 scope: "workspace".into(),
                 view: BrowserView::Empty,
-                #[cfg(feature = "windows-browser-development")]
+                #[cfg(any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                ))]
                 pending_completed_view: None,
-                #[cfg(feature = "windows-browser-development")]
+                #[cfg(any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                ))]
                 close_requested: false,
                 agent_run_id: None,
                 policy: NavigationPolicy::default(),
@@ -932,9 +1024,15 @@ mod tests {
             state.tabs.push(Tab {
                 scope: "workspace".into(),
                 view: BrowserView::Empty,
-                #[cfg(feature = "windows-browser-development")]
+                #[cfg(any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                ))]
                 pending_completed_view: None,
-                #[cfg(feature = "windows-browser-development")]
+                #[cfg(any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                ))]
                 close_requested: false,
                 agent_run_id: Some("finished-run".into()),
                 policy: NavigationPolicy::default(),

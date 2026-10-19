@@ -23,6 +23,7 @@ export interface BrowserEngine {
     | "embedded_chromium"
     | "contained_chromium"
     | "owned_chromium"
+    | "owned_chromium_functional_preview"
     | "webview2"
     | "webkit"
     | "unavailable";

@@ -1,5 +1,11 @@
 //! Private supervised CEF host. This is never a general CDP server.
 
+#[cfg(all(
+    feature = "windows-browser-functional-preview",
+    any(not(windows), not(target_arch = "x86_64"))
+))]
+compile_error!("the functional browser host supports Windows x64 only");
+
 #[cfg(feature = "macos-owned-process-development")]
 compile_error!("owned process Main is a no-exec body library; build this feature with --lib");
 

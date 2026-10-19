@@ -171,6 +171,20 @@ pub struct RuntimeNativeBrowserSession {
     pub(in crate::browser_tools) digest: [u8; 32],
     pub(in crate::browser_tools) session_id: BrowserSessionId,
 }
+
+#[derive(Clone, Copy)]
+enum ObservationRejection {
+    MissingRequest,
+    InvalidUrl,
+    Origin,
+    Closed,
+    Fenced,
+    Lease,
+    AgentTarget,
+    HumanTarget,
+    MissingConfiguration,
+}
+
 impl RuntimeNativeBrowserSession {
     /// Whether the original network authority reached its immutable deadline.
     /// This receipt remains readable after owned host cleanup for native UI recovery.
@@ -316,28 +330,39 @@ impl RuntimeNativeBrowserSession {
             .request
             .lock()
             .map_err(|_| RuntimeNativeBrowserError::OutcomeUnknown)?;
-        let original = request.as_ref().ok_or(RuntimeNativeBrowserError::Stale)?;
-        let url = BrowserUrl::parse(&page.url).map_err(|_| RuntimeNativeBrowserError::Stale)?;
+        let original = request
+            .as_ref()
+            .ok_or_else(|| self.observation_stale(ObservationRejection::MissingRequest))?;
+        let url = BrowserUrl::parse(&page.url)
+            .map_err(|_| self.observation_stale(ObservationRejection::InvalidUrl))?;
         if !url.origin().admitted_by(
             &original.options.allowed_origins,
             original.options.public_web,
         ) {
-            return Err(RuntimeNativeBrowserError::Stale);
+            return Err(self.observation_stale(ObservationRejection::Origin));
         }
         let mut state = self
             .entry
             .view
             .lock()
             .map_err(|_| RuntimeNativeBrowserError::OutcomeUnknown)?;
-        if state.closed
-            || state.fenced && state.agent_generation.is_none()
-            || state.lease != Some(prior)
-        {
-            return Err(RuntimeNativeBrowserError::Stale);
+        let rejection = if state.closed {
+            Some(ObservationRejection::Closed)
+        } else if state.fenced && state.agent_generation.is_none() {
+            Some(ObservationRejection::Fenced)
+        } else if state.lease != Some(prior) {
+            Some(ObservationRejection::Lease)
+        } else {
+            None
+        };
+        if let Some(reason) = rejection {
+            drop(state);
+            return Err(self.observation_stale(reason));
         }
         if let Some(expected) = &state.agent_target {
             if expected != &page.target {
-                return Err(RuntimeNativeBrowserError::Stale);
+                drop(state);
+                return Err(self.observation_stale(ObservationRejection::AgentTarget));
             }
             if state
                 .leased_target
@@ -349,14 +374,40 @@ impl RuntimeNativeBrowserSession {
                 state.retarget_lease = None;
             }
         } else if page.target.tab_id != original.tab_id || state.agent_generation.is_some() {
-            return Err(RuntimeNativeBrowserError::Stale);
+            drop(state);
+            return Err(self.observation_stale(ObservationRejection::HumanTarget));
         }
-        state
-            .configure
-            .as_mut()
-            .ok_or(RuntimeNativeBrowserError::Stale)?
-            .target = page.target.clone();
+        let Some(configure) = state.configure.as_mut() else {
+            drop(state);
+            return Err(self.observation_stale(ObservationRejection::MissingConfiguration));
+        };
+        configure.target = page.target.clone();
         Ok(())
+    }
+
+    fn observation_stale(&self, reason: ObservationRejection) -> RuntimeNativeBrowserError {
+        #[cfg(all(windows, debug_assertions))]
+        if let Ok(mut state) = self.entry.view.lock() {
+            let bit = 1_u16 << reason as u8;
+            if state.observation_diagnostics & bit == 0 {
+                state.observation_diagnostics |= bit;
+                let category = match reason {
+                    ObservationRejection::MissingRequest => "missing_request",
+                    ObservationRejection::InvalidUrl => "invalid_page_url",
+                    ObservationRejection::Origin => "origin_not_admitted",
+                    ObservationRejection::Closed => "closed",
+                    ObservationRejection::Fenced => "fenced_without_agent",
+                    ObservationRejection::Lease => "lease_mismatch",
+                    ObservationRejection::AgentTarget => "agent_target_mismatch",
+                    ObservationRejection::HumanTarget => "human_target_mismatch",
+                    ObservationRejection::MissingConfiguration => "missing_configuration",
+                };
+                eprintln!("EVIDENCE native-runtime-observe rejected={category}");
+            }
+        }
+        #[cfg(not(all(windows, debug_assertions)))]
+        let _ = reason;
+        RuntimeNativeBrowserError::Stale
     }
 }
 
@@ -437,6 +488,8 @@ pub(in crate::browser_tools) struct Entry {
 }
 #[derive(Default)]
 pub(in crate::browser_tools) struct View {
+    #[cfg(all(windows, debug_assertions))]
+    pub(in crate::browser_tools) observation_diagnostics: u16,
     pub(in crate::browser_tools) expires_at: Option<std::time::Instant>,
     pub(in crate::browser_tools) configure: Option<Configure>,
     pub(in crate::browser_tools) lease: Option<Lease>,

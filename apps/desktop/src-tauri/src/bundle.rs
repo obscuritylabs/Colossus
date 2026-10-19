@@ -590,8 +590,8 @@ fn expected_release_channel() -> Result<ReleaseChannel, CommandErrorDto> {
     match EXPECTED_RELEASE_CHANNEL {
         "stable" => Ok(ReleaseChannel::Stable),
         "developer_preview" => Ok(ReleaseChannel::DeveloperPreview),
-        // Validation-only bundles exercise packaging without becoming runnable.
-        "validation_only" | "development" => Err(integrity_error()),
+        // Validation-only bundles exercise packaging without becoming runnable;
+        // all other unrecognized channels remain equally untrusted.
         _ => Err(integrity_error()),
     }
 }

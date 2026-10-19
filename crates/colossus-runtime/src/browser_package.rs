@@ -6,6 +6,24 @@
 #[cfg(target_os = "linux")]
 pub mod files;
 pub mod manifest;
+#[cfg(all(windows, feature = "windows-browser-functional-preview"))]
+mod windows_preview;
+pub mod windows_preview_manifest;
+#[cfg(any(test, all(windows, feature = "windows-browser-functional-preview")))]
+mod windows_preview_slot;
+#[cfg(all(windows, feature = "windows-browser-functional-preview"))]
+pub use windows_preview::WindowsFunctionalPreviewBrowserOwner;
+
+/// Compose only this sidecar's signed, compiler-sealed Windows functional preview.
+/// The native component is installation-relative; state is allocated beneath the
+/// authenticated instance root. This grants no production containment capability.
+#[cfg(all(windows, feature = "windows-browser-functional-preview"))]
+pub async fn windows_functional_preview_from_compiler_seal(
+    seal: &'static [u8],
+    instance_root: &std::path::Path,
+) -> Result<Option<Arc<WindowsFunctionalPreviewBrowserOwner>>, BrowserPackageError> {
+    windows_preview::install(seal, instance_root).await
+}
 #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
 mod windows_development;
 #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]

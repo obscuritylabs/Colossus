@@ -57,6 +57,8 @@ use windows_frames::{accepted_frame, focus};
 mod native_input;
 mod owned_tabs;
 mod viewport_heartbeat;
+#[cfg(windows)]
+mod wait_continuity;
 use viewport_heartbeat::ViewportHeartbeat;
 
 const SPACE: &str = if cfg!(windows) {
@@ -64,11 +66,12 @@ const SPACE: &str = if cfg!(windows) {
 } else {
     "mac-contained-acceptance"
 };
-const TOOLS: [&str; 11] = [
+const TOOLS: [&str; 12] = [
     "browser.open",
     "browser.status",
     "browser.snapshot",
     "browser.click",
+    "browser.wait",
     "browser.navigate",
     "browser.screenshot",
     "browser.close",
@@ -118,6 +121,8 @@ struct FixtureState {
     navigated_target: Mutex<Option<BrowserTarget>>,
     run_id: Mutex<Option<String>>,
     failure: Mutex<Option<String>>,
+    #[cfg(windows)]
+    wait_continuity: wait_continuity::State,
 }
 
 fn close_after_completion() -> bool {
@@ -322,7 +327,7 @@ async fn serve(
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/first") => {
             let page: &[u8] = if cfg!(windows) {
-                br#"<!doctype html><html><head><title>Human fixture</title></head><body style="background:#e7f1ff"><h1>Human fixture</h1><input aria-label="Native Windows input" autocomplete="off" style="position:absolute;left:40px;top:80px;width:300px;height:40px" oninput="document.title='Human input '+this.value"><button style="position:absolute;left:40px;top:160px" onclick="document.title='Agent click received';document.querySelector('output').textContent='Agent clicked'">Agent click</button><output>Waiting for Core</output></body></html>"#
+                include_bytes!("contained_diagnostic/wait_continuity.html")
             } else if state.native_input {
                 include_bytes!("native_input.html")
             } else {
@@ -346,17 +351,25 @@ async fn serve(
         ("GET", "/favicon.ico") => {
             respond(&mut stream, 200, "image/x-icon", &[]).await?;
         }
+        #[cfg(windows)]
+        ("GET", "/wait-release") => {
+            wait_continuity::release_response(&mut stream, state).await?;
+        }
         ("POST", "/v1/chat/completions") => {
             let body: Value = serde_json::from_slice(&request.body)?;
             ensure!(
                 body["stream"] == false,
                 "fixture requires non-streaming model"
             );
-            let phase = state.phase.fetch_add(1, Ordering::AcqRel);
+            let turn = state.phase.fetch_add(1, Ordering::AcqRel);
             ensure!(
-                phase <= if state.native_tabs { 11 } else { 7 },
-                "unexpected extra model turn {phase}"
+                turn <= (if state.native_tabs { 11 } else { 7 }) + usize::from(cfg!(windows)),
+                "unexpected extra model turn {turn}"
             );
+            #[cfg(windows)]
+            let phase = wait_continuity::logical_phase(turn);
+            #[cfg(not(windows))]
+            let phase = turn;
             state.signal(&state.model_seen);
             if phase == 0 {
                 state
@@ -383,6 +396,16 @@ async fn serve(
                     .wait(&state.navigation_observed, "visible Core navigation")
                     .await?;
             }
+            #[cfg(windows)]
+            let response = if turn == 4 {
+                wait_continuity::model_wait(&body, state)?
+            } else {
+                if turn == 5 {
+                    wait_continuity::verify_result(&body, state)?;
+                }
+                model_response(phase, &body, origin, state).await?
+            };
+            #[cfg(not(windows))]
             let response = model_response(phase, &body, origin, state).await?;
             let encoded = serde_json::to_vec(&response)?;
             respond(&mut stream, 200, "application/json", &encoded).await?;
@@ -718,6 +741,7 @@ fn managed_runtime(origin: &str, visual_hold: Duration) -> ManagedRuntimeConfig 
                 "browser.status",
                 "browser.snapshot",
                 "browser.click",
+                "browser.wait",
                 "browser.navigate",
                 "browser.screenshot",
                 "browser.close",
@@ -1354,7 +1378,7 @@ fn request(conversation_id: String) -> anyhow::Result<CreateRunRequest> {
         research_sources: Vec::new(),
         plan_action: None,
         branch: None,
-        max_turns: 12,
+        max_turns: 12 + u32::from(cfg!(windows)),
         idempotency_key: IdempotencyKey::new(format!(
             "mac-contained-browser-{}",
             uuid::Uuid::now_v7()
@@ -1594,6 +1618,8 @@ async fn exercise_owned(
     windows::agent_click_indicator(app, &tab, &view, rect, home).await?;
     fixture.state.signal(&fixture.state.click_observed);
     println!("PASS Core browser.snapshot and browser.click changed the visible page");
+    #[cfg(windows)]
+    wait_continuity::checkpoint(client, &run.run_id, &view, fixture, heartbeat).await?;
     title(&view, "Agent controlled page").await?;
     #[cfg(windows)]
     println!("EVIDENCE Core navigation title acknowledged; awaiting matching native frame");

@@ -28,6 +28,8 @@ pub(super) struct State {
     #[cfg(windows)]
     pub(super) annotations: Option<super::annotation_windows::Pending>,
     active: Option<(Configure, LeaseGuard)>,
+    #[cfg(all(windows, debug_assertions))]
+    observation_diagnostics: std::cell::Cell<u16>,
 }
 fn status(status: i32) -> Result<(), PresentationError> {
     match status {
@@ -96,15 +98,24 @@ impl Host {
             .presentation
             .active
             .as_ref()
-            .ok_or(PresentationError::Stale)?;
-        if !self.presentation.enabled
-            || !self.initialized
-            || self.cancelled.load(super::Ordering::Acquire)
-            || guard.lease() != lease
-            || lease.control_generation != self.presentation.control_generation
-            || self.session.as_ref() != Some(&configuration.session)
-        {
-            return Err(PresentationError::Stale);
+            .ok_or_else(|| self.observation_stale(observe::Rejection::MissingActive))?;
+        let rejection = if !self.presentation.enabled {
+            Some(observe::Rejection::Disabled)
+        } else if !self.initialized {
+            Some(observe::Rejection::Uninitialized)
+        } else if self.cancelled.load(super::Ordering::Acquire) {
+            Some(observe::Rejection::Cancelled)
+        } else if guard.lease() != lease {
+            Some(observe::Rejection::Lease)
+        } else if lease.control_generation != self.presentation.control_generation {
+            Some(observe::Rejection::Control)
+        } else if self.session.as_ref() != Some(&configuration.session) {
+            Some(observe::Rejection::Session)
+        } else {
+            None
+        };
+        if let Some(reason) = rejection {
+            return Err(self.observation_stale(reason));
         }
         Ok(())
     }

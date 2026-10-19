@@ -117,16 +117,16 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
     })?;
     #[cfg(windows)]
     let page = observed_page(owner, lease, &configure, &state);
-    let ttl = remaining(owner, revision)
-        .inspect_err(|error| trace_apply("viewport_ttl_after_observe", *error))?;
+    let ttl = remaining(owner, revision).inspect_err(|error| {
+        trace_remaining(owner, lease, revision, "viewport_ttl_after_observe", *error);
+    })?;
     if applied == Some(bounds)
         && state.target == configure.target
         && let Some(surface) = &surface
-        && surface
-            .renew_confirmed(lease, Duration::from_millis(u64::from(ttl)))
+        && renew_surface(owner, surface, lease, revision, ttl)
             .await
             .is_ok()
-        && owner.client.renew(lease, ttl).await.is_ok()
+        && renew_host(owner, lease, revision, ttl).await.is_ok()
     {
         return Ok(());
     }
@@ -146,8 +146,15 @@ async fn apply(owner: &Arc<Owner>, revision: u64) -> Result<(), BrowserError> {
     configure.width = bounds.width;
     configure.height = bounds.height;
     configure.scale_milli = bounds.scale_milli;
-    configure.lease_ms = remaining(owner, revision)
-        .inspect_err(|error| trace_apply("viewport_ttl_before_configure", *error))?;
+    configure.lease_ms = remaining(owner, revision).inspect_err(|error| {
+        trace_remaining(
+            owner,
+            lease,
+            revision,
+            "viewport_ttl_before_configure",
+            *error,
+        );
+    })?;
     configure.viewport_generation = owner
         .viewport
         .fetch_add(1, Ordering::AcqRel)
@@ -253,7 +260,7 @@ async fn create_replacement(
     let ttl = match remaining(owner, revision) {
         Ok(ttl) => ttl,
         Err(error) => {
-            trace_apply("viewport_ttl_after_create", error);
+            trace_remaining(owner, lease, revision, "viewport_ttl_after_create", error);
             next.hide_confirmed().await?;
             lifecycle::hide_host(owner, lease).await?;
             return Err(error);
@@ -308,6 +315,105 @@ fn presentation_error(error: colossus_browser_presentation::PresentationError) -
         | colossus_browser_presentation::PresentationError::Hidden => BrowserError::Stale,
         _ => BrowserError::Closed,
     }
+}
+async fn renew_surface(
+    owner: &Owner,
+    surface: &crate::presentation::PresentationSurface,
+    lease: colossus_browser_presentation::Lease,
+    revision: u64,
+    ttl: u16,
+) -> Result<(), BrowserError> {
+    #[cfg(all(
+        any(windows, target_os = "macos"),
+        feature = "native-test-driver",
+        debug_assertions
+    ))]
+    let started = Instant::now();
+    surface
+        .renew_confirmed(lease, Duration::from_millis(u64::from(ttl)))
+        .await
+        .inspect_err(|error| {
+            #[cfg(all(
+                any(windows, target_os = "macos"),
+                feature = "native-test-driver",
+                debug_assertions
+            ))]
+            super::trace_owner_failure(
+                owner,
+                "viewport_renew_surface",
+                super::AttachFailure::NativeView(*error).token(),
+                lease,
+                revision,
+                started.elapsed(),
+            );
+            #[cfg(not(all(
+                any(windows, target_os = "macos"),
+                feature = "native-test-driver",
+                debug_assertions
+            )))]
+            let _ = (owner, revision, error);
+        })
+}
+async fn renew_host(
+    owner: &Owner,
+    lease: colossus_browser_presentation::Lease,
+    revision: u64,
+    ttl: u16,
+) -> Result<(), colossus_browser_presentation::PresentationError> {
+    #[cfg(all(
+        any(windows, target_os = "macos"),
+        feature = "native-test-driver",
+        debug_assertions
+    ))]
+    let started = Instant::now();
+    owner.client.renew(lease, ttl).await.inspect_err(|error| {
+        #[cfg(all(
+            any(windows, target_os = "macos"),
+            feature = "native-test-driver",
+            debug_assertions
+        ))]
+        super::trace_owner_failure(
+            owner,
+            "viewport_renew_host",
+            super::presentation_failure_token(*error),
+            lease,
+            revision,
+            started.elapsed(),
+        );
+        #[cfg(not(all(
+            any(windows, target_os = "macos"),
+            feature = "native-test-driver",
+            debug_assertions
+        )))]
+        let _ = (revision, error);
+    })
+}
+fn trace_remaining(
+    owner: &Owner,
+    lease: colossus_browser_presentation::Lease,
+    revision: u64,
+    stage: &'static str,
+    error: BrowserError,
+) {
+    #[cfg(all(
+        any(windows, target_os = "macos"),
+        feature = "native-test-driver",
+        debug_assertions
+    ))]
+    super::trace_owner_failure(
+        owner,
+        stage,
+        super::AttachFailure::NativeView(error).token(),
+        lease,
+        revision,
+        Duration::ZERO,
+    );
+    #[cfg(not(all(
+        any(windows, target_os = "macos"),
+        feature = "native-test-driver",
+        debug_assertions
+    )))]
+    let _ = (owner, lease, revision, stage, error);
 }
 async fn wait_for_target(owner: &Owner) -> Result<(), BrowserError> {
     let _operation = owner.operation.lock().await;

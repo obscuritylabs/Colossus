@@ -66,6 +66,12 @@ struct Owner {
     updating: AtomicBool,
     read_only: AtomicBool,
     operation: tokio::sync::Mutex<()>,
+    #[cfg(all(
+        any(windows, target_os = "macos"),
+        feature = "native-test-driver",
+        debug_assertions
+    ))]
+    diagnostic_failures: std::sync::atomic::AtomicU8,
     #[cfg(windows)]
     completed: Arc<crate::presentation::CompletedCache>,
 }
@@ -124,7 +130,21 @@ fn trace_attach_failure(failure: AttachFailure) {
     debug_assertions
 ))]
 fn trace_frame_channel_failure(stage: &'static str, error: PresentationError, elapsed: Duration) {
-    let failure = match error {
+    let failure = presentation_failure_token(error);
+    let timing = if elapsed >= Duration::from_millis(700) {
+        "after_700ms"
+    } else {
+        "before_700ms"
+    };
+    eprintln!("EVIDENCE native-remote-frame stage={stage} failure={failure} timing={timing}");
+}
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
+fn presentation_failure_token(error: PresentationError) -> &'static str {
+    match error {
         PresentationError::Expired => "expired",
         PresentationError::Invalid => "invalid",
         PresentationError::Stale => "stale",
@@ -132,13 +152,48 @@ fn trace_frame_channel_failure(stage: &'static str, error: PresentationError, el
         PresentationError::Hidden => "hidden",
         PresentationError::LimitExceeded => "limit_exceeded",
         PresentationError::OutcomeUnknown => "outcome_unknown",
+    }
+}
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
+fn trace_owner_failure(
+    owner: &Owner,
+    stage: &'static str,
+    failure: &'static str,
+    lease: Lease,
+    revision: u64,
+    elapsed: Duration,
+) {
+    let bit = match stage {
+        "hide_host" => 1,
+        "viewport_renew_surface" => 2,
+        "viewport_renew_host" => 4,
+        _ => 8,
     };
-    let timing = if elapsed >= Duration::from_millis(700) {
-        "after_700ms"
+    if owner.diagnostic_failures.fetch_or(bit, Ordering::AcqRel) & bit != 0 {
+        return;
+    }
+    let (current_lease, requested_visible, heartbeat_expired) =
+        owner.state.lock().map_or((false, false, false), |state| {
+            (
+                state.lease == lease,
+                state.visible,
+                state.heartbeat.elapsed() >= Duration::from_millis(1500),
+            )
+        });
+    let revision_changed = owner.revision.load(Ordering::Acquire) != revision;
+    let role = if owner.read_only.load(Ordering::Acquire) {
+        "agent"
     } else {
-        "before_700ms"
+        "human"
     };
-    eprintln!("EVIDENCE native-remote-frame stage={stage} failure={failure} timing={timing}");
+    eprintln!(
+        "EVIDENCE native-remote-owner stage={stage} failure={failure} role={role} current_lease={current_lease} requested_visible={requested_visible} revision_changed={revision_changed} heartbeat_expired={heartbeat_expired} elapsed_ms={}",
+        elapsed.as_millis()
+    );
 }
 #[cfg(all(
     any(windows, target_os = "macos"),
@@ -394,6 +449,12 @@ impl RemoteSurface {
             updating: AtomicBool::new(false),
             read_only: AtomicBool::new(read_only),
             operation: tokio::sync::Mutex::new(()),
+            #[cfg(all(
+                any(windows, target_os = "macos"),
+                feature = "native-test-driver",
+                debug_assertions
+            ))]
+            diagnostic_failures: std::sync::atomic::AtomicU8::new(0),
             #[cfg(windows)]
             completed,
         });

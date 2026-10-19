@@ -221,6 +221,8 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     let mut browser = None;
     #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
     let mut windows_browser = None;
+    #[cfg(all(windows, feature = "windows-browser-functional-preview"))]
+    let mut windows_preview = None;
     #[cfg(all(
         target_os = "macos",
         debug_assertions,
@@ -233,6 +235,8 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
         &mut browser,
         #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
         &mut windows_browser,
+        #[cfg(all(windows, feature = "windows-browser-functional-preview"))]
+        &mut windows_preview,
         #[cfg(all(
             target_os = "macos",
             debug_assertions,
@@ -249,6 +253,13 @@ async fn run(request: BootstrapRequest, input: &mut std::io::Stdin) -> Result<()
     }
     #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
     if let Some(owner) = windows_browser {
+        owner
+            .shutdown()
+            .await
+            .map_err(|_| FailureCode::RuntimeFailed)?;
+    }
+    #[cfg(all(windows, feature = "windows-browser-functional-preview"))]
+    if let Some(owner) = windows_preview {
         owner
             .shutdown()
             .await
@@ -310,6 +321,10 @@ async fn run_with_browser_owner(
     browser: &mut Option<Arc<colossus_runtime::browser_package::InstalledBrowserOwner>>,
     #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
     windows_browser: &mut Option<Arc<colossus_runtime::browser_package::WindowsDevelopmentBrowserOwner>>,
+    #[cfg(all(windows, feature = "windows-browser-functional-preview"))]
+    windows_preview: &mut Option<
+        Arc<colossus_runtime::browser_package::WindowsFunctionalPreviewBrowserOwner>,
+    >,
     #[cfg(all(
         target_os = "macos",
         debug_assertions,
@@ -371,6 +386,22 @@ async fn run_with_browser_owner(
         )
         .await
         .map_err(|_| FailureCode::InvalidConfiguration)?;
+        #[cfg(all(windows, feature = "windows-browser-functional-preview"))]
+        {
+            if browser.is_some() {
+                return Err(FailureCode::InvalidConfiguration);
+            }
+            *windows_preview =
+                colossus_runtime::browser_package::windows_functional_preview_from_compiler_seal(
+                    include_bytes!(concat!(
+                        env!("OUT_DIR"),
+                        "/windows-browser-functional-preview.json"
+                    )),
+                    &instance_dir,
+                )
+                .await
+                .map_err(|_| FailureCode::InvalidConfiguration)?;
+        }
         #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
         {
             if browser.is_some() {
@@ -431,6 +462,10 @@ async fn run_with_browser_owner(
     );
     #[cfg(all(windows, debug_assertions, feature = "windows-browser-development"))]
     if let Some(owner) = windows_browser.as_ref() {
+        runtime_options = runtime_options.with_browser_host(owner.host());
+    }
+    #[cfg(all(windows, feature = "windows-browser-functional-preview"))]
+    if let Some(owner) = windows_preview.as_ref() {
         runtime_options = runtime_options.with_browser_host(owner.host());
     }
     #[cfg(all(

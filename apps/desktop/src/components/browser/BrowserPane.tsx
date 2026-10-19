@@ -87,10 +87,15 @@ export function BrowserPane({
             ? "Chromium preview"
             : "Chromium",
           owned_chromium: "Chromium (development)",
+          owned_chromium_functional_preview: "Chromium preview",
           webview2: "WebView2",
           webkit: "WebKit",
           unavailable: "Browser unavailable",
         }[snapshot.engine?.kind ?? "unavailable"];
+  const supervisedAgentControl =
+    snapshot.engine?.agentControlAvailable &&
+    (!snapshot.engine.preview ||
+      snapshot.engine.kind === "owned_chromium_functional_preview");
   const controlLabel = {
     human: "Human control",
     agent: "Agent control",
@@ -493,8 +498,7 @@ export function BrowserPane({
             </>
           )}
         </span>
-        {snapshot.engine?.agentControlAvailable &&
-        !snapshot.engine.preview &&
+        {supervisedAgentControl &&
         active?.control === "human" &&
         run &&
         active.conversationId === run.sessionId ? (
@@ -512,8 +516,7 @@ export function BrowserPane({
             Give agent control
           </button>
         ) : null}
-        {snapshot.engine?.agentControlAvailable &&
-        !snapshot.engine.preview &&
+        {supervisedAgentControl &&
         active?.control === "human" &&
         active.conversationId &&
         active.conversationId !== run?.sessionId &&

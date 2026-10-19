@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+windows-browser-functional-preview = []
+
 [dependencies]
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "sync"] }

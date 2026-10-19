@@ -175,6 +175,27 @@ uses the existing SDK/sidecar/worker channels. This exception does not enable
 publisher release modes, private CA/client identity capabilities or installed
 signed-package acceptance.
 
+The separate `windows-browser-functional-preview` edition packages this same
+ordinary-user boundary for Windows x64 Developer Previews. It is explicitly
+selected at compilation and cannot be enabled in an ordinary stable build or
+by runtime environment variables. The native CEF host is separate from Desktop;
+Desktop links only the Win32 pixel presenter. The installer includes the pinned
+host, helpers, libraries, resources and notices. All executable/DLL signing
+finishes before a fresh false-mode component inventory is sealed. The subsequently
+signed sidecar embeds that exact inventory digest and a fixed installation-relative
+location; the signed Desktop bundle independently binds the sidecar. Runtime state
+is a fresh private allocation beneath the authenticated worker instance.
+
+This edition retains Chromium's sandbox, whole-Job supervision, authenticated
+native channels, typed authority and temporary sessions. It reports
+`restrictive_egress: false` and offers no private CA, client identity or persistent
+profile capability. It does not promote production component modes or claim
+AppContainer/WFP containment. Missing, changed or untrusted installed bytes fail
+closed. An unavailable ordinary-user desktop prerequisite leaves the capability
+unavailable without selecting a contained or personal-browser fallback. Signed
+installed ordinary-user functional acceptance remains a distinct release gate;
+source or unsigned staging tests cannot establish that evidence.
+
 Temporary profiles remain the default. The Linux native store implements explicit
 opaque workspace/application profiles, one retained kernel writer lease, exact
 CEF/Chromium/protocol compatibility, durable active/dirty state, and reset after

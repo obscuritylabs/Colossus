@@ -49,7 +49,10 @@ impl Host {
         self.transfer.stage = None;
         Ok(())
     }
-    #[cfg(all(windows, debug_assertions))]
+    #[cfg(all(
+        windows,
+        any(debug_assertions, feature = "windows-browser-functional-preview")
+    ))]
     pub fn configure_development_transfers(
         &mut self,
         profile: &colossus_windows_native::BoundPath,

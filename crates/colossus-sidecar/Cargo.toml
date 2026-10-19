@@ -12,6 +12,7 @@ description = "Minimal application-bundled Colossus managed runtime host"
 # Source-only signed synthetic Mac fixture. Release and other targets reject it.
 macos-browser-host-acceptance = ["colossus-runtime/macos-browser-host-acceptance"]
 windows-browser-development = ["colossus-runtime/windows-browser-development"]
+windows-browser-functional-preview = ["colossus-runtime/windows-browser-functional-preview"]
 
 [dependencies]
 colossus-browser-presentation.workspace = true

@@ -445,12 +445,20 @@ pub(super) fn spawn_with_channels(
     spawn_owned(request, count, Some(sid.0), network)
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(
+    debug_assertions,
+    all(target_arch = "x86_64", feature = "windows-browser-functional-preview")
+))]
 pub(super) fn spawn_user_browser(
     request: &SpawnRequest,
     count: usize,
 ) -> Result<crate::SupervisedChild, WindowsProcessError> {
     spawn_owned(request, count, None, None)
+}
+
+#[cfg(all(target_arch = "x86_64", feature = "windows-browser-functional-preview"))]
+pub(super) fn validate_functional_browser_context() -> Result<(), WindowsProcessError> {
+    context::functional_preview::validate_current_context()
 }
 
 fn new_job(

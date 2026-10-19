@@ -155,6 +155,25 @@ impl WindowsBrowserSupervisor {
             stopped: Arc::new(AtomicBool::new(false)),
         })
     }
+    /// Explicit Windows x64 functional preview under an ordinary user token.
+    /// The caller must verify the installed component and retain this owner through
+    /// acknowledged shutdown. This edition keeps Chromium's sandbox and owned Job
+    /// but requires false production modes, no PKI and `restrictive_egress: false`.
+    /// Ordinary contained installation never falls back to this constructor.
+    #[cfg(all(target_arch = "x86_64", feature = "windows-browser-functional-preview"))]
+    pub async fn install_for_functional_preview(
+        config: WindowsBrowserConfig,
+    ) -> Result<Self, BrowserDriverError> {
+        let installation =
+            tokio::task::spawn_blocking(move || installation::bind_functional_preview(config))
+                .await
+                .map_err(|_| BrowserDriverError::Denied)??;
+        Ok(Self {
+            installation: Arc::new(installation),
+            sessions: Arc::new(Mutex::new(BTreeMap::new())),
+            stopped: Arc::new(AtomicBool::new(false)),
+        })
+    }
     async fn install_inner(
         config: WindowsBrowserConfig,
         diagnostic: bool,
