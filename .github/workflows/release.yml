@@ -1101,13 +1101,6 @@ jobs:
           npm ci --ignore-scripts
           npm audit --audit-level=high
 
-      - name: Authenticate to Azure using GitHub OIDC
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
       - name: Build pinned functional-preview browser without launching it
         if: env.COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW == '1'
         shell: pwsh
@@ -1124,6 +1117,14 @@ jobs:
           'COLOSSUS_BROWSER_PREVIEW_IMAGES<<COLOSSUS_IMAGES_END' | Out-File -FilePath $env:GITHUB_ENV -Append
           $images.FullName | Out-File -FilePath $env:GITHUB_ENV -Append
           'COLOSSUS_IMAGES_END' | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Authenticate browser signing with fresh GitHub OIDC
+        if: env.COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW == '1'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Sign functional-preview browser binaries before inventory
         if: env.COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW == '1'
@@ -1149,6 +1150,14 @@ jobs:
         shell: pwsh
         run: ./scripts/package-desktop-windows.ps1 -Phase build
 
+      # Cold builds can outlive Azure's token and the short-lived federation assertion.
+      - name: Authenticate nested binary signing with fresh GitHub OIDC
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Sign bundled sidecar, CLI, and ripgrep
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
         with:
@@ -1166,6 +1175,13 @@ jobs:
       - name: Bind signed nested binaries into the desktop executable
         shell: pwsh
         run: ./scripts/package-desktop-windows.ps1 -Phase bind
+
+      - name: Authenticate installer signing with fresh GitHub OIDC
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Bundle NSIS and sign patched app, uninstaller, and installer
         shell: pwsh
