@@ -7,18 +7,43 @@ struct MemoryHost {
     controls: Vec<PresentationCommand>,
     frames: usize,
     revoked: usize,
+    read_rejection: Option<PresentationError>,
 }
 impl Target for MemoryHost {
     fn control(
         &mut self,
         command: PresentationCommand,
     ) -> Result<PresentationReply, PresentationError> {
+        let observation = matches!(command, PresentationCommand::Observe { .. });
         self.controls.push(command);
+        if observation {
+            if let Some(error) = self.read_rejection {
+                return Err(error);
+            }
+            return Ok(PresentationReply::State(
+                colossus_browser_presentation::PageState {
+                    target: configuration().target,
+                    url: "http://127.0.0.1/fixture".into(),
+                    title: "Unchanged native document".into(),
+                    loading: false,
+                    can_go_back: false,
+                    can_go_forward: false,
+                },
+            ));
+        }
         Ok(PresentationReply::Ack)
     }
-    fn frame(&mut self, _: Lease) -> Result<Option<Frame>, PresentationError> {
+    fn frame(&mut self, lease: Lease) -> Result<Option<Frame>, PresentationError> {
         self.frames += 1;
-        Ok(None)
+        if let Some(error) = self.read_rejection {
+            return Err(error);
+        }
+        Ok(Some(Frame {
+            lease,
+            sequence: self.frames as u64,
+            stride: lease.pixel_width * 4,
+            pixels: vec![0x22; lease.pixel_width as usize * lease.pixel_height as usize * 4],
+        }))
     }
     fn revoke(&mut self) {
         self.revoked += 1;
@@ -52,30 +77,39 @@ fn configuration() -> Configure {
 }
 
 #[tokio::test]
-async fn slow_data_wait_settles_readers_without_interleaving_page_or_input_changes() {
+async fn slow_data_wait_rejects_human_reads_and_mutations_before_dispatch() {
     let (sender, receiver) = mpsc::channel(8);
     let mut lane = Lane::new(receiver, Arc::new(AtomicBool::new(false)));
     let mut host = MemoryHost::default();
     let mut results = Vec::new();
+    let human = Lease {
+        control_generation: 0,
+        ..lease()
+    };
     for command in [
-        PresentationCommand::Observe { lease: lease() },
+        PresentationCommand::Observe { lease: human },
         PresentationCommand::Configure(configuration()),
         PresentationCommand::Human {
-            lease: lease(),
+            lease: human,
             command: colossus_browser_presentation::HumanCommand::Reload,
         },
         PresentationCommand::Focus {
-            lease: lease(),
+            lease: human,
             focused: true,
         },
-        PresentationCommand::FenceHuman { lease: lease() },
+        PresentationCommand::FenceHuman { lease: human },
+        PresentationCommand::Input {
+            lease: human,
+            input: colossus_browser_presentation::Input::MouseMove { x: 1, y: 1 },
+            modifiers: 0,
+        },
     ] {
         let (reply, result) = oneshot::channel();
         sender.send(Command::Control(command, reply)).await.unwrap();
         results.push(result);
     }
     let (reply, frame) = oneshot::channel();
-    sender.send(Command::Frame(lease(), reply)).await.unwrap();
+    sender.send(Command::Frame(human, reply)).await.unwrap();
     lane.service(&mut host, true);
     for result in results {
         assert!(matches!(
@@ -99,7 +133,75 @@ async fn slow_data_wait_settles_readers_without_interleaving_page_or_input_chang
         .await
         .unwrap();
     lane.service(&mut host, false);
-    assert!(matches!(result.await.unwrap(), Ok(PresentationReply::Ack)));
+    assert!(matches!(
+        result.await.unwrap(),
+        Ok(PresentationReply::State(_))
+    ));
+}
+
+#[tokio::test]
+async fn agent_observation_and_frames_continue_during_an_unchanged_document_wait() {
+    let (sender, receiver) = mpsc::channel(8);
+    let mut lane = Lane::new(receiver, Arc::new(AtomicBool::new(false)));
+    let mut host = MemoryHost::default();
+    for expected_sequence in 1..=2 {
+        let (reply, observation) = oneshot::channel();
+        sender
+            .send(Command::Control(
+                PresentationCommand::Observe { lease: lease() },
+                reply,
+            ))
+            .await
+            .unwrap();
+        let (reply, frame) = oneshot::channel();
+        sender.send(Command::Frame(lease(), reply)).await.unwrap();
+        lane.service(&mut host, true);
+        assert!(matches!(
+            observation.await.unwrap(),
+            Ok(PresentationReply::State(page))
+                if page.target == configuration().target && !page.loading
+        ));
+        let frame = frame.await.unwrap().unwrap().unwrap();
+        frame.validate().unwrap();
+        assert_eq!(frame.lease, lease());
+        assert_eq!(frame.sequence, expected_sequence);
+        assert_eq!(frame.pixels, [0x22; 16]);
+    }
+    assert_eq!(host.controls.len(), 2);
+    assert_eq!(host.frames, 2);
+}
+
+#[tokio::test]
+async fn native_document_rejection_is_preserved_for_agent_reads_during_wait() {
+    let (sender, receiver) = mpsc::channel(8);
+    let mut lane = Lane::new(receiver, Arc::new(AtomicBool::new(false)));
+    // The native Host, not Lane, owns current_document and document-adoption
+    // fences. A document transition must retain its exact rejection here.
+    let mut host = MemoryHost {
+        read_rejection: Some(PresentationError::Stale),
+        ..MemoryHost::default()
+    };
+    let (reply, observation) = oneshot::channel();
+    sender
+        .send(Command::Control(
+            PresentationCommand::Observe { lease: lease() },
+            reply,
+        ))
+        .await
+        .unwrap();
+    let (reply, frame) = oneshot::channel();
+    sender.send(Command::Frame(lease(), reply)).await.unwrap();
+    lane.service(&mut host, true);
+    assert!(matches!(
+        observation.await.unwrap(),
+        Err(PresentationError::Stale)
+    ));
+    assert!(matches!(
+        frame.await.unwrap(),
+        Err(PresentationError::Stale)
+    ));
+    assert_eq!(host.controls.len(), 1);
+    assert_eq!(host.frames, 1);
 }
 
 #[tokio::test]
@@ -156,6 +258,31 @@ async fn exact_hide_and_revocation_settle_during_wait_and_revoked_lane_cannot_re
         renewed.await.unwrap(),
         Err(PresentationError::Hidden)
     ));
+    let (reply, observation) = oneshot::channel();
+    sender
+        .send(Command::Control(
+            PresentationCommand::Observe { lease: lease() },
+            reply,
+        ))
+        .await
+        .unwrap();
+    let (reply, frame) = oneshot::channel();
+    sender.send(Command::Frame(lease(), reply)).await.unwrap();
+    lane.service(&mut host, true);
+    assert!(matches!(
+        observation.await.unwrap(),
+        Err(PresentationError::Hidden)
+    ));
+    assert!(matches!(
+        frame.await.unwrap(),
+        Err(PresentationError::Hidden)
+    ));
+    assert_eq!(host.frames, 0);
+    assert!(
+        host.controls
+            .iter()
+            .all(|command| !matches!(command, PresentationCommand::Observe { .. }))
+    );
     assert!(host.revoked > 0);
 }
 
@@ -176,11 +303,14 @@ async fn continuous_queue_traffic_has_a_fixed_per_pump_bound() {
             .unwrap();
         replies.push(result);
     }
-    lane.service(&mut host, false);
+    lane.service(&mut host, true);
     assert_eq!(host.controls.len(), 16);
-    lane.service(&mut host, false);
+    lane.service(&mut host, true);
     assert_eq!(host.controls.len(), 32);
     for reply in replies {
-        assert!(matches!(reply.await.unwrap(), Ok(PresentationReply::Ack)));
+        assert!(matches!(
+            reply.await.unwrap(),
+            Ok(PresentationReply::State(_))
+        ));
     }
 }

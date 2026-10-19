@@ -74,6 +74,12 @@ network:
   caBundlePath: null
   clientCertificatePath: null
   clientKeyPath: null
+browser:
+  enabled: true
+  publicWeb: true
+  maxSessions: 4
+  maxTabs: 8
+  maxSnapshotNodes: 1024
 audit:
   exporter:
     kind: disabled
@@ -231,6 +237,7 @@ process launch. YAML contains names and identities, never the values.
 | `context` | No | Long-session compaction controls | [Context, memory, and research](configuration/context-memory-research.md) |
 | `memory` | No | Lexical and optional semantic indexes | [Context, memory, and research](configuration/context-memory-research.md) |
 | `research` | No | Research bounds and compatibility search settings | [Context, memory, and research](configuration/context-memory-research.md) |
+| `browser` | No | Native browser access, sessions, tabs, and snapshot limits | [Browser access and limits](configuration/limits.md#browser-access-and-limits) |
 | `search` | No | Named provider-neutral search profiles and routes | [Search](configuration/search.md) |
 | `plugins` | No | Workspace narrowing, trust profiles, OCI registries, and plugin MCP overlays | [Plugins and workflows](configuration/extensions.md) |
 | `bundles` | No | Trusted publisher keys for retained release/offline bundles | [Release bundle format](bundle-format.md) |

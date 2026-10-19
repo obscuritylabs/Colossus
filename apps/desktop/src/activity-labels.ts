@@ -4,6 +4,7 @@ import type { ToolActivity, ToolActivityState } from "./types";
 import { viewedImages } from "./viewed-images";
 
 export type ActivityLabelKind =
+  | "browser"
   | "delegate"
   | "generic"
   | "image"
@@ -439,7 +440,10 @@ export function presentToolActivity(
         }),
       };
     default:
-      return { kind: "generic", title: genericToolTitle(activity) };
+      return {
+        kind: activity.toolName.startsWith("browser.") ? "browser" : "generic",
+        title: genericToolTitle(activity),
+      };
   }
 }
 

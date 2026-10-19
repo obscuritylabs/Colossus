@@ -34,6 +34,8 @@ pub(super) fn hide(owner: &Arc<Owner>) -> Result<(), BrowserError> {
 }
 pub(super) async fn close(owner: &Arc<Owner>) -> Result<(), BrowserError> {
     owner.closing.store(true, Ordering::Release);
+    #[cfg(windows)]
+    owner.completed.clear();
     hide(owner)?;
     let _operation = owner.operation.lock().await;
     let (surface, lease) = {
@@ -61,13 +63,43 @@ pub(super) async fn hide_host(
     owner: &Owner,
     lease: colossus_browser_presentation::Lease,
 ) -> Result<(), BrowserError> {
+    #[cfg(all(
+        any(windows, target_os = "macos"),
+        feature = "native-test-driver",
+        debug_assertions
+    ))]
+    let started = (
+        std::time::Instant::now(),
+        owner.revision.load(Ordering::Acquire),
+    );
     match owner.client.hide(lease).await {
         Ok(())
         | Err(
             colossus_browser_presentation::PresentationError::Stale
             | colossus_browser_presentation::PresentationError::Hidden,
         ) => Ok(()),
-        Err(_) => Err(BrowserError::Closed),
+        Err(error) => {
+            #[cfg(all(
+                any(windows, target_os = "macos"),
+                feature = "native-test-driver",
+                debug_assertions
+            ))]
+            super::trace_owner_failure(
+                owner,
+                "hide_host",
+                super::presentation_failure_token(error),
+                lease,
+                started.1,
+                started.0.elapsed(),
+            );
+            #[cfg(not(all(
+                any(windows, target_os = "macos"),
+                feature = "native-test-driver",
+                debug_assertions
+            )))]
+            let _ = error;
+            Err(BrowserError::Closed)
+        }
     }
 }
 pub(super) async fn hide_surface(

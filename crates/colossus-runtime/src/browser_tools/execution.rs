@@ -26,7 +26,10 @@ impl ToolExecutor for BrowserToolExecutor {
             ));
         }
         self.browser.run(&context)?;
-        let invocation = BrowserInvocation::from_call(&call)?;
+        let mut invocation = BrowserInvocation::from_call(&call)?;
+        if let BrowserInvocation::Open { options } = &mut invocation {
+            options.public_web = self.browser.public_web;
+        }
         if matches!(
             call.name.as_str(),
             "browser.screenshot"

@@ -5,7 +5,7 @@ import {
   IconFiles,
   IconArrowsMaximize,
   IconArrowsMinimize,
-  IconWorld,
+  IconBrowser,
   IconFolderOpen,
   IconTerminal2,
   IconGitCompare,
@@ -53,6 +53,7 @@ import {
 } from "../session-resources";
 import type { SessionPlanReference } from "../session-resources";
 import type { RunView } from "../state";
+import { isTerminalStatus } from "../types";
 import type {
   Aside,
   CommandError,
@@ -321,6 +322,29 @@ export function WorkSurface({
     view?.run.runId,
   );
   const browserTriggerRef = useRef<HTMLButtonElement>(null);
+  const revealedBrowserRun = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      !browserScope ||
+      !view ||
+      isTerminalStatus(view.run.status) ||
+      !browser.snapshot.available
+    )
+      return;
+    const key = `${browserScope}:${view.run.runId}`;
+    if (
+      revealedBrowserRun.current !== key &&
+      view.updates.some(
+        ({ update }) =>
+          update.type === "tool_activity" &&
+          update.activity.toolName.startsWith("browser.") &&
+          ["started", "completed"].includes(update.activity.state),
+      )
+    ) {
+      revealedBrowserRun.current = key;
+      setActiveDrawer("browser");
+    }
+  }, [browserScope, view, browser.snapshot.available]);
   const [selectionLauncher, setSelectionLauncher] = useState<
     (AsideDraft & { left: number; top: number }) | null
   >(null);
@@ -964,7 +988,10 @@ export function WorkSurface({
   }
 
   const composerVisible =
-    sessionWorkspaceView !== "topology" && sessionWorkspaceView !== "activity";
+    view === undefined ||
+    (sessionWorkspaceView !== "topology" &&
+      sessionWorkspaceView !== "activity" &&
+      sessionWorkspaceView !== "inboxes");
   const gitControl = git.available ? (
     <span className="composer-git-control" ref={gitTriggerRef}>
       <GitIndicator
@@ -994,7 +1021,7 @@ export function WorkSurface({
         : browser.loading
           ? "Checking browser availability…"
           : browser.error || "Browser preview is not enabled in this build",
-      icon: IconWorld,
+      icon: IconBrowser,
       disabled: !browser.snapshot.available,
     },
     ...(shellScope
@@ -1148,7 +1175,7 @@ export function WorkSurface({
                   aria-expanded={activeDrawer === "browser"}
                   onClick={() => toggleDrawer("browser")}
                 >
-                  <IconWorld size={18} aria-hidden="true" />
+                  <IconBrowser size={18} aria-hidden="true" />
                 </button>
               ) : null}
               {browserScope &&
@@ -1241,7 +1268,7 @@ export function WorkSurface({
         }
       >
         <section
-          className={`work-thread${sessionWorkspaceView === "topology" ? " is-topology-view" : ""}${sessionWorkspaceView === "activity" ? " is-activity-view" : ""}`}
+          className={`work-thread${sessionWorkspaceView === "topology" ? " is-topology-view" : ""}${sessionWorkspaceView === "activity" ? " is-activity-view" : ""}${sessionWorkspaceView === "inboxes" ? " is-inboxes-view" : ""}`}
           aria-label="Work conversation"
         >
           <div className="work-feed-frame">

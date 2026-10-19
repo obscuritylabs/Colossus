@@ -1289,6 +1289,18 @@ fn risky_field_authority_changed(
         .iter()
         .map(|field| (field.field_id.as_str(), &field.value))
         .collect::<BTreeMap<_, _>>();
+    let browser_enabled = |fields: &BTreeMap<&str, &Value>, field: &str| {
+        fields
+            .get(field)
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true)
+    };
+    if ["browser.enabled", "browser.publicWeb"]
+        .iter()
+        .any(|field| !browser_enabled(&before, field) && browser_enabled(&after, field))
+    {
+        return true;
+    }
     // Removing a restriction can increase authority too. Treat changes to these
     // fields conservatively rather than inferring safety from empty/false values.
     RISKY_FIELDS
@@ -1634,6 +1646,76 @@ fn effective_yaml(
 #[allow(clippy::too_many_lines)]
 fn field_descriptors() -> Vec<FieldDescriptorDto> {
     vec![
+        descriptor(
+            "browser.enabled",
+            "Browser",
+            "Browser access",
+            "Allow browser tools and the bundled browser skill when a verified browser is installed. Disabling takes effect when the saved configuration is applied.",
+            "both",
+            "high",
+            "toggle",
+            false,
+            json!(true),
+            None,
+            None,
+            vec![],
+        ),
+        descriptor(
+            "browser.publicWeb",
+            "Browser",
+            "Load public websites normally",
+            "Load public HTTPS pages, redirects, images, and styles when workspace network policy permits. Turn off to restrict every request to the session’s listed origins.",
+            "both",
+            "high",
+            "toggle",
+            false,
+            json!(true),
+            None,
+            None,
+            vec![],
+        ),
+        descriptor(
+            "browser.maxSessions",
+            "Browser",
+            "Maximum browser sessions",
+            "Limit simultaneous temporary browser sessions in each workspace runtime.",
+            "both",
+            "low",
+            "number",
+            false,
+            json!(4),
+            Some(1),
+            Some(4),
+            vec![],
+        ),
+        descriptor(
+            "browser.maxTabs",
+            "Browser",
+            "Maximum browser tabs",
+            "Limit total tabs across browser sessions in each workspace runtime.",
+            "both",
+            "low",
+            "number",
+            false,
+            json!(8),
+            Some(1),
+            Some(8),
+            vec![],
+        ),
+        descriptor(
+            "browser.maxSnapshotNodes",
+            "Browser",
+            "Maximum snapshot nodes",
+            "Limit the page elements returned by each browser snapshot.",
+            "both",
+            "low",
+            "number",
+            false,
+            json!(1024),
+            Some(1),
+            Some(1024),
+            vec![],
+        ),
         descriptor(
             "network.maxRedirects",
             "Network",
@@ -2320,6 +2402,21 @@ mod tests {
             },
         });
         settings
+    }
+
+    #[test]
+    fn browser_disabling_can_apply_when_idle_but_reenabling_requires_apply() {
+        let before = resolved_for(&settings(), "space-one").expect("configuration");
+        for field in ["browser.enabled", "browser.publicWeb"] {
+            let mut disabled = before.clone();
+            disabled.field_overrides.push(FieldOverrideSetting {
+                field_id: field.into(),
+                value: json!(false),
+            });
+            assert!(!requires_explicit_apply(&before, &disabled));
+            assert!(requires_explicit_apply(&disabled, &before));
+            assert!(!requires_explicit_apply(&disabled, &disabled));
+        }
     }
 
     #[test]

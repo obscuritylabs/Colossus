@@ -56,8 +56,13 @@ pub struct BrowserActor {
 pub struct BrowserOpenOptions {
     /// Explicit placement.
     pub mode: BrowserMode,
-    /// Exact immutable destinations; native adapters must enforce all browser traffic.
+    /// Exact destinations admitted in addition to any trusted public HTTPS grant.
     pub allowed_origins: Vec<BrowserOrigin>,
+    /// Trusted runtime grant for public HTTPS browsing, including page dependencies.
+    /// The native proxy must reject non-public DNS results unless exactly admitted.
+    /// Model arguments cannot select this grant; it requires public network policy.
+    #[serde(default)]
+    pub public_web: bool,
     /// Optional initial navigation in that envelope.
     #[serde(default)]
     pub initial_url: Option<BrowserUrl>,

@@ -6,6 +6,95 @@ const png = Buffer.from(
   "base64",
 );
 
+test("OpenRouter retains its API-key requirement and can add a credential directly", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  await page.goto("/?fixture=operations-studio");
+  await expect(
+    page.getByRole("button", { name: "Settings", exact: true }),
+  ).toBeVisible();
+  await page.evaluate(() => {
+    (
+      window as unknown as { __TAURI_INTERNALS__: unknown }
+    ).__TAURI_INTERNALS__ = {
+      invoke: async (command: string) => {
+        if (command === "list_setup_packages") return [];
+        if (command === "get_provider_presets")
+          return [
+            {
+              id: "openrouter",
+              label: "OpenRouter",
+              protocol: "chat_completions",
+              baseUrl: "https://openrouter.ai/api/v1",
+              credentialEnv: "OPENROUTER_API_KEY",
+            },
+          ];
+        throw new Error("Fixture command unavailable");
+      },
+    };
+  });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  await page.getByRole("button", { name: "Providers", exact: true }).click();
+  await page.getByRole("button", { name: "Add provider", exact: true }).click();
+  const editor = page.locator(".provider-editor");
+  await editor.getByRole("combobox", { name: "Provider", exact: true }).click();
+  await page.getByRole("option", { name: "OpenRouter", exact: true }).click();
+  // The catalog comes from native metadata; settings writes use the local fixture.
+  await page.evaluate(() => {
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown })
+      .__TAURI_INTERNALS__;
+  });
+  await expect(
+    editor.getByRole("combobox", { name: "Credential reference" }),
+  ).toContainText("Add API key later");
+  await expect(editor).not.toContainText("No API key required");
+  const addKey = editor.getByRole("button", { name: "Add API key securely" });
+  await addKey.focus();
+  await expect(addKey).toBeFocused();
+  await addKey.press("Enter");
+  await expect(
+    editor.getByRole("combobox", { name: "Credential reference" }),
+  ).toContainText("OpenRouter API key");
+  await expect(editor.locator('input[type="password"]')).toHaveCount(0);
+  await page.screenshot({ path: "output/playwright/openrouter-api-key.png" });
+  for (const [theme, palette, width] of [
+    ["light", "colossus", 1440],
+    ["dark", "colossus", 880],
+    ["dark", "neutral", 620],
+    ["dark", "hacker", 620],
+  ] as const) {
+    await page.setViewportSize({ width, height: 1050 });
+    await page.evaluate(
+      ({ theme, palette }) => {
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.palette = palette;
+        document.documentElement.dataset.textSize = "large";
+      },
+      { theme, palette },
+    );
+    const authentication = editor.locator(".provider-auth-grid");
+    expect(
+      await authentication.evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBe(true);
+    const accessibility = await new AxeBuilder({ page })
+      .include(".provider-auth-grid")
+      .analyze();
+    expect(accessibility.violations).toEqual([]);
+    await authentication.screenshot({
+      path: `output/playwright/openrouter-auth-${theme}-${palette}.png`,
+    });
+  }
+  await editor
+    .getByRole("button", { name: "Add provider", exact: true })
+    .click();
+  await expect(editor).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Edit OpenRouter", exact: true }),
+  ).toBeVisible();
+});
+
 test("provider instructions and embedded icons can be authored, previewed, saved, and cleared", async ({
   page,
 }) => {

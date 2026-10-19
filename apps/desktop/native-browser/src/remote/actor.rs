@@ -15,12 +15,13 @@ pub(super) async fn create_surface(
     lease: Lease,
     digest: [u8; 32],
     human_input: bool,
+    #[cfg(windows)] completed: &Arc<crate::presentation::CompletedCache>,
 ) -> Result<PresentationSurface, BrowserError> {
     let inputs = events.clone();
     let focuses = events.clone();
     let input_client = client.clone();
     let focus_client = client.clone();
-    PresentationSurface::create(
+    let surface = PresentationSurface::create(
         window,
         lease,
         digest,
@@ -47,7 +48,12 @@ pub(super) async fn create_surface(
             }
         },
     )
-    .await
+    .await?;
+    #[cfg(windows)]
+    if !human_input {
+        surface.retain_completed_in(Arc::clone(completed))?;
+    }
+    Ok(surface)
 }
 pub(super) fn start(owner: &Arc<Owner>, events: mpsc::Receiver<Event>) {
     start_events(owner, events);
@@ -64,8 +70,10 @@ fn start_events(owner: &Arc<Owner>, mut events: mpsc::Receiver<Event>) {
                 break;
             }
             if let Event::Human(command) = event {
-                if human(&owner, command).await.is_err() {
-                    (owner.sink)(BrowserEvent::Failed);
+                match human(&owner, command).await {
+                    Ok(()) => {}
+                    Err(BrowserError::Expired) => expired(&owner),
+                    Err(_) => (owner.sink)(BrowserEvent::Failed),
                 }
                 continue;
             }
@@ -104,19 +112,23 @@ fn start_events(owner: &Arc<Owner>, mut events: mpsc::Receiver<Event>) {
             };
             match result {
                 Ok(()) => {}
+                Err(colossus_browser_presentation::PresentationError::Expired) => {
+                    expired(&owner);
+                    break;
+                }
                 Err(
                     colossus_browser_presentation::PresentationError::Stale
                     | colossus_browser_presentation::PresentationError::Hidden,
                 ) => super::viewport::update(&owner),
                 Err(error) => {
                     #[cfg(all(
-                        target_os = "macos",
+                        any(windows, target_os = "macos"),
                         feature = "native-test-driver",
                         debug_assertions
                     ))]
                     super::trace_frame_channel_failure(stage, error, started.elapsed());
                     #[cfg(not(all(
-                        target_os = "macos",
+                        any(windows, target_os = "macos"),
                         feature = "native-test-driver",
                         debug_assertions
                     )))]
@@ -172,13 +184,13 @@ fn start_frames(owner: &Arc<Owner>) {
                     }
                     if let Err(error) = surface.present(frame) {
                         #[cfg(all(
-                            target_os = "macos",
+                            any(windows, target_os = "macos"),
                             feature = "native-test-driver",
                             debug_assertions
                         ))]
                         super::trace_frame_browser_failure("surface_present", error);
                         #[cfg(not(all(
-                            target_os = "macos",
+                            any(windows, target_os = "macos"),
                             feature = "native-test-driver",
                             debug_assertions
                         )))]
@@ -188,6 +200,10 @@ fn start_frames(owner: &Arc<Owner>) {
                     }
                 }
                 Ok(None) => {}
+                Err(colossus_browser_presentation::PresentationError::Expired) => {
+                    expired(&owner);
+                    break;
+                }
                 Err(
                     colossus_browser_presentation::PresentationError::Stale
                     | colossus_browser_presentation::PresentationError::Hidden,
@@ -196,13 +212,13 @@ fn start_frames(owner: &Arc<Owner>) {
                 }
                 Err(error) => {
                     #[cfg(all(
-                        target_os = "macos",
+                        any(windows, target_os = "macos"),
                         feature = "native-test-driver",
                         debug_assertions
                     ))]
                     super::trace_frame_channel_failure("poll", error, started.elapsed());
                     #[cfg(not(all(
-                        target_os = "macos",
+                        any(windows, target_os = "macos"),
                         feature = "native-test-driver",
                         debug_assertions
                     )))]
@@ -218,6 +234,11 @@ pub(super) fn fail(owner: &Arc<Owner>) {
     let _ = lifecycle::hide(owner);
     owner.client.disconnect();
     (owner.sink)(BrowserEvent::Crashed);
+}
+pub(super) fn expired(owner: &Arc<Owner>) {
+    let _ = lifecycle::hide(owner);
+    owner.client.disconnect();
+    (owner.sink)(BrowserEvent::Expired);
 }
 pub(super) async fn human(owner: &Arc<Owner>, command: HumanCommand) -> Result<(), BrowserError> {
     let _operation = owner.operation.lock().await;
@@ -238,7 +259,10 @@ pub(super) async fn human(owner: &Arc<Owner>, command: HumanCommand) -> Result<(
         .client
         .command(PresentationCommand::Human { lease, command })
         .await
-        .map_err(|_| BrowserError::Closed)?;
+        .map_err(|error| match error {
+            colossus_browser_presentation::PresentationError::Expired => BrowserError::Expired,
+            _ => BrowserError::Closed,
+        })?;
     (owner.sink)(BrowserEvent::Loading(true));
     Ok(())
 }
@@ -248,12 +272,29 @@ pub(super) async fn inspect(owner: &Arc<Owner>) -> Result<PageState, BrowserErro
         .client
         .observe(lease)
         .await
-        .map_err(|_| BrowserError::Closed)?;
-    Ok(PageState {
+        .map_err(|error| match error {
+            colossus_browser_presentation::PresentationError::Expired => BrowserError::Expired,
+            colossus_browser_presentation::PresentationError::Stale
+            | colossus_browser_presentation::PresentationError::Hidden => BrowserError::Stale,
+            _ => BrowserError::Closed,
+        })?;
+    let page = PageState {
         url: state.url,
         title: state.title,
         loading: state.loading,
         can_go_back: state.can_go_back,
         can_go_forward: state.can_go_forward,
-    })
+    };
+    #[cfg(windows)]
+    if owner.read_only.load(Ordering::Acquire)
+        && let Ok(current) = owner.state.lock()
+        && current.lease == lease
+    {
+        if current.configure.target == state.target {
+            owner.completed.observed(lease, page.clone());
+        } else {
+            owner.completed.invalidate(lease);
+        }
+    }
+    Ok(page)
 }

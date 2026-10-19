@@ -194,6 +194,7 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
             },
         };
         let enrollment = BrowserBridgeEnrollment {
+            public_web: false,
             binding: binding.clone(),
             mode: BrowserMode::Embedded,
             profile: Default::default(),
@@ -211,6 +212,7 @@ async fn real_cef_initializes_in_networkless_appcontainer_without_elevation() {
             tab_id: BrowserTabId::parse(format!("bt_{}", hex::encode(nonce))).unwrap(),
             document_id: BrowserDocumentId::parse(format!("bd_{}", hex::encode(nonce))).unwrap(),
             options: BrowserOpenOptions {
+                public_web: false,
                 profile: Default::default(),
                 mode: BrowserMode::Embedded,
                 allowed_origins: enrollment.allowed_origins.clone(),

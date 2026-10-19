@@ -28,6 +28,18 @@ export interface ProviderCatalogModel {
   supported_reasoning_efforts?: string[];
 }
 
+/** Native credential labels allow at most 96 UTF-8 bytes, including the suffix. */
+export function providerCredentialLabel(provider: string): string {
+  const suffix = " API key";
+  const encoder = new TextEncoder();
+  let prefix = "";
+  for (const character of provider.trim() || "Provider") {
+    if (encoder.encode(prefix + character + suffix).length > 96) break;
+    prefix += character;
+  }
+  return prefix.trimEnd() + suffix;
+}
+
 export function presetProviderKind(preset: ProviderPreset): ProviderKind {
   if (preset.protocol === "anthropic_messages") return "anthropic_messages";
   return preset.protocol === "codex"

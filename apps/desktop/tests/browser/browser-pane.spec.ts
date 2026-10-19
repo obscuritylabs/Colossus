@@ -115,6 +115,33 @@ test("a failed page has retry controls and does not cover the app", async ({
   ).toHaveValue("The conversation still works.");
 });
 
+test("an ended agent browser can reopen its page with human control", async ({
+  page,
+}) => {
+  const address = page.getByRole("textbox", { name: "Web address" });
+  await address.fill("https://example.com/finished");
+  await address.press("Enter");
+  await expect(
+    page.getByRole("button", { name: "Reload page", exact: true }),
+  ).toBeEnabled();
+  await page.evaluate(async () => {
+    const modulePath = "/src/dev/browser-fixture.ts";
+    const fixture = await import(modulePath);
+    fixture.endBrowserFixtureAgentSession(
+      fixture.latestBrowserFixtureViewport().tabId,
+    );
+  });
+  await expect(
+    page.getByRole("heading", { name: "Agent browser unavailable" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Open page in new tab" }).click();
+  await expect(address).toHaveValue("https://example.com/finished");
+  await expect(address).not.toHaveAttribute("readonly");
+  await expect(
+    page.getByRole("heading", { name: "Agent browser unavailable" }),
+  ).toHaveCount(0);
+});
+
 test("browser pane expands, resizes, and has accessible controls", async ({
   page,
 }) => {

@@ -8,6 +8,7 @@ license.workspace = true
 
 [features]
 macos-browser-tls-development = ["dep:colossus-native-browser-tls-broker", "dep:rustls"]
+windows-browser-functional-preview = ["colossus-windows-process/windows-browser-functional-preview"]
 
 [dependencies]
 async-trait.workspace = true

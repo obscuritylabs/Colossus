@@ -46,7 +46,6 @@ crossterm.workspace = true
 fs4.workspace = true
 getrandom.workspace = true
 hex.workspace = true
-keyring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde-saphyr.workspace = true

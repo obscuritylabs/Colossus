@@ -29,7 +29,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_core_matches_directory_packaging_and_has_four_valid_skills() {
+    fn embedded_core_matches_directory_packaging_and_has_valid_skills() {
         let embedded = core_artifact().expect("embedded artifact");
         let source =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bundled-plugins/colossus");
@@ -55,6 +55,7 @@ mod tests {
                 .map(|skill| skill.id.as_str())
                 .collect::<Vec<_>>(),
             [
+                "colossus/browser",
                 "colossus/coding",
                 "colossus/plugin-authoring",
                 "colossus/schedule-task",

@@ -838,7 +838,7 @@ jobs:
     if: needs.validate.outputs.publish_draft != 'true' && needs.validate.outputs.target_channel != 'stable'
     needs: validate
     runs-on: windows-latest-l
-    timeout-minutes: 75
+    timeout-minutes: 100
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TARGET_DIR: ${{ github.workspace }}\apps\desktop\src-tauri\target
@@ -846,6 +846,7 @@ jobs:
       COLOSSUS_DESKTOP_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       COLOSSUS_DESKTOP_TARGET: x86_64-pc-windows-msvc
       COLOSSUS_DESKTOP_TEAM_ID: UNSIGNED
+      COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW: "1"
       COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ""
       COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ""
       SCCACHE_GHA_ENABLED: "true"
@@ -891,7 +892,10 @@ jobs:
 
       - name: Build sealed unsigned NSIS installer
         shell: pwsh
-        run: ./scripts/package-desktop-windows.ps1
+        run: |
+          ./scripts/stage-browser-windows-preview.ps1 -Phase build
+          ./scripts/stage-browser-windows-preview.ps1 -Phase seal
+          ./scripts/package-desktop-windows.ps1
 
       - name: Install, launch preview, uninstall, and verify process cleanup
         id: smoke
@@ -1054,6 +1058,7 @@ jobs:
       COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC
       COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ""
       COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ""
+      COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW: ${{ needs.validate.outputs.release_channel == 'developer_preview' && '1' || '0' }}
       SCCACHE_GHA_ENABLED: "true"
     steps:
       - name: Check out repository
@@ -1095,16 +1100,53 @@ jobs:
           npm ci --ignore-scripts
           npm audit --audit-level=high
 
-      - name: Build unsigned desktop inputs
-        shell: pwsh
-        run: ./scripts/package-desktop-windows.ps1 -Phase build
-
       - name: Authenticate to Azure using GitHub OIDC
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build pinned functional-preview browser without launching it
+        if: env.COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW == '1'
+        shell: pwsh
+        run: |
+          ./scripts/stage-browser-windows-preview.ps1 -Phase build
+          foreach ($name in @('COLOSSUS_BROWSER_PREVIEW_ALLOCATION', 'COLOSSUS_BROWSER_PREVIEW_COMPONENT',
+              'COLOSSUS_BROWSER_PRESENTER_NATIVE_LIB_DIR')) {
+            "$name=$([Environment]::GetEnvironmentVariable($name, 'Process'))" |
+              Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+          $images = @(Get-ChildItem -LiteralPath $env:COLOSSUS_BROWSER_PREVIEW_COMPONENT -Recurse -File |
+            Where-Object Extension -In @('.exe', '.dll'))
+          if ($images.Count -lt 6 -or $images.Count -gt 64) { throw 'unexpected browser image roster' }
+          'COLOSSUS_BROWSER_PREVIEW_IMAGES<<COLOSSUS_IMAGES_END' | Out-File -FilePath $env:GITHUB_ENV -Append
+          $images.FullName | Out-File -FilePath $env:GITHUB_ENV -Append
+          'COLOSSUS_IMAGES_END' | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Sign functional-preview browser binaries before inventory
+        if: env.COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW == '1'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: colossus-code-sign
+          certificate-profile-name: colossus
+          files: ${{ env.COLOSSUS_BROWSER_PREVIEW_IMAGES }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Seal exact signed browser bytes for independent sidecar compilation
+        if: env.COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW == '1'
+        shell: pwsh
+        run: |
+          ./scripts/stage-browser-windows-preview.ps1 -Phase seal -RequireSignatures
+          "COLOSSUS_SIDECAR_WINDOWS_BROWSER_FUNCTIONAL_PREVIEW=$env:COLOSSUS_SIDECAR_WINDOWS_BROWSER_FUNCTIONAL_PREVIEW" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build unsigned desktop inputs
+        shell: pwsh
+        run: ./scripts/package-desktop-windows.ps1 -Phase build
 
       - name: Sign bundled sidecar, CLI, and ripgrep
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
@@ -1154,6 +1196,15 @@ jobs:
           }
           foreach ($name in @('colossus-desktop.exe', 'colossus-sidecar.exe', 'colossus.exe')) {
             ./scripts/ci/verify-authenticode.ps1 -Path (Join-Path $installRoot $name)
+          }
+          if ($env:COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW -eq '1') {
+            $component = Join-Path $installRoot 'browser/component'
+            python -B native/browser/scripts/component.py verify --root $component
+            if ($LASTEXITCODE -ne 0) { throw 'installed signed browser inventory failed' }
+            foreach ($image in @(Get-ChildItem -LiteralPath $component -Recurse -File |
+                Where-Object Extension -In @('.exe', '.dll'))) {
+              ./scripts/ci/verify-authenticode.ps1 -Path $image.FullName
+            }
           }
           $application = Start-Process -FilePath $installed[0].FullName -PassThru
           Start-Sleep -Seconds 8
@@ -1220,6 +1271,13 @@ jobs:
             updateSignature = 'disabled_manual_updates'
             installUninstallSmoke = $env:SMOKE_INSTALL_UNINSTALL
             firstLaunchSmoke = $env:SMOKE_FIRST_LAUNCH
+            browserEdition = $(if ($env:COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW -eq '1') { 'windows_functional_preview' } else { 'unavailable' })
+            browserRestrictiveEgress = $false
+            browserPrivateCertificateCustody = $false
+            browserProductionAcceptance = $false
+            browserComponentManifestSha256 = $(if ($env:COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW -eq '1') {
+              (Get-FileHash -LiteralPath (Join-Path $env:COLOSSUS_BROWSER_PREVIEW_COMPONENT 'browser-component.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+            } else { '' })
           }
           $provenance | ConvertTo-Json | Set-Content -LiteralPath `
             (Join-Path $destination "Colossus-Desktop-$env:RELEASE_TAG-windows-provenance.json") `
@@ -1624,6 +1682,7 @@ jobs:
                 '> **Developer Preview:** This entire release is pre-release software for testing. The macOS Desktop build is ad-hoc signed and not notarized by Apple. The Windows Desktop installer, bundled CLI, and sidecar are Authenticode signed by Obscurity Labs LLC. SmartScreen may still warn until the signed app establishes reputation. Do not treat the preview as stable or production-ready.' \
                 '' \
                 'Desktop package names include `DEVELOPER-PREVIEW`.' \
+                'On Windows, install Desktop with the attached setup.exe. The browser preview requires the per-user installer; copied or unpacked app directories are not a supported portable installation. Windows CLI ZIPs do not include the browser.' \
                 'Automatic Desktop updates are disabled in this preview. Install later previews manually from GitHub Releases.' \
                 "$checksum_note" \
                 '' \

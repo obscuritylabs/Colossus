@@ -464,6 +464,29 @@ function Settings() {
           aria-labelledby="runtime-title"
         >
           <h2 id="runtime-title">Runtime</h2>
+          <div className="settings-card">
+            <div
+              className="setting-row"
+              data-search="browser enabled disable tabs sessions snapshots"
+            >
+              <div>
+                <strong>Browser access</strong>
+                <p>
+                  {view.runtimeKind === "managed"
+                    ? "Control browser access and limits in VS Code settings. Disconnect and start Managed Local again to apply changes after active work finishes. A verified browser component is required."
+                    : "Set browser.enabled and browser limits in the external worker’s YAML configuration, then restart that worker."}
+                </p>
+              </div>
+              {view.runtimeKind === "managed" ? (
+                <button
+                  type="button"
+                  onClick={() => post({ type: "openBrowserSettings" })}
+                >
+                  Browser settings
+                </button>
+              ) : null}
+            </div>
+          </div>
           <p className="section-description">
             The connected worker runs your Colossus tasks.
           </p>

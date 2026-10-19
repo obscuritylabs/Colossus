@@ -69,6 +69,32 @@ pub struct WindowsBrowserSupervisor {
     stopped: Arc<AtomicBool>,
 }
 impl WindowsBrowserSupervisor {
+    /// Original egress deadline for this exact trusted native allocation.
+    /// Reattaching or changing the viewport cannot renew network authority.
+    pub async fn presentation_expires_at(
+        &self,
+        request: &BrowserDriverOpenRequest,
+    ) -> Result<std::time::Instant, BrowserDriverError> {
+        let resource = self
+            .sessions
+            .lock()
+            .await
+            .get(&request.session_id)
+            .cloned()
+            .ok_or(BrowserDriverError::Stale)?;
+        let resource = resource.lock().await;
+        if resource.request != *request
+            || resource.closed
+            || resource.fenced.load(Ordering::Acquire)
+        {
+            return Err(BrowserDriverError::Stale);
+        }
+        resource
+            .egress
+            .as_ref()
+            .map(crate::BrowserEgressLease::expires_at)
+            .ok_or(BrowserDriverError::Unavailable)
+    }
     /// Clone the separately authenticated presenter for this exact enrolled owner.
     /// This native-only seam does not allocate a host or grant browser control.
     /// Cleanup fences the retained session and disconnects every channel clone.
@@ -123,6 +149,25 @@ impl WindowsBrowserSupervisor {
             tokio::task::spawn_blocking(move || installation::bind_development(config))
                 .await
                 .map_err(|_| BrowserDriverError::Unavailable)??;
+        Ok(Self {
+            installation: Arc::new(installation),
+            sessions: Arc::new(Mutex::new(BTreeMap::new())),
+            stopped: Arc::new(AtomicBool::new(false)),
+        })
+    }
+    /// Explicit Windows x64 functional preview under an ordinary user token.
+    /// The caller must verify the installed component and retain this owner through
+    /// acknowledged shutdown. This edition keeps Chromium's sandbox and owned Job
+    /// but requires false production modes, no PKI and `restrictive_egress: false`.
+    /// Ordinary contained installation never falls back to this constructor.
+    #[cfg(all(target_arch = "x86_64", feature = "windows-browser-functional-preview"))]
+    pub async fn install_for_functional_preview(
+        config: WindowsBrowserConfig,
+    ) -> Result<Self, BrowserDriverError> {
+        let installation =
+            tokio::task::spawn_blocking(move || installation::bind_functional_preview(config))
+                .await
+                .map_err(|_| BrowserDriverError::Denied)??;
         Ok(Self {
             installation: Arc::new(installation),
             sessions: Arc::new(Mutex::new(BTreeMap::new())),

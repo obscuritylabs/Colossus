@@ -358,9 +358,18 @@ async fn check_pane_viewport(
     main.window().set_focus().unwrap();
     main.set_focus().unwrap();
     tokio::time::sleep(Duration::from_millis(250)).await;
+    // A different foreground window must not blank the visible terminal pane.
+    let other = tauri::WindowBuilder::new(app, "terminal-focus-fixture")
+        .title("Terminal focus acceptance")
+        .inner_size(160.0, 100.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    other.set_focus().map_err(|e| e.to_string())?;
+    tokio::time::sleep(Duration::from_millis(250)).await;
     let active = colossus_native_browser::is_active(main)
         .await
         .map_err(|e| e.to_string())?;
+    assert!(!active, "fixture must transfer foreground focus");
     // Compact layout starts directly below the shared 48px header.
     pane::terminal_pane_viewport(
         app.clone(),
@@ -375,22 +384,24 @@ async fn check_pane_viewport(
     )
     .await
     .map_err(|e| e.message)?;
-    assert_eq!(
-        app.state::<pane::TerminalPaneState>().visible_lease(),
-        active
+    assert!(app.state::<pane::TerminalPaneState>().visible_lease());
+    assert!(
+        !colossus_native_browser::is_active(main)
+            .await
+            .map_err(|e| e.to_string())?,
+        "background terminal presentation stole focus"
     );
-    if active {
-        assert!(
-            (view
-                .position()
-                .unwrap()
-                .to_logical::<f64>(main.window().scale_factor().unwrap())
-                .y
-                - 48.0)
-                .abs()
-                < 0.01
-        );
-    }
+    other.close().map_err(|e| e.to_string())?;
+    assert!(
+        (view
+            .position()
+            .unwrap()
+            .to_logical::<f64>(main.window().scale_factor().unwrap())
+            .y
+            - 48.0)
+            .abs()
+            < 0.01
+    );
     Ok(())
 }
 

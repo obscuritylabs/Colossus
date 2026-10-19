@@ -48,7 +48,35 @@ test("inboxes retain receipts, page in order, and display peer text without exec
   await recipient.focus();
   await expect(recipient).toBeFocused();
   await inbox.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(inbox).toContainText("No messages have been accepted");
+  await expect(recipient).toContainText("attempt 2");
+});
+
+test("inbox has room to read while approvals wait and filters can be cleared", async ({
+  page,
+}) => {
+  await open(page);
+  const inbox = page.getByRole("region", {
+    name: "Agent inboxes",
+    exact: true,
+  });
+  await expect(page.locator(".work-composer-dock")).toHaveCount(0);
+  await expect(
+    inbox.getByRole("heading", { name: "Agent inboxes" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("combobox", { name: "Execution", exact: true }),
+  ).toHaveCount(0);
+  await inbox
+    .getByRole("textbox", { name: "Search loaded messages" })
+    .fill("missing phrase");
+  await expect(inbox).toContainText("No matching messages");
+  await inbox.getByRole("button", { name: "Clear filters" }).click();
   await expect(inbox.locator("article")).toHaveCount(16);
+  await page.getByRole("button", { name: "Conversation", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Apply the hardened bootstrap changes" }),
+  ).toBeVisible();
 });
 
 test("an unavailable connection is distinguishable from an empty inbox", async ({
@@ -62,6 +90,35 @@ test("an unavailable connection is distinguishable from an empty inbox", async (
     page.getByText("No messages have been accepted in this inbox."),
   ).toHaveCount(0);
 });
+
+for (const view of ["Inboxes", "Activity", "Topology"]) {
+  test(`new work from ${view} restores the conversation composer`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/?fixture=operations-studio");
+    await page.getByRole("button", { name: view, exact: true }).click();
+    await expect(page.locator(".work-composer-dock")).toHaveCount(0);
+    await page.getByRole("button", { name: /^New thread in / }).click();
+    await expect(
+      page.getByRole("region", { name: "Start new work", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("navigation", { name: "Session views" }),
+    ).toHaveCount(0);
+    const prompt = page.getByRole("textbox", { name: "Prompt", exact: true });
+    await expect(prompt).toBeVisible();
+    await expect(prompt).toBeFocused();
+    await prompt.fill("Inspect this workspace without sending the draft.");
+    await expect(prompt).toHaveValue(
+      "Inspect this workspace without sending the draft.",
+    );
+    if (view === "Inboxes")
+      await page.screenshot({
+        path: testInfo.outputPath("new-work-composer.png"),
+      });
+  });
+}
 
 for (const [theme, palette, width, size] of [
   ["light", "colossus", 1100, "comfortable"],

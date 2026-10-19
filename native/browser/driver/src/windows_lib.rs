@@ -1,5 +1,11 @@
 //! Private Windows CEF bootstrap client DLL; it exposes no public automation endpoint.
 
+#[cfg(all(
+    feature = "windows-browser-functional-preview",
+    any(not(windows), not(target_arch = "x86_64"))
+))]
+compile_error!("the functional browser host supports Windows x64 only");
+
 #[cfg(all(windows, colossus_cef_linked))]
 mod bootstrap_windows;
 #[cfg(all(windows, colossus_cef_linked))]

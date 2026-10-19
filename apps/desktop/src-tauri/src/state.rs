@@ -933,7 +933,10 @@ impl AppState {
         feature = "embedded-chromium-preview",
         any(
             feature = "macos-contained-browser-diagnostic",
-            feature = "windows-browser-development"
+            any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            )
         )
     ))]
     pub(crate) async fn managed_browser_for(&self, space_id: &str) -> Option<NativeBrowserClient> {

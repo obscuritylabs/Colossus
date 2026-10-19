@@ -1,4 +1,6 @@
 //! Core-owned fresh browser context. No helper receives Core mutation or outer Job authority.
+#[cfg(all(target_arch = "x86_64", feature = "windows-browser-functional-preview"))]
+pub(super) mod functional_preview;
 mod helper;
 mod identity;
 mod ipc;

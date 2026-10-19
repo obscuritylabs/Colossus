@@ -21,6 +21,7 @@ struct Fixture {
     hosts: StdMutex<BTreeMap<BrowserSessionId, Arc<Host>>>,
     opened: AtomicUsize,
     closed: AtomicUsize,
+    close_attempts: AtomicUsize,
     blocked: AtomicBool,
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
@@ -28,6 +29,7 @@ struct Fixture {
     confirm_stale: AtomicBool,
     snapshot_rotates: AtomicBool,
     panic_acquire: AtomicBool,
+    deadline: StdMutex<Option<std::time::Instant>>,
 }
 #[derive(Default)]
 struct Host {
@@ -255,6 +257,7 @@ impl BrowserDriver for Fixture {
         Ok(())
     }
     async fn close_session(&self, s: &BrowserSessionId) -> Result<(), BrowserDriverError> {
+        self.close_attempts.fetch_add(1, Ordering::SeqCst);
         if self.close_unknown.load(Ordering::SeqCst) {
             return Err(BrowserDriverError::OutcomeUnknown);
         }
@@ -265,6 +268,12 @@ impl BrowserDriver for Fixture {
 }
 #[async_trait]
 impl RuntimeBrowserPresenter for Fixture {
+    async fn expires_at(
+        &self,
+        _: &BrowserDriverOpenRequest,
+    ) -> Result<Option<std::time::Instant>, BrowserDriverError> {
+        Ok(*self.deadline.lock().unwrap())
+    }
     async fn acquire(
         &self,
         r: &BrowserDriverOpenRequest,
@@ -303,10 +312,19 @@ impl RuntimeBrowserPresenter for Fixture {
     }
 }
 fn fixture_runtime(path: &std::path::Path, driver: Arc<Fixture>, presenter: bool) -> Runtime {
+    configured_runtime(path, driver, presenter, |_| {})
+}
+fn configured_runtime(
+    path: &std::path::Path,
+    driver: Arc<Fixture>,
+    presenter: bool,
+    configure: impl FnOnce(&mut RuntimeConfig),
+) -> Runtime {
     let mut config = RuntimeConfig::offline_template(path.join("journal.redb"));
     config.use_ephemeral_storage();
     config.access.profile = AccessProfile::AllowAll;
     config.sandbox.network_destinations = vec!["https://example.org".into()];
+    configure(&mut config);
     let host = super::super::super::RuntimeBrowserHost::new(driver.clone());
     let host = if presenter {
         host.with_presenter(driver)
@@ -317,6 +335,45 @@ fn fixture_runtime(path: &std::path::Path, driver: Arc<Fixture>, presenter: bool
         .unwrap()
         .with_browser_host(host);
     Runtime::open_with_options(&config, Arc::new(DenyApproval), None, options).unwrap()
+}
+
+#[tokio::test]
+async fn human_public_browsing_is_bound_to_configuration_and_destination_policy() {
+    for (enabled, wildcard) in [(false, false), (true, false), (false, true), (true, true)] {
+        let directory = private_tempdir();
+        let driver = Arc::new(Fixture::default());
+        let runtime = configured_runtime(directory.path(), driver.clone(), true, |config| {
+            config.browser.public_web = enabled;
+            if wildcard {
+                config.sandbox.network_destinations.push("*".into());
+            }
+        });
+        let authority = role(&runtime);
+        let session = runtime
+            .open_native_browser(&authority, input(None))
+            .await
+            .unwrap();
+        let public_web = driver
+            .hosts
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .data
+            .lock()
+            .unwrap()
+            .original
+            .as_ref()
+            .unwrap()
+            .options
+            .public_web;
+        assert_eq!(public_web, enabled && wildcard);
+        runtime
+            .close_native_browser(&authority, session.session_id())
+            .await
+            .unwrap();
+    }
 }
 fn input(conversation: Option<String>) -> NativeBrowserOpenRequest {
     NativeBrowserOpenRequest {
@@ -334,6 +391,9 @@ fn role(runtime: &Runtime) -> RuntimeNativeBrowserAuthority {
         .bind_native_browser_authority("desktop", Uuid::now_v7())
         .unwrap()
 }
+
+#[path = "expiry_tests.rs"]
+mod expiry_tests;
 
 #[tokio::test]
 async fn agent_viewer_uses_existing_host_and_denies_foreign_conversations_and_human_input() {
@@ -360,6 +420,7 @@ async fn agent_viewer_uses_existing_host_and_denies_foreign_conversations_and_hu
         .unwrap();
     let run = browser.run(&context).unwrap();
     let options = BrowserOpenOptions {
+        public_web: false,
         mode: BrowserMode::Embedded,
         profile: Default::default(),
         initial_url: Some(BrowserUrl::parse("https://example.org/page").unwrap()),
@@ -380,6 +441,7 @@ async fn agent_viewer_uses_existing_host_and_denies_foreign_conversations_and_hu
             super::super::service::BrowserSessionAuthority {
                 lease: lease.clone(),
                 origins: options.allowed_origins,
+                public_web: false,
             },
         )
         .unwrap();

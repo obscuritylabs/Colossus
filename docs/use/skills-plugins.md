@@ -13,6 +13,16 @@ packages skills and may also include resources or MCP server declarations. The C
 includes the `colossus` plugin with `coding`, `plugin-authoring`, `schedule-task`, and
 `security-review` skills.
 
+When a verified browser is enabled, the bundled plugin also provides
+`colossus/browser`. In Desktop, type `@browser` and choose **Browser** to insert
+`@colossus/browser`; the qualified mention works in other skill-aware composers.
+The skill explains fresh snapshots, observed element references, temporary
+sessions, file transfers, and recovery without repeating unknown external effects.
+It disappears from the available skills when browser access is disabled or the
+native browser is unavailable. Selecting a skill never enables a capability.
+See [Browser settings](../reference/configuration/limits.md#browser-access-and-limits)
+for configuration and app controls.
+
 Use `coding` to implement features, fix bugs, debug failures, or refactor software. It
 guides repository inspection, implementation, and verification. Follow your environment's
 instructions for internal package registries, documentation locations, and network

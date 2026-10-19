@@ -28,6 +28,8 @@ pub(super) struct State {
     #[cfg(windows)]
     pub(super) annotations: Option<super::annotation_windows::Pending>,
     active: Option<(Configure, LeaseGuard)>,
+    #[cfg(all(windows, debug_assertions))]
+    observation_diagnostics: std::cell::Cell<u16>,
 }
 fn status(status: i32) -> Result<(), PresentationError> {
     match status {
@@ -84,20 +86,36 @@ impl Host {
             };
         }
     }
+    pub(super) fn begin_agent_action(&mut self, control_generation: u64) {
+        if self.presentation.human || self.presentation.control_generation != control_generation {
+            self.revoke_human_presentation();
+        }
+        self.presentation.control_generation = control_generation;
+        self.presentation.handoff.revoke();
+    }
     fn owned_viewport(&self, lease: Lease) -> Result<(), PresentationError> {
         let (configuration, guard) = self
             .presentation
             .active
             .as_ref()
-            .ok_or(PresentationError::Stale)?;
-        if !self.presentation.enabled
-            || !self.initialized
-            || self.cancelled.load(super::Ordering::Acquire)
-            || guard.lease() != lease
-            || lease.control_generation != self.presentation.control_generation
-            || self.session.as_ref() != Some(&configuration.session)
-        {
-            return Err(PresentationError::Stale);
+            .ok_or_else(|| self.observation_stale(observe::Rejection::MissingActive))?;
+        let rejection = if !self.presentation.enabled {
+            Some(observe::Rejection::Disabled)
+        } else if !self.initialized {
+            Some(observe::Rejection::Uninitialized)
+        } else if self.cancelled.load(super::Ordering::Acquire) {
+            Some(observe::Rejection::Cancelled)
+        } else if guard.lease() != lease {
+            Some(observe::Rejection::Lease)
+        } else if lease.control_generation != self.presentation.control_generation {
+            Some(observe::Rejection::Control)
+        } else if self.session.as_ref() != Some(&configuration.session) {
+            Some(observe::Rejection::Session)
+        } else {
+            None
+        };
+        if let Some(reason) = rejection {
+            return Err(self.observation_stale(reason));
         }
         Ok(())
     }
@@ -344,13 +362,7 @@ impl Host {
         match command {
             HumanCommand::Navigate { url } => {
                 let url = BrowserUrl::parse(&url).map_err(|_| PresentationError::Invalid)?;
-                if !self
-                    .callbacks
-                    .origins
-                    .lock()
-                    .map_err(|_| PresentationError::OutcomeUnknown)?
-                    .contains(&url.origin())
-                {
+                if !self.callbacks.admits_origin(&url.origin()) {
                     return Err(PresentationError::Hidden);
                 }
                 let url = CString::new(url.as_str()).map_err(|_| PresentationError::Invalid)?;

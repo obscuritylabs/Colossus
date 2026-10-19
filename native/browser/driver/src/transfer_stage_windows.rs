@@ -122,7 +122,7 @@ impl Stage {
             .map_err(|_| BrowserDriverError::Denied)?;
         Self::create_inner(profile, false)
     }
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "windows-browser-functional-preview"))]
     pub fn create_development(profile: &BoundPath) -> Result<Self, BrowserDriverError> {
         profile
             .validate_private_owner_dacl()

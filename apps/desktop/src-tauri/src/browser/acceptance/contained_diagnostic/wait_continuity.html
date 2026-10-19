@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Human fixture</title>
+    <style>
+      body {
+        background: #e7f1ff;
+      }
+      #wait-target {
+        position: fixed;
+        left: 10000px;
+        top: 220px;
+      }
+      #paint {
+        position: fixed;
+        right: 4px;
+        bottom: 4px;
+        width: 12px;
+        height: 12px;
+      }
+      @keyframes paint {
+        from {
+          background: #00a000;
+        }
+        to {
+          background: #004000;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Human fixture</h1>
+    <input
+      aria-label="Native Windows input"
+      autocomplete="off"
+      style="
+        position: absolute;
+        left: 40px;
+        top: 80px;
+        width: 300px;
+        height: 40px;
+      "
+      oninput="document.title = 'Human input ' + this.value"
+    />
+    <button id="begin" style="position: absolute; left: 40px; top: 160px">
+      Agent click
+    </button>
+    <button id="wait-target">Agent wait target</button>
+    <output>Waiting for Core</output>
+    <div id="paint" aria-hidden="true"></div>
+    <script>
+      document.querySelector("#begin").addEventListener("click", function () {
+        if (this.dataset.started) return;
+        this.dataset.started = "1";
+        document.title = "Agent click received";
+        document.querySelector("output").textContent = "Agent clicked";
+        document.querySelector("#paint").style.animation =
+          "paint 100ms linear infinite alternate";
+        setTimeout(async () => {
+          try {
+            const response = await fetch("/wait-release", {
+              cache: "no-store",
+            });
+            if (!response.ok) throw new Error("fixture release failed");
+            document.querySelector("#wait-target").style.left = "40px";
+            document.title = "Agent wait complete";
+          } catch {
+            document.title = "Agent wait fixture failed";
+          }
+        }, 800);
+      });
+    </script>
+  </body>
+</html>

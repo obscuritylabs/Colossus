@@ -16,8 +16,11 @@ export type ImagePreviewLoader = (
 
 /** Only successful built-in output supplies image identities; inputs and prose do not. */
 export function viewedImages(activity: ToolActivity): ViewedImage[] {
+  const screenshot =
+    activity.toolName === "browser.screenshot" ||
+    activity.toolName === "browser.screenshot.annotated";
   if (
-    activity.toolName !== "image.view" ||
+    (activity.toolName !== "image.view" && !screenshot) ||
     activity.state !== "completed" ||
     !activity.preview ||
     activity.preview.length > 32_768
@@ -28,14 +31,17 @@ export function viewedImages(activity: ToolActivity): ViewedImage[] {
     if (
       !output ||
       typeof output !== "object" ||
-      !("images" in output) ||
-      !Array.isArray(output.images)
+      !(screenshot ? "artifact" in output : "images" in output)
     )
       return [];
-    if (output.images.length < 1 || output.images.length > 16) return [];
+    const released = screenshot
+      ? [(output as { artifact: unknown }).artifact]
+      : (output as { images: unknown }).images;
+    if (!Array.isArray(released) || released.length < 1 || released.length > 16)
+      return [];
     let total = 0;
     const images: ViewedImage[] = [];
-    for (const image of output.images) {
+    for (const image of released) {
       if (
         !image ||
         typeof image !== "object" ||

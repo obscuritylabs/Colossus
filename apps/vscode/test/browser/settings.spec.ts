@@ -7,6 +7,68 @@ async function choose(page: Page, label: string, option: string) {
   await page.getByRole("option", { name: option, exact: true }).click();
 }
 
+test("Managed Local browser settings open host configuration and explain restart", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const host = window as any;
+    host.actions = [];
+    host.acquireVsCodeApi = () => ({
+      postMessage: (action: unknown) => host.actions.push(action),
+      getState: () => undefined,
+      setState: () => undefined,
+    });
+  });
+  await page.goto("/settings");
+  await page.evaluate(
+    (preferences) =>
+      window.postMessage(
+        {
+          type: "settings",
+          view: {
+            preferences,
+            preferenceError: "",
+            workspace: "Colossus",
+            connected: true,
+            connecting: false,
+            busy: false,
+            hasSavedConnection: true,
+            version: "fixture",
+            role: "primary",
+            error: "",
+            runtimeKind: "managed",
+          },
+        },
+        "*",
+      ),
+    DEFAULT_PREFERENCES,
+  );
+  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  await page.getByRole("button", { name: "Runtime", exact: true }).click();
+  await expect(
+    page.getByText(/Disconnect and start Managed Local again/),
+  ).toBeVisible();
+  const settings = page.getByRole("button", {
+    name: "Browser settings",
+    exact: true,
+  });
+  await settings.focus();
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => page.evaluate(() => (window as any).actions))
+    .toContainEqual({ type: "openBrowserSettings" });
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: "artifacts/browser-settings.png",
+    fullPage: true,
+  });
+});
+
 test("desktop-style settings navigate, search and request validated host changes", async ({
   page,
 }) => {

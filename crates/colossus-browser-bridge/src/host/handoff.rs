@@ -48,10 +48,9 @@ impl Host {
             || tab.tab_id != request.confirmed_target.tab_id
             || tab.document_id != request.confirmed_target.document_id
             || tab.title.len() > 1024
-            || tab
-                .origin
-                .as_ref()
-                .is_some_and(|origin| !self.enrollment.allowed_origins.contains(origin))
+            || tab.origin.as_ref().is_some_and(|origin| {
+                !origin.admitted_by(&self.enrollment.allowed_origins, self.enrollment.public_web)
+            })
         {
             return Err(BrowserDriverError::OutcomeUnknown);
         }

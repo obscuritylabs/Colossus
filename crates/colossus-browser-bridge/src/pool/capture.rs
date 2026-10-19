@@ -123,7 +123,7 @@ impl BrowserHostPool {
             .entry(&request.session_id)?
             .ok_or(BrowserDriverError::Stale)?;
         crate::validation::native_handoff(&request, &entry.request)?;
-        let origins = entry.request.options.allowed_origins.clone();
+        let options = entry.request.options.clone();
         self.private_operation(entry, control, move |driver, control| {
             Box::pin(async move {
                 let tab = driver
@@ -132,10 +132,9 @@ impl BrowserHostPool {
                 if tab.tab_id != request.confirmed_target.tab_id
                     || tab.document_id != request.confirmed_target.document_id
                     || tab.title.len() > 1024
-                    || tab
-                        .origin
-                        .as_ref()
-                        .is_some_and(|origin| !origins.contains(origin))
+                    || tab.origin.as_ref().is_some_and(|origin| {
+                        !origin.admitted_by(&options.allowed_origins, options.public_web)
+                    })
                 {
                     return Err(BrowserDriverError::OutcomeUnknown);
                 }

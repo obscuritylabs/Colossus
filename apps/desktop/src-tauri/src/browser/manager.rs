@@ -15,7 +15,10 @@ use super::{
 };
 #[cfg(not(any(
     feature = "macos-contained-browser-diagnostic",
-    feature = "windows-browser-development"
+    any(
+        feature = "windows-browser-development",
+        feature = "windows-browser-functional-preview"
+    )
 )))]
 use crate::desktop_settings::SettingsStore;
 use crate::dto::CommandErrorDto;
@@ -161,12 +164,32 @@ impl BrowserManager {
             .ok_or_else(|| error("This tab is no longer available in the selected workspace."))
     }
 
+    fn mutable_tab(
+        &self,
+        id: &str,
+        scope: &str,
+    ) -> Result<(BrowserView, NavigationPolicy), CommandErrorDto> {
+        let state = self.lock()?;
+        let tab = state
+            .tabs
+            .iter()
+            .find(|tab| tab.dto.id == id && tab.scope == scope)
+            .ok_or_else(|| error("This tab is no longer available in the selected workspace."))?;
+        if matches!(tab.dto.control, "completed" | "expired") {
+            return Err(error("Continue browsing in a fresh browser session."));
+        }
+        Ok((tab.view.clone(), tab.policy.clone()))
+    }
+
     #[cfg(all(
         feature = "browser-test-bridge",
         not(feature = "embedded-chromium-preview"),
         not(any(
             feature = "macos-contained-browser-diagnostic",
-            feature = "windows-browser-development"
+            any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            )
         ))
     ))]
     pub(super) fn legacy_tab(
@@ -191,7 +214,10 @@ impl BrowserManager {
             any(
                 feature = "embedded-chromium-preview",
                 feature = "macos-contained-browser-diagnostic",
-                feature = "windows-browser-development"
+                any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                )
             )
         )
     ))]
@@ -288,16 +314,37 @@ impl BrowserManager {
             state
                 .tabs
                 .iter()
-                .filter(|t| Some(&t.scope) == state.scope.as_ref())
+                .filter(|t| {
+                    Some(&t.scope) == state.scope.as_ref()
+                        && !matches!(t.dto.control, "completed" | "expired")
+                })
                 .map(|t| (t.dto.id.clone(), t.view.clone()))
                 .collect()
         };
         let inspections = views
             .into_iter()
             .map(|(id, view)| async move { (id, view.inspect().await) });
-        for (id, mut page) in collect_pages(inspections, SNAPSHOT_BUDGET).await {
+        for (id, page) in collect_pages(inspections, SNAPSHOT_BUDGET).await {
             let mut state = self.lock()?;
+            let mut page = match page {
+                Ok(page) => page,
+                Err(engine::BrowserError::Expired) => {
+                    state.event(&id, BrowserEvent::Expired);
+                    continue;
+                }
+                Err(engine::BrowserError::Closed) => {
+                    state.event(&id, BrowserEvent::Crashed);
+                    continue;
+                }
+                // Navigation freshness and a slow observation do not prove a crash.
+                Err(_) => continue,
+            };
             if let Some(tab) = state.tabs.iter_mut().find(|t| t.dto.id == id) {
+                // A completed view may have replaced the remote while its last
+                // inspection was in flight. Never overwrite retained metadata.
+                if matches!(tab.dto.control, "completed" | "expired") {
+                    continue;
+                }
                 #[cfg(windows)]
                 {
                     // WebView2's event-owned loading flag is independent from
@@ -333,7 +380,7 @@ impl BrowserManager {
                 conversation_id,
             } => self.create(app, &scope, &url, conversation_id).await?,
             BrowserAction::Handoff { tab_id, run_id } => {
-                let (view, _) = self.tab(&tab_id, &scope)?;
+                let (view, _) = self.mutable_tab(&tab_id, &scope)?;
                 view.handoff(&run_id).await.map_err(engine_error)?;
                 if let Some(tab) = self
                     .lock()?
@@ -358,12 +405,7 @@ impl BrowserManager {
                 }
             }
             BrowserAction::Navigate { tab_id, url } => {
-                let (view, policy) = self.tab(&tab_id, &scope)?;
-                let url = engine::parse_address(&url).map_err(engine_error)?;
-                policy.authorize(&url).map_err(engine_error)?;
-                self.reset_navigation(&tab_id, Some(url.as_str()))?;
-                view.navigate(url)
-                    .map_err(|_| error("This page could not be opened."))?;
+                self.navigate(app, &scope, &tab_id, &url).await?;
             }
             BrowserAction::Select { tab_id } => {
                 self.tab(&tab_id, &scope)?;
@@ -389,7 +431,7 @@ impl BrowserManager {
                     .map_err(engine_error)?;
             }
             BrowserAction::OpenPopup { tab_id } => {
-                self.tab(&tab_id, &scope)?;
+                self.mutable_tab(&tab_id, &scope)?;
                 let url = self
                     .lock()?
                     .tabs
@@ -412,13 +454,16 @@ impl BrowserManager {
                     BrowserAction::Stop { tab_id } => (tab_id, NavigationAction::Stop),
                     _ => return Err(error("This browser operation is unavailable.")),
                 };
-                let (view, _) = self.tab(&id, &scope)?;
+                let (view, _) = self.mutable_tab(&id, &scope)?;
                 if matches!(action, NavigationAction::Stop) {
                     self.lock()?.event(&id, BrowserEvent::Loading(false));
                 } else {
                     self.reset_navigation(&id, None)?;
                 }
-                view.control(action).await.map_err(engine_error)?;
+                if let Err(failure) = view.control(action).await {
+                    self.lock()?.event(&id, BrowserEvent::Failed);
+                    return Err(engine_error(failure));
+                }
             }
         }
         Ok(())
@@ -451,7 +496,10 @@ impl BrowserManager {
     ) -> Result<(std::path::PathBuf, Option<Webview>), CommandErrorDto> {
         #[cfg(any(
             feature = "macos-contained-browser-diagnostic",
-            feature = "windows-browser-development"
+            any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            )
         ))]
         {
             let state = self.lock()?;
@@ -465,7 +513,10 @@ impl BrowserManager {
         }
         #[cfg(not(any(
             feature = "macos-contained-browser-diagnostic",
-            feature = "windows-browser-development"
+            any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            )
         )))]
         {
             let mut state = self.lock()?;
@@ -505,6 +556,70 @@ impl BrowserManager {
         }
     }
 
+    async fn navigate(
+        &self,
+        app: &AppHandle,
+        scope: &str,
+        tab_id: &str,
+        address: &str,
+    ) -> Result<(), CommandErrorDto> {
+        let (view, policy) = self.mutable_tab(tab_id, scope)?;
+        if matches!(view, BrowserView::Empty) {
+            // Release only this inert slot while allocating its real guest.
+            // Failed admission restores the address-entry tab without retrying.
+            let (index, placeholder) = {
+                let mut state = self.lock()?;
+                let index = state
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.dto.id == tab_id)
+                    .ok_or_else(|| error("This tab has closed."))?;
+                (index, state.tabs.remove(index))
+            };
+            let result = self
+                .create(app, scope, address, placeholder.dto.conversation_id.clone())
+                .await;
+            if result.is_err() {
+                let mut state = self.lock()?;
+                let index = index.min(state.tabs.len());
+                state.tabs.insert(index, placeholder);
+            }
+            return result;
+        }
+        let url = engine::parse_address(address).map_err(engine_error)?;
+        policy.authorize(&url).map_err(engine_error)?;
+        self.reset_navigation(tab_id, Some(url.as_str()))?;
+        if view.navigate(url).is_err() {
+            self.lock()?.event(tab_id, BrowserEvent::Failed);
+            return Err(error("This page could not be opened."));
+        }
+        Ok(())
+    }
+
+    fn event_sink(&self, id: &str) -> EventSink {
+        let weak = Arc::downgrade(&self.data);
+        let event_id = id.to_owned();
+        Arc::new(move |event| {
+            let crashed = matches!(event, BrowserEvent::Crashed | BrowserEvent::Expired);
+            let view = weak.upgrade().and_then(|data| {
+                let mut state = data.lock().ok()?;
+                state.event(&event_id, event);
+                crashed
+                    .then(|| {
+                        state
+                            .tabs
+                            .iter()
+                            .find(|tab| tab.dto.id == event_id)
+                            .map(|tab| tab.view.clone())
+                    })
+                    .flatten()
+            });
+            if let Some(view) = view {
+                let _ = view.hide();
+            }
+        })
+    }
+
     async fn create(
         &self,
         app: &AppHandle,
@@ -523,27 +638,7 @@ impl BrowserManager {
         }
         let (directory, source) = self.profile(scope)?;
         let id = format!("browser-{}", uuid::Uuid::new_v4());
-        let weak = Arc::downgrade(&self.data);
-        let event_id = id.clone();
-        let sink: EventSink = Arc::new(move |event| {
-            let crashed = matches!(event, BrowserEvent::Crashed);
-            let view = weak.upgrade().and_then(|data| {
-                let mut state = data.lock().ok()?;
-                state.event(&event_id, event);
-                crashed
-                    .then(|| {
-                        state
-                            .tabs
-                            .iter()
-                            .find(|tab| tab.dto.id == event_id)
-                            .map(|tab| tab.view.clone())
-                    })
-                    .flatten()
-            });
-            if let Some(view) = view {
-                let _ = view.hide();
-            }
-        });
+        let sink = self.event_sink(&id);
         let generation = self.lock()?.generation;
         let view = super::guest::create(
             app,
@@ -551,7 +646,7 @@ impl BrowserManager {
                 id: id.clone(),
                 generation,
                 scope: scope.to_owned(),
-                conversation_id,
+                conversation_id: conversation_id.clone(),
                 initial_url: url.clone(),
                 directory,
                 source,
@@ -561,17 +656,32 @@ impl BrowserManager {
         )
         .await?;
         self.hide_all();
+        let conversation_id = view
+            .conversation_id()
+            .map(str::to_owned)
+            .or(conversation_id);
         {
             let mut state = self.lock()?;
             let session_id = view
                 .contained_session_id()
                 .map(str::to_owned)
+                .or_else(|| matches!(view, BrowserView::Empty).then(String::new))
                 .or_else(|| state.sessions.get(scope).cloned())
                 .ok_or_else(|| error("The browser session identity is unavailable."))?;
             state.selected.insert(scope.to_owned(), id.clone());
             state.tabs.push(Tab {
                 scope: scope.to_owned(),
                 view: view.clone(),
+                #[cfg(any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                ))]
+                pending_completed_view: None,
+                #[cfg(any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                ))]
+                close_requested: false,
                 agent_run_id: None,
                 policy,
                 heartbeat: None,
@@ -579,12 +689,13 @@ impl BrowserManager {
                 dto: BrowserTabDto {
                     id: id.clone(),
                     session_id,
-                    conversation_id: view.conversation_id().map(str::to_owned),
+                    conversation_id,
                     control: if view.human_control_available() {
                         "human"
                     } else {
                         "agent"
                     },
+                    completed_snapshot: false,
                     page: PageState {
                         url: url.as_ref().map(ToString::to_string).unwrap_or_default(),
                         title: "New tab".into(),
@@ -602,7 +713,10 @@ impl BrowserManager {
         // could race the authenticated presentation's first frame.
         #[cfg(not(any(
             feature = "macos-contained-browser-diagnostic",
-            feature = "windows-browser-development"
+            any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            )
         )))]
         if let Some(url) = url
             && view.navigate(url).is_err()
@@ -614,7 +728,10 @@ impl BrowserManager {
 
     #[cfg(any(
         feature = "macos-contained-browser-diagnostic",
-        feature = "windows-browser-development"
+        any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )
     ))]
     pub(super) async fn watch_agent(
         &self,
@@ -623,13 +740,23 @@ impl BrowserManager {
         run_id: &str,
         conversation_id: &str,
     ) -> Result<(), CommandErrorDto> {
-        #[cfg(feature = "windows-browser-development")]
-        if !self
+        #[cfg(any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        ))]
+        let replacement = match self
             .reconcile_windows_agent(app, scope, run_id, conversation_id)
             .await?
         {
-            return Ok(());
-        }
+            super::windows_viewer::AgentViewerPlan::Keep => return Ok(()),
+            super::windows_viewer::AgentViewerPlan::Attach => None,
+            super::windows_viewer::AgentViewerPlan::Replace(id) => Some(id),
+        };
+        #[cfg(not(any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )))]
+        let replacement: Option<String> = None;
         // Dropping an old read-only viewer preserves an active Core writer;
         // confirmed run cleanup has already retired its native owner otherwise.
         let prior = self
@@ -637,22 +764,25 @@ impl BrowserManager {
             .tabs
             .iter()
             .filter(|tab| {
-                tab.scope == scope && tab.agent_run_id.as_deref().is_some_and(|id| id != run_id)
+                tab.scope == scope
+                    && tab.dto.control != "completed"
+                    && tab.agent_run_id.as_deref().is_some_and(|id| id != run_id)
             })
             .map(|tab| tab.dto.id.clone())
             .collect::<Vec<_>>();
         for id in prior {
             self.close(scope, &id).await?;
         }
-        if self
-            .lock()?
-            .tabs
-            .iter()
-            .any(|tab| tab.scope == scope && tab.agent_run_id.as_deref() == Some(run_id))
+        if replacement.is_none()
+            && self
+                .lock()?
+                .tabs
+                .iter()
+                .any(|tab| tab.scope == scope && tab.agent_run_id.as_deref() == Some(run_id))
         {
             return Ok(());
         }
-        if self.lock()?.tabs.len() >= MAX_TABS {
+        if replacement.is_none() && self.lock()?.tabs.len() >= MAX_TABS {
             return Err(error("Close a browser tab before attaching another page."));
         }
         let window = app
@@ -668,23 +798,69 @@ impl BrowserManager {
                 state.event(&event_id, event);
             }
         });
-        let Some(view) =
+        let admission = async {
             super::contained::watch_agent(&window, scope, run_id, conversation_id, sink)
                 .await
-                .map_err(engine_error)?
-        else {
+                .map_err(engine_error)
+        };
+        #[cfg(any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        ))]
+        let admitted = if let Some(id) = &replacement {
+            self.recover_agent_presentation(scope, id, admission)
+                .await?
+        } else {
+            admission.await?
+        };
+        #[cfg(not(any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )))]
+        let admitted = admission.await?;
+        let Some(view) = admitted else {
             return Ok(());
         };
+        self.register_agent_view(scope, run_id, conversation_id, id, replacement, view)
+    }
+
+    #[cfg(any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development",
+        feature = "windows-browser-functional-preview"
+    ))]
+    fn register_agent_view(
+        &self,
+        scope: &str,
+        run_id: &str,
+        conversation_id: &str,
+        id: String,
+        replacement: Option<String>,
+        view: BrowserView,
+    ) -> Result<(), CommandErrorDto> {
         let session_id = view
             .contained_session_id()
             .ok_or_else(|| error("The browser session identity is unavailable."))?
             .to_owned();
         self.hide_all();
         let mut state = self.lock()?;
+        if let Some(replaced) = replacement {
+            state.tabs.retain(|tab| tab.dto.id != replaced);
+        }
         state.selected.insert(scope.to_owned(), id.clone());
         state.tabs.push(Tab {
             scope: scope.to_owned(),
             view,
+            #[cfg(any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            ))]
+            pending_completed_view: None,
+            #[cfg(any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            ))]
+            close_requested: false,
             agent_run_id: Some(run_id.to_owned()),
             policy: NavigationPolicy::default(),
             heartbeat: None,
@@ -694,6 +870,7 @@ impl BrowserManager {
                 session_id,
                 conversation_id: Some(conversation_id.to_owned()),
                 control: "agent",
+                completed_snapshot: false,
                 page: PageState::default(),
                 error: None,
                 notice: None,
@@ -705,10 +882,42 @@ impl BrowserManager {
 
     pub(super) async fn close(&self, scope: &str, id: &str) -> Result<(), CommandErrorDto> {
         let (view, _) = self.tab(id, scope)?;
+        #[cfg(any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        ))]
+        if let Some(tab) = self
+            .lock()?
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.scope == scope && tab.dto.id == id)
+        {
+            // Once any native cleanup starts, a pending image is cleanup
+            // custody only. A failed close must never become a display retry.
+            tab.close_requested = true;
+        }
         let _ = view.hide();
         view.close()
             .await
             .map_err(|_| error("This browser tab could not close."))?;
+        #[cfg(any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        ))]
+        {
+            let pending = self
+                .lock()?
+                .tabs
+                .iter()
+                .find(|tab| tab.scope == scope && tab.dto.id == id)
+                .and_then(|tab| tab.pending_completed_view.clone());
+            if let Some(pending) = pending {
+                pending
+                    .close()
+                    .await
+                    .map_err(|_| error("The retained browser view could not close."))?;
+            }
+        }
         let mut state = self.lock()?;
         state.tabs.retain(|t| t.dto.id != id);
         if state
@@ -737,6 +946,141 @@ impl BrowserManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
+
+    #[tokio::test]
+    async fn expired_view_preserves_address_and_cannot_be_revived_by_late_events() {
+        let manager = BrowserManager::default();
+        {
+            let mut state = manager.lock().unwrap();
+            state.scope = Some("workspace".into());
+            state.tabs.push(Tab {
+                scope: "workspace".into(),
+                view: BrowserView::Empty,
+                #[cfg(any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                ))]
+                pending_completed_view: None,
+                #[cfg(any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                ))]
+                close_requested: false,
+                agent_run_id: None,
+                policy: NavigationPolicy::default(),
+                heartbeat: Some(Instant::now()),
+                presentation_epoch: Arc::new(AtomicU64::new(1)),
+                dto: BrowserTabDto {
+                    id: "expired-view".into(),
+                    session_id: "expired-session".into(),
+                    conversation_id: Some("conversation".into()),
+                    control: "human",
+                    completed_snapshot: false,
+                    page: PageState {
+                        url: "https://github.com/".into(),
+                        title: "GitHub".into(),
+                        loading: true,
+                        ..PageState::default()
+                    },
+                    error: None,
+                    notice: None,
+                    popup_url: None,
+                },
+            });
+            state.event("expired-view", BrowserEvent::Expired);
+            for event in [
+                BrowserEvent::Loading(true),
+                BrowserEvent::Crashed,
+                BrowserEvent::Failed,
+            ] {
+                state.event("expired-view", event);
+            }
+            let tab = &state.tabs[0];
+            assert!(tab.heartbeat.is_none());
+            assert_eq!(tab.presentation_epoch.load(Ordering::Acquire), 2);
+        }
+        let snapshot = manager.snapshot().await.unwrap();
+        let tab = &snapshot.tabs[0];
+        assert_eq!(tab.control, "expired");
+        assert_eq!(tab.page.url, "https://github.com/");
+        assert_eq!(tab.page.title, "GitHub");
+        assert!(!tab.page.loading);
+        assert!(tab.error.as_deref().unwrap().contains("session expired"));
+        assert!(manager.mutable_tab("expired-view", "workspace").is_err());
+        manager.close("workspace", "expired-view").await.unwrap();
+        assert!(manager.lock().unwrap().tabs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn completed_view_preserves_page_metadata_and_rejects_live_actions() {
+        let manager = BrowserManager::default();
+        {
+            let mut state = manager.lock().unwrap();
+            state.scope = Some("workspace".into());
+            state
+                .selected
+                .insert("workspace".into(), "last-view".into());
+            state.tabs.push(Tab {
+                scope: "workspace".into(),
+                view: BrowserView::Empty,
+                #[cfg(any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                ))]
+                pending_completed_view: None,
+                #[cfg(any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                ))]
+                close_requested: false,
+                agent_run_id: Some("finished-run".into()),
+                policy: NavigationPolicy::default(),
+                heartbeat: None,
+                presentation_epoch: Arc::new(AtomicU64::new(1)),
+                dto: BrowserTabDto {
+                    id: "last-view".into(),
+                    session_id: "closed-native-session".into(),
+                    conversation_id: Some("conversation".into()),
+                    control: "completed",
+                    completed_snapshot: false,
+                    page: PageState {
+                        url: "https://example.com/finished".into(),
+                        title: "Finished page".into(),
+                        ..PageState::default()
+                    },
+                    error: None,
+                    notice: None,
+                    popup_url: None,
+                },
+            });
+            // Already queued events from the retired attachment cannot replace
+            // this inert view with a crash, spinner, popup or access notice.
+            for event in [
+                BrowserEvent::Crashed,
+                BrowserEvent::Loading(true),
+                BrowserEvent::Failed,
+                BrowserEvent::Popup("https://example.com/popup".into()),
+                BrowserEvent::Blocked,
+            ] {
+                state.event("last-view", event);
+            }
+        }
+        let snapshot = manager.snapshot().await.unwrap();
+        assert_eq!(snapshot.selected_tab_id.as_deref(), Some("last-view"));
+        let tab = &snapshot.tabs[0];
+        assert_eq!(tab.page.url, "https://example.com/finished");
+        assert_eq!(tab.page.title, "Finished page");
+        assert_eq!(tab.control, "completed");
+        assert!(!tab.completed_snapshot);
+        assert!(!tab.page.loading && tab.error.is_none() && tab.popup_url.is_none());
+        assert!(tab.notice.is_none());
+        assert!(manager.tab("last-view", "workspace").is_ok());
+        assert!(manager.mutable_tab("last-view", "workspace").is_err());
+        assert!(manager.tab("last-view", "another-workspace").is_err());
+        manager.close("workspace", "last-view").await.unwrap();
+        assert!(manager.lock().unwrap().tabs.is_empty());
+    }
 
     #[test]
     fn delayed_close_can_reach_reconciliation_but_other_hide_errors_block_teardown() {

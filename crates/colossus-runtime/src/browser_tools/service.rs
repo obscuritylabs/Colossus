@@ -2,8 +2,8 @@ use super::arguments::BrowserInvocation;
 use crate::{prelude::*, workspace_lease::WorkspaceIdentity};
 use colossus_browser::{BrowserCoordinator, BrowserError};
 use colossus_contracts::{
-    BrowserActor, BrowserControlLease, BrowserLimits, BrowserOrigin, BrowserScope,
-    BrowserSessionBinding, BrowserSessionId,
+    BrowserActor, BrowserControlLease, BrowserOrigin, BrowserScope, BrowserSessionBinding,
+    BrowserSessionId, PolicyObligations,
 };
 use colossus_ports::{AgentRunLifecycle, RunControl};
 use std::sync::atomic::AtomicBool;
@@ -23,6 +23,7 @@ pub(super) struct BrowserRun {
 pub(super) struct BrowserSessionAuthority {
     pub(super) lease: BrowserControlLease,
     pub(super) origins: Vec<BrowserOrigin>,
+    pub(super) public_web: bool,
 }
 
 pub(crate) struct RuntimeBrowserTools {
@@ -33,6 +34,7 @@ pub(crate) struct RuntimeBrowserTools {
     pub(super) runs: Arc<StdMutex<BTreeMap<String, BrowserRun>>>,
     pub(super) artifacts: StdMutex<Option<Arc<dyn colossus_ports::BrowserArtifactPublisher>>>,
     pub(super) native: Arc<super::native::NativeState>,
+    pub(super) public_web: bool,
 }
 
 impl RuntimeBrowserTools {
@@ -40,7 +42,7 @@ impl RuntimeBrowserTools {
         host: &super::RuntimeBrowserHost,
         identity: WorkspaceIdentity,
         workspace_id: String,
-        limits: BrowserLimits,
+        config: &crate::BrowserConfig,
         artifacts: Option<Arc<dyn colossus_ports::BrowserArtifactPublisher>>,
     ) -> Self {
         let native =
@@ -48,7 +50,7 @@ impl RuntimeBrowserTools {
         Self {
             coordinator: Arc::new(BrowserCoordinator::new(
                 Arc::new(super::native::driver::Registrar(Arc::clone(&native))),
-                limits,
+                config.limits(),
             )),
             identity,
             runtime_id: Uuid::now_v7().to_string(),
@@ -56,6 +58,7 @@ impl RuntimeBrowserTools {
             runs: Arc::new(StdMutex::new(BTreeMap::new())),
             artifacts: StdMutex::new(artifacts),
             native,
+            public_web: config.public_web,
         }
     }
 
@@ -152,6 +155,14 @@ impl RuntimeBrowserTools {
         }
         super::native::lifecycle::drain(self).await;
     }
+}
+
+pub(super) fn permits_public_web(obligations: &PolicyObligations) -> bool {
+    obligations.resource_authority == ResourceAuthority::Ambient
+        || obligations
+            .network_destinations
+            .iter()
+            .any(|destination| destination == "*")
 }
 
 impl Drop for RuntimeBrowserTools {

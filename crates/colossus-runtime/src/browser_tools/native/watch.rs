@@ -3,6 +3,7 @@ use super::types::*;
 use crate::Runtime;
 use colossus_browser_presentation::Configure;
 use colossus_contracts::{BrowserMode, BrowserScope, BrowserTarget};
+use colossus_ports::BrowserDriverError;
 use std::sync::Arc;
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
@@ -149,7 +150,13 @@ impl Runtime {
             .presenter
             .as_ref()
             .ok_or(RuntimeNativeBrowserError::Unavailable)?;
-        let (client, digest) = match provider.acquire(&original).await {
+        let acquired = async {
+            let (client, digest) = provider.acquire(&original).await?;
+            let deadline = provider.expires_at(&original).await?;
+            Ok::<_, BrowserDriverError>((client, digest, deadline))
+        }
+        .await;
+        let (client, digest, deadline) = match acquired {
             Ok(value) => value,
             Err(error) => {
                 // The run keeps the browser's cleanup owner; no failed viewer may revoke its writer.
@@ -184,6 +191,7 @@ impl Runtime {
             view.client = Some(client.clone());
             view.digest = Some(digest);
         }
+        super::expiry::track(browser, &entry, deadline)?;
         let session = RuntimeNativeBrowserSession {
             entry,
             client,

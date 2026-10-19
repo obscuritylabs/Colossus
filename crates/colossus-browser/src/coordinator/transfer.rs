@@ -179,15 +179,17 @@ impl BrowserCoordinator {
         {
             return Err(BrowserDriverError::OutcomeUnknown);
         }
-        let origins = {
+        let options = {
             let mut state = lock(&self.state).map_err(|_| BrowserDriverError::OutcomeUnknown)?;
             owned(&mut state, &command.binding, &command.session_id)
                 .map_err(|_| BrowserDriverError::Denied)?
                 .options
-                .allowed_origins
                 .clone()
         };
-        if !origins.contains(&descriptor.origin) {
+        if !descriptor
+            .origin
+            .admitted_by(&options.allowed_origins, options.public_web)
+        {
             return Err(BrowserDriverError::OutcomeUnknown);
         }
         let mut bytes = Zeroizing::new(Vec::with_capacity(descriptor.size_bytes as usize));

@@ -1,5 +1,5 @@
 //! Explicit real Windows source acceptance. Missing prerequisites fail categorically.
-#![cfg(windows)]
+#![cfg(all(windows, debug_assertions))]
 #[path = "browser_windows_native/actions.rs"]
 mod actions;
 #[path = "browser_windows_native/capture.rs"]
@@ -8,6 +8,8 @@ mod capture;
 mod exercise;
 #[path = "browser_windows_native/fixture.rs"]
 mod fixture;
+#[path = "browser_windows_native/keyboard.rs"]
+mod keyboard;
 #[path = "browser_windows_native/transfer.rs"]
 mod transfer;
 
@@ -91,6 +93,7 @@ async fn run(user_development: bool) {
         tab_id: BrowserTabId::parse(format!("bt_{}", hex::encode(nonce))).unwrap(),
         document_id: BrowserDocumentId::parse(format!("bd_{}", hex::encode(nonce))).unwrap(),
         options: BrowserOpenOptions {
+            public_web: false,
             profile: Default::default(),
             mode: BrowserMode::Embedded,
             allowed_origins: vec![BrowserOrigin::parse(&fixture.origin).unwrap()],

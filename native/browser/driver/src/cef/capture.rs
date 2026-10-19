@@ -41,9 +41,7 @@ impl Host {
         {
             return Err(BrowserDriverError::Denied);
         }
-        self.revoke_human_presentation();
-        self.presentation.handoff.revoke();
-        self.presentation.control_generation = command.control_generation;
+        self.begin_agent_action(command.control_generation);
         let tab = self
             .tabs
             .get(&command.target.tab_id)

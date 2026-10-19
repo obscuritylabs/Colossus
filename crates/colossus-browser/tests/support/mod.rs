@@ -224,6 +224,7 @@ pub fn actor() -> BrowserActor {
 
 pub fn options() -> BrowserOpenOptions {
     BrowserOpenOptions {
+        public_web: false,
         profile: Default::default(),
         mode: BrowserMode::Headless,
         allowed_origins: vec![BrowserOrigin::parse("https://fixture.test").unwrap()],

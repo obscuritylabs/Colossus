@@ -110,11 +110,12 @@ pub use colossus_observability::{
 };
 pub use composition::Runtime;
 pub use config::{
-    AgentConfig, AuditConfig, AuditExporterConfig, BundlesConfig, KeyConfig, MemoryConfig,
-    MemoryEmbeddingConfig, ModelProfileConfig, ModelsConfig, NetworkConfig, PluginMcpServerConfig,
-    PluginsConfig, PolicyConfig, ProviderProfileConfig, ProvidersConfig, ResearchConfig,
-    RuntimeConfig, SandboxConfig, SearchConfig, SearchProfileConfig, SemanticMemoryConfig,
-    StorageAdapter, StorageConfig, StorageLocation, SubagentConfig, WorkflowLibraryConfig,
+    AgentConfig, AuditConfig, AuditExporterConfig, BrowserConfig, BundlesConfig, KeyConfig,
+    MemoryConfig, MemoryEmbeddingConfig, ModelProfileConfig, ModelsConfig, NetworkConfig,
+    PluginMcpServerConfig, PluginsConfig, PolicyConfig, ProviderProfileConfig, ProvidersConfig,
+    ResearchConfig, RuntimeConfig, SandboxConfig, SearchConfig, SearchProfileConfig,
+    SemanticMemoryConfig, StorageAdapter, StorageConfig, StorageLocation, SubagentConfig,
+    WorkflowLibraryConfig,
 };
 pub use diagnostics::format_provider_response_diagnostic;
 pub use error::RuntimeError;

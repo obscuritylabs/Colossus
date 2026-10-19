@@ -4,9 +4,11 @@ mod crypto;
 mod database;
 mod metadata_view;
 mod platform;
+mod system_entry;
 mod vault;
 
 pub use platform::{PlatformKeyStore, SystemKeyStore};
+pub use system_entry::SystemCredentialEntry;
 pub use vault::{PlatformCredentialVault, VaultKeyMetadata, VaultRecordMetadata, VaultSourceGuard};
 
 mod development;

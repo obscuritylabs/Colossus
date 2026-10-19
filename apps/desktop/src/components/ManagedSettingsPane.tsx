@@ -7,6 +7,7 @@ import { SetupPackagesPanel } from "./setup/SetupPackagesPanel";
 import { useSetupPackages } from "./setup/useSetupPackages";
 import { ImportedProviderActions } from "./setup/ImportedProviderActions";
 import { SettingsFrame } from "./SettingsFrame";
+import { BrowserCapabilityFields } from "./BrowserCapabilityFields";
 import { ModelRoleRouting } from "./ModelRoleRouting";
 import { ModelRoutingOverview } from "./ModelRoutingOverview";
 import { RuntimeProfileRow } from "./RuntimeProfileRow";
@@ -135,6 +136,7 @@ import { ProviderIcon } from "./ProviderIcon";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import {
   presetProviderKind,
+  providerCredentialLabel,
   resetModelMetadata,
   selectCatalogModel,
 } from "../providerCatalog";
@@ -196,8 +198,9 @@ const DESKTOP_PAGES = [
   {
     id: "browser",
     label: "Browser",
-    description: "Choose what opens in a new browser tab.",
-    keywords: "browser new tab home page url localhost preview",
+    description: "Control browser access, limits, and the new-tab page.",
+    keywords:
+      "browser enabled disabled sessions tabs snapshot skill new tab home page url localhost preview",
   },
   {
     id: "terminal",
@@ -234,6 +237,7 @@ type GlobalTab =
   | "defaults"
   | DesktopTab;
 type SpaceTab =
+  | "browser"
   | "cloud"
   | "runtime"
   | "providers"
@@ -393,10 +397,13 @@ const GLOBAL_TABS: ReadonlyArray<{
   { id: "credentials", label: "Credentials", group: "Global settings" },
   { id: "mcp", label: "MCP", group: "Global settings" },
   { id: "plugins", label: "Plugins", group: "Global settings" },
+  { id: "browser", label: "Browser", group: "Global settings" },
   { id: "search", label: "Search", group: "Global settings" },
   { id: "telemetry", label: "Telemetry", group: "Global settings" },
   { id: "defaults", label: "Defaults", group: "Global settings" },
-  ...DESKTOP_PAGES.map(({ id, label }) => ({ id, label, group: "Desktop" })),
+  ...DESKTOP_PAGES.filter(({ id }) => id !== "browser").map(
+    ({ id, label }) => ({ id, label, group: "Desktop" }),
+  ),
 ];
 
 const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
@@ -407,6 +414,7 @@ const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
   { id: "routing", label: "Routing" },
   { id: "mcp", label: "MCP" },
   { id: "plugins", label: "Plugins" },
+  { id: "browser", label: "Browser" },
   { id: "access", label: "Access" },
   { id: "sandbox", label: "Sandbox" },
   { id: "search", label: "Search" },
@@ -417,9 +425,12 @@ const SPACE_TABS: ReadonlyArray<{ id: SpaceTab; label: string }> = [
 ];
 
 export function managedFieldDestination(descriptor: ManagedFieldDescriptor): {
-  tab: "sandbox" | "research" | "advanced" | "runtime" | "plugins";
+  tab: "browser" | "sandbox" | "research" | "advanced" | "runtime" | "plugins";
   section: string | null;
 } {
+  if (descriptor.id.startsWith("browser.")) {
+    return { tab: "browser", section: null };
+  }
   if (descriptor.id.startsWith("plugins.")) {
     return { tab: "plugins", section: null };
   }
@@ -527,6 +538,52 @@ const EMPTY_TELEMETRY_DRAFT: TelemetryEditorDraft = {
 };
 
 const FIELD_DESCRIPTORS: ManagedFieldDescriptor[] = [
+  toggleField(
+    "browser.enabled",
+    "Browser",
+    "Browser access",
+    "Allow browser tools and the bundled browser skill when a verified browser is installed. Disabling takes effect when the saved configuration is applied.",
+    true,
+    false,
+  ),
+  toggleField(
+    "browser.publicWeb",
+    "Browser",
+    "Load public websites normally",
+    "Load public HTTPS pages, redirects, images, and styles when workspace network policy permits. Turn off to restrict every request to the session’s listed origins.",
+    true,
+    false,
+  ),
+  field(
+    "browser.maxSessions",
+    "Browser",
+    "Maximum browser sessions",
+    "Limit simultaneous temporary browser sessions in each workspace runtime.",
+    4,
+    false,
+    1,
+    4,
+  ),
+  field(
+    "browser.maxTabs",
+    "Browser",
+    "Maximum browser tabs",
+    "Limit total tabs across browser sessions in each workspace runtime.",
+    8,
+    false,
+    1,
+    8,
+  ),
+  field(
+    "browser.maxSnapshotNodes",
+    "Browser",
+    "Maximum snapshot nodes",
+    "Limit the page elements returned by each browser snapshot.",
+    1024,
+    false,
+    1,
+    1024,
+  ),
   field(
     "network.maxRedirects",
     "Network",
@@ -2769,30 +2826,51 @@ export function ManagedSettingsPane({
     setTelemetryEditor(null);
   }
 
-  async function createCredential() {
-    if (busy || !credentialLabel.trim()) return false;
+  async function createCredential(forProvider?: ProviderEditorDraft) {
+    const label = forProvider
+      ? providerCredentialLabel(forProvider.label)
+      : credentialLabel.trim();
+    if (busy || !label) return false;
     const request = {
       expectedRevision: snapshot.globalConfiguration.revision,
-      label: credentialLabel.trim(),
-      kind: credentialKind,
+      label,
+      kind: forProvider ? ("api_key" as const) : credentialKind,
+    };
+    const previousIds = new Set(
+      snapshot.globalConfiguration.credentials.map(({ id }) => id),
+    );
+    let createdId: string | undefined;
+    const rememberCredential = (next: ManagedSettingsSnapshot) => {
+      createdId = next.globalConfiguration.credentials.find(
+        ({ id }) => !previousIds.has(id),
+      )?.id;
+      return next;
     };
     const saved = await perform(
-      () => createManagedCredential(request),
+      async () => rememberCredential(await createManagedCredential(request)),
       () =>
-        fixtureRevision((draft) => {
-          const id = crypto.randomUUID();
-          draft.globalConfiguration.credentials.push({
-            id,
-            label: request.label,
-            kind: request.kind,
-            backend: "desktop",
-            createdAtMs: Date.now(),
-          });
-          draft.credentialAvailability[id] = "available";
-        }),
+        rememberCredential(
+          fixtureRevision((draft) => {
+            const id = crypto.randomUUID();
+            draft.globalConfiguration.credentials.push({
+              id,
+              label: request.label,
+              kind: request.kind,
+              backend: "desktop",
+              createdAtMs: Date.now(),
+            });
+            draft.credentialAvailability[id] = "available";
+          }),
+        ),
       "Credential stored securely.",
     );
     if (saved) setCredentialLabel("");
+    if (saved && forProvider && createdId) {
+      const credentialId = createdId;
+      setProviderEditor((current) =>
+        current === forProvider ? { ...current, credentialId } : current,
+      );
+    }
     return saved;
   }
 
@@ -2914,7 +2992,7 @@ export function ManagedSettingsPane({
   }, [descriptors, query, snapshot]);
 
   const desktopPage =
-    scope === "global"
+    scope === "global" && globalTab !== "browser"
       ? DESKTOP_PAGES.find((page) => page.id === globalTab)
       : undefined;
   const externalTargets = desktop.targets.filter(
@@ -3067,6 +3145,9 @@ export function ManagedSettingsPane({
             providerEditor={providerEditor}
             setProviderEditor={setProviderEditor}
             onSaveProvider={() => void saveProvider()}
+            onAddProviderCredential={() =>
+              providerEditor && void createCredential(providerEditor)
+            }
             onDeleteCatalogEntry={(kind, resourceId, trigger) => {
               setFailure("");
               catalogDeleteTrigger.current = trigger;
@@ -3281,6 +3362,7 @@ function GlobalSettingsBody({
   providerEditor,
   setProviderEditor,
   onSaveProvider,
+  onAddProviderCredential,
   modelEditor,
   setModelEditor,
   onSaveModel,
@@ -3338,6 +3420,7 @@ function GlobalSettingsBody({
   providerEditor: ProviderEditorDraft | null;
   setProviderEditor: (draft: ProviderEditorDraft | null) => void;
   onSaveProvider: () => void;
+  onAddProviderCredential: () => void;
   modelEditor: ModelEditorDraft | null;
   setModelEditor: (draft: ModelEditorDraft | null) => void;
   onSaveModel: () => void;
@@ -3791,9 +3874,37 @@ function GlobalSettingsBody({
       </Suspense>
     );
   }
+  if (tab === "browser") {
+    return (
+      <BrowserSettings>
+        <BrowserCapabilityFields
+          descriptors={descriptors.filter((descriptor) =>
+            descriptor.id.startsWith("browser."),
+          )}
+          values={defaults.fields}
+          effective={new Map()}
+          scope="global"
+          fieldElementId={managedFieldElementId}
+          onChange={(id, value) =>
+            setDefaults({
+              ...defaults,
+              fields: { ...defaults.fields, [id]: value },
+            })
+          }
+          onInherit={(id) => {
+            const fields = { ...defaults.fields };
+            delete fields[id];
+            setDefaults({ ...defaults, fields });
+          }}
+        />
+      </BrowserSettings>
+    );
+  }
   if (tab === "defaults") {
     const defaultDescriptors = descriptors.filter(
-      (descriptor) => !descriptor.id.startsWith("plugins."),
+      (descriptor) =>
+        !descriptor.id.startsWith("plugins.") &&
+        !descriptor.id.startsWith("browser."),
     );
     return (
       <section className="managed-settings-body">
@@ -4079,7 +4190,7 @@ function GlobalSettingsBody({
                       ? "Credential saved"
                       : provider.credentialRequired
                         ? "Needs API key"
-                        : "No key required"}
+                        : "No credential selected"}
                 </>
               ),
               usage: `${models.length} ${models.length === 1 ? "model" : "models"}`,
@@ -4111,7 +4222,7 @@ function GlobalSettingsBody({
                               ? "Credential unavailable"
                               : provider.credentialRequired
                                 ? "Needs API key"
-                                : "No key required"))}
+                                : "No credential selected"))}
                       </dd>
                       <dt>Request timeout</dt>
                       <dd>
@@ -4169,6 +4280,7 @@ function GlobalSettingsBody({
               onChange={setProviderEditor}
               onCancel={() => setProviderEditor(null)}
               onSave={onSaveProvider}
+              onAddCredential={onAddProviderCredential}
             />
           ) : null}
         </CatalogInventory>
@@ -4991,6 +5103,7 @@ export function SpaceSettingsBody({
                 (descriptor) =>
                   !descriptor.advanced &&
                   !descriptor.id.startsWith("plugins.") &&
+                  !descriptor.id.startsWith("browser.") &&
                   !descriptor.id.startsWith("research."),
               )}
               values={draft.fields}
@@ -5216,6 +5329,8 @@ export function SpaceSettingsBody({
   }
   const filtered = descriptors.filter((descriptor) => {
     if (descriptor.id.startsWith("plugins.")) return false;
+    if (tab === "browser") return descriptor.id.startsWith("browser.");
+    if (descriptor.id.startsWith("browser.")) return false;
     if (tab === "sandbox") return descriptor.id.startsWith("sandbox.");
     if (tab === "research") return descriptor.id.startsWith("research.");
     return descriptor.advanced;
@@ -5224,8 +5339,13 @@ export function SpaceSettingsBody({
     <section className="managed-settings-body">
       <div className="managed-section-heading">
         <div>
-          <p className="eyebrow">Sparse Workspace overrides</p>
+          <p className="eyebrow">Workspace overrides</p>
           <h3>{tab[0]!.toUpperCase() + tab.slice(1)}</h3>
+          {tab === "browser" ? (
+            <p className="managed-heading-copy">
+              Customize browser access and limits for this workspace.
+            </p>
+          ) : null}
           {tab === "sandbox" ? (
             <p className="managed-heading-copy">
               Filesystem and network rules apply to isolated execution. Select
@@ -5234,7 +5354,20 @@ export function SpaceSettingsBody({
           ) : null}
         </div>
       </div>
-      {tab === "advanced" ? (
+      {tab === "browser" ? (
+        <BrowserCapabilityFields
+          descriptors={filtered}
+          values={draft.fields}
+          effective={effective}
+          scope="space"
+          focusedFieldId={focusedFieldId}
+          fieldElementId={managedFieldElementId}
+          onChange={(id, value) =>
+            setDraft({ ...draft, fields: { ...draft.fields, [id]: value } })
+          }
+          onInherit={(id) => removeDraftField(draft, setDraft, id)}
+        />
+      ) : tab === "advanced" ? (
         [...new Set(filtered.map((descriptor) => descriptor.section))]
           .sort()
           .map((section) => {
@@ -6823,6 +6956,7 @@ function ProviderEditor({
   onChange,
   onCancel,
   onSave,
+  onAddCredential,
 }: {
   draft: ProviderEditorDraft;
   credentials: ManagedSettingsSnapshot["globalConfiguration"]["credentials"];
@@ -6830,6 +6964,7 @@ function ProviderEditor({
   onChange: (draft: ProviderEditorDraft) => void;
   onCancel: () => void;
   onSave: () => void;
+  onAddCredential: () => void;
 }) {
   const [readingIcon, setReadingIcon] = useState(false);
   const busy = externalBusy || readingIcon;
@@ -6942,6 +7077,7 @@ function ProviderEditor({
               label: draft.label || preset.label,
               profile: draft.profile || preset.id,
               credentialId: "",
+              credentialRequired: Boolean(preset.credentialEnv),
             })
           }
         />
@@ -6998,37 +7134,57 @@ function ProviderEditor({
           <p>Choose a saved credential when this provider requires one.</p>
         </div>
         <div className="provider-auth-grid">
-          <label>
-            <span>Credential reference</span>
-            <DropdownSelect
-              value={codex ? "" : draft.credentialId}
-              disabled={busy || codex}
-              aria-describedby="provider-credential-help"
-              onChange={(event) =>
-                onChange({ ...draft, credentialId: event.target.value })
-              }
-            >
-              <option value="">
-                {draft.credentialRequired
-                  ? "Add API key later"
-                  : "No API key required"}
-              </option>
-              {credentials.map((credential) => (
-                <option key={credential.id} value={credential.id}>
-                  {credential.label}
+          <div className="provider-credential-control">
+            <label>
+              <span>Credential reference</span>
+              <DropdownSelect
+                value={codex ? "" : draft.credentialId}
+                disabled={busy || codex}
+                aria-describedby="provider-credential-help"
+                onChange={(event) =>
+                  onChange({ ...draft, credentialId: event.target.value })
+                }
+              >
+                <option value="">
+                  {codex
+                    ? "Codex account"
+                    : draft.credentialRequired
+                      ? "Add API key later"
+                      : "No API key selected"}
                 </option>
-              ))}
-            </DropdownSelect>
-            <small id="provider-credential-help">
-              {codex
-                ? "Uses your signed-in Codex account instead."
-                : "The credential value stays in secure system storage."}
-            </small>
-          </label>
+                {credentials.map((credential) => (
+                  <option key={credential.id} value={credential.id}>
+                    {credential.label}
+                  </option>
+                ))}
+              </DropdownSelect>
+              <small id="provider-credential-help">
+                {codex
+                  ? "Uses your signed-in Codex account instead."
+                  : "The credential value stays in secure system storage."}
+              </small>
+            </label>
+            {!codex && (
+              <button
+                className="button secondary"
+                type="button"
+                disabled={busy}
+                onClick={onAddCredential}
+              >
+                <IconKey size={16} aria-hidden="true" /> Add API key securely
+              </button>
+            )}
+          </div>
           <div className="provider-auth-note">
             <IconShield size={18} aria-hidden="true" />
             <span>
-              <strong>{codex ? "Codex account" : "Stored securely"}</strong>
+              <strong>
+                {codex
+                  ? "Codex account"
+                  : draft.credentialId
+                    ? "Stored securely"
+                    : "Connect an API key"}
+              </strong>
               <small>
                 {codex
                   ? "Uses your existing Codex subscription sign-in."
@@ -8295,7 +8451,6 @@ function DesktopSettings(
       </Suspense>
     );
   if (section === "git") return <GitSettings />;
-  if (section === "browser") return <BrowserSettings />;
   if (section === "terminal") {
     return (
       <TerminalSettings

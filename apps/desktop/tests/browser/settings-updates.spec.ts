@@ -135,6 +135,54 @@ async function saveGlobalTurns(page: Page) {
     .click();
 }
 
+test("browser settings persist globally and support workspace overrides and inheritance", async ({
+  page,
+}) => {
+  await installNativeSettingsMock(page, "idle");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Global", exact: true }).click();
+  const sections = page.getByRole("navigation", { name: "Settings sections" });
+  await sections.getByRole("button", { name: "Browser", exact: true }).click();
+  const enabled = page.getByRole("switch", { name: "Browser access" });
+  await expect(enabled).toBeChecked();
+  await enabled.focus();
+  await page.keyboard.press("Space");
+  await expect(enabled).not.toBeChecked();
+  await page
+    .getByRole("spinbutton", { name: "Maximum browser tabs" })
+    .fill("3");
+  await page
+    .getByRole("button", { name: "Save global changes", exact: true })
+    .click();
+  await expect(page.locator(".managed-settings-actions")).toContainText(
+    "All changes saved and applied",
+  );
+  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  await sections.getByRole("button", { name: "Browser", exact: true }).click();
+  await expect(enabled).not.toBeChecked();
+  const tabs = page.getByRole("spinbutton", { name: "Maximum browser tabs" });
+  await expect(tabs).toHaveValue("3");
+  await tabs.fill("2");
+  await page
+    .getByRole("button", { name: "Apply Workspace changes", exact: true })
+    .click();
+  expect(
+    await page.evaluate(
+      () =>
+        (window as any).settingsUpdateMock.workspaceRequests.at(-1)
+          .fieldOverrides,
+    ),
+  ).toContainEqual({ fieldId: "browser.maxTabs", value: 2 });
+  await page
+    .getByRole("group", { name: "Maximum browser tabs" })
+    .getByRole("button", { name: "Inherit" })
+    .click();
+  await page
+    .getByRole("button", { name: "Apply Workspace changes", exact: true })
+    .click();
+  await expect(tabs).toHaveValue("3");
+});
+
 test("pending global updates and workspace edits share a single footer action", async ({
   page,
 }) => {

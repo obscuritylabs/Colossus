@@ -48,9 +48,12 @@ pub struct BrowserBridgeEnrollment {
     pub mode: BrowserMode,
     /// Exact supervisor-owned cache selection; no caller supplies its native path.
     pub profile: BrowserProfileSelection,
-    /// Immutable origin envelope for admitted browser actions and requests.
+    /// Exact origins in the immutable network grant, alongside `public_web`.
     /// `restrictive_egress` separately reports OS containment of the entire tree.
     pub allowed_origins: Vec<BrowserOrigin>,
+    /// Permit-bound public HTTPS access; private destinations still require exact origins.
+    #[serde(default)]
+    pub public_web: bool,
     /// Fresh 128-bit native enrollment identity, distinct across restarts.
     pub instance_nonce: [u8; 16],
     /// Digest of the supervisor-verified installed component and containment policy.

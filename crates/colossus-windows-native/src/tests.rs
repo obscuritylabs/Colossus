@@ -182,6 +182,12 @@ fn suspended_job_bound_bootstrap_authenticates_the_exact_processes() {
             .expect("bootstrap fixture connection");
         validate_named_pipe_client(&server, child_process)
             .expect("authenticate suspended bootstrap fixture process");
+        assert!(
+            job.active_processes()
+                .expect("observe the live private Job")
+                > 0,
+            "the retained fixture is still waiting for its release byte"
+        );
         server
             .write_all(&[1])
             .await
@@ -194,6 +200,18 @@ fn suspended_job_bound_bootstrap_authenticates_the_exact_processes() {
                 .expect("wait for bootstrap fixture")
                 .success()
         );
+        drop(child);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while job
+                .active_processes()
+                .expect("query failure must not masquerade as an empty Job")
+                != 0
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("exact private Job reaches zero after the owned fixture exits");
         drop(job);
     });
 }

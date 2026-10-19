@@ -205,11 +205,15 @@ impl Host {
             _ => 1,
         };
         for click in 1..=count {
-            let result = self
-                .pointer_event(native, "mousePressed", x, y, button, mask, click, control)
-                .and_then(|()| {
-                    self.pointer_event(native, "mouseReleased", x, y, button, 0, click, control)
-                });
+            let result = self.dispatch(
+                native,
+                "Input.dispatchMouseEvent",
+                [
+                    json!({"type":"mousePressed","x":x,"y":y,"button":button,"buttons":mask,"clickCount":click}),
+                    json!({"type":"mouseReleased","x":x,"y":y,"button":button,"buttons":0,"clickCount":click}),
+                ],
+                control,
+            );
             if result.is_err() {
                 self.reset_pointer(native, x, y, button);
             }

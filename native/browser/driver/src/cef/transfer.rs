@@ -49,7 +49,10 @@ impl Host {
         self.transfer.stage = None;
         Ok(())
     }
-    #[cfg(all(windows, debug_assertions))]
+    #[cfg(all(
+        windows,
+        any(debug_assertions, feature = "windows-browser-functional-preview")
+    ))]
     pub fn configure_development_transfers(
         &mut self,
         profile: &colossus_windows_native::BoundPath,
@@ -86,9 +89,7 @@ impl Host {
         {
             return Err(BrowserDriverError::Stale);
         }
-        self.revoke_human_presentation();
-        self.presentation.handoff.revoke();
-        self.presentation.control_generation = command.control_generation;
+        self.begin_agent_action(command.control_generation);
         self.expected_revision = Some((native, revision, document));
         let mut random = [0_u8; 16];
         getrandom::fill(&mut random).map_err(|_| BrowserDriverError::Failed)?;

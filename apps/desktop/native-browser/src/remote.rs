@@ -17,7 +17,11 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 use std::time::Duration;
 use std::time::Instant;
 use tauri::{Rect, Window};
@@ -62,19 +66,36 @@ struct Owner {
     updating: AtomicBool,
     read_only: AtomicBool,
     operation: tokio::sync::Mutex<()>,
+    #[cfg(all(
+        any(windows, target_os = "macos"),
+        feature = "native-test-driver",
+        debug_assertions
+    ))]
+    diagnostic_failures: std::sync::atomic::AtomicU8,
+    #[cfg(windows)]
+    completed: Arc<crate::presentation::CompletedCache>,
 }
 
 // Source-only, closed-vocabulary attach evidence. These enum variants contain
 // no URL, enrollment material, path, native pointer or channel payload.
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 enum AttachFailure {
     Configure(PresentationError),
     NativeView(BrowserError),
 }
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 impl AttachFailure {
     const fn token(self) -> &'static str {
         match self {
+            Self::Configure(PresentationError::Expired) => "configure_expired",
             Self::Configure(PresentationError::Invalid) => "configure_invalid",
             Self::Configure(PresentationError::Stale) => "configure_stale",
             Self::Configure(PresentationError::Unauthenticated) => "configure_unauthenticated",
@@ -84,6 +105,7 @@ impl AttachFailure {
             Self::NativeView(BrowserError::InvalidAddress) => "native_view_invalid_address",
             Self::NativeView(BrowserError::Unavailable) => "native_view_unavailable",
             Self::NativeView(BrowserError::Closed) => "native_view_closed",
+            Self::NativeView(BrowserError::Expired) => "native_view_expired",
             Self::NativeView(BrowserError::Stale) => "native_view_stale",
             Self::NativeView(BrowserError::TimedOut) => "native_view_timed_out",
             Self::NativeView(BrowserError::ComponentMissing) => "native_view_component_missing",
@@ -94,31 +116,93 @@ impl AttachFailure {
         }
     }
 }
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 fn trace_attach_failure(failure: AttachFailure) {
-    eprintln!("EVIDENCE mac-remote-attach failure={}", failure.token());
+    eprintln!("EVIDENCE native-remote-attach failure={}", failure.token());
 }
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 fn trace_frame_channel_failure(stage: &'static str, error: PresentationError, elapsed: Duration) {
-    let failure = match error {
+    let failure = presentation_failure_token(error);
+    let timing = if elapsed >= Duration::from_millis(700) {
+        "after_700ms"
+    } else {
+        "before_700ms"
+    };
+    eprintln!("EVIDENCE native-remote-frame stage={stage} failure={failure} timing={timing}");
+}
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
+fn presentation_failure_token(error: PresentationError) -> &'static str {
+    match error {
+        PresentationError::Expired => "expired",
         PresentationError::Invalid => "invalid",
         PresentationError::Stale => "stale",
         PresentationError::Unauthenticated => "unauthenticated",
         PresentationError::Hidden => "hidden",
         PresentationError::LimitExceeded => "limit_exceeded",
         PresentationError::OutcomeUnknown => "outcome_unknown",
-    };
-    let timing = if elapsed >= Duration::from_millis(700) {
-        "after_700ms"
-    } else {
-        "before_700ms"
-    };
-    eprintln!("EVIDENCE mac-remote-frame stage={stage} failure={failure} timing={timing}");
+    }
 }
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
+fn trace_owner_failure(
+    owner: &Owner,
+    stage: &'static str,
+    failure: &'static str,
+    lease: Lease,
+    revision: u64,
+    elapsed: Duration,
+) {
+    let bit = match stage {
+        "hide_host" => 1,
+        "viewport_renew_surface" => 2,
+        "viewport_renew_host" => 4,
+        _ => 8,
+    };
+    if owner.diagnostic_failures.fetch_or(bit, Ordering::AcqRel) & bit != 0 {
+        return;
+    }
+    let (current_lease, requested_visible, heartbeat_expired) =
+        owner.state.lock().map_or((false, false, false), |state| {
+            (
+                state.lease == lease,
+                state.visible,
+                state.heartbeat.elapsed() >= Duration::from_millis(1500),
+            )
+        });
+    let revision_changed = owner.revision.load(Ordering::Acquire) != revision;
+    let role = if owner.read_only.load(Ordering::Acquire) {
+        "agent"
+    } else {
+        "human"
+    };
+    eprintln!(
+        "EVIDENCE native-remote-owner stage={stage} failure={failure} role={role} current_lease={current_lease} requested_visible={requested_visible} revision_changed={revision_changed} heartbeat_expired={heartbeat_expired} elapsed_ms={}",
+        elapsed.as_millis()
+    );
+}
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 fn trace_frame_browser_failure(stage: &'static str, error: BrowserError) {
     eprintln!(
-        "EVIDENCE mac-remote-frame stage={stage} failure={}",
+        "EVIDENCE native-remote-frame stage={stage} failure={}",
         AttachFailure::NativeView(error).token()
     );
 }
@@ -175,10 +259,10 @@ impl RemoteSurface {
     #[cfg(all(any(windows, target_os = "macos"), feature = "native-test-driver"))]
     pub async fn acceptance_probe(&self) -> Result<RemoteAcceptanceProbe, BrowserError> {
         let lease = self.0.state.lock().map_err(|_| BrowserError::Closed)?.lease;
-        #[cfg(all(target_os = "macos", debug_assertions))]
+        #[cfg(all(any(windows, target_os = "macos"), debug_assertions))]
         let observed_at = Instant::now();
         let page = self.0.client.observe(lease).await.map_err(|error| {
-            #[cfg(all(target_os = "macos", debug_assertions))]
+            #[cfg(all(any(windows, target_os = "macos"), debug_assertions))]
             trace_frame_channel_failure("probe_observe", error, observed_at.elapsed());
             match error {
                 PresentationError::Stale | PresentationError::Hidden => BrowserError::Stale,
@@ -295,10 +379,14 @@ impl RemoteSurface {
             .configure(configure.clone())
             .await
             .map_err(|failure| {
-                #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+                #[cfg(all(
+                    any(windows, target_os = "macos"),
+                    feature = "native-test-driver",
+                    debug_assertions
+                ))]
                 trace_attach_failure(AttachFailure::Configure(failure));
                 #[cfg(not(all(
-                    target_os = "macos",
+                    any(windows, target_os = "macos"),
                     feature = "native-test-driver",
                     debug_assertions
                 )))]
@@ -306,18 +394,37 @@ impl RemoteSurface {
                 BrowserError::Closed
             })?;
         let (events, receiver) = mpsc::channel(input_queue::CAPACITY);
-        let surface = actor::create_surface(window, &client, &events, lease, digest, !read_only)
-            .await
-            .inspect_err(|failure| {
-                #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
-                trace_attach_failure(AttachFailure::NativeView(*failure));
-                #[cfg(not(all(
-                    target_os = "macos",
-                    feature = "native-test-driver",
-                    debug_assertions
-                )))]
-                let _ = failure;
-            })?;
+        #[cfg(windows)]
+        let completed = Arc::new(crate::presentation::CompletedCache::default());
+        #[cfg(windows)]
+        if read_only {
+            completed.activate(lease);
+        }
+        let surface = actor::create_surface(
+            window,
+            &client,
+            &events,
+            lease,
+            digest,
+            !read_only,
+            #[cfg(windows)]
+            &completed,
+        )
+        .await
+        .inspect_err(|failure| {
+            #[cfg(all(
+                any(windows, target_os = "macos"),
+                feature = "native-test-driver",
+                debug_assertions
+            ))]
+            trace_attach_failure(AttachFailure::NativeView(*failure));
+            #[cfg(not(all(
+                target_os = "macos",
+                feature = "native-test-driver",
+                debug_assertions
+            )))]
+            let _ = failure;
+        })?;
         let viewport = configure.viewport_generation;
         let owner = Arc::new(Owner {
             window: window.clone(),
@@ -342,6 +449,14 @@ impl RemoteSurface {
             updating: AtomicBool::new(false),
             read_only: AtomicBool::new(read_only),
             operation: tokio::sync::Mutex::new(()),
+            #[cfg(all(
+                any(windows, target_os = "macos"),
+                feature = "native-test-driver",
+                debug_assertions
+            ))]
+            diagnostic_failures: std::sync::atomic::AtomicU8::new(0),
+            #[cfg(windows)]
+            completed,
         });
         actor::start(&owner, receiver);
         pending.0.take();
@@ -467,6 +582,31 @@ impl RemoteSurface {
     #[must_use]
     pub fn human_control_available(&self) -> bool {
         !self.0.read_only.load(Ordering::Acquire)
+    }
+
+    #[cfg(windows)]
+    pub(crate) async fn completed_snapshot(
+        &self,
+    ) -> Result<Option<crate::presentation::CompletedSurface>, BrowserError> {
+        if !self.0.read_only.load(Ordering::Acquire) || self.0.closing.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        let lease = self.0.state.lock().map_err(|_| BrowserError::Closed)?.lease;
+        let snapshot = crate::presentation::CompletedSurface::from_cache(
+            &self.0.window,
+            &self.0.completed,
+            lease,
+        )
+        .await?;
+        if self.0.closing.load(Ordering::Acquire)
+            || !self.0.state.lock().is_ok_and(|state| state.lease == lease)
+        {
+            if let Some(snapshot) = snapshot {
+                snapshot.close().await?;
+            }
+            return Ok(None);
+        }
+        Ok(snapshot)
     }
 
     /// Canonical conversation retained by this exact native runtime admission.

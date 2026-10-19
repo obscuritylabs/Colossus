@@ -246,18 +246,18 @@ impl PlatformKeyProvider {
 /// repeatedly reopen the same protected credential.
 pub fn platform_secret(service: &str, account: &str) -> Result<[u8; 32], StoreError> {
     cached_platform_secret(service, account, || {
-        let entry = keyring::Entry::new(service, account).map_err(adapter_error)?;
-        let secret = match entry.get_secret() {
-            Ok(secret) => secret,
-            Err(keyring::Error::NoEntry) => {
-                let mut secret = [0_u8; 32];
-                getrandom::fill(&mut secret).map_err(adapter_error)?;
-                entry.set_secret(&secret).map_err(adapter_error)?;
-                secret.to_vec()
+        let entry = colossus_credentials::SystemCredentialEntry::new(service, account)
+            .map_err(adapter_error)?;
+        let secret = match entry.read().map_err(adapter_error)? {
+            Some(secret) => secret,
+            None => {
+                let mut secret = zeroize::Zeroizing::new([0_u8; 32]);
+                getrandom::fill(secret.as_mut()).map_err(adapter_error)?;
+                entry.write(secret.as_ref()).map_err(adapter_error)?;
+                zeroize::Zeroizing::new(secret.to_vec())
             }
-            Err(error) => return Err(adapter_error(error)),
         };
-        secret.try_into().map_err(|_| {
+        secret.as_slice().try_into().map_err(|_| {
             StoreError::KeyUnavailable(format!(
                 "platform credential {service}/{account} is not 32 bytes"
             ))
@@ -267,14 +267,12 @@ pub fn platform_secret(service: &str, account: &str) -> Result<[u8; 32], StoreEr
 
 fn platform_existing_secret(service: &str, account: &str) -> Result<[u8; 32], StoreError> {
     cached_platform_secret(service, account, || {
-        let entry = keyring::Entry::new(service, account).map_err(adapter_error)?;
-        let secret = entry.get_secret().map_err(|error| match error {
-            keyring::Error::NoEntry => StoreError::KeyUnavailable(format!(
-                "platform credential {service}/{account} is absent"
-            )),
-            other => adapter_error(other),
+        let entry = colossus_credentials::SystemCredentialEntry::new(service, account)
+            .map_err(adapter_error)?;
+        let secret = entry.read().map_err(adapter_error)?.ok_or_else(|| {
+            StoreError::KeyUnavailable(format!("platform credential {service}/{account} is absent"))
         })?;
-        secret.try_into().map_err(|_| {
+        secret.as_slice().try_into().map_err(|_| {
             StoreError::KeyUnavailable(format!(
                 "platform credential {service}/{account} is not 32 bytes"
             ))
@@ -296,18 +294,19 @@ impl KeyProvider for PlatformKeyProvider {
 
     fn store_anchor(&self, anchor: &SecureAnchor) -> Result<(), StoreError> {
         let entry =
-            keyring::Entry::new(&self.service, &self.anchor_account()).map_err(adapter_error)?;
+            colossus_credentials::SystemCredentialEntry::new(&self.service, &self.anchor_account())
+                .map_err(adapter_error)?;
         let body = serde_json::to_vec(anchor).map_err(adapter_error)?;
-        entry.set_secret(&body).map_err(adapter_error)
+        entry.write(&body).map_err(adapter_error)
     }
 
     fn load_anchor(&self) -> Result<Option<SecureAnchor>, StoreError> {
         let entry =
-            keyring::Entry::new(&self.service, &self.anchor_account()).map_err(adapter_error)?;
-        let body = match entry.get_secret() {
-            Ok(body) => body,
-            Err(keyring::Error::NoEntry) => return Ok(None),
-            Err(error) => return Err(adapter_error(error)),
+            colossus_credentials::SystemCredentialEntry::new(&self.service, &self.anchor_account())
+                .map_err(adapter_error)?;
+        let body = match entry.read().map_err(adapter_error)? {
+            Some(body) => body,
+            None => return Ok(None),
         };
         decode_secure_anchor(&body).map(Some)
     }

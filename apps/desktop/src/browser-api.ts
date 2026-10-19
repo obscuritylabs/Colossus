@@ -12,7 +12,10 @@ export interface BrowserTab {
   popupUrl: string | null;
   sessionId?: string;
   conversationId?: string | null;
-  control?: "human" | "agent" | "paused" | "unavailable";
+  control?:
+    "human" | "agent" | "paused" | "completed" | "expired" | "unavailable";
+  /** Desktop retains a read-only native frame after agent control ends. */
+  completedSnapshot?: boolean;
 }
 
 export interface BrowserEngine {
@@ -20,6 +23,7 @@ export interface BrowserEngine {
     | "embedded_chromium"
     | "contained_chromium"
     | "owned_chromium"
+    | "owned_chromium_functional_preview"
     | "webview2"
     | "webkit"
     | "unavailable";

@@ -1,14 +1,26 @@
 //! Trusted owned native pixel views for a separately contained offscreen host.
 //! This adapter does not grant browser authority or enable production automation.
 mod callbacks;
+#[cfg(windows)]
+mod completed;
+#[cfg(windows)]
+mod completed_cache;
 mod ffi;
 mod lifecycle;
+#[cfg(windows)]
+pub use completed::CompletedSurface;
+#[cfg(windows)]
+pub(crate) use completed_cache::CompletedCache;
 #[cfg(all(windows, feature = "native-test-driver"))]
 mod windows_acceptance;
 use crate::BrowserError;
 #[cfg(feature = "native-test-driver")]
 use colossus_browser_presentation::Frame;
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 use colossus_browser_presentation::PresentationError;
 use colossus_browser_presentation::{FrameCodec, Input, LatestFrames, Lease, LeaseGuard};
 use std::{
@@ -30,6 +42,8 @@ struct Owner {
     focus: Box<dyn Fn(Lease, bool) + Send + Sync>,
     frames: Mutex<LatestFrames>,
     scheduled: AtomicBool,
+    #[cfg(windows)]
+    completed: Mutex<Option<Arc<CompletedCache>>>,
     #[cfg(feature = "native-test-driver")]
     accepted_frame: Mutex<Option<AcceptedNativeFrame>>,
 }
@@ -117,6 +131,18 @@ pub struct PresentationSurface {
     codec: Mutex<FrameCodec>,
 }
 impl PresentationSurface {
+    #[cfg(windows)]
+    pub(crate) fn retain_completed_in(
+        &self,
+        cache: Arc<CompletedCache>,
+    ) -> Result<(), BrowserError> {
+        *self
+            .owner
+            .completed
+            .lock()
+            .map_err(|_| BrowserError::Closed)? = Some(cache);
+        Ok(())
+    }
     /// Create a hidden native view from the trusted application window and enrollment.
     ///
     /// # Errors
@@ -140,6 +166,8 @@ impl PresentationSurface {
             focus: Box::new(focus),
             frames: Mutex::new(frames),
             scheduled: AtomicBool::new(false),
+            #[cfg(windows)]
+            completed: Mutex::new(None),
             #[cfg(feature = "native-test-driver")]
             accepted_frame: Mutex::new(None),
         });
@@ -204,10 +232,14 @@ impl PresentationSurface {
             .map_err(|_| BrowserError::Closed)?
             .decode(envelope)
             .inspect_err(|error| {
-                #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+                #[cfg(all(
+                    any(windows, target_os = "macos"),
+                    feature = "native-test-driver",
+                    debug_assertions
+                ))]
                 trace_frame_rejection("decode", *error);
                 #[cfg(not(all(
-                    target_os = "macos",
+                    any(windows, target_os = "macos"),
                     feature = "native-test-driver",
                     debug_assertions
                 )))]
@@ -220,10 +252,14 @@ impl PresentationSurface {
             .map_err(|_| BrowserError::Closed)?
             .push(frame)
             .inspect_err(|error| {
-                #[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+                #[cfg(all(
+                    any(windows, target_os = "macos"),
+                    feature = "native-test-driver",
+                    debug_assertions
+                ))]
                 trace_frame_rejection("queue", *error);
                 #[cfg(not(all(
-                    target_os = "macos",
+                    any(windows, target_os = "macos"),
                     feature = "native-test-driver",
                     debug_assertions
                 )))]
@@ -338,7 +374,11 @@ impl PresentationSurface {
             .map_err(|_| BrowserError::Closed)
     }
 }
-#[cfg(all(target_os = "macos", feature = "native-test-driver", debug_assertions))]
+#[cfg(all(
+    any(windows, target_os = "macos"),
+    feature = "native-test-driver",
+    debug_assertions
+))]
 fn trace_frame_rejection(stage: &'static str, error: PresentationError) {
     let failure = match error {
         PresentationError::Invalid => "invalid",
@@ -347,8 +387,9 @@ fn trace_frame_rejection(stage: &'static str, error: PresentationError) {
         PresentationError::Hidden => "hidden",
         PresentationError::LimitExceeded => "limit_exceeded",
         PresentationError::OutcomeUnknown => "outcome_unknown",
+        PresentationError::Expired => "expired",
     };
-    eprintln!("EVIDENCE mac-remote-frame stage={stage} failure={failure}");
+    eprintln!("EVIDENCE native-remote-frame stage={stage} failure={failure}");
 }
 #[cfg(windows)]
 fn parent(window: &Window) -> Option<usize> {
@@ -456,7 +497,14 @@ fn schedule(window: &Window, owner: &Arc<Owner>, handle: usize) -> Result<(), Br
                             count,
                         });
                     }
-                    #[cfg(not(feature = "native-test-driver"))]
+                    #[cfg(windows)]
+                    if shown
+                        && let Ok(cache) = owner.completed.lock()
+                        && let Some(cache) = cache.as_ref()
+                    {
+                        cache.accepted(frame);
+                    }
+                    #[cfg(not(any(windows, feature = "native-test-driver")))]
                     let _ = shown;
                 }
             } else {

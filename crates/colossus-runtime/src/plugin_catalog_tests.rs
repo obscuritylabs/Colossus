@@ -52,6 +52,7 @@ fn installed_plugin_stdio_status_matches_runtime_component_validation() {
     });
     let runtime = open(&root.join("workspace"), None, &[]);
     let catalog = PluginCatalogSource {
+        browser_available: false,
         workspace_plugins: Arc::new(
             crate::workspace_plugins::WorkspacePlugins::new(
                 &root,
@@ -92,6 +93,7 @@ fn installed_plugin_stdio_status_matches_runtime_component_validation() {
         .allowed_tools
         .clear();
     let catalog = PluginCatalogSource {
+        browser_available: false,
         configuration: Arc::new(broken),
         ..catalog
     };

@@ -16,14 +16,27 @@ use crate::{
 };
 
 // A Retina BGRA paint can cross the native host and worker relay before the
-// presenter receives its authenticated copy. Keep effects on the short
-// deadline; only read-only Poll gets the bounded frame-transfer budget.
+// presenter receives its authenticated copy. Read-only metadata also waits for
+// the CEF-owning thread during page loading. Keep effects on the short deadline;
+// only Poll and Observe use the bounded read budget. Native leases still expire
+// independently and a completed read cannot authorize input or renew visibility.
 const CONTROL_OPERATION_TIMEOUT: Duration = Duration::from_millis(750);
 const FRAME_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 // Callers may queue behind one in-flight frame. The worker still applies the
 // short per-effect deadline after dispatch, so this wait grants no extra
 // execution time or retry to a human command.
 const CALL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(6);
+
+fn operation_timeout(command: &PresentationCommand) -> Duration {
+    if matches!(
+        command,
+        PresentationCommand::Poll { .. } | PresentationCommand::Observe { .. }
+    ) {
+        FRAME_OPERATION_TIMEOUT
+    } else {
+        CONTROL_OPERATION_TIMEOUT
+    }
+}
 
 trait Reader: AsyncRead + Unpin + Send {}
 impl<T: AsyncRead + Unpin + Send> Reader for T {}
@@ -140,11 +153,7 @@ pub async fn serve_presentation(
             if matches!(command, PresentationCommand::Ready) {
                 return Err(PresentationError::Stale);
             }
-            let budget = if matches!(&command, PresentationCommand::Poll { .. }) {
-                FRAME_OPERATION_TIMEOUT
-            } else {
-                CONTROL_OPERATION_TIMEOUT
-            };
+            let budget = operation_timeout(&command);
             let result = tokio::time::timeout(budget, async {
                 if let PresentationCommand::Poll { lease } = command {
                     match host.frame(lease).await {
@@ -263,7 +272,8 @@ impl Drop for ClientOwner {
     }
 }
 
-/// Native-only private client. Dropped dispatched callers close the channel and revoke input.
+/// Native-only private client. Dropped effects revoke input; abandoned reads drain
+/// their authenticated replies within the original deadline to preserve framing.
 #[derive(Clone)]
 pub struct PresentationClient(Arc<ClientOwner>);
 impl PresentationClient {
@@ -302,11 +312,9 @@ impl PresentationClient {
                     continue;
                 }
                 let read_only_frame = matches!(&call.command, PresentationCommand::Poll { .. });
-                let budget = if read_only_frame {
-                    FRAME_OPERATION_TIMEOUT
-                } else {
-                    CONTROL_OPERATION_TIMEOUT
-                };
+                let read_only =
+                    read_only_frame || matches!(&call.command, PresentationCommand::Observe { .. });
+                let budget = operation_timeout(&call.command);
                 let operation = async {
                     channel
                         .writer
@@ -373,7 +381,12 @@ impl PresentationClient {
                     Ok((reply, frame))
                 };
                 let result = tokio::select! {
-                    _ = call.response.closed() => break,
+                    // A UI snapshot can expire while Observe is already dispatched,
+                    // or while a frame is being transferred. Neither read changes
+                    // authority. Finish validating its bounded reply before taking
+                    // the next call; abandoning it mid-frame would desynchronize the
+                    // stream and unnecessarily kill an otherwise healthy viewer.
+                    _ = call.response.closed(), if !read_only => break,
                     result = tokio::time::timeout(budget, operation) => match result {
                         Ok(Ok(reply)) => Ok(reply),
                         // Poll has no human effect. Preserve a verified parser's

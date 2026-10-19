@@ -17,6 +17,16 @@ pub(super) const CRASHED_MESSAGE: &str =
 pub(super) struct Tab {
     pub(super) scope: String,
     pub(super) view: BrowserView,
+    #[cfg(any(
+        feature = "windows-browser-development",
+        feature = "windows-browser-functional-preview"
+    ))]
+    pub(super) pending_completed_view: Option<BrowserView>,
+    #[cfg(any(
+        feature = "windows-browser-development",
+        feature = "windows-browser-functional-preview"
+    ))]
+    pub(super) close_requested: bool,
     pub(super) agent_run_id: Option<String>,
     pub(super) policy: NavigationPolicy,
     pub(super) dto: BrowserTabDto,
@@ -33,7 +43,10 @@ pub(super) struct Registry {
     pub(super) selected: HashMap<String, String>,
     pub(super) profiles: HashMap<String, tempfile::TempDir>,
     pub(super) sessions: HashMap<String, String>,
-    #[cfg(feature = "windows-browser-development")]
+    #[cfg(any(
+        feature = "windows-browser-development",
+        feature = "windows-browser-functional-preview"
+    ))]
     pub(super) viewer_recoveries: HashMap<String, u8>,
 }
 
@@ -47,7 +60,10 @@ impl Registry {
             // independently supervised native surface is actually attached.
             #[cfg(not(any(
                 feature = "macos-contained-browser-diagnostic",
-                feature = "windows-browser-development"
+                any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                )
             )))]
             {
                 engine.preview = false;
@@ -88,7 +104,24 @@ impl Registry {
         let Some(tab) = self.tabs.iter_mut().find(|t| t.dto.id == id) else {
             return;
         };
+        // A late callback belongs to the retired live attachment. A static
+        // completed view has no page event stream and must remain inspectable.
+        if matches!(tab.dto.control, "completed" | "expired") {
+            return;
+        }
         match event {
+            BrowserEvent::Expired => {
+                tab.dto.control = "expired";
+                tab.dto.page.loading = false;
+                tab.dto.error = Some(
+                    "This browser session expired. Continue in a new session to browse again."
+                        .into(),
+                );
+                tab.dto.notice = None;
+                tab.dto.popup_url = None;
+                tab.presentation_epoch.fetch_add(1, Ordering::AcqRel);
+                tab.heartbeat = None;
+            }
             BrowserEvent::Loading(loading) => {
                 tab.dto.page.loading = loading;
                 if loading {

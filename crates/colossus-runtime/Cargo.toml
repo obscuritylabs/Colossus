@@ -11,6 +11,7 @@ license.workspace = true
 # feature does not participate in installed-package discovery or release builds.
 macos-browser-host-acceptance = ["colossus-sandbox/macos-browser-tls-development"]
 windows-browser-development = []
+windows-browser-functional-preview = ["colossus-sandbox/windows-browser-functional-preview"]
 
 [dependencies]
 zeroize.workspace = true

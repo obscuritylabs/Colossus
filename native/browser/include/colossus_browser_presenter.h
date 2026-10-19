@@ -13,6 +13,15 @@ typedef void (*colossus_presenter_input_fn)(void* owner, const colossus_cef_inpu
 typedef void (*colossus_presenter_focus_fn)(void* owner, int32_t focused);
 uintptr_t colossus_presenter_create(uintptr_t parent, void* owner,
   colossus_presenter_input_fn input, colossus_presenter_focus_fn focus);
+#if defined(_WIN32)
+/* Static completed image: hidden at creation, never focusable and has no input
+ * callbacks or browser host. The monotonic epoch below is only a local display
+ * heartbeat, bounded to1500ms; it cannot renew any Core/browser authority.
+ */
+uintptr_t colossus_presenter_snapshot_create(uintptr_t parent);
+int32_t colossus_presenter_snapshot_show(uintptr_t view, uint64_t epoch, uint32_t display_ms,
+  colossus_cef_bounds bounds, uint32_t width, uint32_t height, const uint8_t* bgra, size_t bytes);
+#endif
 int32_t colossus_presenter_bounds(uintptr_t view, colossus_cef_bounds bounds);
 /* Monotonic native epoch; expired/hidden epochs cannot be renewed. Native OS
  * timer clears cached pixels/focus after1500ms independent of new frame arrival.

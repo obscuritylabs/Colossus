@@ -22,12 +22,7 @@ pub(super) async fn drain(mut reader: PrivateReader) -> std::io::Result<u64> {
             for byte in &bytes[..count] {
                 if *byte == b'\n' {
                     if let Ok(text) = std::str::from_utf8(&line)
-                        && (text.starts_with("native Windows profile rejection ")
-                            || text.starts_with("native cef bootstrap ")
-                            || text.starts_with("native cef startup breakpoint ")
-                            || text.starts_with("native cef upload failure ")
-                            || text.starts_with("native cef resource rejection ")
-                            || text.starts_with("native Windows download "))
+                        && debug_line_allowed(text)
                     {
                         eprintln!("{text}");
                     }
@@ -37,6 +32,90 @@ pub(super) async fn drain(mut reader: PrivateReader) -> std::io::Result<u64> {
                 }
             }
         }
+    }
+}
+
+#[cfg(any(debug_assertions, test))]
+fn debug_line_allowed(text: &str) -> bool {
+    text.starts_with("native Windows profile rejection ")
+        || text.starts_with("native cef bootstrap ")
+        || text.starts_with("native cef startup breakpoint ")
+        || text.starts_with("native cef upload failure ")
+        || text.starts_with("native cef resource rejection ")
+        || text.starts_with("native Windows download ")
+        // Only these complete fixed diagnostic lines may pass this boundary.
+        // A single CR belongs to CRLF framing, never to a payload suffix.
+        || matches!(
+            text.strip_suffix('\r').unwrap_or(text),
+            "EVIDENCE native-host-observe rejected=core_wait_in_progress"
+                | "EVIDENCE native-host-observe rejected=missing_active"
+                | "EVIDENCE native-host-observe rejected=disabled"
+                | "EVIDENCE native-host-observe rejected=uninitialized"
+                | "EVIDENCE native-host-observe rejected=cancelled"
+                | "EVIDENCE native-host-observe rejected=lease_mismatch"
+                | "EVIDENCE native-host-observe rejected=control_mismatch"
+                | "EVIDENCE native-host-observe rejected=session_mismatch"
+                | "EVIDENCE native-host-observe rejected=missing_selection"
+                | "EVIDENCE native-host-observe rejected=missing_tab"
+                | "EVIDENCE native-host-observe rejected=native_document_unavailable"
+                | "EVIDENCE native-host-observe rejected=unpublished_document"
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::debug_line_allowed;
+
+    #[test]
+    fn native_observation_diagnostics_require_complete_closed_vocabulary_lines() {
+        for category in [
+            "core_wait_in_progress",
+            "missing_active",
+            "disabled",
+            "uninitialized",
+            "cancelled",
+            "lease_mismatch",
+            "control_mismatch",
+            "session_mismatch",
+            "missing_selection",
+            "missing_tab",
+            "native_document_unavailable",
+            "unpublished_document",
+        ] {
+            let line = format!("EVIDENCE native-host-observe rejected={category}");
+            assert!(debug_line_allowed(&line));
+            assert!(debug_line_allowed(&format!("{line}\r")));
+            for suffix in [" private page data", "\t", "\r\r", "\0"] {
+                assert!(!debug_line_allowed(&format!("{line}{suffix}")));
+            }
+            assert!(!debug_line_allowed(&format!(" {line}")));
+        }
+        for line in [
+            "EVIDENCE native-host-observe rejected=unknown",
+            "EVIDENCE native-host-observe page=private",
+            "untrusted EVIDENCE native-host-observe rejected=lease_mismatch",
+        ] {
+            assert!(!debug_line_allowed(line));
+        }
+    }
+
+    #[test]
+    fn existing_native_startup_receipt_filter_is_preserved() {
+        for prefix in [
+            "native Windows profile rejection ",
+            "native cef bootstrap ",
+            "native cef startup breakpoint ",
+            "native cef upload failure ",
+            "native cef resource rejection ",
+            "native Windows download ",
+        ] {
+            assert!(debug_line_allowed(&format!(
+                "{prefix}fixed_existing_receipt"
+            )));
+        }
+        assert!(!debug_line_allowed(
+            "untrusted native cef bootstrap receipt"
+        ));
     }
 }
 

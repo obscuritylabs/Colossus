@@ -127,7 +127,7 @@ it("lazy inbox inspection queues the exact cloud payload with CSRF and renders r
     "<script>peerInput()</script>",
   );
   expect(container.querySelector("script")).toBeNull();
-  expect(container.textContent).toContain("Included in prepared turn 2");
+  expect(container.textContent).toContain("Included · turn 2");
 });
 
 it("shared source inspection does not borrow the source application's inbox permission", async () => {

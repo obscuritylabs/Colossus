@@ -3,6 +3,30 @@ import { expect, test } from "@playwright/test";
 
 const fixture = "/?fixture=activity-comparison&imageViews=1";
 
+test("browser screenshots show inline and use the image preview in conversation and Activity", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(`${fixture}&browserScreenshot=1`);
+  const row = page.locator(".activity-kind-image");
+  await expect(row.locator("summary")).toContainText("Browser screenshot");
+  await expect(row.locator("img")).toBeVisible();
+  await row
+    .getByRole("button", {
+      name: "Open image 1: sample-screen-1.png",
+      exact: true,
+    })
+    .click();
+  await expect(page.getByRole("dialog").getByRole("img")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.goto(`${fixture}&browserScreenshot=1&view=activity`);
+  const inspector = page.getByRole("complementary", {
+    name: "Activity inspector",
+  });
+  await inspector.getByRole("button", { name: "Result", exact: true }).click();
+  await expect(inspector.locator("img")).toHaveCount(1);
+});
+
 test("viewed images expand to thumbnails, open by keyboard, and survive reload", async ({
   page,
 }) => {

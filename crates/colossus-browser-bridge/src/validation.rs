@@ -75,6 +75,7 @@ pub(crate) fn open(
     }
     let options = &value.options;
     if options.profile != enrollment.profile
+        || options.public_web != enrollment.public_web
         || options.mode != enrollment.mode
         || options.allowed_origins.iter().collect::<BTreeSet<_>>()
             != enrollment.allowed_origins.iter().collect::<BTreeSet<_>>()
@@ -100,10 +101,10 @@ pub(crate) fn allocation(
             .collect::<BTreeSet<_>>()
             .len()
             != options.allowed_origins.len()
-        || options
-            .initial_url
-            .as_ref()
-            .is_some_and(|url| !options.allowed_origins.contains(&url.origin()))
+        || options.initial_url.as_ref().is_some_and(|url| {
+            !url.origin()
+                .admitted_by(&options.allowed_origins, options.public_web)
+        })
     {
         return Err(BrowserDriverError::Denied);
     }
@@ -138,7 +139,9 @@ pub(crate) fn command_for_open(
     let limits = &capabilities.limits;
     match &command.action {
         BrowserAction::Navigate { url } | BrowserAction::TabOpen { url: Some(url) }
-            if !open.options.allowed_origins.contains(&url.origin()) =>
+            if !url
+                .origin()
+                .admitted_by(&open.options.allowed_origins, open.options.public_web) =>
         {
             return Err(BrowserDriverError::Denied);
         }
@@ -331,11 +334,9 @@ pub(crate) fn observed(
             .as_ref()
             .is_some_and(|tab| tab.document_id != value.tab.document_id)
         || value.tab.title.len() > 1024
-        || value
-            .tab
-            .origin
-            .as_ref()
-            .is_some_and(|origin| !open.options.allowed_origins.contains(origin))
+        || value.tab.origin.as_ref().is_some_and(|origin| {
+            !origin.admitted_by(&open.options.allowed_origins, open.options.public_web)
+        })
         || value
             .snapshot
             .as_ref()
