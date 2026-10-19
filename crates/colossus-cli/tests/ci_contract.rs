@@ -616,8 +616,8 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "windows-desktop"), "timeout-minutes").as_u64(),
-        Some(75),
-        "Windows Desktop acceptance must allow a cold native build"
+        Some(90),
+        "Windows Desktop acceptance must allow cold native builds and browser acceptance"
     );
     assert_eq!(
         field(job(jobs, "gate"), "name").as_str(),
