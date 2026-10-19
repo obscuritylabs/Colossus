@@ -99,8 +99,14 @@ the user's apps remain open. Disabling removes both tools and skill availability
 These tools can operate normal-user apps outside the workspace. Filesystem and
 network sandbox rules do not confine effects performed through another app's
 interface. Only one Colossus computer session can own physical input in the same
-Windows user session. The native control card provides Pause/Resume and Stop;
-human input pauses automation. Protected input, elevated apps, UAC, and locked or
+Windows user session. The native control card provides Pause/Resume and Stop.
+Physical **Escape** stops computer control; **Ctrl+Alt+P** pauses it. The pause
+shortcut never resumes control: use the card's **Resume** button. Pause blocks
+native computer input without suspending the whole model run. Stop immediately
+revokes computer input; the owning run is cancelled when the runtime receives
+the native stop result. Human input also pauses automation. These shortcuts are
+active only while a computer-control session owns its native card.
+Protected input, elevated apps, UAC, and locked or
 secure desktops require the human. Colossus's own controls are excluded targets.
 
 ## Other runtime limits

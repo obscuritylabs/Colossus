@@ -1,8 +1,10 @@
 use crate::ComputerConfig;
 
+mod agent_stop;
 mod authority;
 mod capture;
 mod fixture;
+mod operator_stop;
 
 #[test]
 fn native_computer_config_stays_disabled_and_serializes_editable_defaults() {

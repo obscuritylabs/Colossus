@@ -1,11 +1,14 @@
 //! Real native operator controls and a passive human-input takeover fence.
 use super::{Error, wide};
-use crate::input_marker::InputMarker;
+use crate::{
+    input_marker::InputMarker,
+    operator_control::{Action, Key, Keyboard},
+};
 use std::{
     ptr::{null, null_mut},
     sync::{
         Arc,
-        atomic::{AtomicPtr, AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU64, Ordering},
     },
 };
 use windows_sys::Win32::{
@@ -13,6 +16,7 @@ use windows_sys::Win32::{
     System::LibraryLoader::GetModuleHandleW,
     UI::{
         Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
+        Input::KeyboardAndMouse::*,
         WindowsAndMessaging::*,
     },
 };
@@ -25,6 +29,8 @@ pub(crate) struct Signals {
     pub tracked: AtomicU64,
     root: u64,
     pub tag: InputMarker,
+    armed: AtomicBool,
+    keyboard: Keyboard,
     #[cfg(feature = "native-test-driver")]
     pub own_mouse: AtomicU64,
     #[cfg(feature = "native-test-driver")]
@@ -39,9 +45,22 @@ pub(crate) struct Signals {
     pub foreign_injected_key: AtomicU64,
     hwnd: AtomicPtr<std::ffi::c_void>,
 }
+
+impl Signals {
+    fn request(&self, action: Action) {
+        if self.armed.load(Ordering::Acquire) {
+            action.publish(&self.action);
+            // Keep an in-flight input fenced even after the broker consumes the
+            // request or a later explicit human Resume changes native state.
+            self.human.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+}
 pub(crate) struct Indicator {
     pub signals: Arc<Signals>,
     hwnd: HWND,
+    pause: HWND,
+    resume: HWND,
     mouse: HHOOK,
     key: HHOOK,
     window_events: HWINEVENTHOOK,
@@ -58,6 +77,8 @@ impl Indicator {
             tracked: AtomicU64::new(root),
             root,
             tag,
+            armed: AtomicBool::new(false),
+            keyboard: Keyboard::new(),
             #[cfg(feature = "native-test-driver")]
             own_mouse: AtomicU64::new(0),
             #[cfg(feature = "native-test-driver")]
@@ -96,7 +117,7 @@ impl Indicator {
                 24,
                 24,
                 430,
-                100,
+                132,
                 null_mut(),
                 null_mut(),
                 instance,
@@ -112,14 +133,31 @@ impl Indicator {
             CreateWindowExW(
                 0,
                 wide("BUTTON").as_ptr(),
-                wide("Pause / Resume").as_ptr(),
+                wide("Pause").as_ptr(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                 12,
                 10,
-                190,
+                122,
                 30,
                 hwnd,
                 1usize as HMENU,
+                instance,
+                null(),
+            )
+        };
+        // SAFETY: fixed disabled Resume button under this helper's retained card.
+        let resume = unsafe {
+            CreateWindowExW(
+                0,
+                wide("BUTTON").as_ptr(),
+                wide("Resume").as_ptr(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_DISABLED,
+                145,
+                10,
+                122,
+                30,
+                hwnd,
+                3usize as HMENU,
                 instance,
                 null(),
             )
@@ -131,9 +169,9 @@ impl Indicator {
                 wide("BUTTON").as_ptr(),
                 wide("Stop control").as_ptr(),
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                214,
+                278,
                 10,
-                190,
+                126,
                 30,
                 hwnd,
                 2usize as HMENU,
@@ -141,7 +179,24 @@ impl Indicator {
                 null(),
             )
         };
-        if pause.is_null() || stop.is_null() {
+        // SAFETY: fixed explanatory text under this helper's owned native card.
+        let shortcuts = unsafe {
+            CreateWindowExW(
+                0,
+                wide("STATIC").as_ptr(),
+                wide("Esc: stop control    Ctrl+Alt+P: pause").as_ptr(),
+                WS_CHILD | WS_VISIBLE,
+                12,
+                52,
+                392,
+                24,
+                hwnd,
+                null_mut(),
+                instance,
+                null(),
+            )
+        };
+        if pause.is_null() || resume.is_null() || stop.is_null() || shortcuts.is_null() {
             // SAFETY: card is owned; child controls are destroyed with it.
             unsafe { DestroyWindow(hwnd) };
             return Err(Error::Unavailable);
@@ -183,23 +238,34 @@ impl Indicator {
         Ok(Self {
             signals,
             hwnd,
+            pause,
+            resume,
             mouse,
             key,
             window_events,
         })
     }
+    pub fn arm(&self) {
+        self.signals.keyboard.reset();
+        self.signals.armed.store(true, Ordering::Release);
+    }
     pub fn status(&self, paused: bool) {
         let title = wide(if paused {
-            "Colossus paused — use Pause / Resume to continue"
+            "Colossus paused — use Resume to continue"
         } else {
             "Colossus is controlling this window"
         });
         // SAFETY: fixed text, live helper-owned window, no target mutation.
-        unsafe { SetWindowTextW(self.hwnd, title.as_ptr()) };
+        unsafe {
+            SetWindowTextW(self.hwnd, title.as_ptr());
+            EnableWindow(self.pause, i32::from(!paused));
+            EnableWindow(self.resume, i32::from(paused));
+        }
     }
 }
 impl Drop for Indicator {
     fn drop(&mut self) {
+        self.signals.armed.store(false, Ordering::Release);
         SIGNALS.store(null_mut(), Ordering::Release);
         // SAFETY: hooks are removed before releasing the Arc used by their callbacks.
         unsafe {
@@ -244,14 +310,15 @@ unsafe extern "system" fn window_proc(
     if let Some(signals) = unsafe { signals.as_ref() } {
         if message == WM_COMMAND {
             match wparam & 0xffff {
-                1 => signals.action.store(1, Ordering::Release),
-                2 => signals.action.store(2, Ordering::Release),
+                1 => signals.request(Action::Pause),
+                2 => signals.request(Action::Stop),
+                3 => signals.request(Action::Resume),
                 _ => {}
             };
             return 0;
         }
         if message == WM_CLOSE {
-            signals.action.store(2, Ordering::Release);
+            signals.request(Action::Stop);
             return 0;
         }
     }
@@ -317,6 +384,23 @@ unsafe extern "system" fn key_hook(code: i32, wparam: WPARAM, lparam: LPARAM) ->
     {
         // SAFETY: WH_KEYBOARD_LL supplies this fixed event during the callback.
         let event = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
+        let injected = event.flags & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED) != 0;
+        let down = match wparam as u32 {
+            WM_KEYDOWN | WM_SYSKEYDOWN => Some(true),
+            WM_KEYUP | WM_SYSKEYUP => Some(false),
+            _ => None,
+        };
+        let route = down.map(|down| {
+            signals.keyboard.route(
+                signals.armed.load(Ordering::Acquire),
+                keyboard_key(event),
+                down,
+                injected,
+            )
+        });
+        if let Some(action) = route.as_ref().and_then(|route| route.action) {
+            signals.request(action);
+        }
         if !signals
             .tag
             .matches(event.dwExtraInfo, event.flags & LLKHF_INJECTED != 0)
@@ -330,9 +414,36 @@ unsafe extern "system" fn key_hook(code: i32, wparam: WPARAM, lparam: LPARAM) ->
             }
             signals.human.fetch_add(1, Ordering::AcqRel);
         }
+        if route.is_some_and(|route| route.suppress) {
+            // This physical operator command belongs to the active control
+            // session, not the target app. Injected agent keys always pass on.
+            return 1;
+        }
     }
-    // SAFETY: preserve all physical key events.
+    // SAFETY: preserve all other keyboard events, including agent loopback input.
     unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
+}
+
+fn keyboard_key(event: &KBDLLHOOKSTRUCT) -> Key {
+    match event.vkCode as u16 {
+        VK_ESCAPE => Key::Escape,
+        VK_P => Key::P,
+        VK_LCONTROL => Key::ControlLeft,
+        VK_RCONTROL => Key::ControlRight,
+        VK_LMENU => Key::AltLeft,
+        VK_RMENU => Key::AltRight,
+        VK_LSHIFT => Key::ShiftLeft,
+        VK_RSHIFT => Key::ShiftRight,
+        VK_LWIN => Key::WindowsLeft,
+        VK_RWIN => Key::WindowsRight,
+        VK_CONTROL if event.flags & LLKHF_EXTENDED != 0 => Key::ControlRight,
+        VK_CONTROL => Key::ControlLeft,
+        VK_MENU if event.flags & LLKHF_EXTENDED != 0 => Key::AltRight,
+        VK_MENU => Key::AltLeft,
+        VK_SHIFT if event.scanCode == 0x36 => Key::ShiftRight,
+        VK_SHIFT => Key::ShiftLeft,
+        _ => Key::Other,
+    }
 }
 
 unsafe extern "system" fn window_event(
@@ -353,7 +464,7 @@ unsafe extern "system" fn window_event(
         if handle == signals.root || handle == signals.tracked.load(Ordering::Acquire) {
             signals.native_epoch.fetch_add(1, Ordering::AcqRel);
             if handle == signals.root {
-                signals.action.store(4, Ordering::Release);
+                signals.request(Action::WindowClosed);
             }
         }
     }

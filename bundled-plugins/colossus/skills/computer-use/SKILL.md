@@ -27,6 +27,11 @@ not confine actions performed through another app's interface.
    or resizing the window, switching apps, or changing control invalidates old
    observations. A successful input receipt does not prove the intended result.
 
+Use only the observation from the latest `computer.snapshot` or
+`computer.screenshot`; another snapshot or screenshot replaces the previous one.
+Observations expire after a short configured interval (ten seconds by default).
+After unrelated tools or a long delay, obtain a fresh observation before input.
+
 Use `computer.focus` only for a window returned in the current session's
 observation, including a positively owned app dialog. Windows may refuse a focus
 change from a background app. If that happens, ask the human to bring the selected
@@ -39,10 +44,20 @@ they fit the task; desktop input is not a way to bypass their authority limits.
 
 ## Human control and recovery
 
-The visible native control card lets the user pause or stop input. If control
-changes, inspect `computer.status`; continue only with active control, the new
-generation, and a fresh observation. The agent cannot resume paused control.
+The visible native control card lets the user pause or stop input. Physical
+Escape stops computer control, and Ctrl+Alt+P pauses it without resuming it.
+Only the human's Resume button can resume paused control. Pause blocks native
+computer input; it does not suspend the whole model run. Stop immediately fences
+computer input and cancels the owning run when its native stop receipt reaches
+the runtime. Do not send these shortcuts to manipulate Colossus's control card.
+If control changes, inspect `computer.status`; continue only with active control,
+the new generation, and a fresh observation. The agent cannot resume paused control.
 Closing and reopening a session cannot override a human Stop or run cancellation.
+
+When status is paused, stop issuing input and explain that the human must resume
+control. Do not repeatedly poll or try other input routes. A new run starts with
+no computer session: enumerate and open again rather than reusing a previous
+run's session, window, or observation IDs.
 
 On a stale observation, inspect the current session before choosing another action.
 On an unknown external outcome, inspect the resulting app state and report the

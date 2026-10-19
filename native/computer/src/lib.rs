@@ -17,6 +17,8 @@ mod input_marker;
 #[cfg(any(windows, test))]
 mod lifetime;
 #[cfg(any(windows, test))]
+mod operator_control;
+#[cfg(any(windows, test))]
 mod owner_registry;
 #[cfg(windows)]
 mod platform;

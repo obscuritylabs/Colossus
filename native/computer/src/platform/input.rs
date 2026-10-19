@@ -4,7 +4,10 @@ use super::{
     identity::{self, Window},
     indicator::{self, Signals},
 };
-use crate::{TrustedComputerContext, focus_settle, geometry};
+use crate::{
+    TrustedComputerContext, focus_settle, geometry,
+    operator_control::{input_failure, undispatched_failure},
+};
 use colossus_contracts::{ComputerInput, ComputerMouseButton, ComputerNode, ComputerTarget};
 use std::sync::{
     Arc,
@@ -35,26 +38,21 @@ struct Gate<'a> {
 }
 impl Gate<'_> {
     fn check(&self) -> Result<(), Error> {
+        let pending = self.signals.action.load(Ordering::Acquire);
         if self.cancel.load(Ordering::Acquire)
             || !self.lifetime.valid()
             || std::time::Instant::now() >= self.deadline
             || self.signals.native_epoch.load(Ordering::Acquire) != self.native_epoch
-            || self.signals.action.load(Ordering::Acquire) != 0
+            || pending != 0
             || self.signals.human.load(Ordering::Acquire) != self.human
         {
-            return Err(if self.started {
-                Error::OutcomeUnknown
-            } else {
-                Error::Denied
-            });
+            return Err(input_failure(
+                undispatched_failure(Error::Denied, pending),
+                self.started,
+            ));
         }
-        identity::revalidate_admission(self.root, self.window, self.context).map_err(|error| {
-            if self.started {
-                Error::OutcomeUnknown
-            } else {
-                error
-            }
-        })?;
+        identity::revalidate_admission(self.root, self.window, self.context)
+            .map_err(|error| input_failure(error, self.started))?;
         if identity::foreground() != self.window.hwnd() {
             return Err(if self.started {
                 Error::OutcomeUnknown
@@ -242,6 +240,10 @@ pub(crate) fn apply(
     } = scope;
     input.validate().map_err(|_| Error::InvalidInput)?;
     indicator::pump();
+    let pending = signals.action.load(Ordering::Acquire);
+    if pending != 0 {
+        return Err(undispatched_failure(Error::Denied, pending));
+    }
     if signals.native_epoch.load(Ordering::Acquire) != native_epoch {
         return Err(Error::Stale);
     }
@@ -292,7 +294,10 @@ pub(crate) fn apply(
                 unsafe { SetForegroundWindow(window.hwnd()) != 0 }
             },
             Error::Denied,
-        )?;
+        )
+        // Every activate error precedes its sole effect closure. A Stop queued
+        // by the admission probe therefore has a trustworthy no-effect receipt.
+        .map_err(|error| undispatched_failure(error, signals.action.load(Ordering::Acquire)))?;
         #[cfg(feature = "native-test-driver")]
         eprintln!("COMPUTER_NATIVE_FOCUS phase=activate accepted={accepted}");
         if !accepted {
@@ -420,13 +425,7 @@ pub(crate) fn apply(
         }
         ComputerInput::Type { text } => {
             for chunk in text_chunks(text) {
-                if protected().map_err(|error| {
-                    if gate.started {
-                        Error::OutcomeUnknown
-                    } else {
-                        error
-                    }
-                })? {
+                if protected().map_err(|error| input_failure(error, gate.started))? {
                     return Err(if gate.started {
                         Error::OutcomeUnknown
                     } else {

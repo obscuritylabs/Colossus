@@ -3,6 +3,7 @@ use crate::{
     Runtime, RuntimeOpenOptions, computer_tools::RuntimeComputerHost, prelude::*,
     test_support::private_tempdir,
 };
+use colossus_ports::ComputerDriverError;
 use std::sync::atomic::Ordering;
 
 #[tokio::test]
@@ -50,6 +51,7 @@ async fn paused_native_epoch_cannot_be_bypassed_with_close_open_or_stale_input()
     let driver = Arc::new(Driver::default());
     let (runtime, _workspace) = runtime(driver.clone());
     let context = begin(&runtime, "paused-run");
+    let run = runtime.computer.as_ref().unwrap().run(&context).unwrap();
     let executor = executor(&runtime);
     let opened = open(&executor, &context).await;
     let envelope = observe(&executor, &context, &opened).await;
@@ -58,16 +60,18 @@ async fn paused_native_epoch_cannot_be_bypassed_with_close_open_or_stale_input()
         .await
         .unwrap();
     assert_eq!(status["session"]["control_generation"], 2);
-    assert!(
+    assert!(!run.control.is_cancelled());
+    assert!(driver.revoked.lock().unwrap().is_empty());
+    assert!(matches!(
         call(
             &executor,
             &context,
             "computer.move",
             with(envelope, json!({"x":1,"y":1}))
         )
-        .await
-        .is_err()
-    );
+        .await,
+        Err(ToolError::Failed(message)) if message.contains(&ComputerDriverError::Stale.to_string())
+    ));
     call(&executor, &context, "computer.close", session(&status))
         .await
         .unwrap();
@@ -162,21 +166,28 @@ async fn expired_or_foreign_observation_is_consumed_without_native_input() {
     let context = begin(&runtime, "expired-observation");
     let executor = executor(&runtime);
     let opened = open(&executor, &context).await;
-    let envelope = observe(&executor, &context, &opened).await;
     let run = runtime.computer.as_ref().unwrap().run(&context).unwrap();
-    run.state.lock().unwrap().observation.as_mut().unwrap().1 =
-        Instant::now() - Duration::from_secs(60);
-    assert!(
-        call(
-            &executor,
-            &context,
-            "computer.move",
-            with(envelope, json!({"x":0,"y":0}))
-        )
-        .await
-        .is_err()
-    );
-    assert!(run.state.lock().unwrap().observation.is_none());
+    for expired in [true, false] {
+        let mut envelope = observe(&executor, &context, &opened).await;
+        if expired {
+            run.state.lock().unwrap().observation.as_mut().unwrap().1 =
+                Instant::now() - Duration::from_secs(60);
+        } else {
+            envelope["observation_id"] = json!(observation_id());
+        }
+        assert!(matches!(
+            call(
+                &executor,
+                &context,
+                "computer.move",
+                with(envelope, json!({"x":0,"y":0}))
+            ).await,
+            Err(ToolError::Failed(message)) if message.contains(&ComputerDriverError::Stale.to_string())
+        ));
+        assert!(run.state.lock().unwrap().observation.is_none());
+        assert!(!run.control.is_cancelled());
+        assert!(driver.revoked.lock().unwrap().is_empty());
+    }
     assert_eq!(driver.inputs.load(Ordering::SeqCst), 0);
     runtime.drain_computer_sessions().await.unwrap();
 }

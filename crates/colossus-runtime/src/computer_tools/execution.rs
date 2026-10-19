@@ -4,6 +4,7 @@ use super::{
     service::RuntimeComputerTools,
 };
 use crate::prelude::*;
+use colossus_contracts::{ComputerControlState, ComputerStopReason};
 use colossus_ports::AgentRunLifecycle;
 
 pub(crate) struct ComputerToolExecutor {
@@ -85,7 +86,17 @@ impl ToolExecutor for ComputerToolExecutor {
             }
             return result;
         }
+        let user_stopped = call.name == "computer.status"
+            && matches!(
+                &receipt,
+                StagedComputerReply::Session(session)
+                    if session.state == ComputerControlState::Stopped
+                        && session.reason == Some(ComputerStopReason::UserStopped)
+            );
         super::effect::commit(&run, receipt).map_err(|_| unknown())?;
+        if user_stopped {
+            self.computer.cancel_run(&run.binding.run_id);
+        }
         Ok(ToolResult {
             call_id: call.call_id,
             name: call.name,

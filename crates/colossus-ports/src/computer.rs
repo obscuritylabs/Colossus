@@ -184,6 +184,10 @@ pub enum ComputerDriverError {
     /// Native authority, protected target, or human control rejected the action.
     #[error("computer native boundary denied operation")]
     Denied,
+    /// The native operator stopped this exact owned run before dispatch.
+    /// This is never inferred from a stale observation, pause, or generic denial.
+    #[error("computer control stopped by user")]
+    UserStopped,
     /// Native identity, control generation, geometry, focus, or observation changed.
     #[error("computer target or observation is stale")]
     Stale,

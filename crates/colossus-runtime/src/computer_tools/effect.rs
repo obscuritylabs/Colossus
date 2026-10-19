@@ -78,7 +78,10 @@ impl EffectExecutor for ComputerEffect<'_> {
         let reply = match reply {
             Ok(Ok(reply)) => reply,
             Ok(Err(error)) => {
-                if error == ComputerDriverError::OutcomeUnknown {
+                if matches!(
+                    error,
+                    ComputerDriverError::OutcomeUnknown | ComputerDriverError::UserStopped
+                ) {
                     self.computer.cancel_run(&run.binding.run_id);
                 }
                 return Err(driver_error(error));
@@ -168,14 +171,17 @@ fn admit_command(
         _ => return Err(failed()),
     };
     let session = state.session.as_ref().ok_or_else(failed)?;
-    if session.session_id != *id || session.control_generation != generation {
+    if session.session_id != *id {
         return Err(failed());
+    }
+    if session.control_generation != generation {
+        return Err(driver_error(ComputerDriverError::Stale));
     }
     if matches!(command, ComputerCommand::Close { .. }) {
         return Ok(());
     }
     if session.state != ComputerControlState::Active || state.paused || state.stopped {
-        return Err(failed());
+        return Err(driver_error(ComputerDriverError::Denied));
     }
     if let ComputerCommand::Input {
         observation_id,
@@ -183,12 +189,15 @@ fn admit_command(
         ..
     } = command
     {
-        let observation = state.observation.take().ok_or_else(failed)?;
+        let observation = state
+            .observation
+            .take()
+            .ok_or_else(|| driver_error(ComputerDriverError::Stale))?;
         if observation.0 != *observation_id
             || observation.1.elapsed()
                 > Duration::from_millis(u64::from(service.limits.observation_max_age_ms))
         {
-            return Err(failed());
+            return Err(driver_error(ComputerDriverError::Stale));
         }
         if let colossus_contracts::ComputerInput::Focus { window_id } = input
             && !state.observed_windows.contains(window_id)

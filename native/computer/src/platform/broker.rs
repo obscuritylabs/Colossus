@@ -7,6 +7,7 @@ use super::{
     read_worker::ReadWorker,
 };
 use crate::{
+    operator_control::{self, Action, StopFence, Transition},
     protocol::{self, Bootstrap, ReadQuery, Reply, Request, Response, Role},
     wire,
 };
@@ -130,6 +131,7 @@ struct Broker {
     lifetimes: crate::lifetime::Tracker,
     session: Option<Session>,
     blocked: bool,
+    stop_fence: StopFence,
     cancel: Arc<AtomicBool>,
     worker: Option<ReadWorker>,
 }
@@ -173,6 +175,7 @@ fn run(bootstrap: Bootstrap) -> Result<(), Error> {
         lifetimes: crate::lifetime::Tracker::new()?,
         session: None,
         blocked: false,
+        stop_fence: StopFence::new(),
         cancel,
         worker: None,
     };
@@ -239,87 +242,71 @@ impl Broker {
         let Some(session) = self.session.as_mut() else {
             return;
         };
+        if session.summary.state == ComputerControlState::Stopped {
+            return;
+        }
         let mut transition = None;
         if self.cancel.load(Ordering::Acquire) {
-            transition = Some((ComputerControlState::Stopped, ComputerStopReason::Disabled));
+            transition = Some(Transition::Stop(ComputerStopReason::Disabled));
         } else if session.started.elapsed()
             >= Duration::from_millis(u64::from(session.limits.session_timeout_ms))
         {
-            transition = Some((ComputerControlState::Stopped, ComputerStopReason::Expired));
+            transition = Some(Transition::Stop(ComputerStopReason::Expired));
         } else if identity::desktop().is_err() {
-            transition = Some((
-                ComputerControlState::Stopped,
-                ComputerStopReason::DesktopUnavailable,
-            ));
+            transition = Some(Transition::Stop(ComputerStopReason::DesktopUnavailable));
         } else if identity::process(session.root.process.pid).ok().as_ref()
             != Some(&session.root.process)
         {
-            transition = Some((
-                ComputerControlState::Stopped,
-                ComputerStopReason::WindowClosed,
-            ));
+            transition = Some(Transition::Stop(ComputerStopReason::WindowClosed));
         }
         if let Some(card) = session.indicator.as_ref() {
-            let action = card.signals.action.swap(0, Ordering::AcqRel);
-            if action == 4 {
-                transition = Some((
-                    ComputerControlState::Stopped,
-                    ComputerStopReason::WindowClosed,
-                ));
-            } else if action == 2 {
-                transition = Some((
-                    ComputerControlState::Stopped,
-                    ComputerStopReason::UserStopped,
-                ));
-            } else if action == 1 && session.summary.state != ComputerControlState::Stopped {
-                if session.summary.state == ComputerControlState::Paused {
-                    session.summary.state = ComputerControlState::Active;
-                    session.summary.reason = None;
-                    session.summary.control_generation += 1;
-                    session.observation = None;
-                    session.human = card.signals.human.load(Ordering::Acquire);
-                    card.status(false);
-                } else {
-                    transition =
-                        Some((ComputerControlState::Paused, ComputerStopReason::UserPaused));
-                }
-            } else if session.summary.state == ComputerControlState::Active
-                && card.signals.human.load(Ordering::Acquire) != session.human
-            {
-                transition = Some((
-                    ComputerControlState::Paused,
-                    ComputerStopReason::UserTakeover,
-                ));
+            let action = Action::take(&card.signals.action);
+            if action == Some(Action::Stop) {
+                // Positive native human Stop stays categorical even if window
+                // destruction or another terminal fact arrives in the same pump.
+                transition = Some(Transition::Stop(ComputerStopReason::UserStopped));
+            } else if transition.is_none() {
+                transition = operator_control::decide(
+                    session.summary.state,
+                    action,
+                    card.signals.human.load(Ordering::Acquire) != session.human,
+                );
             }
         }
-        if let Some((state, reason)) = transition {
-            if session.summary.state != state || session.summary.reason != Some(reason) {
-                #[cfg(feature = "native-test-driver")]
-                if let Some(card) = session.indicator.as_ref() {
-                    eprintln!(
-                        "COMPUTER_NATIVE_CONTROL phase=transition state={state:?} reason={reason:?} human_changed={} own_mouse={} foreign_mouse={} foreign_injected_mouse={} foreign_matching_low_tag={} foreign_key={} foreign_injected_key={}",
-                        card.signals.human.load(Ordering::Acquire) != session.human,
-                        card.signals.own_mouse.load(Ordering::Relaxed),
-                        card.signals.foreign_mouse.load(Ordering::Relaxed),
-                        card.signals.foreign_injected_mouse.load(Ordering::Relaxed),
-                        card.signals
-                            .foreign_matching_low_tag
-                            .load(Ordering::Relaxed),
-                        card.signals.foreign_key.load(Ordering::Relaxed),
-                        card.signals.foreign_injected_key.load(Ordering::Relaxed)
-                    );
-                }
-                session.summary.control_generation += 1;
+        if let Some(transition) = transition {
+            if !transition.apply(&mut session.summary) {
+                return;
             }
-            session.summary.state = state;
-            session.summary.reason = Some(reason);
+            self.stop_fence.record(&session.summary);
+            #[cfg(feature = "native-test-driver")]
+            if let Some(card) = session.indicator.as_ref()
+                && let Transition::Pause(reason) | Transition::Stop(reason) = transition
+            {
+                let state = session.summary.state;
+                eprintln!(
+                    "COMPUTER_NATIVE_CONTROL phase=transition state={state:?} reason={reason:?} human_changed={} own_mouse={} foreign_mouse={} foreign_injected_mouse={} foreign_matching_low_tag={} foreign_key={} foreign_injected_key={}",
+                    card.signals.human.load(Ordering::Acquire) != session.human,
+                    card.signals.own_mouse.load(Ordering::Relaxed),
+                    card.signals.foreign_mouse.load(Ordering::Relaxed),
+                    card.signals.foreign_injected_mouse.load(Ordering::Relaxed),
+                    card.signals
+                        .foreign_matching_low_tag
+                        .load(Ordering::Relaxed),
+                    card.signals.foreign_key.load(Ordering::Relaxed),
+                    card.signals.foreign_injected_key.load(Ordering::Relaxed)
+                );
+            }
             session.observation = None;
-            if state == ComputerControlState::Stopped {
+            if session.summary.state == ComputerControlState::Stopped {
                 self.blocked = true;
                 session.indicator = None;
                 session.writer = None;
             } else if let Some(card) = &session.indicator {
-                card.status(true);
+                let paused = session.summary.state == ComputerControlState::Paused;
+                if !paused {
+                    session.human = card.signals.human.load(Ordering::Acquire);
+                }
+                card.status(paused);
             }
         }
     }
@@ -329,6 +316,9 @@ impl Broker {
             .as_ref()
             .filter(|s| &s.summary.session_id == id)
             .ok_or(Error::Stale)?;
+        if operator_control::user_stopped(&session.summary) {
+            return Err(Error::UserStopped);
+        }
         if session.summary.state != ComputerControlState::Active
             || session.summary.control_generation != generation
             || self.cancel.load(Ordering::Acquire)
@@ -505,6 +495,7 @@ impl Broker {
             eprintln!("COMPUTER_NATIVE_CONTROL phase=broker_cancelled");
             return Err(Error::Denied);
         }
+        self.stop_fence.before_dispatch(&request.command)?;
         match request.command {
             ComputerCommand::Windows { max_windows } => {
                 let windows = self.enumerate(max_windows, None)?;
@@ -549,6 +540,13 @@ impl Broker {
                     observation: None,
                     human,
                 });
+                if let Some(card) = self
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.indicator.as_ref())
+                {
+                    card.arm();
+                }
                 Ok((Reply::Opened(summary), Vec::new()))
             }
             ComputerCommand::Status { session_id } => {
@@ -961,7 +959,11 @@ impl Broker {
                             .as_ref()
                             .is_some_and(|s| s.summary.state != ComputerControlState::Active)
                     {
-                        break Err(Error::Denied);
+                        break Err(if self.stop_fence.stopped() {
+                            Error::UserStopped
+                        } else {
+                            Error::Denied
+                        });
                     }
                     match receiver.try_recv() {
                         Ok(Ok((response, binary))) => {

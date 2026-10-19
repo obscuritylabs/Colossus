@@ -40,6 +40,7 @@ pub(super) struct Driver {
     pub(super) revoked: StdMutex<BTreeSet<String>>,
     pub(super) closed: AtomicUsize,
     pub(super) inputs: AtomicUsize,
+    pub(super) input_error: StdMutex<Option<ComputerDriverError>>,
     pub(super) paused: AtomicBool,
     pub(super) unknown: AtomicBool,
     pub(super) bad_png: AtomicBool,
@@ -154,6 +155,9 @@ impl ComputerDriver for Driver {
                 }))
             }
             ComputerCommand::Input { .. } => {
+                if let Some(error) = *self.input_error.lock().unwrap() {
+                    return Err(error);
+                }
                 self.inputs.fetch_add(1, Ordering::SeqCst);
                 if self.open_modal_on_input.load(Ordering::SeqCst) {
                     self.modal.store(true, Ordering::SeqCst);
