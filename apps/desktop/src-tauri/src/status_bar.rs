@@ -16,6 +16,8 @@ use crate::dto::CommandErrorDto;
 
 mod notification_content;
 use notification_content::BackgroundNotificationContent;
+#[cfg(any(target_os = "macos", windows))]
+mod system_notification;
 
 const MAX_PINS: usize = 10;
 const MAX_RUN_ID_BYTES: usize = 128;
@@ -184,8 +186,6 @@ pub(crate) fn notify_background(
     }
     #[cfg(any(target_os = "macos", windows))]
     {
-        use tauri_plugin_notification::NotificationExt as _;
-
         let window = app
             .get_webview_window("main")
             .ok_or_else(status_bar_error)?;
@@ -200,18 +200,13 @@ pub(crate) fn notify_background(
             return Ok(false);
         }
         let (title, body) = content.presentation(kind);
-        app.notification()
-            .builder()
-            .title(title)
-            .body(body)
-            .show()
-            .map_err(|_| {
-                CommandErrorDto::local_sanitized(
-                    "notification_unavailable",
-                    "Colossus could not show a system notification.",
-                    true,
-                )
-            })?;
+        system_notification::show(&app, &title, body).map_err(|()| {
+            CommandErrorDto::local_sanitized(
+                "notification_unavailable",
+                "Colossus could not show a system notification.",
+                true,
+            )
+        })?;
         history.record_sent(run_id, kind, now);
         Ok(true)
     }

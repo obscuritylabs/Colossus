@@ -203,8 +203,6 @@ pub fn run() {
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build());
-    #[cfg(any(target_os = "macos", windows))]
-    let application = application.plugin(tauri_plugin_notification::init());
     let application = application
         .manage(state::AppState::default())
         .manage(dictation::DictationState::default())

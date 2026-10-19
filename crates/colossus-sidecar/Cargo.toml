@@ -45,8 +45,8 @@ rustix.workspace = true
 
 [dev-dependencies]
 colossus-sdk = { workspace = true, features = ["sidecar"] }
+colossus-credentials.workspace = true
 colossus-worker-protocol.workspace = true
-keyring.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 

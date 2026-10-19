@@ -77,16 +77,12 @@ impl CatalogTestHome {
                 format!("signing-key:checkpoint-{instance}"),
                 format!("journal-anchor:journal-{instance}"),
             ] {
-                let entry = keyring::Entry::new(RUNTIME_KEY_SERVICE, &account)
-                    .expect("isolated runtime key");
-                if let Err(error) = entry.delete_credential() {
-                    assert!(
-                        matches!(error, keyring::Error::NoEntry),
-                        "cannot remove isolated catalog runtime key"
-                    );
-                }
+                let entry =
+                    colossus_credentials::SystemCredentialEntry::new(RUNTIME_KEY_SERVICE, &account)
+                        .expect("isolated runtime key");
+                entry.delete().expect("remove isolated catalog runtime key");
                 assert!(
-                    matches!(entry.get_secret(), Err(keyring::Error::NoEntry)),
+                    entry.read().expect("read isolated runtime key").is_none(),
                     "isolated catalog runtime key must be absent after cleanup"
                 );
             }
@@ -170,13 +166,13 @@ fn native_catalog_recreated_home_does_not_reuse_previous_secure_anchor() {
             original_path.with_file_name(format!("{ROOT_PREFIX}retained-{}", uuid::Uuid::new_v4()));
         std::fs::rename(&original_path, &retained).expect("retain old home");
         original.path = retained;
-        let anchor = keyring::Entry::new(
+        let anchor = colossus_credentials::SystemCredentialEntry::new(
             RUNTIME_KEY_SERVICE,
             &format!("journal-anchor:journal-{old_id}"),
         )
         .unwrap();
         assert!(
-            anchor.get_secret().is_ok(),
+            anchor.read().unwrap().is_some(),
             "old secure anchor survives the data reset"
         );
         let mut recreated = CatalogTestHome::new();
@@ -193,7 +189,7 @@ fn native_catalog_recreated_home_does_not_reuse_previous_secure_anchor() {
         .expect("same-path fresh setup with old anchor present");
         assert_eq!(cards[0].id, "fixture-model-retry");
         assert!(
-            anchor.get_secret().is_ok(),
+            anchor.read().unwrap().is_some(),
             "setup must not delete the old journal anchor"
         );
     });
