@@ -11,6 +11,7 @@ path = "src/windows_lib.rs"
 crate-type = ["cdylib"]
 
 [features]
+windows-browser-functional-preview = ["colossus-windows-process/windows-browser-functional-preview"]
 native-custody-test = []
 macos-owned-profile-development = []
 macos-synthetic-profile-diagnostic = []

@@ -2,7 +2,53 @@
 use super::Host;
 use colossus_browser_presentation::{Lease, PageState, PresentationError};
 use colossus_contracts::{BrowserDocumentId, BrowserTarget};
+
+#[derive(Clone, Copy)]
+pub(super) enum Rejection {
+    MissingActive,
+    Disabled,
+    Uninitialized,
+    Cancelled,
+    Lease,
+    Control,
+    Session,
+    MissingSelection,
+    MissingTab,
+    NativeDocument,
+    AdoptionDenied,
+}
+
 impl Host {
+    pub(super) fn observation_stale(&self, reason: Rejection) -> PresentationError {
+        #[cfg(all(windows, debug_assertions))]
+        {
+            let bit = 1_u16 << reason as u8;
+            let observed = self.presentation.observation_diagnostics.get();
+            if observed & bit == 0 {
+                self.presentation
+                    .observation_diagnostics
+                    .set(observed | bit);
+                let category = match reason {
+                    Rejection::MissingActive => "missing_active",
+                    Rejection::Disabled => "disabled",
+                    Rejection::Uninitialized => "uninitialized",
+                    Rejection::Cancelled => "cancelled",
+                    Rejection::Lease => "lease_mismatch",
+                    Rejection::Control => "control_mismatch",
+                    Rejection::Session => "session_mismatch",
+                    Rejection::MissingSelection => "missing_selection",
+                    Rejection::MissingTab => "missing_tab",
+                    Rejection::NativeDocument => "native_document_unavailable",
+                    Rejection::AdoptionDenied => "unpublished_document",
+                };
+                eprintln!("EVIDENCE native-host-observe rejected={category}");
+            }
+        }
+        #[cfg(not(all(windows, debug_assertions)))]
+        let _ = reason;
+        PresentationError::Stale
+    }
+
     pub(super) fn observe_view(
         &mut self,
         lease: Lease,
@@ -15,7 +61,7 @@ impl Host {
             .presentation
             .active
             .as_ref()
-            .ok_or(PresentationError::Stale)?
+            .ok_or_else(|| self.observation_stale(Rejection::MissingActive))?
             .0
             .target
             .tab_id
@@ -24,7 +70,7 @@ impl Host {
             self.presentation
                 .selected_tab
                 .clone()
-                .ok_or(PresentationError::Stale)?
+                .ok_or_else(|| self.observation_stale(Rejection::MissingSelection))?
         } else {
             // The native human path has exactly its original configured tab.
             self.owned_lease(lease)?;
@@ -33,14 +79,14 @@ impl Host {
         let native = self
             .tabs
             .get(&identity)
-            .ok_or(PresentationError::Stale)?
+            .ok_or_else(|| self.observation_stale(Rejection::MissingTab))?
             .native;
         let (origin, title, revision) = self
             .metadata(native)
             .map_err(|_| PresentationError::OutcomeUnknown)?;
         let native_document = self
             .native_document(native)
-            .map_err(|_| PresentationError::Stale)?;
+            .map_err(|_| self.observation_stale(Rejection::NativeDocument))?;
         let tab = self
             .tabs
             .get_mut(&identity)
@@ -60,7 +106,7 @@ impl Host {
                 self.presentation.human,
                 final_human_fence,
             ) {
-                return Err(PresentationError::Stale);
+                return Err(self.observation_stale(Rejection::AdoptionDenied));
             }
             let mut bytes = [0_u8; 16];
             getrandom::fill(&mut bytes).map_err(|_| PresentationError::OutcomeUnknown)?;

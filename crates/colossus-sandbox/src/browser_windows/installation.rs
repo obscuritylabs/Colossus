@@ -64,6 +64,21 @@ pub(super) fn bind_development(
     bind_inner(config, true, true)
 }
 
+#[cfg(all(target_arch = "x86_64", feature = "windows-browser-functional-preview"))]
+pub(super) fn bind_functional_preview(
+    config: WindowsBrowserConfig,
+) -> Result<Installation, BrowserDriverError> {
+    // Capability, pinned inventory and false production-mode mismatches are
+    // integrity failures, even when the ordinary-user context is unavailable.
+    let installation = bind_inner(config, true, true).map_err(|error| match error {
+        BrowserDriverError::Unavailable => BrowserDriverError::Denied,
+        error => error,
+    })?;
+    colossus_windows_process::validate_functional_browser_context()
+        .map_err(|_| BrowserDriverError::Unavailable)?;
+    Ok(installation)
+}
+
 fn bind_inner(
     config: WindowsBrowserConfig,
     diagnostic: bool,
@@ -310,3 +325,11 @@ fn actual(root: &Path) -> Result<BTreeSet<String>, BrowserDriverError> {
     }
     Ok(paths)
 }
+
+#[cfg(all(
+    test,
+    target_arch = "x86_64",
+    feature = "windows-browser-functional-preview"
+))]
+#[path = "installation_preview_tests.rs"]
+mod functional_preview_tests;

@@ -2,8 +2,12 @@
 
 use std::{env, path::PathBuf};
 
+#[path = "build/functional_preview.rs"]
+mod functional_preview;
+
 fn main() {
     configure_windows_manifest();
+    functional_preview::link();
     link_native_preview();
 }
 
@@ -128,4 +132,5 @@ fn link_native_preview() {
         _ => panic!("native CEF linkage target is unsupported"),
     }
     println!("cargo:rustc-cfg=colossus_cef_linked");
+    println!("cargo:rustc-cfg=colossus_browser_presenter_linked");
 }

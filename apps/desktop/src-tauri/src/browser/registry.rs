@@ -17,9 +17,15 @@ pub(super) const CRASHED_MESSAGE: &str =
 pub(super) struct Tab {
     pub(super) scope: String,
     pub(super) view: BrowserView,
-    #[cfg(feature = "windows-browser-development")]
+    #[cfg(any(
+        feature = "windows-browser-development",
+        feature = "windows-browser-functional-preview"
+    ))]
     pub(super) pending_completed_view: Option<BrowserView>,
-    #[cfg(feature = "windows-browser-development")]
+    #[cfg(any(
+        feature = "windows-browser-development",
+        feature = "windows-browser-functional-preview"
+    ))]
     pub(super) close_requested: bool,
     pub(super) agent_run_id: Option<String>,
     pub(super) policy: NavigationPolicy,
@@ -37,7 +43,10 @@ pub(super) struct Registry {
     pub(super) selected: HashMap<String, String>,
     pub(super) profiles: HashMap<String, tempfile::TempDir>,
     pub(super) sessions: HashMap<String, String>,
-    #[cfg(feature = "windows-browser-development")]
+    #[cfg(any(
+        feature = "windows-browser-development",
+        feature = "windows-browser-functional-preview"
+    ))]
     pub(super) viewer_recoveries: HashMap<String, u8>,
 }
 
@@ -51,7 +60,10 @@ impl Registry {
             // independently supervised native surface is actually attached.
             #[cfg(not(any(
                 feature = "macos-contained-browser-diagnostic",
-                feature = "windows-browser-development"
+                any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                )
             )))]
             {
                 engine.preview = false;

@@ -87,7 +87,10 @@ pub trait RemoteHostOwner: Send + Sync {
 /// Whether this build includes the native pixel compositor, independent of host acceptance.
 #[must_use]
 pub const fn native_presentation_available() -> bool {
-    cfg!(all(colossus_cef_linked, any(windows, target_os = "macos")))
+    cfg!(all(
+        colossus_browser_presenter_linked,
+        any(windows, target_os = "macos")
+    ))
 }
 
 /// Attach independently admitted pixels through the platform compositor.
@@ -102,13 +105,13 @@ pub async fn attach(
     owner: Arc<dyn RemoteHostOwner>,
     sink: EventSink,
 ) -> Result<BrowserView, BrowserError> {
-    #[cfg(all(colossus_cef_linked, any(windows, target_os = "macos")))]
+    #[cfg(all(colossus_browser_presenter_linked, any(windows, target_os = "macos")))]
     {
         crate::remote::RemoteSurface::create(window, client, configure, digest, owner, sink)
             .await
             .map(BrowserView::Remote)
     }
-    #[cfg(not(all(colossus_cef_linked, any(windows, target_os = "macos"))))]
+    #[cfg(not(all(colossus_browser_presenter_linked, any(windows, target_os = "macos"))))]
     {
         let _ = (window, client, configure, digest, sink);
         owner.close().await?;
@@ -127,7 +130,7 @@ pub async fn attach_read_only(
     owner: Arc<dyn RemoteHostOwner>,
     sink: EventSink,
 ) -> Result<BrowserView, BrowserError> {
-    #[cfg(all(colossus_cef_linked, any(windows, target_os = "macos")))]
+    #[cfg(all(colossus_browser_presenter_linked, any(windows, target_os = "macos")))]
     {
         crate::remote::RemoteSurface::create_read_only(
             window, client, configure, digest, owner, sink,
@@ -135,7 +138,7 @@ pub async fn attach_read_only(
         .await
         .map(BrowserView::Remote)
     }
-    #[cfg(not(all(colossus_cef_linked, any(windows, target_os = "macos"))))]
+    #[cfg(not(all(colossus_browser_presenter_linked, any(windows, target_os = "macos"))))]
     {
         let _ = (window, client, configure, digest, sink);
         owner.close().await?;

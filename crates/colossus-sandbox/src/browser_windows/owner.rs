@@ -40,9 +40,9 @@ struct Native {
 impl Native {
     fn attest_tree(&self) -> Result<u16, BrowserDriverError> {
         let child = self.child.as_ref().ok_or(BrowserDriverError::Stale)?;
-        let processes = child.observe_process_tree().map_err(|error| {
+        let processes = child.observe_process_tree().map_err(|_error| {
             #[cfg(debug_assertions)]
-            eprintln!("Windows browser Job observation rejected: {error}");
+            eprintln!("Windows browser Job observation rejected: {_error}");
             BrowserDriverError::OutcomeUnknown
         })?;
         if processes.is_empty()
@@ -199,16 +199,16 @@ impl Owner {
                             native.profile_directory = Some(directory);
                             let directory = native.profile_directory.as_ref().expect("retained allocation");
                             let identity = colossus_windows_native::FileIdentity::of(directory)
-                                .map_err(|error| {
+                                .map_err(|_error| {
                                     #[cfg(debug_assertions)]
-                                    eprintln!("Windows browser profile identity rejected: {error}");
+                                    eprintln!("Windows browser profile identity rejected: {_error}");
                                     BrowserDriverError::OutcomeUnknown
                                 })?;
                             let profile_handle = if native.user_development { Ok(0) } else { native.child.as_ref().expect("retained child")
                                 .enroll_profile_directory(directory) }
-                                .map_err(|error| {
+                                .map_err(|_error| {
                                     #[cfg(debug_assertions)]
-                                    eprintln!("Windows browser profile handle rejected: {error}");
+                                    eprintln!("Windows browser profile handle rejected: {_error}");
                                     BrowserDriverError::OutcomeUnknown
                                 })?;
                             Ok(SupervisedChildChannels {
@@ -392,11 +392,24 @@ fn allocate(
             .then_some(u128::from_be_bytes(request.nonce)),
     };
     let spawned = if request.installation.user_development {
-        #[cfg(debug_assertions)]
+        #[cfg(all(target_arch = "x86_64", feature = "windows-browser-functional-preview"))]
+        {
+            colossus_windows_process::spawn_functional_browser_with_private_channels(
+                &spawn_request,
+                4,
+            )
+        }
+        #[cfg(all(
+            debug_assertions,
+            not(all(target_arch = "x86_64", feature = "windows-browser-functional-preview"))
+        ))]
         {
             colossus_windows_process::spawn_user_browser_with_private_channels(&spawn_request, 4)
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(
+            debug_assertions,
+            all(target_arch = "x86_64", feature = "windows-browser-functional-preview")
+        )))]
         {
             return Err(BrowserDriverError::Unsupported);
         }

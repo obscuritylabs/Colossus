@@ -1,4 +1,22 @@
 #[cfg(all(
+    feature = "windows-browser-functional-preview",
+    any(not(windows), not(target_arch = "x86_64"))
+))]
+compile_error!("Windows browser functional preview supports Windows x64 only");
+#[cfg(all(
+    feature = "windows-browser-functional-preview",
+    any(
+        feature = "embedded-chromium-preview",
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development",
+        feature = "browser-test-bridge",
+        feature = "plugin-test-bridge",
+        feature = "approval-test-bridge"
+    )
+))]
+compile_error!("the functional browser preview cannot include development or test bridges");
+
+#[cfg(all(
     feature = "macos-contained-browser-diagnostic",
     any(not(target_os = "macos"), not(debug_assertions))
 ))]
@@ -219,7 +237,8 @@ pub fn run() {
             #[cfg(any(
                 feature = "embedded-chromium-preview",
                 feature = "macos-contained-browser-diagnostic",
-                feature = "windows-browser-development"
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
             ))]
             browser::contained::install(app.handle())?;
             #[cfg(windows)]

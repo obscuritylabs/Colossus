@@ -63,6 +63,15 @@ pub(super) async fn hide_host(
     owner: &Owner,
     lease: colossus_browser_presentation::Lease,
 ) -> Result<(), BrowserError> {
+    #[cfg(all(
+        any(windows, target_os = "macos"),
+        feature = "native-test-driver",
+        debug_assertions
+    ))]
+    let started = (
+        std::time::Instant::now(),
+        owner.revision.load(Ordering::Acquire),
+    );
     match owner.client.hide(lease).await {
         Ok(())
         | Err(
@@ -75,7 +84,14 @@ pub(super) async fn hide_host(
                 feature = "native-test-driver",
                 debug_assertions
             ))]
-            super::trace_frame_channel_failure("hide_host", error, std::time::Duration::ZERO);
+            super::trace_owner_failure(
+                owner,
+                "hide_host",
+                super::presentation_failure_token(error),
+                lease,
+                started.1,
+                started.0.elapsed(),
+            );
             #[cfg(not(all(
                 any(windows, target_os = "macos"),
                 feature = "native-test-driver",

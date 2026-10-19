@@ -8,6 +8,7 @@ license = "Apache-2.0"
 workspace = "../src-tauri"
 
 [features]
+windows-browser-functional-preview = ["dep:async-trait", "dep:colossus-browser-presentation", "dep:serde_json", "dep:zeroize"]
 cef-preview = ["dep:serde_json", "dep:sha2", "dep:rustls-pki-types", "dep:x509-parser", "dep:zeroize", "dep:colossus-native-browser-pki", "dep:colossus-browser-presentation", "dep:async-trait"]
 native-test-driver = ["objc2-foundation/NSData", "objc2-foundation/NSJSONSerialization"]
 

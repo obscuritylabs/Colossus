@@ -10,6 +10,13 @@ use tauri::{AppHandle, Manager as _};
 
 mod close_intent;
 mod completed;
+mod recovery;
+
+pub(super) enum AgentViewerPlan {
+    Keep,
+    Attach,
+    Replace(String),
+}
 
 fn terminal(status: RunStatus) -> bool {
     matches!(
@@ -29,7 +36,7 @@ impl BrowserManager {
         scope: &str,
         run_id: &str,
         conversation_id: &str,
-    ) -> Result<bool, CommandErrorDto> {
+    ) -> Result<AgentViewerPlan, CommandErrorDto> {
         // Only the selected conversation's current run can own this viewer.
         // Keep its bounded recovery budget across fresh attachments, without
         // accumulating counters for already replaced runs or workspaces.
@@ -53,21 +60,21 @@ impl BrowserManager {
                 )
             });
         let Some((id, crashed, completed, session_id, close_requested)) = existing else {
-            return Ok(true);
+            return Ok(AgentViewerPlan::Attach);
         };
         if close_requested {
             self.close(scope, &id).await?;
-            return Ok(false);
+            return Ok(AgentViewerPlan::Keep);
         }
         if completed {
-            return Ok(false);
+            return Ok(AgentViewerPlan::Keep);
         }
         let state = app.state::<AppState>();
         let Some(target) = state.target(scope).await else {
-            return Ok(true);
+            return Ok(AgentViewerPlan::Keep);
         };
         let Some(_slot) = target.try_unary_slot() else {
-            return Ok(true);
+            return Ok(AgentViewerPlan::Keep);
         };
         let Ok(Ok(response)) = tokio::time::timeout(
             Duration::from_secs(1),
@@ -78,45 +85,55 @@ impl BrowserManager {
         .await
         else {
             // Unavailable run metadata never becomes terminal/cleanup authority.
-            return Ok(true);
+            return Ok(AgentViewerPlan::Keep);
         };
         if response.run.session_id != conversation_id || response.run.run_id != run_id {
-            return Ok(true);
+            return Ok(AgentViewerPlan::Keep);
         }
         if terminal(response.run.status) {
-            match close_intent::explicitly_closed(&target.client, &response.run, &session_id).await
-            {
-                Some(true) => self.close(scope, &id).await?,
-                closed => {
-                    // Unknown/over-budget close evidence retains only the URL
-                    // already displayed by Desktop, with a fresh-session path.
-                    // It cannot authorize a new private pixel copy.
-                    self.retain_completed_agent(scope, &id, closed == Some(false))
-                        .await?;
-                }
-            }
+            let closed =
+                close_intent::explicitly_closed(&target.client, &response.run, &session_id).await;
+            self.settle_terminal_agent(scope, &id, closed).await?;
             self.lock()?.viewer_recoveries.remove(run_id);
-            return Ok(false);
+            return Ok(AgentViewerPlan::Keep);
         }
         if !crashed {
-            return Ok(true);
+            return Ok(AgentViewerPlan::Keep);
         }
         {
             let mut registry = self.lock()?;
             if registry.viewer_recoveries.len() >= MAX_TABS
                 && !registry.viewer_recoveries.contains_key(run_id)
             {
-                return Ok(true);
+                return Ok(AgentViewerPlan::Keep);
             }
             let attempts = registry.viewer_recoveries.entry(run_id.into()).or_default();
             if *attempts >= 2 {
-                return Ok(true);
+                return Ok(AgentViewerPlan::Keep);
             }
             *attempts += 1;
         }
-        // Recover only presentation. The following normal watch obtains a fresh
-        // authenticated read-only admission to the existing Core-owned page.
-        self.close(scope, &id).await?;
-        Ok(true)
+        // Recovery retires only the failed presentation. Keep its tab and last
+        // metadata until a fresh admission succeeds: Core can finish while the
+        // next watch is awaiting its reply, leaving no live page to reattach.
+        Ok(AgentViewerPlan::Replace(id))
+    }
+
+    async fn settle_terminal_agent(
+        &self,
+        scope: &str,
+        id: &str,
+        explicitly_closed: Option<bool>,
+    ) -> Result<(), CommandErrorDto> {
+        match explicitly_closed {
+            Some(true) => self.close(scope, id).await,
+            closed => {
+                // Unknown/over-budget close evidence retains only the URL
+                // already displayed by Desktop, with a fresh-session path.
+                // It cannot authorize a new private pixel copy.
+                self.retain_completed_agent(scope, id, closed == Some(false))
+                    .await
+            }
+        }
     }
 }

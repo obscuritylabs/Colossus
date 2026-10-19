@@ -143,10 +143,13 @@ def grant_lpac_read(component_root: Path) -> None:
 
 
 def stage(cef_root: Path, native_build: Path, client_dll: Path, destination: Path,
-          dictation_resources: Path | None = None, *, host: bool = False) -> Path:
+          dictation_resources: Path | None = None, *, host: bool = False,
+          defer_inventory: bool = False) -> Path:
     program = HOST_PROGRAM if host else PROGRAM
     if host and dictation_resources is not None:
         raise component.ComponentError("private browser host cannot contain Desktop dictation resources")
+    if defer_inventory and not host:
+        raise component.ComponentError("only a private publisher host stage may defer inventory")
     source = stage_macos.verify_source(cef_root, "windows64")
     client_dll = client_dll.absolute()
     inspect_client(client_dll)
@@ -198,8 +201,9 @@ def stage(cef_root: Path, native_build: Path, client_dll: Path, destination: Pat
         inspect_client(staged / (program + ".dll"))
         inspect_client(staged / "colossus-browser-helper.dll")
         grant_lpac_read(staged)
-        component.installed_inventory(staged, "windows64", program + ".exe")
-        component.verify_installed(staged)
+        if not defer_inventory:
+            component.installed_inventory(staged, "windows64", program + ".exe")
+            component.verify_installed(staged)
         if os.name == "nt":
             # Windows os.rename fails if any destination already exists.
             os.rename(staged, destination)
@@ -216,10 +220,13 @@ def main() -> int:
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--dictation-resources", type=Path)
     parser.add_argument("--host", action="store_true", help="stage the fixed private supervised host bootstrap")
+    parser.add_argument("--defer-inventory", action="store_true",
+                        help="publisher staging only: seal a fresh inventory after binary signing")
     arguments = parser.parse_args()
     try:
         print(stage(arguments.cef_root, arguments.native_build, arguments.client_dll, arguments.destination,
-                    arguments.dictation_resources, host=arguments.host))
+                    arguments.dictation_resources, host=arguments.host,
+                    defer_inventory=arguments.defer_inventory))
         return 0
     except (component.ComponentError, OSError, subprocess.SubprocessError, ValueError) as error:
         print(f"Windows browser stage: {error}", file=sys.stderr)

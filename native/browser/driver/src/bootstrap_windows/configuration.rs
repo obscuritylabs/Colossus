@@ -19,7 +19,7 @@ use crate::{ffi, windows_io};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Configuration {
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "windows-browser-functional-preview"))]
     #[serde(default)]
     user_development: bool,
     pub enrollment: BrowserBridgeEnrollment,
@@ -80,11 +80,11 @@ pub(super) async fn read(
 
 impl Configuration {
     pub(super) fn user_development(&self) -> bool {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "windows-browser-functional-preview"))]
         {
             self.user_development
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, feature = "windows-browser-functional-preview")))]
         {
             false
         }
@@ -117,6 +117,13 @@ impl Configuration {
         {
             return Err(BrowserDriverError::Denied);
         }
+        #[cfg(feature = "windows-browser-functional-preview")]
+        if self.user_development() {
+            // Independently query this broker's actual primary before CEF. The
+            // private flag cannot promote an elevated or isolated process token.
+            colossus_windows_process::validate_functional_browser_context()
+                .map_err(|_| BrowserDriverError::Denied)?;
+        }
         Ok(())
     }
 
@@ -147,12 +154,12 @@ impl Configuration {
         }
         let handle = usize::try_from(std::mem::take(&mut self.profile_handle))
             .ok()
-            .filter(|value| *value != 0 && *value != usize::MAX)
-            .ok_or_else(|| {
-                #[cfg(debug_assertions)]
-                eprintln!("native Windows profile rejection phase=handle category=invalid_numeric");
-                BrowserDriverError::Denied
-            })? as *mut std::ffi::c_void;
+            .filter(|value| *value != 0 && *value != usize::MAX);
+        #[cfg(debug_assertions)]
+        if handle.is_none() {
+            eprintln!("native Windows profile rejection phase=handle category=invalid_numeric");
+        }
+        let handle = handle.ok_or(BrowserDriverError::Denied)? as *mut std::ffi::c_void;
         // SAFETY: the authenticated supervising parent duplicated this exact
         // non-inherited directory into us after token attestation. Verify native
         // type before transferring ownership; it cannot be inherited by helpers.

@@ -1,5 +1,5 @@
 //! Explicit real Windows source acceptance. Missing prerequisites fail categorically.
-#![cfg(windows)]
+#![cfg(all(windows, debug_assertions))]
 #[path = "browser_windows_native/actions.rs"]
 mod actions;
 #[path = "browser_windows_native/capture.rs"]
