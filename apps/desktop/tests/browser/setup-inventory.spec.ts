@@ -159,7 +159,7 @@ test("every imported connection is in the normal inventory and setup management 
   await expect(rows).toHaveCount(5);
   await expect(rows.filter({ hasText: "Needs API key" })).toHaveCount(4);
   await expect(rows.filter({ hasText: "Local Models" })).toContainText(
-    "No key required",
+    "No credential selected",
   );
   await expect(rows.first()).toBeInViewport();
   await expect(page.locator(".setup-packages")).toHaveCount(0);
