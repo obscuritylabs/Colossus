@@ -57,6 +57,9 @@ use std::{
 };
 use tempfile::tempdir;
 
+#[path = "agent_tools_search_tests.rs"]
+mod agent_tools_search_tests;
+
 #[test]
 fn research_outer_timeout_contains_every_bounded_nested_operation() {
     let mut config = RuntimeConfig::offline_template("state.redb");

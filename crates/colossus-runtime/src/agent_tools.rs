@@ -43,7 +43,21 @@ impl ToolExecutor for DiscoverableToolExecutor {
         let query = required_tool_string(&call, "query")?
             .trim()
             .to_ascii_lowercase();
-        let terms = query.split_whitespace().collect::<Vec<_>>();
+        let terms = query
+            .split_whitespace()
+            .map(|term| {
+                term.strip_prefix('+')
+                    .filter(|word| !word.is_empty() && !word.starts_with('+'))
+                    .unwrap_or(term)
+            })
+            .collect::<Vec<_>>();
+        if terms.is_empty() || terms.contains(&"+") {
+            return Err(ToolError::InvalidArguments {
+                tool: call.name,
+                message: "query requires search terms; attach '+' to a term".into(),
+            });
+        }
+        let matching_query = terms.join(" ");
         let limit = usize::try_from(optional_tool_u64(&call, "max_results")?.unwrap_or(10))
             .unwrap_or(50)
             .clamp(1, 50);
@@ -62,8 +76,8 @@ impl ToolExecutor for DiscoverableToolExecutor {
                 {
                     return None;
                 }
-                let score = usize::from(name == query) * 1_000
-                    + usize::from(name.contains(&query)) * 500
+                let score = usize::from(name == matching_query) * 1_000
+                    + usize::from(name.contains(&matching_query)) * 500
                     + terms.iter().filter(|term| name.contains(**term)).count() * 50
                     + terms
                         .iter()
