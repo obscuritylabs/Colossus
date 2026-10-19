@@ -196,13 +196,11 @@ impl SecretStore for OsCredentialStore {
         service: &str,
         account: &str,
     ) -> Result<Option<Zeroizing<Vec<u8>>>, PublicApiAdminError> {
-        let entry = keyring::Entry::new(service, account)
+        let entry = colossus_credentials::SystemCredentialEntry::new(service, account)
             .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)?;
-        match entry.get_secret() {
-            Ok(secret) => Ok(Some(Zeroizing::new(secret))),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(_) => Err(PublicApiAdminError::SecretStoreUnavailable),
-        }
+        entry
+            .read()
+            .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)
     }
 
     fn write(
@@ -211,20 +209,19 @@ impl SecretStore for OsCredentialStore {
         account: &str,
         secret: &[u8],
     ) -> Result<(), PublicApiAdminError> {
-        let entry = keyring::Entry::new(service, account)
+        let entry = colossus_credentials::SystemCredentialEntry::new(service, account)
             .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)?;
         entry
-            .set_secret(secret)
+            .write(secret)
             .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)
     }
 
     fn delete(&self, service: &str, account: &str) -> Result<(), PublicApiAdminError> {
-        let entry = keyring::Entry::new(service, account)
+        let entry = colossus_credentials::SystemCredentialEntry::new(service, account)
             .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)?;
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => Err(PublicApiAdminError::SecretStoreUnavailable),
-        }
+        entry
+            .delete()
+            .map_err(|_| PublicApiAdminError::SecretStoreUnavailable)
     }
 }
 

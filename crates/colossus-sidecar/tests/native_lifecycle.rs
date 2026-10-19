@@ -80,8 +80,8 @@ fn delete_test_credential(account: &str) {
 
 #[cfg(not(target_os = "macos"))]
 fn delete_test_credential(account: &str) {
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, account) {
-        let _ = entry.delete_credential();
+    if let Ok(entry) = colossus_credentials::SystemCredentialEntry::new(KEYRING_SERVICE, account) {
+        let _ = entry.delete();
     }
 }
 

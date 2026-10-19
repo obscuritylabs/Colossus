@@ -107,15 +107,13 @@ rustix = { version = "1.1.4", features = ["fs", "process"] }
 [target.'cfg(windows)'.dependencies]
 colossus-windows-native = { version = "=0.11.8", path = "../../../crates/colossus-windows-native" }
 keyring-core = "=1.0.0"
-tauri-plugin-single-instance = "=2.4.2"
 windows-native-keyring-store = "=1.1.0"
 
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
 tauri = { version = "=2.12.4", features = ["tray-icon", "image-png"] }
-tauri-plugin-notification = "=2.4.0"
+notify-rust = { version = "=4.18.1", default-features = false }
 
 [dev-dependencies]
-keyring = "4.1.4"
 rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 tempfile = "3.23.0"

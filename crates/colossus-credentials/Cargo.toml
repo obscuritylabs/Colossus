@@ -30,7 +30,8 @@ windows-native-keyring-store = "=1.1.0"
 apple-native-keyring-store = { version = "=1.0.1", features = ["keychain"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-zbus-secret-service-keyring-store = { version = "=1.0.0", features = ["crypto-rust"] }
+# 4.1 replaced the cryptographic DH/IV generator with fastrand; retain OsRng.
+dbus-secret-service = { version = "=4.0.3", features = ["crypto-rust", "vendored"] }
 
 [dev-dependencies]
 tempfile.workspace = true

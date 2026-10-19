@@ -55,7 +55,6 @@ colossus-api.workspace = true
 colossus-policy.workspace = true
 colossus-credentials.workspace = true
 colossus-sdk = { workspace = true, features = ["embedded", "serialization", "sidecar"] }
-keyring.workspace = true
 
 [lints]
 workspace = true
