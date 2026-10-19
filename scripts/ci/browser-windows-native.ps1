@@ -17,6 +17,7 @@ $Evidence = if ([IO.Path]::IsPathRooted($EvidenceDirectory)) { $EvidenceDirector
 if (Test-Path -LiteralPath $Evidence) { throw "Native evidence destination must be fresh." }
 $null = New-Item -ItemType Directory -Path $Evidence
 $Parent = $null
+$ManagedParent = $null
 $Passed = $false
 $ManifestHash = $null
 $Development = $Mode -eq 'Development'
@@ -57,24 +58,10 @@ try {
     $UserProfile = [Environment]::GetFolderPath('UserProfile')
     if ([string]::IsNullOrWhiteSpace($UserProfile)) { throw "Native acceptance requires an owned user profile." }
     $ParentName = "ColossusBrowserCI-" + [Guid]::NewGuid().ToString("N")
-    if ($HostProfile -eq 'Release') {
-        # Managed Desktop adds workspace/instance ancestry. Keep one private
-        # leaf to prove a distinct short native cache avoids that ancestry.
-        $Padding = [Math]::Max(1, 190 - $UserProfile.Length - 1 - $ParentName.Length)
-        $ParentName += '-' + ('r' * $Padding)
-    }
     $Parent = Join-Path $UserProfile $ParentName
     & python -B -c 'import sys; from pathlib import Path; sys.path.insert(0, "native/browser/scripts"); from pki_fixture_private import private_directory; private_directory(Path(sys.argv[1]))' $Parent
     if ($LASTEXITCODE -ne 0) { throw "Private fixture state allocation failed." }
     $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_STATE_PARENT = $Parent
-    $SavedPaths = @{}
-    foreach ($Name in @('LOCALAPPDATA', 'TEMP', 'TMP', 'COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_LONG_PROFILE')) {
-        $SavedPaths[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
-    }
-    foreach ($Name in @('LOCALAPPDATA', 'TEMP', 'TMP')) {
-        [Environment]::SetEnvironmentVariable($Name, $Parent, 'Process')
-    }
-    $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_LONG_PROFILE = if ($HostProfile -eq 'Release') { '1' } else { $null }
     if (-not $Development) {
         $StartupCases = @(
             @{
@@ -126,6 +113,28 @@ try {
             $StartupChecked[$Case.evidence] = $true
         }
     }
+    # Raw startup cases construct their CEF profile directly. Keep their parent
+    # short; only the runtime factory below splits long managed ancestry from a
+    # distinct short native engine allocation.
+    $FactoryParent = $Parent
+    if ($HostProfile -eq 'Release') {
+        $ManagedName = 'managed-' + [Guid]::NewGuid().ToString('N')
+        $Padding = [Math]::Max(1, 190 - $Parent.Length - 1 - $ManagedName.Length)
+        $ManagedName += '-' + ('r' * $Padding)
+        $ManagedParent = Join-Path $Parent $ManagedName
+        & python -B -c 'import sys; from pathlib import Path; sys.path.insert(0, "native/browser/scripts"); from pki_fixture_private import private_directory; private_directory(Path(sys.argv[1]))' $ManagedParent
+        if ($LASTEXITCODE -ne 0) { throw "Private managed fixture state allocation failed." }
+        $FactoryParent = $ManagedParent
+    }
+    $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_STATE_PARENT = $FactoryParent
+    $SavedPaths = @{}
+    foreach ($Name in @('LOCALAPPDATA', 'TEMP', 'TMP', 'COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_LONG_PROFILE')) {
+        $SavedPaths[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
+    }
+    foreach ($Name in @('LOCALAPPDATA', 'TEMP', 'TMP')) {
+        [Environment]::SetEnvironmentVariable($Name, $FactoryParent, 'Process')
+    }
+    $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_LONG_PROFILE = if ($HostProfile -eq 'Release') { '1' } else { $null }
     # A rolling categorical log stays bounded even on a noisy compiler failure.
     $Lines = [Collections.Generic.Queue[string]]::new()
     $Bytes = 0
@@ -173,6 +182,10 @@ try {
     }
     # The actual fixture removes its owned subtree only after the complete native
     # shutdown receipt. Nonrecursive removal refuses any unknown surviving state.
+    if ($null -ne $ManagedParent) {
+        [IO.Directory]::Delete($ManagedParent)
+        $ManagedParent = $null
+    }
     [IO.Directory]::Delete($Parent)
     $Parent = $null
     $Passed = $true
