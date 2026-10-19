@@ -6,7 +6,7 @@ pub(super) fn computer_specs() -> Vec<ToolSpec> {
     let mut specs = vec![
         tool(
             "computer.windows",
-            "List bounded native Windows application choices. Returns opaque window IDs, never operating-system handles. Computer use controls ordinary unsandboxed apps and may act outside the workspace.",
+            "List bounded native Windows application choices. The requested count is an upper bound narrowed by workspace and native limits. Returns opaque window IDs, never operating-system handles. Computer use controls ordinary unsandboxed apps and may act outside the workspace.",
             object(
                 json!({"max_windows":{"type":"integer","minimum":1,"maximum":128}}),
                 &[],
@@ -24,7 +24,7 @@ pub(super) fn computer_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "computer.snapshot",
-            "Read bounded native accessibility semantics for the selected window or a positively owned same-app dialog. Sensitive values are withheld. A released observation is required before each input action.",
+            "Read bounded native accessibility semantics for the selected window or a positively owned same-app dialog. The requested node count is an upper bound narrowed by workspace and native limits. Sensitive values are withheld. A released observation is required before each input action.",
             session(
                 json!({"max_nodes":{"type":"integer","minimum":1,"maximum":1024}}),
                 &[],

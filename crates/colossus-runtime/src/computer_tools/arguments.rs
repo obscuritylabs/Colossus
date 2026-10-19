@@ -31,7 +31,7 @@ impl ComputerInvocation {
             };
             arguments.insert("session_id".into(), json!(session.session_id));
         }
-        let command = match action {
+        let mut command = match action {
             "windows" => {
                 arguments
                     .entry("max_windows")
@@ -91,6 +91,17 @@ impl ComputerInvocation {
             _ => return Err(invalid(call)),
         };
         command.validate().map_err(|_| invalid(call))?;
+        // Read counts are requested upper bounds. Validate the protocol first,
+        // then bind policy and native dispatch to the narrower workspace limit.
+        match &mut command {
+            ComputerCommand::Windows { max_windows } => {
+                *max_windows = (*max_windows).min(service.limits.max_windows);
+            }
+            ComputerCommand::Snapshot { max_nodes, .. } => {
+                *max_nodes = (*max_nodes).min(service.limits.max_snapshot_nodes);
+            }
+            _ => {}
+        }
         Ok(Self::Command { command })
     }
 
