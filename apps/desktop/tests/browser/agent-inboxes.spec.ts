@@ -91,6 +91,35 @@ test("an unavailable connection is distinguishable from an empty inbox", async (
   ).toHaveCount(0);
 });
 
+for (const view of ["Inboxes", "Activity", "Topology"]) {
+  test(`new work from ${view} restores the conversation composer`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/?fixture=operations-studio");
+    await page.getByRole("button", { name: view, exact: true }).click();
+    await expect(page.locator(".work-composer-dock")).toHaveCount(0);
+    await page.getByRole("button", { name: /^New thread in / }).click();
+    await expect(
+      page.getByRole("region", { name: "Start new work", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("navigation", { name: "Session views" }),
+    ).toHaveCount(0);
+    const prompt = page.getByRole("textbox", { name: "Prompt", exact: true });
+    await expect(prompt).toBeVisible();
+    await expect(prompt).toBeFocused();
+    await prompt.fill("Inspect this workspace without sending the draft.");
+    await expect(prompt).toHaveValue(
+      "Inspect this workspace without sending the draft.",
+    );
+    if (view === "Inboxes")
+      await page.screenshot({
+        path: testInfo.outputPath("new-work-composer.png"),
+      });
+  });
+}
+
 for (const [theme, palette, width, size] of [
   ["light", "colossus", 1100, "comfortable"],
   ["dark", "colossus", 880, "compact"],

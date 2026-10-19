@@ -46,6 +46,7 @@ test("TUI and shell tabs keep independent sessions and route typed commands", as
             request?: { kind?: string; sessionId: string; dataBase64: string };
           },
         ) => {
+          if (command === "list_setup_packages") return [];
           if (command === "terminal_context") {
             const requestedKind = first ? "colossus_tui" : null;
             first = false;

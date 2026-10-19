@@ -988,9 +988,10 @@ export function WorkSurface({
   }
 
   const composerVisible =
-    sessionWorkspaceView !== "topology" &&
-    sessionWorkspaceView !== "activity" &&
-    sessionWorkspaceView !== "inboxes";
+    view === undefined ||
+    (sessionWorkspaceView !== "topology" &&
+      sessionWorkspaceView !== "activity" &&
+      sessionWorkspaceView !== "inboxes");
   const gitControl = git.available ? (
     <span className="composer-git-control" ref={gitTriggerRef}>
       <GitIndicator
