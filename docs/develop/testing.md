@@ -219,6 +219,23 @@ cargo test --locked --manifest-path native/computer/Cargo.toml --all-targets
 cargo clippy --locked --manifest-path native/computer/Cargo.toml --all-targets --all-features -- -D warnings
 ```
 
+To check authenticated Desktop tool discovery without capturing a window or
+sending input, prepare a matching sidecar with
+`cargo xtask desktop prepare --profile debug`, then run from PowerShell 7:
+
+```powershell
+$env:COLOSSUS_ACCEPTANCE_SIDECAR = (Resolve-Path apps/desktop/src-tauri/binaries/colossus-sidecar-x86_64-pc-windows-msvc.exe).Path
+cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --lib native_desktop_grant_discovers_computer_tools_without_computer_effects -- --ignored
+```
+
+This Windows check requires the ordinary user's unlocked Default desktop, native
+credential storage and loopback access. It uses disposable private homes and a
+credential-free local provider to verify that the Desktop application grant
+offers all 13 computer tools and that `tool.search` returns them. It removes its
+generated runtime keys and homes, leaves the operator's profile untouched, and
+performs no computer operation or window activation. It can run in the
+background, but does not replace the capture and input acceptance below.
+
 Real Windows acceptance requires an unlocked interactive desktop under the
 ordinary user's token. Its disposable target must be a sibling process of the
 verified host: the adapter deliberately denies its host, controller and their

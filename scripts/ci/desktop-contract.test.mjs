@@ -871,6 +871,21 @@ test("Space search indexes only bounded released thread metadata", () => {
 
 test("Managed Local trusted tool ceiling exactly matches declared built-ins", () => {
   const builtinSource = read("crates/colossus-tools/src/builtin.rs");
+  const builtinSpecs = builtinSource.match(
+    /pub fn builtin_specs\(\)[^{]*\{(?<body>[\s\S]*?)\n\}/u,
+  );
+  assert.notEqual(builtinSpecs, null);
+  const extensionCalls = [
+    ...builtinSpecs.groups.body.matchAll(
+      /specs\s*\.\s*extend\s*\((?<expression>[\s\S]*?)\)\s*;/gu,
+    ),
+  ].map((match) => match.groups.expression.replace(/\s+/gu, ""));
+  assert.deepEqual(extensionCalls.sort(), [
+    "super::browser::browser_specs()",
+    "super::computer::computer_specs()",
+    "super::process_sessions::session_specs()",
+    "super::workflows::workflow_specs()",
+  ]);
   const builtinNames = [
     ...builtinSource.matchAll(/name: "([a-z][a-z0-9_.-]+)"\.into\(\)/gu),
   ].map((match) => match[1]);
@@ -912,16 +927,31 @@ test("Managed Local trusted tool ceiling exactly matches declared built-ins", ()
         .map((match) => match[1]),
     );
   }
+  assert.match(
+    builtinSource,
+    /specs\.extend\(super::computer::computer_specs\(\)\)/u,
+  );
+  const computerSpecs = read("crates/colossus-tools/src/computer.rs").match(
+    /fn computer_specs\(\)[^{]*\{(?<body>[\s\S]*?)\n\}/u,
+  );
+  assert.notEqual(computerSpecs, null);
+  builtinNames.push(
+    ...[
+      ...computerSpecs.groups.body.matchAll(
+        /(?:tool)?\(\s*"(computer\.[a-z_.]+)"/gu,
+      ),
+    ].map((match) => match[1]),
+  );
 
   const runtimeSource = read("apps/desktop/src-tauri/src/managed_runtime.rs");
   const grantStart = runtimeSource.indexOf("const TRUSTED_BUILTIN_TOOL_GRANT");
   const grantEnd = runtimeSource.indexOf("];", grantStart);
   assert.ok(grantStart >= 0 && grantEnd > grantStart);
-  const grantNames = [
-    ...runtimeSource
-      .slice(grantStart, grantEnd)
-      .matchAll(/"([a-z][a-z0-9_.-]+)"/gu),
-  ].map((match) => match[1]);
+  const grantSource = runtimeSource.slice(grantStart, grantEnd);
+  assert.doesNotMatch(grantSource, /"[^"]*\*[^"]*"/u);
+  const grantNames = [...grantSource.matchAll(/"([a-z][a-z0-9_.-]+)"/gu)].map(
+    (match) => match[1],
+  );
 
   assert.deepEqual(new Set(grantNames), new Set(builtinNames));
   assert.equal(grantNames.length, new Set(grantNames).size);
