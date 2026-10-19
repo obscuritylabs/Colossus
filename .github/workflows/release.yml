@@ -193,7 +193,8 @@ jobs:
     environment:
       name: ${{ needs.validate.outputs.publish_draft == 'true' && vars.SCCACHE_R2_ENABLED == 'true' && 'sccache-r2-write' || 'release-validation' }}
       deployment: false
-    timeout-minutes: 60
+    # Cold Intel macOS native acceptance plus optimized compilation can exceed one hour.
+    timeout-minutes: ${{ matrix.target == 'x86_64-apple-darwin' && 90 || 60 }}
     env:
       SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_RELEASE_JOURNAL_KEY: "5555555555555555555555555555555555555555555555555555555555555555"
