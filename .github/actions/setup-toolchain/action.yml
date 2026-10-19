@@ -1,0 +1,21 @@
+name: Set up PR toolchain
+description: Install only selected tools from the locked inventory on Linux x64
+inputs:
+  tools:
+    description: Space-separated inventory tool names (without versions)
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Require the supported PR platform
+      shell: bash
+      run: test "$RUNNER_OS:$RUNNER_ARCH" = Linux:X64
+    - name: Install verified mise and selected tools
+      uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      with:
+        version: 2026.9.12
+        sha256: e79ae57945034903aee8aa2ea66b4c7ca9cd4f4edd5a8a78a589cbae6d0f428a
+        install_args: --locked ${{ inputs.tools }}
+        # Direct bin paths avoid shims auto-installing unselected tools.
+        add_shims_to_path: false
+        cache: true
