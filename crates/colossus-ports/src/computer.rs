@@ -189,7 +189,9 @@ pub enum ComputerDriverError {
     #[error("computer control stopped by user")]
     UserStopped,
     /// Native identity, control generation, geometry, focus, or observation changed.
-    #[error("computer target or observation is stale")]
+    #[error(
+        "computer target or observation is stale; check computer.status and take a fresh snapshot; if the selected observation.window_id has foreground=false in observation.windows, use computer.focus for that observed window, then take a new snapshot before input"
+    )]
     Stale,
     /// Closed typed payload failed bounded validation.
     #[error("invalid computer input")]

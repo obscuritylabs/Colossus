@@ -18,6 +18,7 @@ pub async fn run(
     denied: String,
     origin: String,
     uploaded: Arc<std::sync::atomic::AtomicUsize>,
+    long_profile_layout: Option<super::logging::Layout>,
 ) {
     let control = BrowserDriverControl::new(RunControl::default(), RunControl::default());
     use colossus_browser_bridge::BrowserHostFactory as _;
@@ -28,6 +29,9 @@ pub async fn run(
         .open_session(request.clone(), &control)
         .await
         .expect("native owned session readiness");
+    if let Some(layout) = &long_profile_layout {
+        layout.assert_short_private_profile_without_logs();
+    }
     let attachment = supervisor
         .take_presentation(&request)
         .await
@@ -248,6 +252,9 @@ pub async fn run(
     attachment.client.disconnect();
     super::keyboard::check(&*driver, &request, &mut configure.target, &control, &origin).await;
     let _ = snapshot(&*driver, &request, &configure.target, &control, 50).await;
+    if let Some(layout) = &long_profile_layout {
+        layout.assert_short_private_profile_without_logs();
+    }
     driver
         .close_session(&request.session_id)
         .await

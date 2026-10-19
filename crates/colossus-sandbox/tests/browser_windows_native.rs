@@ -10,6 +10,8 @@ mod exercise;
 mod fixture;
 #[path = "browser_windows_native/keyboard.rs"]
 mod keyboard;
+#[path = "browser_windows_native/logging.rs"]
+mod logging;
 #[path = "browser_windows_native/transfer.rs"]
 mod transfer;
 
@@ -64,6 +66,8 @@ async fn run(user_development: bool) {
         PrivateDirectoryCreation::create(&parent.join(format!("win-{}", hex::encode(nonce))))
             .expect("owner-private exact state allocation");
     let state_path = state.path().to_owned();
+    let long_profile = std::env::var_os("COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_LONG_PROFILE")
+        .is_some_and(|value| value == "1");
     let state_binding = colossus_windows_native::BoundPath::open_directory(&state_path)
         .expect("native state root binding");
     state_binding
@@ -77,7 +81,17 @@ async fn run(user_development: bool) {
     component_binding
         .validate_immutable_directory_dacl()
         .expect("native component payload and ancestry DACL");
-    drop((state_binding, component_binding));
+    drop(component_binding);
+    let mut engine_state = long_profile.then(|| {
+        PrivateDirectoryCreation::create_in_current_user_profile(std::ffi::OsStr::new(&format!(
+            "ColossusBrowserPreview-{}",
+            hex::encode(nonce)
+        )))
+        .expect("same exclusive native cache allocation as the functional preview")
+    });
+    let engine_state_path = engine_state
+        .as_ref()
+        .map_or_else(|| state_path.clone(), |state| state.path().to_owned());
     let fixture = fixture::Fixture::start().await;
     let request = BrowserDriverOpenRequest {
         binding: BrowserSessionBinding {
@@ -103,7 +117,7 @@ async fn run(user_development: bool) {
     let config = WindowsBrowserConfig {
         component_root: component,
         manifest_sha256: Sha256::digest(&manifest).into(),
-        state_root: state_path.clone(),
+        state_root: engine_state_path.clone(),
         capabilities: BrowserCapabilities {
             available: true,
             engine_version: Some(
@@ -170,6 +184,10 @@ async fn run(user_development: bool) {
         denied,
         fixture.origin.clone(),
         Arc::clone(&fixture.uploaded),
+        long_profile.then_some(logging::Layout {
+            managed_root: state_path.clone(),
+            engine_root: engine_state_path.clone(),
+        }),
     ));
     let result = tokio::time::timeout(Duration::from_secs(90), &mut check).await;
     if result.is_err() {
@@ -193,6 +211,13 @@ async fn run(user_development: bool) {
         "shutdown retry idempotent"
     );
     drop(supervisor);
+    if let Some(engine_state) = &mut engine_state {
+        engine_state
+            .remove_empty()
+            .expect("positive short native cache removal after full cleanup");
+        assert!(!engine_state_path.exists(), "short native cache gone");
+    }
+    drop(state_binding);
     state
         .remove_empty()
         .expect("positive exact state-root removal after process/filter/pipe/profile retirement");
@@ -234,6 +259,7 @@ async fn run(user_development: bool) {
         "exact_origin_denial":true,"native_upload_actual_http_bytes":true,
         "native_download_actual_http_bytes":true,"full_job_and_io_cleanup":true,
         "native_typed_automation":true,"native_tabs":true,
+        "long_managed_path_short_private_profile_without_file_logging":long_profile,
         "cef_shutdown":true,"whole_host_network_acceptance":false,"production_containment":false})
     );
 }

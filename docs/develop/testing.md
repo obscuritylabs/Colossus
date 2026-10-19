@@ -435,6 +435,12 @@ For the native host tier alone:
 ./scripts/ci/browser-windows-native.ps1 -Mode Development
 ```
 
+Add `-HostProfile Release` to build the non-diagnostic native client and exercise
+long managed ancestry with a distinct short private engine profile, without file
+logging. Both use the actual token's OS profile and the exclusive native allocator.
+The existing owned Windows CI tier uses this profile with the same input,
+transfer, frame and cleanup assertions; it does not add another acceptance run.
+
 Both component release modes remain false. This functional development lane
 retains Chromium's built-in sandbox and reports no outer containment or private
 certificate capability. AppContainer/WFP, owned CA/client-key custody, additional

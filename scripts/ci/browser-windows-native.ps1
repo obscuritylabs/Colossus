@@ -1,7 +1,8 @@
 param(
     [string]$EvidenceDirectory = '.local/windows-owned-browser-evidence',
     [string]$Component = '',
-    [ValidateSet('Containment', 'Development')][string]$Mode = 'Containment'
+    [ValidateSet('Containment', 'Development')][string]$Mode = 'Containment',
+    [ValidateSet('Debug', 'Release')][string]$HostProfile = 'Debug'
 )
 
 # Reviewed premerge diagnostic only. This script never accepts a release mode or
@@ -30,13 +31,14 @@ $Checks = @(
     "full_job_and_io_cleanup", "cef_shutdown", "native_typed_automation", "native_tabs"
 )
 if (-not $Development) { $Checks += @('low_appcontainer_token', 'low_package_profile_label') }
+if ($HostProfile -eq 'Release') { $Checks += @('long_managed_path_short_private_profile_without_file_logging') }
 $Checked = @{}
 foreach ($Check in $Checks) { $Checked[$Check] = $false }
 $StartupChecked = [ordered]@{}
 Push-Location $Repository
 try {
     if ([string]::IsNullOrWhiteSpace($Component)) {
-        & (Join-Path $Repository "scripts/browser-native-host-windows.ps1")
+        & (Join-Path $Repository "scripts/browser-native-host-windows.ps1") -HostProfile $HostProfile
         $Component = $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT
     } else {
         & python -B native/browser/scripts/component.py verify --root $Component
@@ -54,15 +56,25 @@ try {
     $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT = $Component
     $UserProfile = [Environment]::GetFolderPath('UserProfile')
     if ([string]::IsNullOrWhiteSpace($UserProfile)) { throw "Native acceptance requires an owned user profile." }
-    $Parent = Join-Path $UserProfile ("ColossusBrowserCI-" + [Guid]::NewGuid().ToString("N"))
+    $ParentName = "ColossusBrowserCI-" + [Guid]::NewGuid().ToString("N")
+    if ($HostProfile -eq 'Release') {
+        # Managed Desktop adds workspace/instance ancestry. Keep one private
+        # leaf to prove a distinct short native cache avoids that ancestry.
+        $Padding = [Math]::Max(1, 190 - $UserProfile.Length - 1 - $ParentName.Length)
+        $ParentName += '-' + ('r' * $Padding)
+    }
+    $Parent = Join-Path $UserProfile $ParentName
     & python -B -c 'import sys; from pathlib import Path; sys.path.insert(0, "native/browser/scripts"); from pki_fixture_private import private_directory; private_directory(Path(sys.argv[1]))' $Parent
     if ($LASTEXITCODE -ne 0) { throw "Private fixture state allocation failed." }
     $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_STATE_PARENT = $Parent
     $SavedPaths = @{}
-    foreach ($Name in @('LOCALAPPDATA', 'TEMP', 'TMP')) {
+    foreach ($Name in @('LOCALAPPDATA', 'TEMP', 'TMP', 'COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_LONG_PROFILE')) {
         $SavedPaths[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
+    }
+    foreach ($Name in @('LOCALAPPDATA', 'TEMP', 'TMP')) {
         [Environment]::SetEnvironmentVariable($Name, $Parent, 'Process')
     }
+    $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_LONG_PROFILE = if ($HostProfile -eq 'Release') { '1' } else { $null }
     if (-not $Development) {
         $StartupCases = @(
             @{
@@ -170,6 +182,7 @@ try {
         passed = $Passed
         sourceDiagnostic = $true
         standardUserDevelopment = $Development
+        requestedNativeHostProfile = $HostProfile
         componentManifestSha256 = $ManifestHash
         checks = $Checked
         startupChecks = $StartupChecked
