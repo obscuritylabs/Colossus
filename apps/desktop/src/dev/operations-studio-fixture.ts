@@ -13,7 +13,9 @@ import type {
 } from "../types";
 
 /** Explicit sample images for the real activity component's browser acceptance. */
-export function buildImageViewFixture(screenshot = false): ChatState {
+export function buildImageViewFixture(
+  screenshot?: "browser" | "computer",
+): ChatState {
   const state = buildActivityComparisonFixture();
   const view = state.views.get(state.activeRunId!)!;
   const images = Array.from({ length: 5 }, (_, index) => ({
@@ -35,7 +37,7 @@ export function buildImageViewFixture(screenshot = false): ChatState {
       type: "tool_activity",
       activity: {
         callId: "sample-image-view",
-        toolName: screenshot ? "browser.screenshot" : "image.view",
+        toolName: screenshot ? `${screenshot}.screenshot` : "image.view",
         state: "completed",
         summary: "Image inspection completed",
         preview: JSON.stringify(
@@ -79,7 +81,7 @@ export async function readFixtureImagePreview(
 
 export function buildImageViewActivityFixture(
   request: ListSessionActivityRequest,
-  screenshot = false,
+  screenshot?: "browser" | "computer",
 ): SessionActivityPage {
   const state = buildImageViewFixture(screenshot);
   const view = state.views.get(state.activeRunId!)!;
@@ -96,7 +98,7 @@ export function buildImageViewActivityFixture(
         turn: 1,
         lane: "tools",
         kind: "tool",
-        title: screenshot ? "browser.screenshot" : "image.view",
+        title: screenshot ? `${screenshot}.screenshot` : "image.view",
         summary: "Image inspection completed",
         actor: "Colossus",
         status: "completed",

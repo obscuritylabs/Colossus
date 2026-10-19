@@ -8,6 +8,18 @@ export function latestBrowserFixtureViewport() {
   return latestViewport;
 }
 
+export function completeBrowserFixtureAgentSession(tabId: string) {
+  for (const session of sessions.values()) {
+    const tab = session.tabs.find((entry) => entry.id === tabId);
+    if (tab) {
+      tab.control = "completed";
+      tab.loading = false;
+      tab.error = null;
+      tab.completedSnapshot = true;
+    }
+  }
+}
+
 export function endBrowserFixtureAgentSession(tabId: string) {
   for (const session of sessions.values()) {
     const tab = session.tabs.find((entry) => entry.id === tabId);

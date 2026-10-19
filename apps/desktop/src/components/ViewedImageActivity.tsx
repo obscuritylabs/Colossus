@@ -49,6 +49,7 @@ function ImagePreview({
       ref={dialog}
       className="settings-dialog viewed-image-dialog"
       aria-label={`Image preview: ${image.fileName}`}
+      data-browser-occluded
       onCancel={onClose}
       onClose={onClose}
     >
@@ -179,14 +180,14 @@ export function ViewedImageActivity({
   images,
   createdAt,
   load,
-  screenshot = false,
+  screenshot,
 }: {
   images: ViewedImage[];
   createdAt: string;
   load?: ImagePreviewLoader | undefined;
-  screenshot?: boolean | undefined;
+  screenshot?: "browser" | "computer" | undefined;
 }) {
-  const [open, setOpen] = useState(screenshot);
+  const [open, setOpen] = useState(!!screenshot);
   return (
     <details
       className="compact-tool-activity activity-tool-thread activity-kind-image activity-state-completed"
@@ -201,7 +202,9 @@ export function ViewedImageActivity({
           <span className="compact-tool-heading">
             <strong>
               {screenshot
-                ? "Browser screenshot"
+                ? screenshot === "computer"
+                  ? "Computer screenshot"
+                  : "Browser screenshot"
                 : `Viewed ${images.length} ${images.length === 1 ? "image" : "images"}`}
             </strong>
             <time dateTime={createdAt}>

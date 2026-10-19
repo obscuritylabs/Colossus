@@ -925,7 +925,11 @@ export default function App() {
         : FIXTURE_SCENARIO === "activity-comparison"
           ? FIXTURE_QUERY.get("imageViews") === "1"
             ? developmentFixtures().buildImageViewFixture(
-                FIXTURE_QUERY.get("browserScreenshot") === "1",
+                FIXTURE_QUERY.get("computerScreenshot") === "1"
+                  ? "computer"
+                  : FIXTURE_QUERY.get("browserScreenshot") === "1"
+                    ? "browser"
+                    : undefined,
               )
             : developmentFixtures().buildActivityComparisonFixture()
           : FIXTURE_SCENARIO === "plan-workflow"
@@ -6103,7 +6107,11 @@ export default function App() {
                 return Promise.resolve(
                   developmentFixtures().buildImageViewActivityFixture(
                     request,
-                    FIXTURE_QUERY.get("browserScreenshot") === "1",
+                    FIXTURE_QUERY.get("computerScreenshot") === "1"
+                      ? "computer"
+                      : FIXTURE_QUERY.get("browserScreenshot") === "1"
+                        ? "browser"
+                        : undefined,
                   ),
                 );
               let liveActivityCount = 0;
