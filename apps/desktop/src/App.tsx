@@ -2415,6 +2415,7 @@ export default function App() {
       return next;
     });
     setSurface("work");
+    setActiveSessionWorkspaceView("conversation");
     dispatch({ type: "select_run", runId: null });
     setRunLoadError("");
     setActionError(null);

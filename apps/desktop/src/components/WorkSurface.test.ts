@@ -7,6 +7,7 @@ import type { Run } from "../types";
 import type { ArtifactViewItem } from "./ArtifactWorkspace";
 import { AppearanceProvider } from "../theme/AppearanceProvider";
 import { WorkSurface } from "./WorkSurface";
+import type { SessionWorkspaceView } from "./SessionWorkspace";
 import type { ToolOption } from "./tools/ToolSwitcher";
 
 // Portal interaction belongs to browser acceptance. Capture the host's released
@@ -26,6 +27,7 @@ function renderSurface(
   withRun = activityComparisonEnabled,
   runMode: Run["mode"] = "execute",
   processSessionsAvailable?: boolean,
+  initialSessionWorkspaceView: SessionWorkspaceView = "conversation",
 ): string {
   const comparisonRun: Run = {
     runId: "comparison-run",
@@ -124,6 +126,7 @@ function renderSurface(
       planContinuationAvailable: false,
       planWorkflowAvailable: false,
       activityComparisonEnabled,
+      initialSessionWorkspaceView,
       workNavigationOpen: false,
       onConnect: vi.fn(),
       onRespond: vi.fn(async () => undefined),
@@ -181,6 +184,24 @@ describe("WorkSurface side panels", () => {
     );
     expect(markup).not.toContain('class="agent-flow"');
   });
+
+  it.each(["inboxes", "activity", "topology"] as const)(
+    "renders the new-work composer before resetting the previous %s view",
+    (previousView) => {
+      const markup = renderSurface(
+        [],
+        undefined,
+        false,
+        false,
+        "execute",
+        undefined,
+        previousView,
+      );
+      expect(markup).toContain('aria-label="Start new work"');
+      expect(markup).toContain('class="work-composer-dock"');
+      expect(markup).not.toContain('aria-label="Session views"');
+    },
+  );
 
   it("keeps tools collapsed with artifact counts in the menu", () => {
     const markup = renderSurface([]);
