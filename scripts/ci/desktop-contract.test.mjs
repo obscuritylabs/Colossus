@@ -1368,7 +1368,70 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
   assert.match(signedWindowsJob, /environment: release-signing/u);
   assert.match(signedWindowsJob, /id-token: write/u);
   assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC/u);
-  assert.match(signedWindowsJob, /azure\/login@[0-9a-f]{40}/u);
+  const signedSteps = signedWindowsJob
+    .replaceAll("\r\n", "\n")
+    .split(/^      - /mu)
+    .slice(1);
+  const signingStepIndex = (name) => {
+    const matches = signedSteps.flatMap((step, index) =>
+      step.startsWith(`name: ${name}\n`) ? [index] : [],
+    );
+    assert.equal(matches.length, 1, `Expected one signed Windows step: ${name}`);
+    return matches[0];
+  };
+  const previewGuard = "env.COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW == '1'";
+  for (const [buildName, authName, signingName, guard] of [
+    [
+      "Build pinned functional-preview browser without launching it",
+      "Authenticate browser signing with fresh GitHub OIDC",
+      "Sign functional-preview browser binaries before inventory",
+      previewGuard,
+    ],
+    [
+      "Build unsigned desktop inputs",
+      "Authenticate nested binary signing with fresh GitHub OIDC",
+      "Sign bundled sidecar, CLI, and ripgrep",
+      null,
+    ],
+    [
+      "Bind signed nested binaries into the desktop executable",
+      "Authenticate installer signing with fresh GitHub OIDC",
+      "Bundle NSIS and sign patched app, uninstaller, and installer",
+      null,
+    ],
+  ]) {
+    const authIndex = signingStepIndex(authName);
+    assert.equal(
+      authIndex,
+      signingStepIndex(buildName) + 1,
+      `${authName} must follow its build/bind boundary`,
+    );
+    assert.equal(
+      signingStepIndex(signingName),
+      authIndex + 1,
+      `${authName} must immediately precede signing`,
+    );
+    const auth = signedSteps[authIndex];
+    assert.match(
+      auth,
+      /^        uses: azure\/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906(?: # v3)?$/mu,
+    );
+    for (const [input, secret] of [
+      ["client-id", "AZURE_CLIENT_ID"],
+      ["tenant-id", "AZURE_TENANT_ID"],
+      ["subscription-id", "AZURE_SUBSCRIPTION_ID"],
+    ]) {
+      assert.ok(
+        auth.split("\n").includes("          " + input + ": ${{ secrets." + secret + " }}"),
+        `${authName} must retain its ${input} binding`,
+      );
+    }
+    const authGuard = auth.match(/^        if: (.+)$/mu)?.[1] ?? null;
+    const signingGuard = signedSteps[authIndex + 1].match(/^        if: (.+)$/mu)?.[1] ?? null;
+    assert.equal(authGuard, guard, `${authName} must run exactly when signing runs`);
+    assert.equal(signingGuard, guard, `${signingName} guard changed`);
+  }
+  assert.equal((signedWindowsJob.match(/azure\/login@/gu) ?? []).length, 3);
   assert.equal((signedWindowsJob.match(/azure\/artifact-signing-action@[0-9a-f]{40}/gu) ?? []).length, 2);
   const browserSign = signedWindowsJob.indexOf("Sign functional-preview browser binaries before inventory");
   const browserSeal = signedWindowsJob.indexOf("Seal exact signed browser bytes for independent sidecar compilation");
