@@ -133,7 +133,8 @@ pub(super) fn payload(
                 .map(|tool| {
                     Ok(json!({
                         "name":projection.tool_names.provider_name(&tool.name)?,
-                        "description":tool.description, "input_schema":tool.input_schema
+                        "description":tool.description,
+                        "input_schema":compatible_anthropic_tool_schema(&tool.input_schema)?
                     }))
                 })
                 .collect::<Result<Vec<_>, ProviderError>>()?,

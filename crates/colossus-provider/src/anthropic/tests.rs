@@ -80,6 +80,134 @@ fn native_endpoint_projection_and_usage() {
 }
 
 #[test]
+fn native_tool_schema_projection_preserves_nested_constraints_and_canonical_schema() {
+    let mut request = request();
+    let canonical_schema = json!({
+        "type": "object",
+        "properties": {
+            "selector": {"$ref": "#/$defs/selector"},
+            "fallback": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "labels": {"type": "array", "items": {"allOf": [
+                {"type": "string"}, {"minLength": 1, "maxLength": 32}
+            ]}}
+        },
+        "$defs": {"selector": {"oneOf": [
+            {"type": "string", "minLength": 1, "maxLength": 64},
+            {"type": "integer", "minimum": 1}
+        ]}},
+        "required": ["selector"],
+        "additionalProperties": false,
+        "minProperties": 1,
+        "maxProperties": 3,
+        "oneOf": [{"required": ["selector"]}, {"required": ["missing"]}],
+        "anyOf": [{"required": ["selector"]}, {"required": ["fallback"]}],
+        "allOf": [{"minProperties": 1}],
+        "enum": [{"selector": "a"}],
+        "const": {"selector": "a"}
+    });
+    request.tools[0].input_schema = canonical_schema.clone();
+    let canonical_request = serde_json::to_value(&request).unwrap();
+    let names = ProviderToolNames::from_request(&request).unwrap();
+    let images = ProviderResolvedImages::default();
+    let mut expected = canonical_schema.clone();
+    for keyword in ["oneOf", "allOf", "anyOf"] {
+        expected.as_object_mut().unwrap().remove(keyword);
+    }
+
+    for streaming in [false, true] {
+        let wire = payload(
+            &request,
+            "test-model",
+            1024,
+            None,
+            streaming,
+            ProviderProjection::new(&names, &images),
+        )
+        .unwrap();
+        assert_eq!(wire["stream"], streaming);
+        assert_eq!(wire["tools"][0]["input_schema"], expected);
+        assert_eq!(serde_json::to_value(&request).unwrap(), canonical_request);
+        assert_eq!(request.tools[0].input_schema, canonical_schema);
+    }
+}
+
+#[test]
+fn native_tool_schema_projection_keeps_canonical_builtin_validation() {
+    use colossus_ports::ToolRegistry as _;
+
+    let registry = colossus_tools::StaticToolRegistry::builtins(&[
+        "shell.run".into(),
+        "user.ask".into(),
+        "workflow.schedule.create".into(),
+    ])
+    .unwrap();
+    let mut request = request();
+    request.tools = colossus_tools::model_definitions(&registry);
+    for (name, keyword) in [
+        ("shell.run", "oneOf"),
+        ("user.ask", "allOf"),
+        ("workflow.schedule.create", "allOf"),
+    ] {
+        let tool = request.tools.iter().find(|tool| tool.name == name).unwrap();
+        assert!(
+            tool.input_schema.get(keyword).is_some(),
+            "{name}: {keyword}"
+        );
+    }
+    let canonical_request = serde_json::to_value(&request).unwrap();
+    let names = ProviderToolNames::from_request(&request).unwrap();
+    let images = ProviderResolvedImages::default();
+    for streaming in [false, true] {
+        let wire = payload(
+            &request,
+            "test-model",
+            1024,
+            None,
+            streaming,
+            ProviderProjection::new(&names, &images),
+        )
+        .unwrap();
+        for projected in wire["tools"].as_array().unwrap() {
+            for keyword in ["oneOf", "allOf", "anyOf"] {
+                assert!(projected["input_schema"].get(keyword).is_none());
+            }
+        }
+        assert_eq!(serde_json::to_value(&request).unwrap(), canonical_request);
+    }
+
+    for (name, arguments, valid_arguments) in [
+        (
+            "shell.run",
+            json!({"justification": "Read a fixture", "command": "echo fixture", "argv": ["echo", "fixture"]}),
+            json!({"justification": "Read a fixture", "command": "echo fixture"}),
+        ),
+        (
+            "user.ask",
+            json!({"question": "Continue?", "allow_free_form": false}),
+            json!({"question": "Continue?", "allow_free_form": true}),
+        ),
+    ] {
+        registry
+            .validate(&colossus_contracts::ToolCall {
+                call_id: "valid-call".into(),
+                name: name.into(),
+                arguments: valid_arguments,
+            })
+            .unwrap();
+        assert!(
+            registry
+                .validate(&colossus_contracts::ToolCall {
+                    call_id: "invalid-call".into(),
+                    name: name.into(),
+                    arguments,
+                })
+                .is_err(),
+            "{name} must retain canonical validation"
+        );
+    }
+}
+
+#[test]
 fn nullable_cache_usage_preserves_absence_and_rejects_invalid_counters() {
     for value in [
         json!({"input_tokens":10,"output_tokens":3}),

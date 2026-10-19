@@ -226,6 +226,17 @@ fn object_tool_schema(value: &Value) -> Option<&Map<String, Value>> {
 }
 
 fn compatible_openai_tool_schema(value: &Value) -> Result<Value, ProviderError> {
+    compatible_tool_schema(value, &["oneOf", "anyOf", "allOf", "enum", "const"])
+}
+
+pub(super) fn compatible_anthropic_tool_schema(value: &Value) -> Result<Value, ProviderError> {
+    compatible_tool_schema(value, &["oneOf", "anyOf", "allOf"])
+}
+
+fn compatible_tool_schema(
+    value: &Value,
+    unsupported_root_keywords: &[&str],
+) -> Result<Value, ProviderError> {
     let mut projected = object_tool_schema(value)
         .ok_or_else(|| {
             ProviderError::Configuration(
@@ -233,8 +244,10 @@ fn compatible_openai_tool_schema(value: &Value) -> Result<Value, ProviderError> 
             )
         })?
         .clone();
-    for keyword in ["oneOf", "anyOf", "allOf", "enum", "const"] {
-        projected.remove(keyword);
+    // Only the model-facing copy is relaxed. The registry and continuation bindings
+    // retain the complete canonical schema for validation and authorization.
+    for keyword in unsupported_root_keywords {
+        projected.remove(*keyword);
     }
     Ok(Value::Object(projected))
 }
