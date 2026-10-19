@@ -1,10 +1,10 @@
-//! Balanced ordinary-user input. No shell, clipboard or target message injection.
+//! Balanced ordinary-user input. Only WM_NULL probes foreign activation completion.
 use super::{
     Error,
     identity::{self, Window},
     indicator::{self, Signals},
 };
-use crate::{TrustedComputerContext, geometry};
+use crate::{TrustedComputerContext, focus_settle, geometry};
 use colossus_contracts::{ComputerInput, ComputerMouseButton, ComputerNode, ComputerTarget};
 use std::sync::{
     Arc,
@@ -14,7 +14,10 @@ use windows_sys::Win32::{
     Foundation::POINT,
     UI::{
         Input::KeyboardAndMouse::*,
-        WindowsAndMessaging::{GA_ROOT, GetAncestor, SetForegroundWindow, WindowFromPoint},
+        WindowsAndMessaging::{
+            GA_ROOT, GetAncestor, SMTO_ABORTIFHUNG, SMTO_BLOCK, SMTO_ERRORONEXIT,
+            SendMessageTimeoutW, SetForegroundWindow, WM_NULL, WindowFromPoint,
+        },
     },
 };
 
@@ -225,6 +228,7 @@ pub(crate) fn apply(
     input: &ComputerInput,
     mut protected: impl FnMut() -> Result<bool, Error>,
 ) -> Result<(), Error> {
+    let action_started = std::time::Instant::now();
     let InputScope {
         lifetime,
         root,
@@ -260,37 +264,100 @@ pub(crate) fn apply(
     if matches!(input, ComputerInput::Focus { .. }) {
         #[cfg(feature = "native-test-driver")]
         eprintln!("COMPUTER_NATIVE_FOCUS phase=admission");
-        identity::revalidate_admission(root, window, context).inspect_err(|_| {
-            #[cfg(feature = "native-test-driver")]
-            eprintln!("COMPUTER_NATIVE_FOCUS phase=admission_denied");
-        })?;
-        if cancel.load(Ordering::Acquire) || signals.action.load(Ordering::Acquire) != 0 {
-            #[cfg(feature = "native-test-driver")]
-            eprintln!(
-                "COMPUTER_NATIVE_FOCUS phase=control_denied cancelled={} control_action={}",
-                cancel.load(Ordering::Acquire),
-                signals.action.load(Ordering::Acquire) != 0
-            );
-            return Err(Error::Denied);
-        }
-        // SAFETY: explicit fresh-observation focus of the selected admitted window only.
-        let accepted = unsafe { SetForegroundWindow(window.hwnd()) } != 0;
+        let accepted = focus_settle::activate(
+            || {
+                identity::revalidate_admission(root, window, context).inspect_err(|_| {
+                    #[cfg(feature = "native-test-driver")]
+                    eprintln!("COMPUTER_NATIVE_FOCUS phase=admission_denied");
+                })
+            },
+            || {
+                indicator::pump();
+                let conditions = focus_settle::Conditions {
+                    foreground: false,
+                    human_unchanged: signals.human.load(Ordering::Acquire) == human,
+                    cancelled: cancel.load(Ordering::Acquire),
+                    control_pending: signals.action.load(Ordering::Acquire) != 0,
+                    epoch_unchanged: signals.native_epoch.load(Ordering::Acquire) == native_epoch,
+                    admission_valid: true,
+                    lifetime_valid: lifetime.valid(),
+                };
+                #[cfg(feature = "native-test-driver")]
+                trace_focus_conditions("preactivation", conditions);
+                (conditions, action_started.elapsed() < timeout)
+            },
+            || {
+                // SAFETY: the original lifetime/authority fences were just drained
+                // and checked; focus this exact admitted HWND only, once.
+                unsafe { SetForegroundWindow(window.hwnd()) != 0 }
+            },
+            Error::Denied,
+        )?;
         #[cfg(feature = "native-test-driver")]
         eprintln!("COMPUTER_NATIVE_FOCUS phase=activate accepted={accepted}");
         if !accepted {
             return Err(Error::Denied);
         }
-        indicator::pump();
-        if identity::foreground() != window.hwnd()
-            || signals.human.load(Ordering::Acquire) != human
-            || cancel.load(Ordering::Acquire)
-            || signals.action.load(Ordering::Acquire) != 0
-            || signals.native_epoch.load(Ordering::Acquire) != native_epoch
-            || identity::revalidate_admission(root, window, context).is_err()
-            || !lifetime.valid()
-        {
+        // Cross-process activation is asynchronous. Acknowledging WM_NULL lets
+        // the foreign queue process its activation nudge without attaching queues
+        // or requesting activation again. Authority is rechecked between slices.
+        let settling_started = std::time::Instant::now();
+        #[cfg(feature = "native-test-driver")]
+        let mut first_probe = true;
+        let settled = focus_settle::settle(
+            timeout.saturating_sub(action_started.elapsed()),
+            || settling_started.elapsed(),
+            || {
+                indicator::pump();
+                let admission_valid = identity::revalidate_admission(root, window, context).is_ok();
+                // Native identity queries can race queued destroy/takeover
+                // callbacks. Drain again before taking the final fence snapshot.
+                indicator::pump();
+                let conditions = focus_settle::Conditions {
+                    foreground: identity::foreground() == window.hwnd(),
+                    human_unchanged: signals.human.load(Ordering::Acquire) == human,
+                    cancelled: cancel.load(Ordering::Acquire),
+                    control_pending: signals.action.load(Ordering::Acquire) != 0,
+                    epoch_unchanged: signals.native_epoch.load(Ordering::Acquire) == native_epoch,
+                    admission_valid,
+                    lifetime_valid: lifetime.valid(),
+                };
+                #[cfg(feature = "native-test-driver")]
+                if first_probe {
+                    trace_focus_conditions("initial_postcondition", conditions);
+                    first_probe = false;
+                }
+                conditions
+            },
+            |slice| {
+                let mut result = 0;
+                // SAFETY: the exact admitted foreign HWND receives only WM_NULL
+                // with no pointers/data. SMTO_BLOCK prevents sender reentrancy;
+                // no input queues are attached and a hung/exited target is bounded.
+                unsafe {
+                    SendMessageTimeoutW(
+                        window.hwnd(),
+                        WM_NULL,
+                        0,
+                        0,
+                        SMTO_ABORTIFHUNG | SMTO_BLOCK | SMTO_ERRORONEXIT,
+                        slice.as_millis() as u32,
+                        &mut result,
+                    ) != 0
+                }
+            },
+        );
+        if let Err(failure) = settled {
             #[cfg(feature = "native-test-driver")]
-            eprintln!("COMPUTER_NATIVE_FOCUS phase=postcondition_failed");
+            {
+                eprintln!(
+                    "COMPUTER_NATIVE_FOCUS phase=postcondition_failed reason={:?}",
+                    failure.kind
+                );
+                trace_focus_conditions("final_postcondition", failure.conditions);
+            }
+            #[cfg(not(feature = "native-test-driver"))]
+            let _ = failure;
             return Err(Error::OutcomeUnknown);
         }
         #[cfg(feature = "native-test-driver")]
@@ -310,7 +377,7 @@ pub(crate) fn apply(
         native_epoch,
     };
     gate.check()?;
-    let tag = signals.tag;
+    let tag = signals.tag.value();
     match input {
         ComputerInput::Move { x, y } => {
             let (x, y) = gate.point(*x, *y)?;
@@ -417,6 +484,20 @@ pub(crate) fn apply(
         }
         ComputerInput::Focus { .. } => Err(Error::InvalidInput),
     }
+}
+
+#[cfg(feature = "native-test-driver")]
+fn trace_focus_conditions(phase: &'static str, conditions: focus_settle::Conditions) {
+    eprintln!(
+        "COMPUTER_NATIVE_FOCUS phase={phase} foreground={} human_unchanged={} cancelled={} control_pending={} epoch_unchanged={} admission_valid={} lifetime_valid={}",
+        conditions.foreground,
+        conditions.human_unchanged,
+        conditions.cancelled,
+        conditions.control_pending,
+        conditions.epoch_unchanged,
+        conditions.admission_valid,
+        conditions.lifetime_valid,
+    );
 }
 
 fn drag_events(start: (i32, i32), points: &[(i32, i32)], tag: usize) -> Vec<INPUT> {

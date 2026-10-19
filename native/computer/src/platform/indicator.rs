@@ -1,5 +1,6 @@
 //! Real native operator controls and a passive human-input takeover fence.
 use super::{Error, wide};
+use crate::input_marker::InputMarker;
 use std::{
     ptr::{null, null_mut},
     sync::{
@@ -23,7 +24,7 @@ pub(crate) struct Signals {
     pub native_epoch: AtomicU64,
     pub tracked: AtomicU64,
     root: u64,
-    pub tag: usize,
+    pub tag: InputMarker,
     #[cfg(feature = "native-test-driver")]
     pub own_mouse: AtomicU64,
     #[cfg(feature = "native-test-driver")]
@@ -48,15 +49,15 @@ pub(crate) struct Indicator {
 
 impl Indicator {
     pub fn create(root: u64) -> Result<Self, Error> {
-        let mut bytes = [0u8; 8];
-        getrandom::fill(&mut bytes).map_err(|_| Error::Failed)?;
+        let tag =
+            InputMarker::generate(|bytes| getrandom::fill(bytes).is_ok()).ok_or(Error::Failed)?;
         let signals = Arc::new(Signals {
             action: AtomicU8::new(0),
             human: AtomicU64::new(0),
             native_epoch: AtomicU64::new(0),
             tracked: AtomicU64::new(root),
             root,
-            tag: u64::from_le_bytes(bytes) as usize,
+            tag,
             #[cfg(feature = "native-test-driver")]
             own_mouse: AtomicU64::new(0),
             #[cfg(feature = "native-test-driver")]
@@ -267,11 +268,14 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
     {
         // SAFETY: WH_MOUSE_LL supplies this fixed event while the hook executes.
         let event = unsafe { &*(lparam as *const MSLLHOOKSTRUCT) };
+        let loopback = signals
+            .tag
+            .matches(event.dwExtraInfo, event.flags & LLMHF_INJECTED != 0);
         #[cfg(feature = "native-test-driver")]
-        if event.dwExtraInfo == signals.tag {
+        if loopback {
             signals.own_mouse.fetch_add(1, Ordering::Relaxed);
         }
-        if event.dwExtraInfo != signals.tag {
+        if !loopback {
             let hwnd = signals.hwnd.load(Ordering::Acquire);
             let mut rect = RECT::default();
             // Own card events are human control, including Resume's mouse-up.
@@ -291,7 +295,7 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
                             .foreign_injected_mouse
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    if event.dwExtraInfo as u32 == signals.tag as u32 {
+                    if event.dwExtraInfo as u32 == signals.tag.value() as u32 {
                         signals
                             .foreign_matching_low_tag
                             .fetch_add(1, Ordering::Relaxed);
@@ -313,7 +317,10 @@ unsafe extern "system" fn key_hook(code: i32, wparam: WPARAM, lparam: LPARAM) ->
     {
         // SAFETY: WH_KEYBOARD_LL supplies this fixed event during the callback.
         let event = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
-        if event.dwExtraInfo != signals.tag {
+        if !signals
+            .tag
+            .matches(event.dwExtraInfo, event.flags & LLKHF_INJECTED != 0)
+        {
             #[cfg(feature = "native-test-driver")]
             {
                 signals.foreign_key.fetch_add(1, Ordering::Relaxed);

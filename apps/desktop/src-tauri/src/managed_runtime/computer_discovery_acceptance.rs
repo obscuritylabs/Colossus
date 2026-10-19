@@ -197,15 +197,12 @@ impl Drop for RuntimeKeys {
                 format!("signing-key:checkpoint-{}", self.0),
                 format!("journal-anchor:journal-{}", self.0),
             ] {
-                let entry =
-                    keyring::Entry::new("com.obscuritylabs.colossus.managed-runtime", &account)
-                        .unwrap();
-                if let Err(error) = entry.delete_credential() {
-                    assert!(
-                        matches!(error, keyring::Error::NoEntry),
-                        "remove only owned runtime key"
-                    );
-                }
+                let entry = colossus_credentials::SystemCredentialEntry::new(
+                    "com.obscuritylabs.colossus.managed-runtime",
+                    &account,
+                )
+                .unwrap();
+                entry.delete().expect("remove only owned runtime key");
             }
         });
         if let Err(panic) = cleanup {

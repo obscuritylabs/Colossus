@@ -9,7 +9,11 @@ mod driver;
 #[path = "driver_unavailable.rs"]
 mod driver;
 #[cfg(any(windows, test))]
+mod focus_settle;
+#[cfg(any(windows, test))]
 mod geometry;
+#[cfg(any(windows, test))]
+mod input_marker;
 #[cfg(any(windows, test))]
 mod lifetime;
 #[cfg(any(windows, test))]
