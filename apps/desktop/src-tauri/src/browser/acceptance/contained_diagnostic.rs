@@ -839,13 +839,17 @@ async fn start_sidecar(
     let availability = native.available().await;
     if !matches!(availability, Ok(true)) {
         // Once the authenticated child has started, an admission failure must
-        // await its shutdown. A successful SDK close proves sidecar exit here;
-        // no browser session exists from which to infer a direct-child receipt.
+        // await SDK close. Its platform-specific result is not a native browser
+        // cleanup receipt, since no browser session was admitted here.
         let close = client.close().await;
         eprintln!(
             "EVIDENCE contained diagnostic bootstrap cleanup SDKClose={}",
             if close.is_ok() {
-                "verifiedSidecarExit"
+                if cfg!(windows) {
+                    "returned_success"
+                } else {
+                    "verifiedSidecarExit"
+                }
             } else {
                 "unknown"
             }
@@ -2035,8 +2039,8 @@ pub(super) async fn exercise(
             })
             .await;
     }
-    // These operations run even after a failed assertion. The sidecar owns the
-    // direct-child shutdown receipt; no helper-tree cleanup is inferred here.
+    // These operations run even after a failed assertion. Native viewer cleanup
+    // needs its own acknowledgment; Windows SDK close exposes no exit disposition.
     let drain = state.browser.close_all_settled().await;
     let close = client.close().await;
     state.configure_managed_browser_for(SPACE, None).await;
@@ -2053,7 +2057,11 @@ pub(super) async fn exercise(
             "EVIDENCE failed contained diagnostic cleanup ViewerDrain={} SDKClose={}",
             if drain.is_ok() { "ok" } else { "unknown" },
             if close.is_ok() {
-                "verifiedGracefulDirectChild"
+                if cfg!(windows) {
+                    "returned_success"
+                } else {
+                    "verifiedGracefulDirectChild"
+                }
             } else {
                 "unknown"
             }
@@ -2063,6 +2071,11 @@ pub(super) async fn exercise(
     fixture.state.check()?;
     drain.map_err(|error| anyhow::anyhow!(error.message))?;
     close?;
+    #[cfg(windows)]
+    println!(
+        "PASS SDK close returned success; Desktop native viewer shut down after acknowledged detach"
+    );
+    #[cfg(not(windows))]
     println!(
         "PASS verified sidecar exit required GracefulDirectChildExit; Desktop native viewer shut down"
     );
