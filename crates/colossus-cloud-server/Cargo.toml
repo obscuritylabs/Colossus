@@ -13,6 +13,12 @@ axum.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
 colossus-cloud.workspace = true
+colossus-cloud-chat.workspace = true
+colossus-codex-auth.workspace = true
+colossus-connector.workspace = true
+colossus-credentials.workspace = true
+colossus-runtime.workspace = true
+colossus-mcp.workspace = true
 colossus-cloud-postgres.workspace = true
 colossus-contracts.workspace = true
 colossus-network.workspace = true
@@ -20,6 +26,7 @@ chacha20poly1305.workspace = true
 colossus-cloud-protocol.workspace = true
 colossus-ports.workspace = true
 colossus-home.workspace = true
+colossus-journal-postgres.workspace = true
 colossus-sdk = { workspace = true, features = ["serialization"] }
 futures.workspace = true
 hex.workspace = true
@@ -29,6 +36,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+subtle.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
 rustls.workspace = true
@@ -44,16 +52,14 @@ zeroize.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 tower.workspace = true
-colossus-connector.workspace = true
+colossus-control-plane-client = { version = "=0.11.8", path = "../colossus-control-plane-client" }
 colossus-testkit.workspace = true
-colossus-runtime.workspace = true
 serde-saphyr.workspace = true
 base64.workspace = true
 p256.workspace = true
 colossus-api-runtime.workspace = true
 colossus-api.workspace = true
 colossus-policy.workspace = true
-colossus-credentials.workspace = true
 colossus-sdk = { workspace = true, features = ["embedded", "serialization", "sidecar"] }
 
 [lints]

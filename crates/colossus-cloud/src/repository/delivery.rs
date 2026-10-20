@@ -19,7 +19,7 @@ impl CloudRepository {
     ) -> CloudResult<PendingCommand> {
         caller.require(CloudPermission::Read)?;
         crate::validate_identifier(command_id)?;
-        let task = self.task(caller.project_id(), task_id).await?;
+        let task = self.task_for_caller(caller, task_id).await?;
         let (command, _) = self
             .read::<PendingCommand>(&tasks::command_stream(
                 caller.project_id(),
@@ -57,6 +57,7 @@ impl CloudRepository {
                 query: None,
                 status: Some("pending".into()),
                 archived: None,
+                visible_to: None,
                 order: EntityOrder::IdAsc,
             })
             .await?
@@ -500,7 +501,7 @@ impl CloudRepository {
         limit: usize,
     ) -> CloudResult<Vec<RunUpdate>> {
         caller.require(CloudPermission::Read)?;
-        let task = self.task(caller.project_id(), task_id).await?;
+        let task = self.task_for_caller(caller, task_id).await?;
         if after > task.last_sequence {
             return Err(CloudError::Conflict);
         }
@@ -548,6 +549,7 @@ impl CloudRepository {
                 query: None,
                 status: None,
                 archived: None,
+                visible_to: None,
                 order: EntityOrder::IdAsc,
             })
             .await?

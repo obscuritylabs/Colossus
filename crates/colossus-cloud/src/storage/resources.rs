@@ -80,6 +80,21 @@ impl MemoryCloudStore {
         validate_resource_request(caller, lease, &operation)?;
         let mut state = self.state.lock().await;
         let key = (lease.project_id.clone(), lease.node_id.clone());
+        let node_key = EntityKey {
+            kind: EntityKind::Node,
+            project_id: lease.project_id.clone(),
+            parent_id: None,
+            id: lease.node_id.clone(),
+        };
+        let node = state.entities.get(&node_key).ok_or(CloudError::NotFound)?;
+        if !crate::visibility::record_visible(
+            &state.entities,
+            &state.deleted,
+            node,
+            caller.subject(),
+        ) {
+            return Err(CloudError::NotFound);
+        }
         if !enrolled_live(&state, &lease.project_id, &lease.node_id)
             || !state.leases.get(&key).is_some_and(|live| {
                 live.owner_id == lease.owner_id
@@ -221,13 +236,18 @@ impl MemoryCloudStore {
     ) -> CloudResult<Option<ResourceReply>> {
         caller.require(crate::CloudPermission::Read)?;
         let state = self.state.lock().await;
-        state
+        let request = state
             .resource_requests
             .get(id)
             .filter(|request| {
                 request.lease.project_id == caller.project_id() && request.actor == caller.subject()
             })
-            .map(|request| request.reply.clone())
-            .ok_or(CloudError::NotFound)
+            .ok_or(CloudError::NotFound)?;
+        caller.require(match request.operation.permission() {
+            ResourcePermission::Read => crate::CloudPermission::Read,
+            ResourcePermission::Execute => crate::CloudPermission::Execute,
+            ResourcePermission::Control => crate::CloudPermission::Control,
+        })?;
+        Ok(request.reply.clone())
     }
 }

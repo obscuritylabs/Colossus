@@ -25,8 +25,10 @@ use std::{
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
+mod hosted;
 mod isolated;
 mod managed;
+mod native;
 mod resources;
 mod retained;
 
@@ -443,7 +445,16 @@ async fn acceptance(postgres: bool) {
         .with_resources(colossus_connector::ConnectorResources {
             workflows: Some(workflow_resources),
             plugins: None,
+            model_profiles: vec![colossus_sdk::ConfiguredModelProfile {
+                profile: "primary-model".into(),
+                model: "echo-fixture".into(),
+                provider: "echo".into(),
+                provider_profile: "acceptance".into(),
+                reasoning_effort: Some("medium".into()),
+                default_roles: vec!["primary".into()],
+            }],
             capabilities: vec![
+                "agent_runs.model_selection".into(),
                 "workflows.read".into(),
                 "workflows.register".into(),
                 "schedules.read".into(),

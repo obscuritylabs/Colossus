@@ -6,7 +6,6 @@ import {
   IconFileText,
   IconPaperclip,
   IconPlaylistAdd,
-  IconPlayerStopFilled,
   IconRouteAltLeft,
   IconShieldCheck,
 } from "@tabler/icons-react";
@@ -15,13 +14,14 @@ import {
   DEFAULT_GOAL_ITERATIONS,
   validGoalIterations,
 } from "@colossus/ui/components/GoalControls";
+import { ComposerStopButton } from "@colossus/ui/components/Composer";
 import { ConversationComposerFrame } from "@colossus/ui/conversation";
 import {
   ResearchControls,
   RESEARCH_SOURCE_OPTIONS,
 } from "@colossus/ui/components/ResearchControls";
 import "@colossus/ui/styles/research-controls.css";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode, RefObject } from "react";
 
 import { desktopSlashCommandSuggestions } from "../slash-commands";
@@ -40,6 +40,7 @@ import type { QueuedMessage } from "../message-queue";
 import { DropdownSelect } from "./DropdownSelect";
 import { NextUpQueue } from "./NextUpQueue";
 import { PluginIcon } from "./PluginIcon";
+import { ComposerModelChip } from "./ComposerModelChip";
 import type {
   ComposerModelContext,
   ComposerModelSelection,
@@ -54,12 +55,6 @@ import type { ComposerEditIntent } from "../composer-paste";
 import type { DictationController, DictationSnapshot } from "../dictation";
 import { DictationControl } from "./DictationControl";
 import { DictationRecordingBar } from "./DictationRecordingBar";
-
-const ComposerModelChip = lazy(() =>
-  import("./ComposerModelChip").then((module) => ({
-    default: module.ComposerModelChip,
-  })),
-);
 
 interface WorkComposerProps {
   onOpenDictationSettings?: (() => void) | undefined;
@@ -343,22 +338,16 @@ export function WorkComposer({
     >
       <div className="composer-header">
         <div className="composer-context">
-          <Suspense
-            fallback={
-              <span className="composer-model-loading">Loading model…</span>
+          <ComposerModelChip
+            disabled={submitting}
+            context={modelContext}
+            role={role}
+            selection={mode === "research" ? undefined : modelSelection}
+            onSelectionChange={
+              mode === "research" ? undefined : onModelSelectionChange
             }
-          >
-            <ComposerModelChip
-              disabled={submitting}
-              context={modelContext}
-              role={role}
-              selection={mode === "research" ? undefined : modelSelection}
-              onSelectionChange={
-                mode === "research" ? undefined : onModelSelectionChange
-              }
-              onOpenSettings={onOpenModelSettings}
-            />
-          </Suspense>
+            onOpenSettings={onOpenModelSettings}
+          />
           {contextActions}
         </div>
         <div className="composer-run-actions">
@@ -956,24 +945,16 @@ export function WorkComposer({
             </ComposerSendButton>
           ) : null}
           {activeWorkRunning ? (
-            <button
-              className={`send-button is-stop${stopping ? " is-stopping" : ""}`}
-              type="button"
-              aria-label={stopping ? "Stopping response" : "Stop response"}
+            <ComposerStopButton
+              stopping={stopping}
               title={
                 stopping
                   ? "Waiting for the response to stop"
                   : "Stop response and pause queued messages"
               }
-              disabled={!canCompose || !activeWorkRedirectable || stopping}
+              disabled={!canCompose || !activeWorkRedirectable}
               onClick={onStop}
-            >
-              {stopping ? (
-                <span className="spinner" aria-hidden="true" />
-              ) : (
-                <IconPlayerStopFilled size={16} aria-hidden="true" />
-              )}
-            </button>
+            />
           ) : null}
         </div>
       </div>

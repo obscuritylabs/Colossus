@@ -35,6 +35,7 @@ export default defineConfig({
       "recharts",
       "use-sync-external-store/shim",
       "use-sync-external-store/shim/with-selector",
+      "use-sync-external-store/shim/with-selector.js",
     ],
     // Dependency pre-bundling bypasses the compatibility transform above.
     exclude: [

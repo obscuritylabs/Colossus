@@ -181,7 +181,7 @@ export function App({
             .join("")}
         </span>
       </header>
-      <div className="mobile-main" key={`${projectId}:${tab}`}>
+      <div className="mobile-main" key={projectId}>
         {tab === "settings" ? (
           <main className="mobile-settings">
             <h1>Settings</h1>
@@ -250,6 +250,7 @@ export function App({
             project={projectId}
             permissions={permissions}
             tab={tab}
+            onNavigate={setTab}
             onLocked={setLocked}
           />
         ) : (

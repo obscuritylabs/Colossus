@@ -12,7 +12,10 @@ import type {
   RunTerminal,
   PlanStatus,
 } from "@colossus/ui/session/types";
-import type { SessionPlanReference } from "@colossus/ui/session/selectors";
+import {
+  selectSessionPlans,
+  type SessionPlanReference,
+} from "@colossus/ui/session/selectors";
 import { WorkflowDialog } from "@colossus/ui/automations/WorkflowDialog";
 import {
   MarkdownContent,
@@ -30,6 +33,8 @@ import { WebLink } from "./WebLink";
 import { Button } from "@colossus/ui";
 import { releasedArtifacts } from "./released-artifacts";
 import type { ArtifactViewItem } from "@colossus/ui/session/types";
+import { ThreadPlanDecision } from "./ThreadPlanDecision";
+import type { PlanStrategy } from "./plan-continuation";
 import "@colossus/ui/styles/session.css";
 import "@colossus/ui/styles/workflows.css";
 
@@ -110,6 +115,9 @@ export function ThreadSessionViews({
   onChangeView,
   onRevisePlan,
   canContinuePlan,
+  onExecutePlan,
+  goalAvailable = false,
+  busy = false,
 }: {
   view: SessionWorkspaceView;
   tasks: Task[];
@@ -117,6 +125,9 @@ export function ThreadSessionViews({
   onChangeView: (view: SessionWorkspaceView) => void;
   onRevisePlan: (plan: SessionPlanReference) => void;
   canContinuePlan: boolean;
+  onExecutePlan?: (plan: SessionPlanReference, strategy: PlanStrategy) => void;
+  goalAvailable?: boolean;
+  busy?: boolean;
 }) {
   const views = useMemo(
     () => sessionRunViews(tasks, updates),
@@ -155,11 +166,14 @@ export function ThreadSessionViews({
             continuationAvailable={canContinuePlan}
             workflowAvailable={false}
             onInspectPlan={setPlan}
-            onRevisePlan={(sourceRunId) => {
-              const match =
-                plan ?? views.find((view) => view.run.runId === sourceRunId);
-              if (match && "planId" in match)
-                onRevisePlan(match as SessionPlanReference);
+            onRevisePlan={(sourceRunId, planId, revision) => {
+              const match = selectSessionPlans(views).find(
+                (candidate) =>
+                  candidate.sourceRunId === sourceRunId &&
+                  candidate.planId === planId &&
+                  candidate.revision === revision,
+              );
+              if (match) onRevisePlan(match);
             }}
             onOpenPlanWorkflow={() => {}}
           />
@@ -250,6 +264,31 @@ export function ThreadSessionViews({
             onClose={() => setPlan(null)}
           >
             <MarkdownContent content={plan.output} linkComponent={WebLink} />
+            <ThreadPlanDecision
+              plan={plan}
+              available={
+                canContinuePlan &&
+                selectSessionPlans(views).some(
+                  (current) =>
+                    current.planId === plan.planId &&
+                    current.sourceRunId === plan.sourceRunId &&
+                    current.revision === plan.revision &&
+                    current.status === "draft" &&
+                    !current.continuationPending,
+                )
+              }
+              goalAvailable={goalAvailable}
+              busy={busy}
+              onRevise={(selected) => {
+                setPlan(null);
+                onRevisePlan(selected);
+              }}
+              onExecute={(selected, strategy) => {
+                setPlan(null);
+                onExecutePlan?.(selected, strategy);
+              }}
+              inline
+            />
             <Button onClick={() => setPlan(null)}>Close plan</Button>
           </WorkflowDialog>
         ) : null}

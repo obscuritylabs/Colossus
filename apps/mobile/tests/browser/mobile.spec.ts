@@ -70,7 +70,7 @@ test("work, fleet, inbox and accessible appearance preferences share one shell",
   });
   await page.getByRole("button", { name: "Inbox", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Review in Control Plane" }),
+    page.getByRole("button", { name: "Review request" }),
   ).toBeVisible();
   await page.screenshot({
     path: "test-results/mobile-inbox.png",
@@ -153,7 +153,7 @@ test("an uncertain submission reconciles the original operation after fleet chan
             password?: string;
           },
         ) {
-          const fixturePath = "/src/preview.ts";
+          const fixturePath = `${location.origin}/src/preview.ts`;
           const { previewClient } = await import(fixturePath);
           if (command === "mobile_connect")
             return previewClient.connect(args.origin);
@@ -336,6 +336,7 @@ test("retained task output catches up across pages and keeps one canonical resul
       body:
         source +
         `
+tasks[2].snapshot.run.terminal = { result: { output: "The complete retained result." } };
 const originalRequest = previewClient.request.bind(previewClient);
 previewClient.request = async (operation) => {
   if (operation.kind !== "task_updates" || operation.task !== "task-2") return originalRequest(operation);

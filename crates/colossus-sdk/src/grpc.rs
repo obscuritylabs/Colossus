@@ -142,6 +142,7 @@ pub struct GrpcBackend {
     plugins: Arc<plugins::GrpcPluginClient>,
     workflows: Arc<workflows::GrpcWorkflowClient>,
     capabilities: ServerCapabilities,
+    model_profiles: Vec<crate::ConfiguredModelProfile>,
     closed: watch::Sender<bool>,
 }
 
@@ -189,7 +190,7 @@ impl GrpcBackend {
             plugin_selection: std::sync::atomic::AtomicBool::new(false),
             model_selection: std::sync::atomic::AtomicBool::new(false),
         });
-        let capabilities = verify_server_identity(
+        let (capabilities, model_profiles) = verify_server_identity(
             agent_runs.as_ref(),
             options.expected_instance_id,
             options.api_major,
@@ -216,6 +217,7 @@ impl GrpcBackend {
             }),
             artifacts,
             capabilities,
+            model_profiles,
             closed,
         })
     }
@@ -267,6 +269,9 @@ impl Backend for GrpcBackend {
 
     fn capabilities(&self) -> ServerCapabilities {
         self.capabilities.clone()
+    }
+    fn model_profiles(&self) -> Vec<crate::ConfiguredModelProfile> {
+        self.model_profiles.clone()
     }
 
     fn artifacts(&self) -> Option<Arc<dyn ArtifactClient>> {
@@ -447,7 +452,7 @@ async fn verify_server_identity(
     expected_instance_id: crate::InstanceId,
     api_major: crate::ApiMajor,
     backend_kind: BackendKind,
-) -> SdkResult<ServerCapabilities> {
+) -> SdkResult<(ServerCapabilities, Vec<crate::ConfiguredModelProfile>)> {
     let request = client
         .request(proto::GetServerInfoRequest {})
         .await
@@ -513,7 +518,9 @@ async fn verify_server_identity(
         .filter(|capability| capability.enabled)
         .map(|capability| capability.name)
         .collect::<Vec<_>>();
-    Ok(ServerCapabilities::from_enabled(enabled))
+    let capabilities = ServerCapabilities::from_enabled(enabled);
+    let model_profiles = crate::model_catalog::decode(info.model_profiles, &capabilities)?;
+    Ok((capabilities, model_profiles))
 }
 
 fn connect_api_error(error: ApiError) -> SdkError {
@@ -3166,6 +3173,22 @@ mod tests {
 
     #[tokio::test]
     async fn live_pinned_tls_and_bearer_authentication_fail_closed() {
+        struct Catalog;
+        impl colossus_grpc::ModelCatalogProvider for Catalog {
+            fn model_profiles(
+                &self,
+                _caller: &CallerContext,
+            ) -> Vec<proto::ConfiguredModelProfile> {
+                vec![proto::ConfiguredModelProfile {
+                    profile: "configured-model".into(),
+                    model: "provider-model".into(),
+                    provider: "echo".into(),
+                    provider_profile: "test".into(),
+                    reasoning_effort: Some("high".into()),
+                    default_roles: vec!["assistant".into()],
+                }]
+            }
+        }
         let tls_identity =
             TlsIdentity::from_seed(TlsKeySeed::new([0x5a; 32])).expect("TLS identity");
         let certificate_pem = tls_identity.certificate_pem().to_vec();
@@ -3205,7 +3228,8 @@ mod tests {
                 deployment_mode: proto::DeploymentMode::SharedDaemon,
             },
             Arc::new(FixedReadiness::ready()),
-        );
+        )
+        .with_model_catalog(Arc::new(Catalog));
         let server = BoundPublicGrpcServer::bind(
             "127.0.0.1:0".parse().expect("address"),
             tls_identity,
@@ -3295,6 +3319,13 @@ mod tests {
         .unwrap();
         assert!(goal_backend.capabilities().contains("goal.create"));
         assert!(!backend.capabilities().contains("goal.create"));
+        assert!(backend.model_profiles().is_empty());
+        let catalog = goal_backend.model_profiles();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].profile, "configured-model");
+        assert_eq!(catalog[0].reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(catalog[0].default_roles, ["assistant"]);
+        assert!(goal_backend.connector_model_profiles().is_empty());
         let goal_request = CreateRunRequest {
             model_profile: None,
             reasoning_effort: None,

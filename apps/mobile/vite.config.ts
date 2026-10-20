@@ -22,6 +22,18 @@ export default defineConfig({
     },
   ],
   clearScreen: false,
+  optimizeDeps: {
+    // Keep shared providers together and prebundle Markdown's CommonJS dependencies.
+    exclude: ["@colossus/ui"],
+    include: [
+      "@xyflow/react",
+      "react-markdown",
+      "recharts",
+      "react-resizable-panels",
+      "use-sync-external-store/shim",
+      "use-sync-external-store/shim/with-selector",
+    ],
+  },
   server: {
     host: "0.0.0.0",
     port: 1422,

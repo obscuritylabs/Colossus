@@ -37,7 +37,8 @@ protects a current boundary; it does not mean every future assertion is permanen
 | `colossus-api` | Keep server composition and public API lifecycle tests. |
 | `colossus-audit` | Keep journal export, retry, recovery, and live WORM acceptance tests. |
 | `colossus-cli` | Keep command-level smoke suites because they exercise public parsing and embedded/worker boundaries; remove a suite only when its command or contract is removed. |
-| `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Keep project/placement/receipt/cursor/renewal invariants and the signed OIDC-to-runtime transport acceptance; run the operator-owned PostgreSQL variant described in [cloud development](cloud-control-plane.md). |
+| `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Keep project/personal ownership, placement, receipt, cursor, renewal and resource-admission invariants and the signed OIDC-to-runtime transport acceptance; run the operator-owned PostgreSQL variants described in [cloud development](cloud-control-plane.md). |
+| `colossus-cloud-chat` | Keep credential purpose/project/user/generation/destination binding, personal/shared separation, controlled runtime composition and private-state identity tests; server acceptance owns browser authentication and supervised connector integration. |
 | `colossus-control-plane-client` | Keep origin and route confinement, cookie custody, permission/expiry distinctions, logout/server switching, bounded reads, redirect rejection and single-attempt mutation tests. Mobile browser fixtures separately verify presentation; see [Mobile development](mobile.md) for native device acceptance. |
 | `colossus-codex-auth` | Keep OAuth/device-flow parsing, storage, and redaction tests. |
 | `colossus-context` | Keep compaction budgets, snapshots, and deterministic fallback unit tests. |

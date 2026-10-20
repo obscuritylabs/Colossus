@@ -6,6 +6,7 @@ members = [
     "crates/colossus-cloud",
     "crates/colossus-cloud-postgres",
     "crates/colossus-cloud-server",
+    "crates/colossus-cloud-chat",
     "crates/colossus-a2a-server",
     "crates/colossus-connector",
     "crates/colossus-cloud-protocol",
@@ -91,6 +92,7 @@ openidconnect = { version = "4.0.1", default-features = false, features = ["reqw
 colossus-connector = { version = "=0.11.8", path = "crates/colossus-connector" }
 colossus-a2a-server = { version = "=0.11.8", path = "crates/colossus-a2a-server" }
 colossus-cloud-server = { version = "=0.11.8", path = "crates/colossus-cloud-server" }
+colossus-cloud-chat = { version = "=0.11.8", path = "crates/colossus-cloud-chat" }
 axum = { version = "0.8.9", features = ["json", "tokio", "http1", "http2"] }
 colossus-cloud-protocol = { version = "=0.11.8", path = "crates/colossus-cloud-protocol" }
 colossus-cloud = { version = "=0.11.8", path = "crates/colossus-cloud" }

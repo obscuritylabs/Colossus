@@ -48,7 +48,57 @@ impl CloudRepository {
     /// Read one exact project-owned node.
     pub async fn get_node(&self, caller: &CloudCaller, node_id: &str) -> CloudResult<CloudNode> {
         caller.require(CloudPermission::Read)?;
-        self.node(caller.project_id(), node_id).await
+        self.node_for_caller(caller, node_id).await
+    }
+
+    /// Reconcile a hosted personal node's advertised roles after a reviewed project edit.
+    ///
+    /// The trusted hosted manager supplies the fixed node and owner; this operation is
+    /// not a browser administration endpoint and grants no runtime tools or API scopes.
+    pub async fn update_personal_node_roles(
+        &self,
+        caller: &CloudCaller,
+        node_id: &str,
+        owner_user_id: &str,
+        expected_revision: u64,
+        roles: std::collections::BTreeSet<String>,
+    ) -> CloudResult<CloudNode> {
+        caller.require(CloudPermission::Administer)?;
+        if owner_user_id.is_empty()
+            || owner_user_id.len() > 256
+            || owner_user_id.chars().any(char::is_control)
+            || roles.is_empty()
+            || roles.len() > 32
+        {
+            return Err(CloudError::InvalidArgument);
+        }
+        for role in &roles {
+            validate_identifier(role)?;
+        }
+        let mut node = self.node(caller.project_id(), node_id).await?;
+        if node.owner_user_id.as_deref() != Some(owner_user_id) {
+            return Err(CloudError::NotFound);
+        }
+        if node.revoked {
+            return Err(CloudError::PermissionDenied);
+        }
+        if node.revision != expected_revision {
+            return Err(CloudError::Conflict);
+        }
+        if node.roles == roles {
+            return Ok(node);
+        }
+        node.roles = roles;
+        node.revision = node.revision.checked_add(1).ok_or(CloudError::Conflict)?;
+        self.append(
+            caller.subject(),
+            stream(caller.project_id(), node_id),
+            expected_revision,
+            "cloud.node.roles.v1",
+            &node,
+        )
+        .await?;
+        Ok(node)
     }
 
     /// List one bounded lexical node page, exclusively after a validated node identity.
@@ -62,8 +112,19 @@ impl CloudRepository {
         if let Some(after) = after {
             validate_identifier(after)?;
         }
-        let prefix = format!("cloud.node:{}:", caller.project_id());
-        self.list(&prefix, after, limit).await
+        self.query_entities(
+            caller,
+            EntityQuery {
+                kind: EntityKind::Node,
+                after: after.map(str::to_owned),
+                limit,
+                ..Default::default()
+            },
+        )
+        .await?
+        .into_iter()
+        .map(|record| record.value.try_into())
+        .collect()
     }
 
     /// Durably revoke an exact revision. Existing authenticated streams must recheck this state.
@@ -74,7 +135,7 @@ impl CloudRepository {
         revision: u64,
     ) -> CloudResult<CloudNode> {
         caller.require(CloudPermission::Administer)?;
-        let mut node = self.node(caller.project_id(), node_id).await?;
+        let mut node = self.node_for_caller(caller, node_id).await?;
         if node.revoked {
             return Ok(node);
         }
@@ -139,6 +200,21 @@ impl CloudRepository {
         .await
     }
 
+    pub(super) async fn node_for_caller(
+        &self,
+        caller: &CloudCaller,
+        node_id: &str,
+    ) -> CloudResult<CloudNode> {
+        let node = self.node(caller.project_id(), node_id).await?;
+        if node
+            .owner_user_id
+            .as_deref()
+            .is_some_and(|owner| owner != caller.subject())
+        {
+            return Err(CloudError::NotFound);
+        }
+        Ok(node)
+    }
     pub(super) async fn node(&self, project: &str, node_id: &str) -> CloudResult<CloudNode> {
         validate_identifier(project)?;
         validate_identifier(node_id)?;

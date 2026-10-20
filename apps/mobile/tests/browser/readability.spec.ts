@@ -6,6 +6,29 @@ const appearances = ["black", "colossus", "neutral", "hacker", "light"];
 test("refresh preserves reading position and sending follows the reply", async ({
   page,
 }) => {
+  await page.route("**/src/preview.ts*", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      body:
+        (await response.text()) +
+        `
+const readingRequest = previewClient.request.bind(previewClient);
+previewClient.request = async (operation) => {
+  let refreshed = false;
+  if(operation.kind === "thread" && Reflect.get(window,"__pauseMobileNextRead")) {
+    Reflect.set(window,"__pauseMobileNextRead",false);
+    Reflect.set(window,"__mobileReadPending",true);
+    await new Promise(resolve => Reflect.set(window,"__releaseMobileRead",resolve));
+    Reflect.set(window,"__mobileReadPending",false);
+    refreshed = true;
+  }
+  const result = await readingRequest(operation);
+  return refreshed ? {...result,thread:{...result.thread,title:"Reading position refreshed"}} : result;
+};
+`,
+    });
+  });
   await page.goto("/");
   await page
     .getByRole("button", { name: "Explore development preview" })
@@ -22,28 +45,18 @@ test("refresh preserves reading position and sending follows the reply", async (
   }
   const body = page.locator(".mobile-conversation-body");
   await body.evaluate((element) => {
-    element.scrollTop = 0;
+    element.addEventListener("scroll", () =>
+      Reflect.set(window, "__mobileReadingScrollTop", element.scrollTop),
+    );
   });
+  await body.hover();
+  await page.mouse.wheel(0, -1600);
   await expect
-    .poll(() => body.evaluate((element) => element.scrollTop))
+    .poll(() =>
+      page.evaluate(() => Reflect.get(window, "__mobileReadingScrollTop")),
+    )
     .toBe(0);
-  await page.evaluate(async () => {
-    const fixturePath = "/src/preview.ts";
-    const { previewClient } = await import(fixturePath);
-    const request = previewClient.request.bind(previewClient);
-    let pauseNext = true;
-    previewClient.request = async (operation: { kind: string }) => {
-      if (operation.kind === "thread" && pauseNext) {
-        pauseNext = false;
-        Reflect.set(window, "__mobileReadPending", true);
-        await new Promise<void>((resolve) =>
-          Reflect.set(window, "__releaseMobileRead", resolve),
-        );
-        Reflect.set(window, "__mobileReadPending", false);
-      }
-      return request(operation);
-    };
-  });
+  await page.evaluate(() => Reflect.set(window, "__pauseMobileNextRead", true));
   await page.getByRole("button", { name: "Refresh conversation" }).click();
   await expect
     .poll(() => page.evaluate(() => Reflect.get(window, "__mobileReadPending")))
@@ -56,6 +69,13 @@ test("refresh preserves reading position and sending follows the reply", async (
   await expect
     .poll(() => page.evaluate(() => Reflect.get(window, "__mobileReadPending")))
     .toBe(false);
+  await expect(
+    page.getByRole("heading", {
+      name: "Reading position refreshed",
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(await body.evaluate((element) => element.scrollTop)).toBe(0);
   await page
     .getByRole("textbox", { name: "Message Colossus" })
     .fill("Return to latest work");
@@ -203,7 +223,10 @@ for (const appearance of appearances) {
       page.getByRole("dialog", { name: "Task options" }),
     ).toBeVisible();
     await expect(page.getByText("Mac studio · Connected")).toBeVisible();
-    await page.getByRole("radio", { name: /^Plan / }).click();
+    await page
+      .locator(".mode-switch label")
+      .filter({ hasText: "Plan" })
+      .click();
     await page.screenshot({
       path: `test-results/readable-options-${appearance}.png`,
     });
@@ -252,7 +275,10 @@ for (const appearance of appearances) {
     await expect(
       page.getByRole("button", { name: "Done", exact: true }),
     ).toBeInViewport({ ratio: 1 });
-    await page.getByRole("radio", { name: /^Plan / }).click();
+    await page
+      .locator(".mode-switch label")
+      .filter({ hasText: "Plan" })
+      .click();
     await page.getByRole("button", { name: "Done", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "Task options · Plan" }),
@@ -272,7 +298,7 @@ test("workspace names remain complete and options control the submitted task", a
   await expect(page.getByRole("radio", { name: /^Release / })).toBeVisible();
   await expect(page.getByText("Mac studio · Connected")).toBeVisible();
   await page.getByRole("radio", { name: /^Release / }).click();
-  await page.getByRole("radio", { name: /^Plan / }).click();
+  await page.locator(".mode-switch label").filter({ hasText: "Plan" }).click();
   await page.screenshot({ path: "test-results/readable-new-task-options.png" });
   await page.getByRole("button", { name: "Done", exact: true }).click();
   await page

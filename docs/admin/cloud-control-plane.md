@@ -1,6 +1,6 @@
 ---
 title: Operate Colossus Control Plane
-description: Deploy the PostgreSQL-backed Kubernetes control plane, enroll runtimes, and operate shared conversations.
+description: Deploy the PostgreSQL-backed control plane, enable optional personal hosted chat, and operate enrolled runtimes.
 audience: operator
 type: how-to
 ---
@@ -12,6 +12,8 @@ history, and queues human work on a fixed runtime. Each agent opens an outbound
 connection; its workspace and daemon need no inbound public port. The control plane
 owns project membership, placement and its PostgreSQL schema. Local runtimes retain
 their own journals, provider credentials, tools, policy, approvals and sandboxing.
+Optional built-in Chat runs a separate controlled runtime for each project/user on the
+server; it has its own protected state and deployment requirements below.
 
 ## Deploy on Kubernetes
 
@@ -52,7 +54,8 @@ Local and OIDC sign-in can be enabled together, or either can be used independen
 Users, project memberships, and project hierarchy live in PostgreSQL. The legacy
 `memberships` configuration is a one-time migration seed; subsequent configuration
 restarts do not overwrite administrator-managed database roles. A global administrator
-can inspect all projects and manage users, but receives no implicit execution or effect
+can inspect shared project resources and manage users, but cannot read another user's
+personal chat history or runtime. Administration gives no implicit execution or effect
 approval grant. Project roles explicitly bundle permissions: Viewer reads; Operator
 reads, executes, and controls; Approver reads, controls, and answers effect approvals;
 Project administrator reads, executes, controls, and administers that project. Every
@@ -147,8 +150,10 @@ are shared in PostgreSQL. Connection fencing prevents a previous replica from co
 runtime updates after a replacement obtains ownership. The service applies checksummed
 SQL migrations under a schema-specific advisory lock; independent replicas can start
 together. Changed migration SQL fails startup instead of silently changing the schema.
-The cloud deployment needs no journal anchor PVC. Its history and operational state
-live in PostgreSQL; runtime journals remain local to their runtimes.
+The default chat-disabled deployment needs no journal-anchor PVC. Its history and
+operational state live in PostgreSQL; runtime journals remain local to their runtimes.
+The optional hosted-chat deployment additionally retains its runtime journals and
+credential custody on a private PVC.
 
 Browser HTTPS terminates at the trusted ingress. The separate runtime hostname on
 port 443 passes TCP/TLS through to port 8443, preserving HTTP/2 and client certificates.
@@ -170,6 +175,207 @@ Home and project analytics show daily run activity for the last 7, 30, or 90 day
 The line chart and its accessible data table use the same retained UTC daily buckets;
 tooltips show actual counts. Active runs and queued work show current state regardless
 of the selected period. Failed runs describe execution outcomes, not policy violations.
+
+## Enable personal hosted chat
+
+Open **Chat**, select a project, and start a conversation after the operator enables
+that project's hosted service. A workstation enrollment is unnecessary. Project
+administrators use Chat's settings to configure providers, model profiles and remote
+MCP connections within the deployment's allowed origins. Users select configured
+models/reasoning in the composer and connect their own accounts in **Connections**.
+Conversation streaming, saved history, cancellation, prompts and exact effect approvals
+reuse the normal runtime rather than a separate web agent implementation.
+Personal hosted conversations also support Plan refinement and combined approval and
+execution, with direct execution or a bounded Goal. Continuation requires the exact
+owned draft revision and session mapping; the runtime rechecks the released request.
+
+### Scale hosted chat across replicas
+
+Use `deploy/control-plane/overlays/hosted-chat-sql` for shared hosted state. Its two
+API replicas use the server's `database` block for tenant-partitioned runtime journals,
+projections, project settings, encrypted credentials, enrollment and OAuth callback
+metadata. Each API replica can serve the same signed-in user. The database places
+one execution owner per project/user runtime; other replicas route operations to that
+owner through durable cloud commands. This preserves a conversation's session and
+memory without requiring browser affinity.
+
+Enable the shared composition with these secret references inside `chat`:
+
+```json
+{
+  "shared": {
+    "keys": {
+      "journal_variable": "COLOSSUS_CHAT_JOURNAL_KEY",
+      "signing_variable": "COLOSSUS_CHAT_SIGNING_KEY",
+      "anchor_endpoint": "https://chat-anchors.example.com/v1/anchors",
+      "anchor_bearer_variable": "COLOSSUS_CHAT_ANCHOR_TOKEN",
+      "anchor_ca_pem_path": null,
+      "allow_loopback_http": false
+    }
+  }
+}
+```
+
+Keep `wrapping_key_variable` configured for the SQL credential/settings encryption
+key. Supply independent 32-byte encryption, signing and wrapping masters through your
+secret authority on every executor. Journal and checkpoint keys are derived for the
+exact runtime namespace and purpose. SQL stores ciphertext and references rather
+than these master keys. A missing key, unavailable authority or invalid ciphertext
+blocks the operation; no local credential-store fallback exists.
+
+Run `colossus-chat-anchor /etc/colossus/anchor.json` as a separately administered
+service. Give it its own PostgreSQL database, role, backup authority, encryption key
+and bearer credential, outside the journal database's administration boundary. It
+stores encrypted, monotonic checkpoint attestations and exposes no delete operation.
+Point `anchor_endpoint` at its HTTPS ingress. An optional CA bundle configures
+additional trust; certificate and hostname verification remain enabled.
+
+For example, its configuration contains references only:
+
+```json
+{
+  "bind": "0.0.0.0:8080",
+  "trustedTlsIngress": true,
+  "database": {
+    "connectionVariable": "COLOSSUS_ANCHOR_DATABASE",
+    "schema": "colossus_chat_anchors",
+    "tls": { "kind": "webpki_roots" },
+    "maxConnections": 4,
+    "connectionTimeoutMs": 5000,
+    "statementTimeoutMs": 5000
+  },
+  "bearerVariable": "COLOSSUS_ANCHOR_TOKEN",
+  "storageKeyVariable": "COLOSSUS_ANCHOR_STORAGE_KEY"
+}
+```
+
+`trustedTlsIngress` is an explicit operator assertion for non-loopback listeners;
+the authority process serves HTTP behind that ingress. The authority's storage key
+is separate from the three executor keys. Restrict access to the trusted executors.
+The explicit `allow_loopback_http` client option is only for isolated development.
+
+The SQL overlay uses disposable `emptyDir` caches and rolling updates. No runtime
+Redb database, local vault, anchor file or project-settings file is authoritative in
+shared mode. Size local caches and per-replica runtime limits using measured workloads.
+An execution lease lasts 30 seconds and renews every five seconds. Database-clock
+expiry and increasing ownership generations fence stale runtime opens, admissions,
+journal/projection writes, credentials and output release. Loss of ownership cancels
+in-flight adapter futures; a durable effect start with an uncertain remote outcome is
+reconciled as unknown rather than automatically executed again. A remote service may
+already have accepted a request, so lease fencing does not promise exactly-once
+external effects without that service's idempotency support.
+
+OAuth begin/callback operations can arrive at any API replica. Shared one-use state
+and an encrypted management queue bind each operation to its user, project,
+connection generation and execution owner. Losing that execution owner interrupts
+an in-progress OAuth exchange; the user restarts sign-in. Previously stored account
+credentials remain in encrypted SQL custody. Project-wide settings and credential
+changes use database coordination and require affected execution to be idle.
+
+Back up the shared cloud/journal database, retain the matching external keys and
+connector CA, and back up the independent anchor authority separately. Restore must
+satisfy the retained anchors; rolling the journal back below an attested boundary
+fails closed. Do not roll back the authority to hide a journal integrity failure.
+Existing single-host data is not silently imported by setting `shared`: keep the old
+state and keys until a supervised migration is verified, or use a new project for a
+fresh shared deployment.
+
+### Configure and verify the shared deployment
+
+Pin images and replace browser/runtime hostnames and TLS material in the SQL overlay.
+Select an existing project ID and explicit project memberships. Global administration
+alone does not grant access to another account's conversations. Replace the example
+model, token limits, provider and MCP endpoints with reviewed values. The sample shares
+the provider key; MCP OAuth uses a personal public client with S256 PKCE and the exact
+`https://colossus.example.com/auth/mcp/callback` registration. Remove the example MCP
+entry until its endpoint, client and authorization server are ready.
+
+Review exact `sandbox.networkDestinations` origins for the provider, MCP endpoint and
+OAuth metadata/token servers. Project administrators can select destinations within
+this immutable operator ceiling. They cannot add arbitrary network access. Select
+runtime admission, CPU, memory, cache and database budgets using measured workloads.
+The example permits four resident user runtimes per process and a 4 GiB memory limit.
+Controller readiness checks the database; verify actual hosted execution separately.
+
+After the secret authority has written owner-private files, provision the executor
+Secret without embedding values in configuration:
+
+```sh
+kubectl -n colossus create secret generic colossus-chat-state \
+  --from-file=journal-key=/secure/cloud/chat/journal-key \
+  --from-file=signing-key=/secure/cloud/chat/signing-key \
+  --from-file=wrapping-key=/secure/cloud/chat/wrapping-key \
+  --from-file=provider-key=/secure/cloud/chat/provider-key \
+  --from-file=anchor-token=/secure/cloud/chat/anchor-token
+kubectl apply -k deploy/control-plane/overlays/hosted-chat-sql
+kubectl -n colossus rollout status deployment/colossus-control-plane
+```
+
+Provider/MCP authentication defaults to personal custody. Missing, expired or corrupt
+personal credentials never select another user's or a shared account. Shared static
+credentials require an explicit project choice and remain separate from personal
+records. The browser cannot import or repoint a native workstation account file. A trusted
+operator can explicitly import a shared service account into encrypted SQL custody;
+see the [source import procedure](../develop/cloud-control-plane.md#develop-hosted-personal-chat).
+A rotating-token refresh interrupted after its durable claim requires explicit
+reauthentication before another refresh attempt.
+Project settings return connection metadata rather than host paths, environment key
+references or credentials. Destination/authentication changes retire the credential
+generation; unrelated model edits preserve existing connections.
+
+In Web settings, use **Global → Credentials** to save or remove your personal API keys.
+Use **Workspace → Credentials** to save shared project credentials with project
+administration permission. Save a new provider or MCP connection before adding its
+credential. The forms show the destination and saved status; stored secret values are
+never read back into the browser. In a shared deployment these writes use the encrypted
+PostgreSQL vault and remain available across API replicas.
+
+Providers shows the full built-in connection preset catalog used by Desktop, with
+deployment availability guidance. Codex account enrollment and local-server endpoints
+require deployment configuration; a local address refers to the server. Providers from
+Desktop's locally imported setup packages are separate configuration and are not
+automatically imported into a cloud project.
+
+Providers and Models use the shared Desktop inventories and editors. **Add provider**,
+**Add model**, and **Save changes** persist the reviewed project configuration directly.
+Display labels are stored separately from runtime profile IDs and credentials.
+In Models, **Load models** discovers the saved provider's catalog through the caller's controlled runtime.
+The selected model fills in reported limits and capabilities; manual model IDs remain
+available. Discovery requires project administration and execution permission and uses
+the configured personal or shared credential. It does not accept browser-supplied
+endpoints or secret values. Subscription account sign-in remains deployment-managed.
+
+**Role routing** uses the shared routing map and selectors. A specialized role left on
+**Use primary** follows the primary model; only explicit overrides are stored.
+Feature **Auto** uses advertised model support and provider responses, with separate
+controls for tool calls, streaming, image inputs and server compaction.
+
+Personal nodes and threads belong to the authenticated account. Other project members,
+project administrators and global administrators cannot read or control them through
+thread, task, event, inventory or analytics routes. Shared links do not transfer
+ownership. A personal owner with current Execute and Control can answer their exact
+one-use approval; shared execution retains the independent project Approve requirement.
+Runtime policy, request hashes and response ETags remain authoritative.
+
+Verify with two ordinary project users, using different MCP accounts. Stream a chat,
+answer an approval, reconnect through another API replica and continue the same
+history. Neither user should see the other's threads, tasks, nodes, tokens or usage.
+Restart the execution owner, discard its local caches, and verify history and connector
+recovery. Check that unresolved effects are reported as unknown rather than replayed.
+
+The older `overlays/hosted-chat` path is a compatibility alias for the SQL overlay.
+A production `chat` block without `shared` is rejected. The single-host composition
+is retained only when `local_development` is explicitly enabled, for source fixtures
+with protected local state. Keep its private volume and matching keys until any
+supervised migration is verified; pending sign-in flows restart after interruption.
+
+Hosted Chat currently has controlled provider and allowlisted remote MCP tooling.
+It does not provision a Coder workspace, Kubernetes sandbox or other user environment.
+Shell/filesystem tools, stdio MCP, native browser/computer control and plugin execution
+require future environment integration. Cloud attachment/artifact transfer, branch
+mappings, standalone Plan approve/discard, and explicit plugin-skill selection remain
+unavailable. Choose an independently enrolled runtime for capabilities outside this
+hosted boundary.
 
 ## Configure deployment markings and monitor policy
 

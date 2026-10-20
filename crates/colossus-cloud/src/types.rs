@@ -7,6 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CloudNode {
+    /// Personal runtime owner; absent denotes a legacy or explicitly shared project node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
     /// Stable registered machine identity.
     pub node_id: String,
     /// Owning cloud project.
@@ -156,6 +159,9 @@ pub struct CloudThread {
     pub thread_id: String,
     /// Owning authenticated project.
     pub project_id: String,
+    /// Personal owner, derived from the authenticated account; absent preserves shared history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
     /// Immutable enrolled runtime placement.
     pub node_id: String,
     /// Native host grouping if advertised.

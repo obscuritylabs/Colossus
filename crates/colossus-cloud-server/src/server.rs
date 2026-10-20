@@ -29,6 +29,7 @@ pub(crate) struct State {
     pub sse_permits: Arc<tokio::sync::Semaphore>,
     pub shutdown: tokio::sync::watch::Sender<bool>,
     pub replica_id: String,
+    pub chat: Option<Arc<crate::chat::HostedChat>>,
 }
 /// Fully composed HTTP/OIDC and mutual-TLS runtime host.
 pub struct ControlPlaneServer {
@@ -90,6 +91,19 @@ impl ControlPlaneServer {
         }
         let ca = CertificateAuthority::load(&config)?;
         let auth = Authentication::with_store(config.clone(), store).await?;
+        let chat = if let Some(deployment) = config.chat.clone() {
+            let database = config.database.clone();
+            let repository = repo.clone();
+            Some(Arc::new(
+                tokio::task::spawn_blocking(move || {
+                    crate::chat::HostedChat::open(deployment, repository, database)
+                })
+                .await
+                .map_err(|_| "hosted chat startup unavailable")??,
+            ))
+        } else {
+            None
+        };
         Ok(Self {
             state: Arc::new(State {
                 config,
@@ -101,6 +115,7 @@ impl ControlPlaneServer {
                 sse_permits: Arc::new(tokio::sync::Semaphore::new(1024)),
                 shutdown: tokio::sync::watch::channel(false).0,
                 replica_id: uuid::Uuid::now_v7().simple().to_string(),
+                chat,
             }),
         })
     }
@@ -170,15 +185,22 @@ impl ControlPlaneServer {
             }
         };
         tokio::pin!(upkeep);
-        tokio::select! {
-            result = &mut drain => result?,
-            _ = &mut upkeep => return Err("cloud maintenance stopped"),
+        let result = tokio::select! {
+            result = &mut drain => result,
+            _ = &mut upkeep => Err("cloud maintenance stopped"),
             _ = &mut forward => {
                 tokio::time::timeout(std::time::Duration::from_secs(30), &mut drain)
-                    .await.map_err(|_| "cloud shutdown drain deadline exceeded")??;
+                    .await.map_err(|_| "cloud shutdown drain deadline exceeded").and_then(|result|result)
             }
-        }
-        Ok(())
+        };
+        let chat_shutdown = if let Some(chat) = &self.state.chat {
+            chat.shutdown()
+                .await
+                .map_err(|_| "hosted chat shutdown did not complete")
+        } else {
+            Ok(())
+        };
+        result.and(chat_shutdown)
     }
 }
 async fn wait_shutdown(mut receiver: tokio::sync::watch::Receiver<bool>) {

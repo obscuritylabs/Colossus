@@ -1,5 +1,9 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import type { Membership } from "@colossus/control-plane-client";
+import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
+import type {
+  ResearchDepth,
+  ResearchSourceKind,
+} from "@colossus/ui/session/types";
+import type { Update, Membership } from "@colossus/control-plane-client";
 
 export interface Identity {
   user: { id: string; display_name: string; is_admin: boolean };
@@ -18,7 +22,35 @@ export type Operation =
       project: string;
       after?: string;
     }
-  | { kind: "thread"; project: string; thread: string }
+  | {
+      kind: "thread";
+      project: string;
+      thread: string;
+      message_after?: string;
+      task_after?: string;
+    }
+  | {
+      kind: "runtime_context" | "model_catalog";
+      project: string;
+      node: string;
+      connection_id: string;
+    }
+  | {
+      kind: "respond";
+      project: string;
+      task: string;
+      mutation_id: string;
+      request: InteractionResponseRequest;
+    }
+  | { kind: "command"; project: string; task: string; command: string }
+  | {
+      kind: "inspect_inboxes";
+      project: string;
+      task: string;
+      request_id: string;
+      participant_id?: string;
+      after_sequence: number;
+    }
   | { kind: "task"; project: string; task: string }
   | { kind: "task_updates"; project: string; task: string; after: number }
   | {
@@ -35,17 +67,45 @@ export type Operation =
       request: RunRequest;
     }
   | { kind: "cancel"; project: string; task: string; mutation_id: string };
+export type RunMode = "execute" | "plan" | "goal" | "research";
+export interface InteractionResponseRequest {
+  run_id: string;
+  interaction_id: string;
+  etag: string;
+  idempotency_key: string;
+  response:
+    | { approval: { approved: boolean; request_hash: string } }
+    | {
+        prompt:
+          | { choice: { choice_id: string; label: string } }
+          | { free_form: string };
+      };
+}
+export interface WatchScope {
+  project: string;
+  thread?: string;
+  task?: string;
+  after?: string;
+}
+export type MobileStreamEvent =
+  | { kind: "run_update"; update: Update; cursor: string }
+  | { kind: "thread_changed"; cursor: string }
+  | { kind: "connection"; connected: boolean }
+  | { kind: "error"; code: string; message: string };
 export interface RunRequest {
   input: { text: string }[];
   role: string;
-  mode: "execute" | "plan";
+  mode: RunMode;
+  model_profile?: string;
+  reasoning_effort?: string;
+  goal_max_iterations?: number;
   max_turns: number;
   idempotency_key: string;
   plugin_skill_ids: string[];
   session_id: null;
   end_user_id: null;
-  research_depth: null;
-  research_sources: [];
+  research_depth: ResearchDepth | null;
+  research_sources: ResearchSourceKind[];
   plan_action: null;
   branch: null;
 }
@@ -54,6 +114,10 @@ export interface MobileClient {
   connect(origin: string): Promise<AuthConfiguration>;
   login(username: string, password: string): Promise<Identity>;
   request<T>(operation: Operation): Promise<T>;
+  watch(
+    scope: WatchScope,
+    listener: (event: MobileStreamEvent) => void,
+  ): Promise<() => Promise<void>>;
   logout(): Promise<void>;
   openBrowser(project?: string, task?: string): Promise<void>;
 }
@@ -120,6 +184,22 @@ export const nativeClient: MobileClient = {
   connect: (origin) => native("mobile_connect", { origin }),
   login: (username, password) => native("mobile_login", { username, password }),
   request: (operation) => native("mobile_request", { operation }),
+  async watch(scope, listener) {
+    const channel = new Channel<MobileStreamEvent>();
+    let active = true;
+    channel.onmessage = (event) => {
+      if (!active) return;
+      if (event.kind === "error" && event.code === "session_expired")
+        window.dispatchEvent(new Event("colossus:mobile-session-expired"));
+      listener(event);
+    };
+    const id = await native<number>("mobile_watch", { scope, channel });
+    return async () => {
+      if (!active) return;
+      active = false;
+      await native("mobile_unwatch", { id });
+    };
+  },
   logout: () => native("mobile_logout"),
   openBrowser: (project, task) =>
     native("mobile_open_browser", {
@@ -130,7 +210,7 @@ export const nativeClient: MobileClient = {
 export function runRequest(
   text: string,
   role: string,
-  mode: "execute" | "plan",
+  mode: RunMode,
   key: string,
 ): RunRequest {
   return {

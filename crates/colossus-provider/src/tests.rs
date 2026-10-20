@@ -1,4 +1,6 @@
 use super::*;
+#[path = "tests/codex_shared.rs"]
+mod codex_shared;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use colossus_contracts::{
     DecisionOutcome, EffectPhase, PolicyDecision, ProviderEvent, SandboxBoundaryMode,

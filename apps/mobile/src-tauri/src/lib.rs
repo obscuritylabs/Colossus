@@ -14,25 +14,29 @@ pub fn run() {
             commands::mobile_connect,
             commands::mobile_login,
             commands::mobile_request,
+            commands::mobile_watch,
+            commands::mobile_unwatch,
             commands::mobile_logout,
             commands::mobile_open_browser,
         ])
         .setup(|app| {
-            let development_origin = app.config().build.dev_url.as_ref().map(|url| url.origin());
-            tauri::WebviewWindowBuilder::new(
+            let development_origin = app.config().build.dev_url.as_ref().map(tauri::Url::origin);
+            let window = tauri::WebviewWindowBuilder::new(
                 app,
                 "main",
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title("Colossus")
-            .inner_size(420.0, 900.0)
-            .on_navigation(move |url| {
-                url.scheme() == "tauri"
-                    || url.host_str() == Some("tauri.localhost")
-                    || (cfg!(debug_assertions)
-                        && development_origin.as_ref() == Some(&url.origin()))
-            })
-            .build()?;
+            .title("Colossus");
+            #[cfg(desktop)]
+            let window = window.inner_size(420.0, 900.0);
+            window
+                .on_navigation(move |url| {
+                    url.scheme() == "tauri"
+                        || url.host_str() == Some("tauri.localhost")
+                        || (cfg!(debug_assertions)
+                            && development_origin.as_ref() == Some(&url.origin()))
+                })
+                .build()?;
             Ok(())
         })
         .run(tauri::generate_context!())

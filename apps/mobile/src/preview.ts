@@ -14,6 +14,8 @@ import {
   type MobileClient,
   type Operation,
   type RunRequest,
+  type WatchScope,
+  type MobileStreamEvent,
 } from "./client";
 
 export const previewAuth: AuthConfiguration = {
@@ -57,10 +59,42 @@ const nodes: FleetNode[] = names.map((label, index) => ({
     host_id: `host-${index}`,
     workspace_label: workspaces[index]!,
     workspace_id: `workspace-${index}`,
+    policy: {
+      schema_version: 1,
+      provenance: "development-preview",
+      fingerprint: "sample-policy",
+      configuration_revision: 1,
+      access_profile: "sample",
+      sandbox_backend: "sample",
+      sandbox_profile: "workspace",
+      boundary_acknowledged: true,
+      approval_mode: "ask",
+      allowed_roles: ["primary"],
+      allowed_tools: ["filesystem.search", "web.search", "mcp.call"],
+      capabilities: [
+        "goal.create",
+        "research.create",
+        "agent_runs.model_selection",
+      ],
+      models: [{ profile: "balanced", label: "Balanced model" }],
+      findings: [],
+      telemetry: {
+        provenance: "sample",
+        denied_requests: 0,
+        approval_requests: 1,
+        outcome_unknown_runs: 0,
+      },
+    },
   },
   presence: {
     ready: true,
-    capabilities: [],
+    capabilities: [
+      "runtime.model_catalog.v1",
+      "agent_runs.model_selection",
+      "goal.create",
+      "research.create",
+      "agent_messages.read.v1",
+    ],
     connection_id: `preview-${index}`,
   },
 }));
@@ -205,6 +239,47 @@ const activity = new Map<string, Update[]>(
     ],
   ]),
 );
+const sampleActivity = activity.get("task-0")!;
+sampleActivity.push(
+  {
+    run_id: "run-0",
+    sequence: 4,
+    created_at: now,
+    update: {
+      tool_activity: {
+        call_id: "preview-reconnect",
+        tool_name: "filesystem.search",
+        state: "started",
+        summary: "Inspecting reconnect handling",
+        input: "Search the workspace for connection lease handling.",
+      },
+    },
+  },
+  {
+    run_id: "run-0",
+    sequence: 5,
+    created_at: now,
+    update: {
+      tool_activity: {
+        call_id: "preview-reconnect",
+        tool_name: "filesystem.search",
+        state: "completed",
+        summary: "Located the reconnect path",
+        preview:
+          "The sample runtime found a stale lease during the reconnect handshake.",
+      },
+    },
+  },
+  {
+    run_id: "run-0",
+    sequence: 6,
+    created_at: now,
+    update: {
+      reasoning_summary:
+        "Checking cancellation before proposing a change to the reconnect path.",
+    },
+  },
+);
 function complete(
   thread: Thread,
   request: RunRequest,
@@ -288,8 +363,106 @@ function complete(
   ]);
   return { thread, task };
 }
+const capabilities = [
+  "runtime.model_catalog.v1",
+  "agent_runs.model_selection",
+  "goal.create",
+  "research.create",
+  "agent_messages.read.v1",
+];
+const modelProfiles = [
+  {
+    profile: "balanced",
+    model: "Balanced model",
+    provider: "open_ai",
+    provider_profile: "preview",
+    reasoning_effort: "medium",
+    default_roles: ["primary"],
+  },
+  {
+    profile: "deep",
+    model: "Deep reasoning model",
+    provider: "open_ai",
+    provider_profile: "preview",
+    reasoning_effort: "high",
+    default_roles: [],
+  },
+];
+const commandReplies = new Map<string, unknown>();
+let eventCursor = 0;
+const streamCursors = new Map<string, number>();
+function streamCursor(task: Task, event: Update) {
+  const key = JSON.stringify([task.task_id, event.run_id, event.sequence]);
+  if (!streamCursors.has(key)) streamCursors.set(key, ++eventCursor);
+  return streamCursors.get(key)!;
+}
+// Assign stable sample stream cursors before watchers or submissions are created.
+for (const task of tasks)
+  for (const event of activity.get(task.task_id) ?? [])
+    streamCursor(task, event);
 export const previewClient: MobileClient = {
   preview: true,
+  async watch(scope: WatchScope, listener: (event: MobileStreamEvent) => void) {
+    let active = true,
+      pending = false,
+      after = Number(scope.after ?? 0);
+    const deliver = async () => {
+      if (!active || pending) return;
+      pending = true;
+      try {
+        const pendingEvents: { task: Task; update: Update; cursor: number }[] =
+          [];
+        for (const task of tasks.filter((task) =>
+          scope.task
+            ? task.task_id === scope.task
+            : task.thread_id === scope.thread,
+        )) {
+          const updates = scope.task
+            ? (
+                await previewClient.request<{ updates: Update[] }>({
+                  kind: "task_updates",
+                  project: scope.project,
+                  task: task.task_id,
+                  after,
+                })
+              ).updates
+            : (activity.get(task.task_id) ?? []);
+          for (const update of updates)
+            pendingEvents.push({
+              task,
+              update,
+              cursor: scope.task ? update.sequence : streamCursor(task, update),
+            });
+        }
+        pendingEvents.sort((a, b) => a.cursor - b.cursor);
+        for (const { task, update, cursor } of pendingEvents) {
+          if (cursor <= after || !active) continue;
+          after = cursor;
+          listener({
+            kind: "run_update",
+            update: structuredClone({ ...update, task_id: task.task_id }),
+            cursor: String(cursor),
+          });
+        }
+      } catch {
+        if (active)
+          listener({
+            kind: "error",
+            code: "unavailable",
+            message: "Sample activity could not be loaded.",
+          });
+      } finally {
+        pending = false;
+      }
+    };
+    listener({ kind: "connection", connected: true });
+    void deliver();
+    const timer = setInterval(() => void deliver(), 100);
+    return async () => {
+      active = false;
+      clearInterval(timer);
+    };
+  },
   async connect() {
     return structuredClone(previewAuth);
   },
@@ -304,6 +477,84 @@ export const previewClient: MobileClient = {
   async request<T>(operation: Operation): Promise<T> {
     let result: unknown;
     switch (operation.kind) {
+      case "runtime_context":
+      case "model_catalog": {
+        const node = nodes.find((item) => item.node.node_id === operation.node);
+        if (node?.presence?.connection_id !== operation.connection_id)
+          throw new ClientFailure(
+            "conflict",
+            "The runtime connection changed.",
+          );
+        result = {
+          kind: "result",
+          connection_id: operation.connection_id,
+          value: {
+            capabilities,
+            ...(operation.kind === "model_catalog"
+              ? { model_profiles: modelProfiles }
+              : {}),
+          },
+        };
+        break;
+      }
+      case "respond": {
+        const task = tasks.find((item) => item.task_id === operation.task);
+        const interaction = task?.snapshot?.pending_interactions.find(
+          (item) => item.interaction_id === operation.request.interaction_id,
+        );
+        if (
+          !task ||
+          !interaction ||
+          interaction.etag !== operation.request.etag
+        )
+          throw new ClientFailure(
+            "conflict",
+            "The request changed. Refresh before responding.",
+          );
+        interaction.status = "answered";
+        const command = {
+          command_id: operation.mutation_id,
+          reply: { kind: "responded" },
+        };
+        commandReplies.set(command.command_id, command.reply);
+        result = { command };
+        break;
+      }
+      case "command":
+        result = {
+          command: {
+            command_id: operation.command,
+            reply: commandReplies.get(operation.command) ?? null,
+          },
+        };
+        break;
+      case "inspect_inboxes": {
+        const task = tasks.find((item) => item.task_id === operation.task);
+        const participant = {
+          id: "preview-participant",
+          root_run_id: task?.run_id ?? "",
+          session_id: "preview-session",
+          run_id: task?.run_id ?? null,
+          parent_id: null,
+          subagent_id: null,
+          generation: 1,
+          open: true,
+          closed_reason: null,
+          pending_messages: 0,
+          pending_bytes: 0,
+          created_at: now,
+        };
+        const reply = {
+          kind: "inboxes",
+          participants: [participant],
+          page: operation.participant_id
+            ? { messages: [], next_sequence: 0, has_more: false }
+            : null,
+        };
+        commandReplies.set(operation.request_id, reply);
+        result = { command: { command_id: operation.request_id, reply } };
+        break;
+      }
       case "me":
         result = identity;
         break;

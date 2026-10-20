@@ -251,6 +251,12 @@ chain but has no payload confidentiality, signed checkpoints, or external rollba
 anchor. Release builds continue to use platform-protected journals and never reuse the
 debug partition.
 
+To run the mobile client on a local iPhone simulator, use `./scripts/mobile-dev`.
+For a browser renderer preview, use `./scripts/mobile-dev --browser-preview`.
+See [mobile development](mobile.md#run-locally-on-a-mac) for the one-time Xcode,
+simulator runtime, native tools, and pinned Rust target setup. The labeled development
+preview needs no controller or account.
+
 ### Use isolated development credential custody
 
 Unsigned development rebuilds can change their macOS code identity and require renewed

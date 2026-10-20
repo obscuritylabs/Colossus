@@ -25,6 +25,7 @@ uuid.workspace = true
 webpki-roots.workspace = true
 
 [dev-dependencies]
+tokio.workspace = true
 colossus-journal-redb.workspace = true
 colossus-memory.workspace = true
 colossus-projection.workspace = true

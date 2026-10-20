@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: colossus-control-plane
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  template:
+    spec:
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        # Preserve owner-private children on ordinary restarts.
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: prepare-chat-cache
+          image: colossus-control-plane
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              umask 077
+              if [ -L /var/lib/colossus-chat/private ]; then exit 1; fi
+              mkdir -p /var/lib/colossus-chat/private
+              chmod 0700 /var/lib/colossus-chat/private
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          volumeMounts:
+            - {name: chat-cache, mountPath: /var/lib/colossus-chat}
+      containers:
+        - name: control-plane
+          env:
+            - name: COLOSSUS_CHAT_JOURNAL_KEY
+              valueFrom: {secretKeyRef: {name: colossus-chat-state, key: journal-key}}
+            - name: COLOSSUS_CHAT_SIGNING_KEY
+              valueFrom: {secretKeyRef: {name: colossus-chat-state, key: signing-key}}
+            - name: COLOSSUS_CHAT_WRAPPING_KEY
+              valueFrom: {secretKeyRef: {name: colossus-chat-state, key: wrapping-key}}
+            - name: COLOSSUS_CHAT_PROVIDER_KEY
+              valueFrom: {secretKeyRef: {name: colossus-chat-state, key: provider-key}}
+            - name: COLOSSUS_CHAT_ANCHOR_TOKEN
+              valueFrom: {secretKeyRef: {name: colossus-chat-state, key: anchor-token}}
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "4", memory: 4Gi}
+          volumeMounts:
+            - {name: chat-cache, mountPath: /var/lib/colossus-chat}
+      volumes:
+        - name: chat-cache
+          emptyDir: {sizeLimit: 4Gi}

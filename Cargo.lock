@@ -1335,6 +1335,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-cloud-chat"
+version = "0.11.8"
+dependencies = [
+ "base64 0.22.1",
+ "colossus-api",
+ "colossus-api-runtime",
+ "colossus-contracts",
+ "colossus-credentials",
+ "colossus-home",
+ "colossus-journal-redb",
+ "colossus-network",
+ "colossus-policy",
+ "colossus-ports",
+ "colossus-runtime",
+ "colossus-sdk",
+ "hex",
+ "hmac 0.12.1",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "colossus-cloud-postgres"
 version = "0.11.8"
 dependencies = [
@@ -1349,6 +1376,7 @@ dependencies = [
  "ed25519-dalek",
  "futures",
  "hex",
+ "postgres",
  "rustls",
  "serde",
  "serde_json",
@@ -1390,12 +1418,17 @@ dependencies = [
  "colossus-api",
  "colossus-api-runtime",
  "colossus-cloud",
+ "colossus-cloud-chat",
  "colossus-cloud-postgres",
  "colossus-cloud-protocol",
+ "colossus-codex-auth",
  "colossus-connector",
  "colossus-contracts",
+ "colossus-control-plane-client",
  "colossus-credentials",
  "colossus-home",
+ "colossus-journal-postgres",
+ "colossus-mcp",
  "colossus-network",
  "colossus-policy",
  "colossus-ports",
@@ -1414,6 +1447,7 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "sha2 0.10.9",
+ "subtle",
  "tempfile",
  "time",
  "tokio",
@@ -1693,6 +1727,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "time",
+ "tokio",
  "tokio-postgres-rustls",
  "uuid",
  "webpki-roots",

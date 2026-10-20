@@ -111,7 +111,7 @@ docs_required=false
 dependency_required=false
 sdk_required=false
 desktop_required=true' apps/web/src/App.tsx
-for mobile_surface in apps/web/src/App.tsx apps/mobile/src/App.tsx apps/control-plane-client/src/index.ts crates/colossus-control-plane-client/src/service.rs; do
+for mobile_surface in apps/web/src/App.tsx apps/mobile/src/App.tsx apps/control-plane-client/src/index.ts crates/colossus-control-plane-client/src/service.rs scripts/mobile-dev scripts/mobile-dev.mjs scripts/mobile-dev.test.mjs; do
 expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
@@ -331,6 +331,7 @@ trap - EXIT HUP INT TERM
 "${NODE:-node}" --test "$script_dir/browser-pki-evidence.test.mjs"
 "${NODE:-node}" --test "$script_dir/release-notes.test.mjs"
 "${NODE:-node}" --test "$script_dir/../development-launch.test.mjs"
+"${NODE:-node}" --test "$script_dir/../mobile-dev.test.mjs"
 
 # These offline integrity and harness tests use synthetic archives and executable
 # fixtures. The selected Python needs cryptography for PKI input contracts; see

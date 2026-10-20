@@ -15,6 +15,7 @@ struct LoginBody<'a> {
 
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 
+#[derive(Clone)]
 pub(crate) struct Connection {
     pub origin: Url,
     client: reqwest::Client,
@@ -45,8 +46,8 @@ impl Connection {
     pub(crate) fn new(origin: Url) -> Result<Self> {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
             .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(20))
             .user_agent("Colossus-Mobile/0.1")
             .build()
             .map_err(|_| Failure::new("unavailable", "The network client could not start."))?;
@@ -83,6 +84,7 @@ impl Connection {
         let response = self
             .client
             .post(url)
+            .timeout(Duration::from_secs(20))
             .header(header::ORIGIN, self.origin.origin().ascii_serialization())
             .header("X-Colossus-CSRF", "1")
             .header(header::CONTENT_TYPE, "application/json")
@@ -132,6 +134,7 @@ impl Connection {
         let mut request = self
             .client
             .request(method, url.clone())
+            .timeout(Duration::from_secs(20))
             .header(header::ACCEPT, "application/json");
         if authenticated && let Some(cookie) = &self.cookie {
             request = request.header(header::COOKIE, cookie.as_str());
@@ -160,45 +163,7 @@ impl Connection {
             .map_err(|_| transport_failure(mutation))?;
         let status = response.status();
         if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-            // Project permission denial must not sign a still-authenticated user out.
-            let valid = if url.path() == "/api/me" {
-                false
-            } else if let Some(cookie) = &self.cookie {
-                let response = self
-                    .client
-                    .get(
-                        self.origin
-                            .join("api/me")
-                            .map_err(|_| transport_failure(false))?,
-                    )
-                    .header(header::COOKIE, cookie.as_str())
-                    .send()
-                    .await
-                    .map_err(|_| transport_failure(false))?;
-                if response.status().is_success() {
-                    true
-                } else if matches!(
-                    response.status(),
-                    StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-                ) {
-                    false
-                } else {
-                    return Err(transport_failure(false));
-                }
-            } else {
-                false
-            };
-            if !valid {
-                self.cookie = None;
-                return Err(Failure::new(
-                    "session_expired",
-                    "Your session ended. Sign in again.",
-                ));
-            }
-            return Err(Failure::new(
-                "forbidden",
-                "You do not have permission for this action.",
-            ));
+            return Err(self.authorization_failure(&url).await?);
         }
         if !status.is_success() {
             return Err(match status.as_u16() {
@@ -218,6 +183,92 @@ impl Connection {
         read_json(response)
             .await
             .map_err(|_| transport_failure(mutation))
+    }
+    pub(crate) async fn stream(&mut self, url: Url, after: u64) -> Result<reqwest::Response> {
+        let cookie = self
+            .cookie
+            .as_ref()
+            .ok_or(Failure::new("session_expired", "Sign in to continue."))?;
+        let request = self
+            .client
+            .get(url.clone())
+            .header(header::COOKIE, cookie.as_str())
+            .header(header::ACCEPT, "text/event-stream")
+            .header("Last-Event-ID", after.to_string())
+            .timeout(Duration::from_secs(15 * 60));
+        let response = tokio::time::timeout(Duration::from_secs(20), request.send())
+            .await
+            .map_err(|_| transport_failure(false))?
+            .map_err(|_| transport_failure(false))?;
+        if matches!(
+            response.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
+            return Err(self.authorization_failure(&url).await?);
+        }
+        if response.status() == StatusCode::NOT_FOUND {
+            return Err(Failure::new(
+                "not_found",
+                "This resource is no longer available.",
+            ));
+        }
+        if !response.status().is_success() {
+            return Err(transport_failure(false));
+        }
+        if response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_none_or(|value| value.split(';').next() != Some("text/event-stream"))
+        {
+            return Err(Failure::new(
+                "invalid_stream",
+                "The server returned an incompatible activity stream.",
+            ));
+        }
+        Ok(response)
+    }
+    async fn authorization_failure(&mut self, url: &Url) -> Result<Failure> {
+        // Project permission denial must not sign a still-authenticated user out.
+        let valid = if url.path() == "/api/me" {
+            false
+        } else if let Some(cookie) = &self.cookie {
+            let response = self
+                .client
+                .get(
+                    self.origin
+                        .join("api/me")
+                        .map_err(|_| transport_failure(false))?,
+                )
+                .timeout(Duration::from_secs(20))
+                .header(header::COOKIE, cookie.as_str())
+                .send()
+                .await
+                .map_err(|_| transport_failure(false))?;
+            if response.status().is_success() {
+                true
+            } else if matches!(
+                response.status(),
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+            ) {
+                false
+            } else {
+                return Err(transport_failure(false));
+            }
+        } else {
+            false
+        };
+        if !valid {
+            self.cookie = None;
+            return Ok(Failure::new(
+                "session_expired",
+                "Your session ended. Sign in again.",
+            ));
+        }
+        Ok(Failure::new(
+            "forbidden",
+            "You do not have permission for this action.",
+        ))
     }
     pub(crate) async fn logout(&mut self) {
         if self.cookie.is_some()

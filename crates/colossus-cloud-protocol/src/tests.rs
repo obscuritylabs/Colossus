@@ -17,3 +17,19 @@ fn empty_and_oversized_payloads_are_rejected_without_echoing_input() {
         "cloud payload is invalid or exceeds its bound"
     );
 }
+
+#[test]
+fn model_catalog_is_a_closed_execute_scoped_read() {
+    let operation = decode::<ResourceOperation>(br#"{"operation":"model_catalog"}"#).unwrap();
+    assert_eq!(operation, ResourceOperation::ModelCatalog {});
+    assert_eq!(operation.permission(), ResourcePermission::Execute);
+    assert!(operation.validate());
+    assert!(!operation.is_mutation());
+    assert_eq!(
+        ResourceOperation::Context.permission(),
+        ResourcePermission::Read
+    );
+    assert!(
+        decode::<ResourceOperation>(br#"{"operation":"model_catalog","owner":"primary"}"#).is_err()
+    );
+}

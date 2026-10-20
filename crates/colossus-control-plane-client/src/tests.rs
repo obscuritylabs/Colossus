@@ -1,3 +1,4 @@
+mod streams;
 mod transport;
 use crate::{
     operations::Operation,
@@ -40,11 +41,15 @@ fn route_identifiers_cannot_change_origin_or_inject_query_parameters() {
     let operation = Operation::Thread {
         project: "../../outside?x=1".into(),
         thread: "https://other.example/#private".into(),
+        message_after: None,
+        task_after: None,
     };
     assert!(operation.route(&origin).is_err());
     let (_, url, _) = Operation::Thread {
         project: "namespace:engineering".into(),
         thread: "thread-1".into(),
+        message_after: None,
+        task_after: None,
     }
     .route(&origin)
     .unwrap();
@@ -106,5 +111,87 @@ fn task_activity_reads_use_the_existing_bounded_retained_event_contract() {
             "kind":"task_updates","project":"engineering","task":"task-1","after":-1
         }))
         .is_err()
+    );
+}
+
+#[test]
+fn mobile_parity_operations_keep_exact_routes_and_reviewed_request_fields() {
+    let origin = validate_origin("https://colossus.example", false).unwrap();
+    let (_, url, _) = Operation::Thread {
+        project: "project".into(),
+        thread: "thread".into(),
+        message_after: Some("message&task_after=other".into()),
+        task_after: Some("task".into()),
+    }
+    .route(&origin)
+    .unwrap();
+    assert_eq!(
+        url.query_pairs().collect::<Vec<_>>(),
+        [
+            ("message_after".into(), "message&task_after=other".into()),
+            ("task_after".into(), "task".into())
+        ]
+    );
+    let (method, url, body) = Operation::RuntimeContext {
+        project: "project".into(),
+        node: "node".into(),
+        connection_id: "connection".into(),
+    }
+    .route(&origin)
+    .unwrap();
+    assert_eq!(method, reqwest::Method::POST);
+    assert_eq!(url.path(), "/api/projects/project/nodes/node/resources");
+    assert_eq!(
+        body.unwrap(),
+        serde_json::json!({"connection_id":"connection","operation":{"operation":"context"}})
+    );
+    let (_, _, body) = Operation::ModelCatalog {
+        project: "project".into(),
+        node: "node".into(),
+        connection_id: "connection".into(),
+    }
+    .route(&origin)
+    .unwrap();
+    assert_eq!(body.unwrap()["operation"]["operation"], "model_catalog");
+    let request = serde_json::json!({"run_id":"run","interaction_id":"prompt","etag":"reviewed","idempotency_key":"stable","response":{"prompt":{"free_form":"answer"}}});
+    let (_, url, body) = Operation::Respond {
+        project: "project".into(),
+        task: "task".into(),
+        mutation_id: "mutation".into(),
+        request: request.clone(),
+    }
+    .route(&origin)
+    .unwrap();
+    assert_eq!(url.path(), "/api/projects/project/tasks/task/respond");
+    assert_eq!(
+        body.unwrap(),
+        serde_json::json!({"mutation_id":"mutation","request":request})
+    );
+    let (method, url, body) = Operation::Command {
+        project: "project".into(),
+        task: "task".into(),
+        command: "receipt".into(),
+    }
+    .route(&origin)
+    .unwrap();
+    assert_eq!(method, reqwest::Method::GET);
+    assert_eq!(
+        url.path(),
+        "/api/projects/project/tasks/task/commands/receipt"
+    );
+    assert!(body.is_none());
+    let (_, url, body) = Operation::InspectInboxes {
+        project: "project".into(),
+        task: "task".into(),
+        request_id: "request".into(),
+        participant_id: Some("child".into()),
+        after_sequence: 42,
+    }
+    .route(&origin)
+    .unwrap();
+    assert_eq!(url.path(), "/api/projects/project/tasks/task/inboxes");
+    assert_eq!(
+        body.unwrap(),
+        serde_json::json!({"request_id":"request","participant_id":"child","after_sequence":42})
     );
 }

@@ -331,12 +331,16 @@ it("preserves the authorized project through global settings navigation and relo
   );
   expect(settings).not.toBeNull();
   await act(() => settings!.click());
-  await contains("Personal preferences");
+  await contains("Personal preferences and connections");
+  expect(container.querySelector(".managed-settings-shell")).not.toBeNull();
+  expect(
+    container.querySelector('[aria-label="Settings sections"]')?.textContent,
+  ).toContain("Appearance");
   expect(location.search).toBe("?project=p");
   await act(() => root.unmount());
   root = createRoot(container);
   await act(() => root.render(<App />));
-  await contains("Personal preferences");
+  await contains("Personal preferences and connections");
   expect(container.querySelector('a[href="/fleet?project=p"]')).not.toBeNull();
   expect(paths.some((path) => path.startsWith("/api/projects/q/"))).toBe(false);
 });

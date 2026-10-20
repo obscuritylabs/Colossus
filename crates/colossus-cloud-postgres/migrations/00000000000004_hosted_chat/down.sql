@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS hosted_chat_requests,hosted_chat_records,hosted_chat_leases,hosted_chat_project_gates;

@@ -40,6 +40,7 @@ def generate(directory: Path) -> dict:
 
     def key(name: str) -> None:
         command("genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256",
+                "-pkeyopt", "ec_param_enc:named_curve",
                 "-out", f"{name}.key")
 
     for name in ("ca", "other_ca"):
@@ -47,7 +48,9 @@ def generate(directory: Path) -> dict:
         command("req", "-new", "-x509", "-sha256", "-days", "3", "-key", f"{name}.key",
                 "-out", f"{name}.pem", "-subj", f"/CN=Colossus fixture {name} {fixture_id}",
                 "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
-                "-addext", "keyUsage=critical,keyCertSign,cRLSign")
+                "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+                "-addext", "subjectKeyIdentifier=hash",
+                "-addext", "authorityKeyIdentifier=keyid:always")
     private_write(directory / "ca.der", ssl.PEM_cert_to_DER_cert(
                   (directory / "ca.pem").read_text("ascii")))
     private_write(directory / "ca-index.txt", b"")
@@ -66,6 +69,9 @@ def generate(directory: Path) -> dict:
         usage = "clientAuth" if client and name != "wrong_usage_client" else "serverAuth"
         issuer = "other_ca" if name in ("untrusted_server", "wrong_issuer_client") else "ca"
         extension = "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n"
+        # Emit identifiers explicitly: system LibreSSL does not add them by
+        # default, and strict X.509 validation requires the issuing CA's key ID.
+        extension += "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n"
         extension += f"extendedKeyUsage={usage}\n"
         if not client:
             extension += "subjectAltName=" + ("DNS:wrong.invalid\n" if

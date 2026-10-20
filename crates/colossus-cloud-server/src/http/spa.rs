@@ -36,7 +36,14 @@ pub(super) fn service(web_root: &Path) -> Router {
             if parts.first().is_some_and(|part| {
                 matches!(
                     part.as_str(),
-                    "api" | "auth" | "health" | "projects" | "fleet" | "admin" | "settings"
+                    "api"
+                        | "auth"
+                        | "health"
+                        | "projects"
+                        | "chat"
+                        | "fleet"
+                        | "admin"
+                        | "settings"
                 )
             }) {
                 return StatusCode::NOT_FOUND.into_response();
@@ -99,7 +106,7 @@ fn identifier(value: &str) -> bool {
 fn frontend_path(parts: &[String]) -> bool {
     let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
     match parts.as_slice() {
-        [] | ["fleet" | "projects" | "admin" | "settings"] => true,
+        [] | ["chat" | "fleet" | "projects" | "admin" | "settings"] => true,
         ["admin", "users" | "projects" | "settings"] => true,
         [
             "projects",
@@ -114,9 +121,12 @@ fn frontend_path(parts: &[String]) -> bool {
             "overview" | "threads" | "analytics" | "policy" | "workflows" | "schedules"
             | "capabilities" | "plugins" | "library" | "connections",
         ] => identifier(project) && identifier(node),
-        ["projects", project, "threads" | "tasks" | "hosts", resource] => {
-            identifier(project) && identifier(resource)
-        }
+        [
+            "projects",
+            project,
+            "chat" | "threads" | "tasks" | "hosts",
+            resource,
+        ] => identifier(project) && identifier(resource),
         _ => false,
     }
 }

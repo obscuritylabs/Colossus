@@ -248,8 +248,38 @@ pub(super) async fn list(
         EntityKind::Thread => "title",
         _ => "''::TEXT",
     };
+    let node_visibility = |alias: &str| {
+        format!(
+            "NOT EXISTS(SELECT 1 FROM runtime_agents visible_node WHERE visible_node.project_id={alias}.project_id AND visible_node.id={alias}.node_id AND NOT visible_node.deleted AND visible_node.owner_user_id IS NOT NULL AND visible_node.owner_user_id<>$12)"
+        )
+    };
+    let visible_thread = |id: &str| {
+        let node = node_visibility("visible_thread");
+        format!(
+            "EXISTS(SELECT 1 FROM conversation_threads visible_thread WHERE visible_thread.project_id=source.project_id AND visible_thread.id={id} AND NOT visible_thread.deleted AND (visible_thread.owner_user_id IS NULL OR visible_thread.owner_user_id=$12) AND {node})"
+        )
+    };
+    let visible_task = |id: &str| {
+        let thread = "EXISTS(SELECT 1 FROM conversation_threads visible_thread WHERE visible_thread.project_id=visible_task.project_id AND visible_thread.id=visible_task.thread_id AND NOT visible_thread.deleted AND (visible_thread.owner_user_id IS NULL OR visible_thread.owner_user_id=$12))";
+        let node = node_visibility("visible_task");
+        format!(
+            "EXISTS(SELECT 1 FROM tasks visible_task WHERE visible_task.project_id=source.project_id AND visible_task.id={id} AND NOT visible_task.deleted AND (visible_task.thread_id IS NULL OR {thread}) AND {node})"
+        )
+    };
+    let visibility = match query.kind {
+        EntityKind::Node => "(source.owner_user_id IS NULL OR source.owner_user_id=$12)".into(),
+        EntityKind::Host => "(NOT EXISTS(SELECT 1 FROM runtime_agents host_node WHERE host_node.project_id=source.project_id AND host_node.host_id=source.id AND NOT host_node.deleted) OR EXISTS(SELECT 1 FROM runtime_agents host_node WHERE host_node.project_id=source.project_id AND host_node.host_id=source.id AND NOT host_node.deleted AND (host_node.owner_user_id IS NULL OR host_node.owner_user_id=$12)))".into(),
+        EntityKind::Workspace => node_visibility("source"),
+        EntityKind::Thread => format!("((source.owner_user_id IS NULL OR source.owner_user_id=$12) AND {})", node_visibility("source")),
+        EntityKind::Task => format!("((source.thread_id IS NULL OR {}) AND {})", visible_thread("source.thread_id"), node_visibility("source")),
+        EntityKind::ThreadMessage => visible_thread("source.parent_id"),
+        EntityKind::SessionMapping => format!("({} AND {})", visible_thread("source.thread_id"), node_visibility("source")),
+        EntityKind::Command | EntityKind::Run | EntityKind::NodeTask => format!("({} AND {})", visible_task("source.task_id"), node_visibility("source")),
+        EntityKind::Admission => "FALSE".into(),
+        _ => "TRUE".into(),
+    };
     let page = format!(
-        "SELECT source.*,{page_time} AS page_time,ROW_NUMBER() OVER (ORDER BY {order}) AS page_ordinal FROM {table} source WHERE project_id=$1 AND ($2::TEXT IS NULL OR {parent}=$2) AND ($3::TEXT IS NULL OR {comparison}) AND NOT deleted AND ($4::TEXT IS NULL OR {node}=$4) AND ($5::TEXT IS NULL OR strpos(lower({search}),lower($5))>0) AND {status_filter} AND ($7 IS NULL OR {archived}=$7) AND ($11::TEXT IS NULL OR {host}=$11) ORDER BY {order} LIMIT $8"
+        "SELECT source.*,{page_time} AS page_time,ROW_NUMBER() OVER (ORDER BY {order}) AS page_ordinal FROM {table} source WHERE project_id=$1 AND ($2::TEXT IS NULL OR {parent}=$2) AND ($3::TEXT IS NULL OR {comparison}) AND NOT deleted AND ($4::TEXT IS NULL OR {node}=$4) AND ($5::TEXT IS NULL OR strpos(lower({search}),lower($5))>0) AND {status_filter} AND ($7 IS NULL OR {archived}=$7) AND ($11::TEXT IS NULL OR {host}=$11) AND ($12::TEXT IS NULL OR {visibility}) ORDER BY {order} LIMIT $8"
     );
     let selection = rows::selection(query.kind, "r", "r.page_time");
     let joins = rows::joins(query.kind, "r");
@@ -266,7 +296,8 @@ pub(super) async fn list(
         .bind::<BigInt, _>(query.limit.min(100) as i64)
         .bind::<Nullable<Text>, _>(after_time.map(str::to_owned))
         .bind::<Nullable<Text>, _>(after_parent.map(str::to_owned))
-        .bind::<Nullable<Text>, _>(query.host_id.clone());
+        .bind::<Nullable<Text>, _>(query.host_id.clone())
+        .bind::<Nullable<Text>, _>(query.visible_to.clone());
     let rows = rows::load(conn, query.kind, statement, None)
         .await
         .map_err(CloudError::from)?;

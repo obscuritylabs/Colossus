@@ -5106,13 +5106,6 @@ p {
   flex: none;
 }
 
-.composer-model-loading {
-  min-height: 28px;
-  padding: 5px 3px;
-  color: var(--muted);
-  font-size: var(--font-size-body-sm);
-}
-
 .approval-mode-control {
   display: flex;
   flex: none;
@@ -10189,221 +10182,7 @@ textarea {
   min-width: 0;
 }
 
-.provider-editor-section {
-  padding: 16px 18px 18px;
-  border-bottom: 1px solid var(--border);
-}
-
-.provider-editor-section-heading {
-  margin-bottom: 13px;
-}
-
-.provider-editor-section-heading h5 {
-  font-size: var(--font-size-body);
-}
-
-.provider-editor-grid,
-.provider-auth-grid {
-  display: grid;
-  min-width: 0;
-  align-items: start;
-  gap: 12px;
-}
-
-.provider-editor-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.provider-connection-grid {
-  grid-template-columns: minmax(220px, 0.7fr) minmax(300px, 1.3fr);
-}
-
-.provider-auth-grid {
-  grid-template-columns: minmax(280px, 1fr) minmax(260px, 0.8fr);
-}
-
-.provider-credential-control {
-  display: grid;
-  min-width: 0;
-  justify-items: start;
-  gap: var(--space-3, 12px);
-}
-
-.provider-credential-control > label {
-  width: 100%;
-}
-
-.provider-editor label > small,
-.provider-auth-note small {
-  color: var(--faint);
-  font-size: var(--font-size-caption);
-  line-height: 1.35;
-}
-
-.provider-auth-note {
-  display: flex;
-  min-height: 70px;
-  align-items: flex-start;
-  gap: 9px;
-  padding: 12px;
-  border: 1px solid var(--green-border);
-  border-radius: 7px;
-  background: var(--green-soft);
-  color: var(--green-text);
-}
-
-.provider-auth-note > svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-}
-
-.provider-auth-note strong,
-.provider-auth-note small {
-  display: block;
-}
-
-.provider-auth-note strong {
-  color: var(--text);
-  font-size: var(--font-size-body-sm);
-}
-
-.provider-auth-note small {
-  margin-top: 3px;
-  color: var(--text);
-}
-
-.provider-runtime-control {
-  width: min(100%, 380px);
-}
-
 .provider-editor > .mcp-editor-actions {
-  padding: 12px 18px;
-  background: var(--surface-panel);
-}
-
-.model-editor-heading h4,
-.model-editor-section-heading h5 {
-  margin: 0;
-  color: var(--text-strong);
-}
-
-.model-editor-heading h4 {
-  font-size: var(--font-size-heading-sm);
-}
-
-.model-editor-heading p,
-.model-editor-section-heading p {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: var(--font-size-caption);
-  line-height: 1.45;
-}
-
-.model-editor {
-  display: block;
-  width: 100%;
-  padding: 0;
-  margin-bottom: 16px;
-}
-
-.model-editor-heading {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 11px;
-  padding: 16px 18px;
-  border-bottom: 1px solid var(--border);
-}
-
-.model-editor-heading > div {
-  min-width: 0;
-}
-
-.model-editor-section {
-  padding: 16px 18px 18px;
-  border-bottom: 1px solid var(--border);
-}
-
-.model-editor-section-heading {
-  margin-bottom: 13px;
-}
-
-.model-editor-section-heading h5 {
-  font-size: var(--font-size-body);
-}
-
-.model-editor-grid,
-.model-capability-grid {
-  display: grid;
-  min-width: 0;
-  align-items: start;
-  gap: 12px;
-}
-
-.model-editor-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.model-editor label > small,
-.model-capability-toggle small {
-  color: var(--faint);
-  font-size: var(--font-size-caption);
-  line-height: 1.35;
-}
-
-.model-capability-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.model-capability-toggle {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  min-height: 70px;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface-panel);
-}
-
-.model-capability-toggle:has(input:checked) {
-  border-color: var(--accent-border);
-  background: var(--blue-soft);
-}
-
-.model-capability-toggle > input {
-  grid-column: 2;
-  grid-row: 1;
-  justify-self: end;
-  margin-top: 1px;
-}
-
-.model-capability-toggle > span {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.model-capability-toggle strong,
-.model-capability-toggle small {
-  display: block;
-}
-
-.model-capability-toggle strong {
-  color: var(--text);
-  font-size: var(--font-size-body-sm);
-}
-
-.model-capability-toggle small {
-  margin-top: 3px;
-}
-
-.model-reasoning-control {
-  width: min(100%, 380px);
-  margin-top: 14px;
-}
-
-.model-editor > .mcp-editor-actions {
   padding: 12px 18px;
   background: var(--surface-panel);
 }
@@ -10997,8 +10776,6 @@ textarea {
   .search-editor-connection-grid,
   .provider-editor-grid,
   .provider-auth-grid,
-  .model-editor-grid,
-  .model-capability-grid,
   .telemetry-editor-grid,
   .telemetry-signal-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -11056,7 +10833,6 @@ textarea {
 
   .search-editor-heading,
   .provider-editor-heading,
-  .model-editor-heading,
   .telemetry-editor-heading {
     padding-left: 56px;
   }
@@ -11211,50 +10987,11 @@ textarea {
   }
 }
 
-/* A quiet activity cue; reduced-motion users retain a steady glow. */
-.send-button.is-stop {
-  border-color: var(--blue);
-  background: var(--surface-selected);
-  color: var(--blue-strong);
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--blue) 10%, transparent),
-    0 0 13px color-mix(in srgb, var(--blue) 18%, transparent);
-  animation: composer-working-glow 4s ease-in-out infinite;
-}
-.send-button.is-stop:not(:disabled):hover {
-  background: var(--surface-selected-hover);
-}
-.send-button.is-stop.is-stopping {
-  animation: none;
-}
-.send-button.is-stop .spinner {
-  border-color: var(--border);
-  border-top-color: var(--blue-strong);
-}
 .next-up-paused {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-@keyframes composer-working-glow {
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--blue) 5%, transparent),
-      0 0 7px color-mix(in srgb, var(--blue) 9%, transparent);
-  }
-  50% {
-    box-shadow:
-      0 0 0 4px color-mix(in srgb, var(--blue) 14%, transparent),
-      0 0 20px color-mix(in srgb, var(--blue) 28%, transparent);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .send-button.is-stop {
-    animation: none;
-  }
-}
-
 /* Provider recovery shares the live activity rail and the warning palette. */
 .provider-retry-status .feed-marker {
   border-color: var(--amber-border);

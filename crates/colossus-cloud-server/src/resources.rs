@@ -120,6 +120,12 @@ async fn request(
     };
     // Recheck user membership, revocation and lease before disclosing a response.
     let caller = state.auth.caller(&headers, &project, true).await?;
+    caller.require(CloudPermission::Read)?;
+    caller.require(match input.operation.permission() {
+        ResourcePermission::Read => CloudPermission::Read,
+        ResourcePermission::Execute => CloudPermission::Execute,
+        ResourcePermission::Control => CloudPermission::Control,
+    })?;
     if state.repo.get_node(&caller, &node).await?.revoked {
         return Err(CloudError::PermissionDenied.into());
     }

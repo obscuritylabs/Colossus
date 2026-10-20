@@ -16,13 +16,14 @@ pub mod settings;
 pub mod storage;
 mod types;
 mod validation;
+mod visibility;
 
 pub use accounts::*;
 pub use enrollment::{CertificateRedemption, Enrollment, RenewalIdentity};
 
 pub use error::{CloudError, CloudResult};
 pub use identity::{CloudCaller, CloudPermission};
-pub use repository::CloudRepository;
+pub use repository::{CloudRepository, DiscoverySnapshot};
 pub use types::*;
 pub use validation::validate_identifier;
 

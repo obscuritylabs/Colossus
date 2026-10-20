@@ -227,11 +227,11 @@ fn cursor_query_hash(query: &EntityQuery) -> CloudResult<String> {
         query.archived,
         query.order,
     );
-    // Preserve existing cursors when no new host filter is selected.
-    let bytes = if let Some(host) = &query.host_id {
-        serde_json::to_vec(&(base, host))
-    } else {
-        serde_json::to_vec(&base)
+    // Preserve existing internal cursors while binding human pages to their account.
+    let bytes = match (&query.host_id, &query.visible_to) {
+        (host, Some(subject)) => serde_json::to_vec(&(base, host, subject)),
+        (Some(host), None) => serde_json::to_vec(&(base, host)),
+        (None, None) => serde_json::to_vec(&base),
     }
     .map_err(|_| CloudError::InvalidArgument)?;
     Ok(hex::encode(sha2::Sha256::digest(bytes)))
@@ -322,6 +322,9 @@ pub struct EntityQuery {
     pub status: Option<String>,
     /// Conversation archive state filter.
     pub archived: Option<bool>,
+    /// Human account permitted to see shared and personally owned conversation data.
+    /// None is reserved for trusted internal connector and maintenance queries.
+    pub visible_to: Option<String>,
     /// Deterministic ordering.
     pub order: EntityOrder,
 }
@@ -338,6 +341,7 @@ impl Default for EntityQuery {
             query: None,
             status: None,
             archived: None,
+            visible_to: None,
             order: EntityOrder::IdAsc,
         }
     }
@@ -481,7 +485,18 @@ pub trait CloudStore: Send + Sync {
         now: u64,
         days: u16,
     ) -> CloudResult<crate::observability::OperationalStatistics> {
-        crate::observability::collect(self, project, node, now, days).await
+        crate::observability::collect(self, project, node, None, now, days).await
+    }
+    /// Human operational projection excluding another account's personal history.
+    async fn statistics_visible_to(
+        &self,
+        project: &str,
+        node: Option<&str>,
+        subject: &str,
+        now: u64,
+        days: u16,
+    ) -> CloudResult<crate::observability::OperationalStatistics> {
+        crate::observability::collect(self, project, node, Some(subject), now, days).await
     }
     /// Read an exact project resource and its revision.
     async fn read(&self, key: &EntityKey) -> CloudResult<EntityRecord>;
@@ -724,6 +739,14 @@ impl CloudStore for MemoryCloudStore {
                 !state.deleted.contains(&r.key)
                     && r.key.kind == query.kind
                     && r.key.project_id == query.project_id
+                    && query.visible_to.as_ref().is_none_or(|subject| {
+                        crate::visibility::record_visible(
+                            &state.entities,
+                            &state.deleted,
+                            r,
+                            subject,
+                        )
+                    })
                     && query.parent_id.as_ref().is_none_or(|p| {
                         if query.kind == EntityKind::Task {
                             r.value.thread_id() == Some(p)

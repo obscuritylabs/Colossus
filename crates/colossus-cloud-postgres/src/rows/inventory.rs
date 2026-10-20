@@ -42,6 +42,7 @@ impl DomainRow for HostRow {
 }
 
 row!(NodeRow {
+    owner_user_id: Option<String> => Nullable<Text>,
     instance_id: String => Text,
     label: String => Text,
     certificate_sha256: String => Text,
@@ -61,6 +62,7 @@ impl DomainRow for NodeRow {
         };
         Ok(Self {
             metadata,
+            owner_user_id: value.owner_user_id.clone(),
             instance_id: value.instance_id.clone(),
             label: value.label.clone(),
             certificate_sha256: value.certificate_sha256.clone(),
@@ -76,6 +78,7 @@ impl DomainRow for NodeRow {
     }
     fn into_value(self) -> CloudResult<EntityValue> {
         Ok(CloudNode {
+            owner_user_id: self.owner_user_id,
             revision: self.metadata.revision()?,
             node_id: self.metadata.id,
             project_id: self.metadata.project_id,

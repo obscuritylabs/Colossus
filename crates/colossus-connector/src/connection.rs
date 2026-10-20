@@ -270,6 +270,8 @@ impl RuntimeConnector {
                     let mut capabilities = self.config.capabilities.clone();
                     capabilities.retain(|c| c != colossus_cloud_protocol::RESOURCE_CAPABILITY);
                     capabilities.push(colossus_cloud_protocol::RESOURCE_CAPABILITY.into());
+                    capabilities.retain(|c| c != colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY);
+                    capabilities.push(colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY.into());
                     capabilities
                 },
                 project_id: self.config.project_id.clone(),
@@ -548,6 +550,12 @@ async fn watch_task(
             .await?;
         }
     }
+    let mut released_cursor = after;
+    let mut terminal_cursor = snapshot
+        .run
+        .terminal
+        .as_ref()
+        .map(|_| snapshot.run.last_sequence);
     let mut stream = runs
         .watch_run(WatchRunRequest {
             run_id: run_id.clone(),
@@ -557,6 +565,14 @@ async fn watch_task(
         .map_err(|error| local_read_error(error, "local watch unavailable"))?;
     while let Some(update) = stream.next().await {
         let update = update.map_err(|error| local_read_error(error, "local feed unavailable"))?;
+        if matches!(
+            &update.update,
+            colossus_sdk::RunUpdateKind::Result(_)
+                | colossus_sdk::RunUpdateKind::Failure { .. }
+                | colossus_sdk::RunUpdateKind::Cancellation(_)
+        ) {
+            terminal_cursor = Some(update.sequence);
+        }
         let update_json = match encode(&update) {
             Ok(bytes) => bytes,
             Err(_) => {
@@ -584,6 +600,7 @@ async fn watch_task(
             }),
         )
         .await?;
+        released_cursor = update.sequence;
         let mut snapshot = runs
             .get_run(GetRunRequest {
                 run_id: run_id.clone(),
@@ -592,6 +609,9 @@ async fn watch_task(
             .map_err(|error| local_read_error(error, "local snapshot unavailable"))?;
         let limited =
             crate::released::compact_snapshot(&mut snapshot).map_err(Status::resource_exhausted)?;
+        if snapshot.run.terminal.is_some() {
+            terminal_cursor = Some(snapshot.run.last_sequence);
+        }
         send(
             &sender,
             runtime_frame::Body::Snapshot(wire::RuntimeSnapshot {
@@ -614,7 +634,14 @@ async fn watch_task(
             return Ok(());
         }
     }
-    Ok(())
+    if terminal_cursor.is_some_and(|terminal| released_cursor >= terminal) {
+        Ok(())
+    } else {
+        // A runtime may close a feed after a storage fault without persisting a
+        // terminal update. Reconnect and replay from the cloud's committed cursor;
+        // otherwise the connection's watched set would suppress this task forever.
+        Err(Status::unavailable("local feed unavailable"))
+    }
 }
 async fn send(
     sender: &crate::outbound::FrameSender,

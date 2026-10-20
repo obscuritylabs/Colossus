@@ -10,7 +10,7 @@ fn fixture() -> (tempfile::TempDir, Router) {
     std::fs::write(directory.path().join("index.html"), SHELL).expect("SPA fixture shell");
     std::fs::create_dir(directory.path().join("assets")).expect("SPA fixture assets");
     std::fs::write(directory.path().join("assets/app.js"), ASSET).expect("SPA fixture asset");
-    for namespace in ["api", "auth", "health"] {
+    for namespace in ["api", "auth", "health", "chat"] {
         std::fs::create_dir(directory.path().join(namespace)).expect("reserved fixture directory");
         std::fs::write(
             directory.path().join(namespace).join("missing"),
@@ -48,6 +48,8 @@ async fn spa_get_recognized_pages_returns_exact_shell() {
     let (_directory, router) = fixture();
     for path in [
         "/",
+        "/chat",
+        "/chat?project=chat-local",
         "/fleet",
         "/projects",
         "/admin",
@@ -60,6 +62,7 @@ async fn spa_get_recognized_pages_returns_exact_shell() {
         "/projects/project-a/analytics",
         "/projects/project-a/access",
         "/projects/project-a/settings",
+        "/projects/project-a/chat/personal-thread",
         "/projects/project-a/agents/node-a/overview",
         "/projects/project-a/agents/node-a/threads",
         "/projects/project-a/agents/node-a/analytics",
@@ -71,6 +74,7 @@ async fn spa_get_recognized_pages_returns_exact_shell() {
         "/projects/project-a/agents/node-a/library",
         "/projects/project-a/agents/node-a/connections",
         "/projects/project-a/hosts/host-a",
+        "/projects/project%3Aa/chat/personal%3Athread",
         "/projects/project-a/threads/thread-a",
         "/projects/project-a/tasks/task-a",
         "/projects/project%3Aa/agents/node%3Ab/threads?compose=1",
@@ -96,6 +100,8 @@ async fn spa_head_preserves_shell_headers_without_body() {
     let (_directory, router) = fixture();
     for path in [
         "/",
+        "/chat?project=chat-local",
+        "/projects/project-a/chat/personal-thread",
         "/projects/project-a/threads/thread-a",
         "/projects/project-a/hosts/host-a",
         "/projects/project-a/agents/node-a/workflows",
@@ -131,8 +137,11 @@ async fn spa_assets_reserved_namespaces_and_unknown_paths_stay_distinct() {
         "/api/missing",
         "/auth/missing",
         "/health/missing",
+        "/chat/missing",
         "/%61pi/missing",
         "/projects/project-a/missing-view",
+        "/projects/project-a/chat",
+        "/projects/project-a/chat/personal-thread/extra",
         "/projects/project-a/agents/node-a/missing-view",
         "/admin/missing-view",
     ] {
@@ -149,6 +158,7 @@ async fn spa_assets_reserved_namespaces_and_unknown_paths_stay_distinct() {
 async fn spa_malformed_identifiers_and_traversal_cannot_select_shell_or_asset() {
     let (_directory, router) = fixture();
     let oversized = format!("/projects/{}/overview", "a".repeat(257));
+    let oversized_thread = format!("/projects/project-a/chat/{}", "a".repeat(257));
     let oversized_path = format!("/assets/{}", "a".repeat(2048));
     for path in [
         "/projects/../overview",
@@ -160,11 +170,17 @@ async fn spa_malformed_identifiers_and_traversal_cannot_select_shell_or_asset() 
         "/projects/%ff/overview",
         "/projects/%zz/overview",
         "/projects/project-a/overview//",
+        "/projects/project-a/chat/%2e%2e",
+        "/projects/project-a/chat/bad%2fthread",
+        "/projects/project-a/chat/bad%5cthread",
+        "/projects/project-a/chat/bad%20thread",
+        "/projects/project-a/chat/bad%00thread",
         "/assets/../index.html",
         "/assets/%2e%2e/index.html",
         "/assets/%2findex.html",
         "/assets/%5cindex.html",
         oversized.as_str(),
+        oversized_thread.as_str(),
         oversized_path.as_str(),
     ] {
         let (status, _, body) = response(&router, Method::GET, path).await;
@@ -184,6 +200,8 @@ async fn spa_non_get_preserves_static_method_rejection() {
     for method in [Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS] {
         for path in [
             "/fleet",
+            "/chat?project=chat-local",
+            "/projects/project-a/chat/personal-thread",
             "/projects/project-a/threads/thread-a",
             "/assets/app.js",
         ] {

@@ -105,6 +105,25 @@ fn setup_package_rejects_links_before_reading_their_targets() {
 }
 
 #[test]
+fn setup_package_rejects_nonportable_raw_member_names_without_echoing_them() {
+    let mut package = bytes();
+    let filename = b"manifest.yaml";
+    let mut replacements = 0;
+    for offset in 0..=package.len() - filename.len() {
+        if &package[offset..offset + filename.len()] == filename {
+            package[offset] = 0xff;
+            replacements += 1;
+        }
+    }
+    assert_eq!(replacements, 2, "local and central file headers");
+    let error = archive::read(&package).err().unwrap();
+    assert_eq!(
+        error.violations[0].description,
+        "Package paths must be unique portable files; links and special files are unsupported."
+    );
+}
+
+#[test]
 fn setup_package_rejects_unsupported_versions_and_unknown_manifest_fields() {
     for manifest in [
         MANIFEST.replace("schemaVersion: 1", "schemaVersion: 99"),

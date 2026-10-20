@@ -14,6 +14,8 @@ pub struct ConnectorResources {
     pub plugins: Option<Arc<dyn PluginClient>>,
     /// Authenticated capabilities of that same application connection.
     pub capabilities: Vec<String>,
+    /// Credential-free choices captured from that same authenticated connection.
+    pub model_profiles: Vec<colossus_sdk::ConfiguredModelProfile>,
 }
 impl ConnectorResources {
     pub(crate) async fn execute(&self, operation: ResourceOperation) -> ResourceReply {
@@ -32,7 +34,17 @@ impl ConnectorResources {
             ));
         }
         if matches!(operation, ResourceOperation::Context) {
-            return Ok(serde_json::json!({ "capabilities": self.capabilities }));
+            return Ok(serde_json::json!({ "capabilities": self.context_capabilities() }));
+        }
+        if matches!(operation, ResourceOperation::ModelCatalog {}) {
+            return Ok(serde_json::json!({
+                "capabilities": self.context_capabilities(),
+                "model_profiles": if self.capabilities.iter().any(|capability| capability == "agent_runs.model_selection") {
+                    self.model_profiles.as_slice()
+                } else {
+                    &[]
+                },
+            }));
         }
         if matches!(operation, ResourceOperation::ListPlugins) {
             return json(
@@ -81,8 +93,20 @@ impl ConnectorResources {
             ResourceOperation::StartWorkflowRun { request } => {
                 run_json(client.start_run(request).await?)
             }
-            ResourceOperation::Context | ResourceOperation::ListPlugins => Err(unsupported()),
+            ResourceOperation::Context
+            | ResourceOperation::ModelCatalog {}
+            | ResourceOperation::ListPlugins => Err(unsupported()),
         }
+    }
+    fn context_capabilities(&self) -> Vec<&str> {
+        self.capabilities
+            .iter()
+            .map(String::as_str)
+            .filter(|capability| *capability != colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY)
+            .chain(std::iter::once(
+                colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY,
+            ))
+            .collect()
     }
 }
 fn json(value: impl serde::Serialize) -> ApiResult<serde_json::Value> {
@@ -125,3 +149,6 @@ fn known_error(
         violations: Vec::new(),
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -12,15 +12,18 @@ body {
   color: var(--text);
   font: var(--font-size-body) / var(--line-height-body) var(--font-sans);
 }
-/* Touch typography uses shared tokens, including content rendered in portals. */
+/* Shared text-size preferences apply to chrome. Reading/input text keeps touch sizing. */
 .mobile-shell,
 .mobile-login,
 .mobile-task-options {
-  --font-size-body: var(--font-size-touch-body);
-  --font-size-control: var(--font-size-touch-body);
-  --font-size-body-sm: var(--font-size-touch-caption);
-  --font-size-caption: var(--font-size-touch-caption);
   font-size: var(--font-size-body);
+}
+.mobile-shell input,
+.mobile-login input,
+.mobile-shell textarea,
+.mobile-conversation .shared-message-body,
+.mobile-task-output .shared-message-body {
+  font-size: var(--font-size-touch-body);
 }
 button,
 input,
@@ -65,9 +68,11 @@ select:focus-visible {
   display: flex;
   flex-direction: column;
   padding-top: env(safe-area-inset-top);
+  padding-inline-start: env(safe-area-inset-left);
+  padding-inline-end: env(safe-area-inset-right);
 }
 .mobile-app-header {
-  padding: 10px 16px;
+  padding: 6px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -82,14 +87,14 @@ select:focus-visible {
   color: var(--text-strong);
 }
 .mobile-brand img {
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
 }
 .mobile-avatar {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: var(--surface-hover);
   font-size: var(--font-size-caption);
@@ -117,7 +122,7 @@ select:focus-visible {
 }
 .mobile-workspace,
 .mobile-settings {
-  padding: 18px 20px 28px;
+  padding: 12px 16px 20px;
   height: 100%;
   overflow: auto;
   display: flex;
@@ -125,7 +130,7 @@ select:focus-visible {
   gap: 20px;
 }
 .mobile-workspace {
-  gap: 14px;
+  gap: 10px;
 }
 .mobile-page-heading,
 .mobile-surface-heading {
@@ -164,6 +169,9 @@ select:focus-visible {
 .mobile-page-actions > button {
   min-width: var(--control-height-touch);
 }
+.mobile-shell .shared-composer-run-actions > button {
+  min-width: var(--control-height-touch);
+}
 .mobile-page-heading:has(.mobile-new-task) {
   align-items: center;
 }
@@ -172,7 +180,7 @@ select:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 8px 4px 12px;
+  padding: 0 4px 0 10px;
   border: 1px solid var(--amber-border);
   border-radius: var(--radius);
   background: var(--amber-soft);
@@ -189,8 +197,8 @@ select:focus-visible {
 .mobile-row {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 16px 0;
+  gap: 10px;
+  padding: 10px 0;
   border: 0;
   border-bottom: 1px solid var(--border);
   background: transparent;
@@ -204,7 +212,7 @@ select:focus-visible {
 }
 .mobile-row > span {
   display: grid;
-  gap: 6px;
+  gap: 3px;
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -248,7 +256,7 @@ select:focus-visible {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   border-top: 1px solid var(--border);
-  padding: 8px 8px max(10px, env(safe-area-inset-bottom));
+  padding: 4px 8px max(4px, env(safe-area-inset-bottom));
   flex-shrink: 0;
   background: var(--canvas);
 }
@@ -257,9 +265,9 @@ select:focus-visible {
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   border: 0;
-  padding: 6px 2px;
+  padding: 2px;
   background: transparent;
   color: var(--muted);
   min-width: 0;
@@ -274,8 +282,9 @@ select:focus-visible {
   min-height: 100dvh;
   max-width: 520px;
   margin: auto;
-  padding: max(24px, env(safe-area-inset-top)) 20px
-    max(20px, env(safe-area-inset-bottom));
+  padding: max(24px, env(safe-area-inset-top))
+    max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom))
+    max(20px, env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   gap: 24px;
@@ -286,7 +295,7 @@ select:focus-visible {
   align-items: stretch;
   gap: 18px;
   margin-block: auto;
-  padding-block: 18px;
+  padding-block: 12px;
 }
 .mobile-login-content > .mobile-brand {
   justify-content: center;
@@ -329,8 +338,8 @@ select:focus-visible {
 }
 .mobile-auth-card {
   display: grid;
-  gap: 22px;
-  padding: 24px;
+  gap: 16px;
+  padding: 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -341,7 +350,7 @@ select:focus-visible {
   text-align: center;
 }
 .mobile-auth-card h1 {
-  font-size: var(--font-size-title);
+  font-size: var(--font-size-heading);
 }
 .mobile-auth-card > header p {
   font-size: var(--font-size-body-sm);
@@ -541,18 +550,58 @@ select:focus-visible {
 .mobile-conversation-context .mobile-task-state[data-tone="danger"] {
   color: var(--red-text);
 }
+.mobile-surface-heading > .mobile-conversation-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+.mobile-conversation-actions > button {
+  min-width: var(--control-height-touch);
+  padding-inline: 8px;
+}
+.mobile-conversation-reading-title {
+  display: none;
+}
+@media (min-height: 551px), (max-width: 419px) {
+  .mobile-conversation > .mobile-surface-heading {
+    display: grid;
+    grid-template-columns: var(--control-height-touch) minmax(0, 1fr) auto;
+    align-items: center;
+    row-gap: 4px;
+  }
+  .mobile-conversation-heading-copy {
+    display: contents;
+  }
+  .mobile-conversation-heading-copy > h1 {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+  .mobile-conversation > .mobile-surface-heading > button {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .mobile-conversation-context {
+    grid-column: 2;
+    grid-row: 2;
+    margin-top: 0;
+  }
+  .mobile-conversation-actions {
+    grid-column: 3;
+    grid-row: 2;
+  }
+}
 .mobile-conversation-body {
   overflow: auto;
   min-height: 0;
   display: grid;
-  gap: 20px;
+  gap: 14px;
   align-content: start;
   flex: 1;
   padding: 12px 4px;
   overscroll-behavior: contain;
 }
 .mobile-conversation .shared-conversation-timeline {
-  gap: 22px;
+  gap: 16px;
 }
 .mobile-conversation .shared-conversation-entry {
   grid-template-columns: 28px minmax(0, 1fr);
@@ -584,14 +633,92 @@ select:focus-visible {
 .mobile-conversation .shared-composer-controls > button {
   color: var(--text);
 }
+/* A short landscape viewport needs a reading pane, even with Large text.
+   Keep every navigation destination and touch target in a side rail; titles,
+   notices and session details can use the conversation's normal scroll area. */
+@media (max-height: 550px) and (min-width: 420px) {
+  .mobile-shell:has(.mobile-conversation) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 68px;
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "preview preview"
+      "classification classification"
+      "header header"
+      "main navigation";
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mobile-shell:has(.mobile-conversation) > .mobile-preview-banner {
+    grid-area: preview;
+    padding-block: 2px;
+  }
+  .mobile-shell:has(.mobile-conversation) > .mobile-classification {
+    grid-area: classification;
+    padding-block: 2px;
+  }
+  .mobile-shell:has(.mobile-conversation) > .mobile-app-header {
+    grid-area: header;
+    padding-block: 0;
+  }
+  .mobile-shell:has(.mobile-conversation) > .mobile-main {
+    grid-area: main;
+  }
+  .mobile-shell:has(.mobile-conversation) > .mobile-bottom-nav {
+    grid-area: navigation;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(4, minmax(var(--control-height-touch), 1fr));
+    border-top: 0;
+    border-inline-start: 1px solid var(--border);
+    padding: 0 2px;
+  }
+  .mobile-conversation {
+    gap: 4px;
+    padding: 3px 4px;
+  }
+  .mobile-conversation-heading-copy > h1 {
+    display: none;
+  }
+  .mobile-conversation-reading-title {
+    display: block;
+    font-size: var(--font-size-heading);
+    overflow-wrap: anywhere;
+  }
+  .mobile-conversation-context {
+    margin-top: 0;
+    gap: 0 6px;
+  }
+  .mobile-conversation-body {
+    padding: 4px;
+    gap: 8px;
+  }
+  .mobile-conversation .shared-conversation-composer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .mobile-conversation .shared-composer-body {
+    min-width: 0;
+    padding: 2px 6px;
+  }
+  .mobile-conversation .shared-composer-body > textarea {
+    max-height: var(--control-height-touch);
+  }
+  .mobile-conversation .shared-composer-footer {
+    border-top: 0;
+    border-inline-start: 1px solid var(--border);
+    padding: 2px 4px;
+    gap: 4px;
+  }
+}
 .mobile-task-options {
   max-height: calc(100dvh - max(16px, env(safe-area-inset-top)));
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   padding-bottom: env(safe-area-inset-bottom);
+  padding-inline-start: env(safe-area-inset-left);
+  padding-inline-end: env(safe-area-inset-right);
   gap: 0;
 }
 .mobile-task-options .ui-sheet-header {
-  padding: 20px 56px 16px 20px;
+  padding: 14px 52px 12px 16px;
 }
 .mobile-task-options .ui-sheet-title {
   margin: 0;
@@ -604,18 +731,24 @@ select:focus-visible {
   min-height: var(--control-height-touch);
 }
 .mobile-task-options .ui-sheet-close-button {
+  right: calc(10px + env(safe-area-inset-right));
   min-width: var(--control-height-touch);
 }
 .mobile-options-body {
   overflow: auto;
-  padding: 0 20px 20px;
+  padding: 0 16px 16px;
   display: grid;
-  gap: 24px;
+  gap: 16px;
 }
 .mobile-options-body section {
   min-width: 0;
   display: grid;
   gap: 10px;
+}
+.mobile-options-body .mode-switch {
+  min-inline-size: 0;
+  margin-inline: 0;
+  flex-wrap: wrap;
 }
 .mobile-options-body h2 {
   font-size: var(--font-size-heading-sm);
@@ -686,7 +819,7 @@ select:focus-visible {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px;
-  padding: 4px;
+  padding: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -719,17 +852,17 @@ select:focus-visible {
 .mobile-task-detail {
   height: 100%;
   overflow: auto;
-  padding: 12px 20px 28px;
+  padding: 12px 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 14px;
 }
 .mobile-task-facts {
   display: grid;
-  gap: 16px;
+  gap: 10px;
   margin: 0;
   border-block: 1px solid var(--border);
-  padding-block: 18px;
+  padding-block: 12px;
 }
 .mobile-task-facts > div {
   display: grid;
@@ -790,4 +923,111 @@ select:focus-visible {
 }
 .mobile-task-events strong {
   font-weight: 500;
+}
+
+/* Dense mobile chrome keeps the shared 44px touch target without oversized cards. */
+.mobile-page-heading h1 {
+  font-size: var(--font-size-heading);
+}
+.mobile-row > svg:first-child {
+  width: 20px;
+  height: 20px;
+}
+.mobile-options-body [role="radio"] {
+  padding: 8px 10px;
+}
+.mobile-conversation-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+.mobile-conversation-toolbar button {
+  padding-inline: 8px;
+}
+.mobile-conversation .shared-conversation-activity {
+  margin-block: 8px;
+}
+.mobile-conversation .shared-activity-detail pre,
+.mobile-interaction code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mobile-interaction {
+  padding: 12px;
+  gap: 8px;
+}
+.mobile-interaction h2 {
+  font-size: var(--font-size-heading-sm);
+}
+.mobile-interaction dl {
+  margin: 0;
+}
+.mobile-interaction dd {
+  margin: 2px 0 8px;
+  overflow-wrap: anywhere;
+}
+.mobile-interaction .mobile-task-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-block: 8px;
+}
+.mobile-interaction form {
+  display: grid;
+  gap: 8px;
+}
+.mobile-session-views {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  flex-shrink: 1;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.mobile-conversation > .mobile-session-views {
+  max-height: 55dvh;
+}
+.mobile-session-views > label {
+  font-size: var(--font-size-caption);
+  color: var(--muted);
+}
+.mobile-session-content {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+.mobile-session-content h3 {
+  font-size: var(--font-size-heading-sm);
+  margin-block: 6px;
+}
+.mobile-session-sheet {
+  scroll-padding-block: 16px max(16px, env(safe-area-inset-bottom));
+  max-height: min(85dvh, calc(100dvh - max(16px, env(safe-area-inset-top))));
+  overflow: auto;
+  padding: 16px max(16px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+.mobile-session-sheet .ui-sheet-header {
+  padding-inline-end: calc(var(--control-height-touch) + 8px);
+}
+.mobile-session-sheet .ui-sheet-title {
+  overflow-wrap: anywhere;
+}
+.mobile-session-sheet button {
+  min-height: var(--control-height-touch);
+}
+.mobile-session-sheet .ui-sheet-close-button {
+  top: 16px;
+  right: max(16px, env(safe-area-inset-right));
+  min-width: var(--control-height-touch);
+  min-height: var(--control-height-touch);
+}
+.mobile-session-content .session-topology {
+  overflow: auto;
 }

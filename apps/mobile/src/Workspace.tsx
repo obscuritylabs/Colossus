@@ -1,11 +1,6 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Button, HostPlatformIcon, TextInput } from "@colossus/ui";
-import {
-  IconArrowUpRight,
-  IconChevronRight,
-  IconPlus,
-  IconRefresh,
-} from "@tabler/icons-react";
+import { IconChevronRight, IconPlus, IconRefresh } from "@tabler/icons-react";
 import type {
   FleetNode,
   Host,
@@ -28,12 +23,14 @@ export function Workspace({
   permissions,
   tab,
   onLocked,
+  onNavigate,
 }: {
   client: MobileClient;
   project: string;
   permissions: Permission[];
   tab: Tab;
   onLocked: (locked: boolean) => void;
+  onNavigate: (tab: Tab) => void;
 }) {
   const [selection, setSelection] = useState<Thread | "new" | null>(null);
   const [query, setQuery] = useState("");
@@ -97,13 +94,36 @@ export function Workspace({
   const hosts = new Map(
     hostPage.value?.hosts.map((host) => [host.host_id, host]) ?? [],
   );
+  const refreshTasks = tasks.refresh;
+  const latestRefresh = useRef(refreshTasks);
+  latestRefresh.current = refreshTasks;
+  const onTaskUpdated = useCallback((updated: Task) => {
+    setMoreTasks((current) =>
+      current.map((task) =>
+        task.task_id === updated.task_id ? updated : task,
+      ),
+    );
+    latestRefresh.current();
+  }, []);
+  function review(task: Task) {
+    setSelection(null);
+    setSelectedTask(task);
+    setWorkView("tasks");
+    onNavigate("work");
+  }
   async function more(kind: "threads" | "fleet" | "tasks") {
     const after =
       kind === "tasks"
-        ? (taskCursor ?? tasks.value?.next_cursor)
+        ? taskCursor === undefined
+          ? tasks.value?.next_cursor
+          : taskCursor
         : kind === "threads"
-          ? (threadCursor ?? threads.value?.next_cursor)
-          : (nodeCursor ?? fleet.value?.next_cursor);
+          ? threadCursor === undefined
+            ? threads.value?.next_cursor
+            : threadCursor
+          : nodeCursor === undefined
+            ? fleet.value?.next_cursor
+            : nodeCursor;
     if (!after || pageBusy) return;
     setPageBusy(true);
     try {
@@ -147,6 +167,7 @@ export function Workspace({
         permissions={permissions}
         onBack={() => setSelectedTask(null)}
         onLocked={onLocked}
+        onTaskUpdated={onTaskUpdated}
         onConversation={async (thread) => {
           const result = await client.request<ThreadDetailResponse>({
             kind: "thread",
@@ -173,10 +194,9 @@ export function Workspace({
         hosts={hostPage.value?.hosts ?? []}
       />
     );
-  const pending =
-    tasks.value?.tasks.filter((t) =>
-      t.snapshot?.pending_interactions.some((i) => i.status === "pending"),
-    ) ?? [];
+  const pending = inventory.filter((t) =>
+    t.snapshot?.pending_interactions.some((i) => i.status === "pending"),
+  );
   const platform = (node: FleetNode | undefined) => {
     // Only authenticated host metadata establishes a platform.
     return hosts.get(node?.node.host_id ?? "")?.platform ?? "unknown";
@@ -276,14 +296,10 @@ export function Workspace({
               </p>
               <Button
                 variant="tertiary"
-                aria-label="Review in Control Plane"
-                onClick={() =>
-                  void client
-                    .openBrowser(project, pending[0]!.task_id)
-                    .catch((failure) => setBrowserError(messageOf(failure)))
-                }
+                aria-label="Review requests"
+                onClick={() => review(pending[0]!)}
               >
-                Review <IconArrowUpRight size={16} />
+                Review <IconChevronRight size={16} />
               </Button>
             </div>
           )}
@@ -470,14 +486,8 @@ export function Workspace({
                       "Your input is needed."}
                   </p>
                 ))}
-              <Button
-                onClick={() =>
-                  void client
-                    .openBrowser(project, t.task_id)
-                    .catch((failure) => setBrowserError(messageOf(failure)))
-                }
-              >
-                Review in Control Plane <IconArrowUpRight size={16} />
+              <Button onClick={() => review(t)}>
+                Review request <IconChevronRight size={16} />
               </Button>
             </section>
           ))}
@@ -487,9 +497,15 @@ export function Workspace({
               <p>No pending requests in the loaded task page.</p>
             </div>
           )}
+          {(taskCursor === undefined
+            ? tasks.value?.next_cursor
+            : taskCursor) && (
+            <Button disabled={pageBusy} onClick={() => void more("tasks")}>
+              Load older requests
+            </Button>
+          )}
           <p className="mobile-caption">
-            Showing the latest task page. Open Control Plane for the full task
-            inventory.
+            Requests from the loaded task history.
           </p>
         </>
       )}

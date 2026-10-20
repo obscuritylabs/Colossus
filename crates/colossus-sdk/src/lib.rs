@@ -19,6 +19,8 @@ mod embedded;
 #[cfg(feature = "embedded")]
 mod embedded_projection;
 mod error;
+mod model_catalog;
+pub use model_catalog::ConfiguredModelProfile;
 #[cfg(feature = "daemon")]
 mod grpc;
 #[cfg(feature = "keyring")]

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   agentHref,
+  chatThreadHref,
+  chatConnectionsHref,
   globalHref,
   hostHref,
   parseRoute,
@@ -49,6 +51,22 @@ describe("Control Plane permalinks", () => {
       project: "project:a",
       host: "host:b",
     });
+    expect(parseRoute(globalHref("chat", "project:a"), origin)).toEqual({
+      kind: "global",
+      surface: "chat",
+      project: "project:a",
+    });
+    expect(
+      parseRoute(chatThreadHref("project:a", "personal:c"), origin),
+    ).toEqual({
+      kind: "chat",
+      project: "project:a",
+      thread: "personal:c",
+    });
+    expect(parseRoute(chatConnectionsHref("project:a"), origin)).toEqual({
+      kind: "chat-connections",
+      project: "project:a",
+    });
   });
   it("rejects malformed, ambiguous, oversized, and cross-origin destinations", () => {
     for (const href of [
@@ -59,6 +77,9 @@ describe("Control Plane permalinks", () => {
       "/projects/p/threads/",
       "/fleet?project=p&project=q",
       "/fleet?permissions=execute",
+      "/chat?project=p&user=other",
+      "/projects/p/chat/%2Fsecret",
+      "/projects/p/chat/t?node_id=other",
       "/projects/p/agents/n/policy?compose=0",
       `/projects/p/threads/${"x".repeat(257)}`,
       `/fleet?${"x".repeat(2048)}`,

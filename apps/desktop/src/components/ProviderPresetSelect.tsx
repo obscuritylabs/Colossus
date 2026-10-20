@@ -9,7 +9,7 @@ import {
   type ProviderPreset,
 } from "../providerCatalog";
 import type { ProviderKind } from "../types";
-import { DropdownSelect } from "./DropdownSelect";
+import { ProviderPresetPicker } from "@colossus/ui/components/ProviderPresetPicker";
 import { ProviderIcon } from "./ProviderIcon";
 
 export function ProviderPresetSelect({
@@ -97,52 +97,40 @@ export function ProviderPresetSelect({
   const selected = matchingProviderPreset(presets, kind, baseUrl);
   return (
     <div className="provider-preset-control">
-      <label>
-        <span>Provider</span>
-        <DropdownSelect
-          aria-label="Provider"
-          value={selected?.id ?? ""}
-          disabled={busy || presets.length === 0}
-          renderOptionIcon={(option) =>
-            option.value ? (
-              <ProviderIcon
-                presetId={option.value}
-                customIcon={
-                  presets.find((p) => p.id === option.value)?.setup?.provider
-                    .icon ?? null
-                }
-                customDarkIcon={
-                  presets.find((p) => p.id === option.value)?.setup?.provider
-                    .darkIcon ?? null
-                }
-              />
-            ) : null
+      <ProviderPresetPicker
+        presets={presets}
+        selected={selected?.id ?? ""}
+        disabled={busy || presets.length === 0}
+        placeholder={
+          error
+            ? "Providers unavailable"
+            : presets.length === 0
+              ? "Loading providers…"
+              : "Choose a provider"
+        }
+        icon={(id) =>
+          id ? (
+            <ProviderIcon
+              presetId={id}
+              customIcon={
+                presets.find((p) => p.id === id)?.setup?.provider.icon ?? null
+              }
+              customDarkIcon={
+                presets.find((p) => p.id === id)?.setup?.provider.darkIcon ??
+                null
+              }
+            />
+          ) : null
+        }
+        onSelect={(id) => {
+          if (id === selected?.id) return;
+          const preset = presets.find((candidate) => candidate.id === id);
+          if (preset) {
+            allowDefault.current = false;
+            onSelect(preset);
           }
-          onChange={(event) => {
-            if (event.target.value === selected?.id) return;
-            const preset = presets.find(
-              (candidate) => candidate.id === event.target.value,
-            );
-            if (preset) {
-              allowDefault.current = false;
-              onSelect(preset);
-            }
-          }}
-        >
-          <option value="">
-            {error
-              ? "Providers unavailable"
-              : presets.length === 0
-                ? "Loading providers…"
-                : "Choose a provider"}
-          </option>
-          {presets.map((preset) => (
-            <option key={preset.id} value={preset.id}>
-              {preset.label}
-            </option>
-          ))}
-        </DropdownSelect>
-      </label>
+        }}
+      />
       {selected?.setup ? (
         <BrowserLinkContext.Provider
           value={(url) => {

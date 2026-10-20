@@ -10,17 +10,19 @@
     "dev": "vite --host 127.0.0.1 --port 5180",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
+    "test:browser": "playwright test",
     "check": "npm run build && npm test",
     "format": "prettier --write ."
   },
   "dependencies": {
+    "@colossus/control-plane-client": "file:../control-plane-client",
     "@colossus/ui": "file:../ui",
     "@tabler/icons-react": "3.45.0",
     "react": "19.2.7",
-    "react-dom": "19.2.7",
-    "@colossus/control-plane-client": "file:../control-plane-client"
+    "react-dom": "19.2.7"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.0",
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "26.1.1",
     "@types/react": "19.2.17",

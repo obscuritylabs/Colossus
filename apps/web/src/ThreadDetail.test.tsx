@@ -86,6 +86,7 @@ async function render(
   initial = thread,
   nodes = [node],
   permissions: Permission[] = ["read", "execute", "control", "approve"],
+  personalChat?: { owner: string; node: string },
 ) {
   await act(async () => {
     root.render(
@@ -96,6 +97,7 @@ async function render(
         permissions={permissions}
         onBack={() => {}}
         onChanged={() => {}}
+        personalChat={personalChat}
       />,
     );
   });
@@ -139,6 +141,205 @@ async function conversationMenuItem(label: string) {
 }
 
 describe("human cloud conversation authority", () => {
+  const planHistory = (): ThreadDetailResponse => ({
+    ...history,
+    thread: { ...thread, owner_user_id: "alice" },
+    tasks: [
+      {
+        task_id: "task-a",
+        project_id: "project-a",
+        node_id: "node-a",
+        subject: "alice",
+        request: {
+          input: [{ text: "Draft a plan" }],
+          mode: "plan",
+          role: "primary",
+        },
+        run_id: "run-a",
+        revision: 1,
+        last_sequence: 0,
+        snapshot: {
+          run: {
+            run_id: "run-a",
+            session_id: "session-a",
+            title: "A reviewed plan",
+            status: "completed",
+            mode: "plan",
+            role: "primary",
+            created_at: "2026-10-05T10:00:00Z",
+            updated_at: "2026-10-05T10:01:00Z",
+            last_sequence: 0,
+            terminal: {
+              result: {
+                output: "A controlled plan",
+                plan_id: "plan-a",
+                plan_revision: 2,
+                plan_status: "draft",
+              },
+            },
+          },
+          pending_interactions: [],
+        },
+      },
+    ],
+  });
+  it("reviews and submits an exact personal Plan with immutable execute retries", async () => {
+    const detail = planHistory();
+    const attempts: Array<{ request: Record<string, unknown> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) => {
+        if (path.endsWith("/resources"))
+          return response({
+            kind: "result",
+            connection_id: "connection-a",
+            value: { capabilities: ["plans.continue", "goal.create"] },
+          });
+        if (path.endsWith("/messages") && options.method === "POST") {
+          attempts.push(JSON.parse(options.body as string));
+          return attempts.length === 1
+            ? response({ error: "storage" }, 503)
+            : response({ thread: detail.thread });
+        }
+        return response(detail);
+      }),
+    );
+    await render(
+      detail.thread,
+      [
+        {
+          ...node,
+          presence: {
+            ...node.presence!,
+            capabilities: ["plans.continue", "goal.create"],
+          },
+        },
+      ],
+      ["read", "execute", "control"],
+      { owner: "alice", node: "node-a" },
+    );
+    await act(() => button("Read plan").click());
+    expect(document.querySelector("dialog")?.textContent).toContain(
+      "A controlled plan",
+    );
+    await act(() =>
+      [...document.querySelectorAll<HTMLButtonElement>("dialog button")]
+        .find((item) => item.textContent === "Execute once")!
+        .click(),
+    );
+    expect(container.querySelector("textarea")?.value).toBe(
+      "Approve and execute Plan revision 2 once.",
+    );
+    expect(container.querySelector(".composer-fixed-role")?.textContent).toBe(
+      "Role: primary",
+    );
+    expect(container.querySelector('[aria-label="Agent role"]')).toBeNull();
+    await act(() => button("Approve and execute plan").click());
+    await act(() => button("Approve and execute plan").click());
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]?.request).toEqual(attempts[1]?.request);
+    expect(attempts[0]?.request).toMatchObject({
+      session_id: null,
+      mode: "execute",
+      role: "primary",
+      plan_action: {
+        execute: {
+          source_run_id: "run-a",
+          expected_revision: 2,
+          strategy: "direct",
+        },
+      },
+    });
+    expect(container.querySelector(".composer-fixed-role")).toBeNull();
+    expect(container.querySelector('[aria-label="Agent role"]')).not.toBeNull();
+  });
+  it("revises from the Plans view using the exact selected reference", async () => {
+    const detail = planHistory();
+    const submissions: Array<{ request: Record<string, unknown> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) => {
+        if (path.endsWith("/resources"))
+          return response({ kind: "unsupported" });
+        if (path.endsWith("/messages") && options.method === "POST") {
+          submissions.push(JSON.parse(options.body as string));
+          return response({ thread: detail.thread });
+        }
+        return response(detail);
+      }),
+    );
+    await render(
+      detail.thread,
+      [
+        {
+          ...node,
+          presence: { ...node.presence!, capabilities: ["plans.continue"] },
+        },
+      ],
+      ["read", "execute", "control"],
+      { owner: "alice", node: "node-a" },
+    );
+    await act(() => button("Plans").click());
+    await act(() => button("Revise").click());
+    await write("Use a smaller first step");
+    await act(() => button("Revise plan").click());
+    expect(submissions[0]?.request).toMatchObject({
+      mode: "plan",
+      input: [{ text: "Use a smaller first step" }],
+      plan_action: { revise: { source_run_id: "run-a", expected_revision: 2 } },
+    });
+  });
+  it.each([
+    {
+      label: "another user",
+      owner: "bob",
+      personalNode: "node-a",
+      permissions: ["read", "execute", "control"],
+    },
+    {
+      label: "shared node",
+      owner: "alice",
+      personalNode: "different-node",
+      permissions: ["read", "execute", "control", "approve"],
+    },
+    {
+      label: "read only",
+      owner: "alice",
+      personalNode: "node-a",
+      permissions: ["read"],
+    },
+  ])(
+    "keeps Plan execution unavailable for $label",
+    async ({ owner, personalNode, permissions }) => {
+      const detail = planHistory();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => response(detail)),
+      );
+      await render(
+        detail.thread,
+        [
+          {
+            ...node,
+            presence: { ...node.presence!, capabilities: ["plans.continue"] },
+          },
+        ],
+        permissions as Permission[],
+        { owner, node: personalNode },
+      );
+      expect(container.textContent).toContain("Plan revision 2");
+      expect(
+        [...container.querySelectorAll("button")].some(
+          (item) => item.textContent === "Execute once",
+        ),
+      ).toBe(false);
+      expect(
+        [...container.querySelectorAll("button")].some(
+          (item) => item.textContent === "Revise in chat",
+        ),
+      ).toBe(false);
+    },
+  );
   it("retains inbox inspection when switching shared session views", async () => {
     const task: Task = {
       task_id: "task-a",
@@ -159,7 +360,22 @@ describe("human cloud conversation authority", () => {
       response({ ...history, tasks: [task] }),
     );
     vi.stubGlobal("fetch", fetch);
-    await render(thread, [node], ["read"]);
+    await render(
+      thread,
+      [
+        {
+          ...node,
+          presence: {
+            ...node.presence!,
+            capabilities: ["agent_messages.read.v1"],
+          },
+        },
+      ],
+      ["read"],
+    );
+    expect(
+      container.querySelector(".conversation-run details summary")?.textContent,
+    ).not.toBe("Agent inboxes");
     await act(() => button("Inboxes").click());
     const inboxes = container.querySelector('[aria-label="Session inboxes"]');
     expect(inboxes?.querySelector("summary")?.textContent).toBe(
@@ -175,6 +391,20 @@ describe("human cloud conversation authority", () => {
     expect(
       container.querySelector('[aria-label="Conversation history"]'),
     ).not.toBeNull();
+  });
+  it("keeps unsupported inbox inspection out of conversation and session navigation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(planHistory())),
+    );
+    await render();
+    expect(
+      container.querySelector('[aria-label="Session views"]')?.textContent,
+    ).not.toContain("Inboxes");
+    expect(
+      container.querySelector('[aria-label="Conversation history"]')
+        ?.textContent,
+    ).not.toContain("Agent inboxes");
   });
   it("renders recorded account names and leaves imported authors neutral", async () => {
     const messages = ["own", "other", "imported"].map((id, index) => ({

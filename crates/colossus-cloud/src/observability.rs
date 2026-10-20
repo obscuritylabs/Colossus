@@ -107,7 +107,7 @@ impl CloudRepository {
             return Err(CloudError::InvalidArgument);
         }
         self.store
-            .statistics(caller.project_id(), node, now, days)
+            .statistics_visible_to(caller.project_id(), node, caller.subject(), now, days)
             .await
     }
 }
@@ -117,6 +117,7 @@ pub(crate) async fn collect<S: CloudStore + ?Sized>(
     store: &S,
     project: &str,
     node: Option<&str>,
+    visible_to: Option<&str>,
     now: u64,
     days: u16,
 ) -> CloudResult<OperationalStatistics> {
@@ -142,7 +143,7 @@ pub(crate) async fn collect<S: CloudStore + ?Sized>(
         complete: true,
         ..Default::default()
     };
-    let (nodes, complete) = records(store, project, EntityKind::Node, node).await?;
+    let (nodes, complete) = records(store, project, EntityKind::Node, node, visible_to).await?;
     result.complete &= complete;
     for record in &nodes {
         let crate::storage::EntityValue::Node(value) = &record.value else {
@@ -165,14 +166,14 @@ pub(crate) async fn collect<S: CloudStore + ?Sized>(
             .collect::<std::collections::BTreeSet<_>>()
             .len() as u64;
     } else {
-        let (hosts, complete) = records(store, project, EntityKind::Host, None).await?;
+        let (hosts, complete) = records(store, project, EntityKind::Host, None, visible_to).await?;
         result.counts.hosts = hosts.len() as u64;
         result.complete &= complete;
     }
-    let (threads, complete) = records(store, project, EntityKind::Thread, node).await?;
+    let (threads, complete) = records(store, project, EntityKind::Thread, node, visible_to).await?;
     result.counts.threads = threads.len() as u64;
     result.complete &= complete;
-    let (tasks, complete) = records(store, project, EntityKind::Task, node).await?;
+    let (tasks, complete) = records(store, project, EntityKind::Task, node, visible_to).await?;
     result.complete &= complete;
     for record in tasks {
         let value = &record.value;
@@ -265,6 +266,7 @@ async fn records<S: CloudStore + ?Sized>(
     project: &str,
     kind: EntityKind,
     node: Option<&str>,
+    visible_to: Option<&str>,
 ) -> CloudResult<(Vec<EntityRecord>, bool)> {
     let mut all = Vec::new();
     let mut after = None;
@@ -274,6 +276,7 @@ async fn records<S: CloudStore + ?Sized>(
                 kind,
                 project_id: project.into(),
                 node_id: node.map(str::to_owned),
+                visible_to: visible_to.map(str::to_owned),
                 after,
                 limit: 100,
                 order: EntityOrder::IdAsc,

@@ -1,4 +1,5 @@
-export type Surface = "home" | "fleet" | "projects" | "admin" | "settings";
+export type Surface =
+  "home" | "chat" | "fleet" | "projects" | "admin" | "settings";
 export type ProjectView =
   "overview" | "tasks" | "analytics" | "access" | "settings";
 export type AgentView =
@@ -25,6 +26,8 @@ export type Route =
       compose: boolean;
     }
   | { kind: "thread"; project: string; thread: string }
+  | { kind: "chat"; project: string; thread: string }
+  | { kind: "chat-connections"; project: string }
   | { kind: "task"; project: string; task: string }
   | { kind: "invalid"; message: string };
 
@@ -90,6 +93,10 @@ export const agentHref = (
   `/projects/${id(project)}/agents/${id(node)}/${view}${compose ? "?compose=1" : ""}`;
 export const threadHref = (project: string, thread: string) =>
   `/projects/${id(project)}/threads/${id(thread)}`;
+export const chatThreadHref = (project: string, thread: string) =>
+  `/projects/${id(project)}/chat/${id(thread)}`;
+export const chatConnectionsHref = (project: string) =>
+  `/projects/${id(project)}/chat/connections`;
 export const taskHref = (project: string, task: string) =>
   `/projects/${id(project)}/tasks/${id(task)}`;
 
@@ -110,7 +117,7 @@ export function parseRoute(href: string, origin: string): Route {
     if (
       !parts.length ||
       (parts.length === 1 &&
-        ["fleet", "projects", "admin", "settings"].includes(first!)) ||
+        ["chat", "fleet", "projects", "admin", "settings"].includes(first!)) ||
       (first === "admin" && parts.length === 2 && adminViews.has(parts[1]!))
     ) {
       if ([...query.keys()].some((key) => key !== "project")) return invalid();
@@ -152,6 +159,10 @@ export function parseRoute(href: string, origin: string): Route {
         return { kind: "host", project, host: parts[3]! };
       if (parts[2] === "threads")
         return { kind: "thread", project, thread: parts[3]! };
+      if (parts[2] === "chat" && parts[3] === "connections")
+        return { kind: "chat-connections", project };
+      if (parts[2] === "chat")
+        return { kind: "chat", project, thread: parts[3]! };
       if (parts[2] === "tasks")
         return { kind: "task", project, task: parts[3]! };
     }
@@ -167,6 +178,7 @@ export function safeReturnPath(href: string, origin: string): string | null {
 }
 export function routeSurface(route: Route): Surface {
   if (route.kind === "global") return route.surface;
+  if (route.kind === "chat" || route.kind === "chat-connections") return "chat";
   if (route.kind === "project" || route.kind === "task") return "projects";
   if (
     route.kind === "host" ||

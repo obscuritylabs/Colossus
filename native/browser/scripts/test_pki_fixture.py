@@ -18,6 +18,8 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
+from cryptography import x509
+
 import pki_fixture
 from pki_fixture_proxy import FixtureProxy
 
@@ -36,16 +38,18 @@ class PkiFixtureTests(unittest.TestCase):
         cls.fixture.close()
         cls.temporary.cleanup()
 
-    def context(self, identity=None, trusted=True):
+    def context(self, identity=None, trusted=True, strict=False):
         context = ssl.create_default_context(cafile=self.root / "ca.pem" if trusted else None)
+        if strict:
+            context.verify_flags |= ssl.VERIFY_X509_STRICT
         if identity:
             context.load_cert_chain(self.root / f"{identity}.pem", self.root / f"{identity}.key")
         return context
 
-    def request(self, endpoint, *, path="/public", identity=None, trusted=True):
+    def request(self, endpoint, *, path="/public", identity=None, trusted=True, strict=False):
         address = urlsplit(self.metadata["urls"][endpoint])
         connection = http.client.HTTPSConnection(address.hostname, address.port,
-            timeout=3, context=self.context(identity, trusted))
+            timeout=3, context=self.context(identity, trusted, strict))
         try:
             connection.request("GET", path)
             response = connection.getresponse()
@@ -73,6 +77,22 @@ class PkiFixtureTests(unittest.TestCase):
         with self.assertRaises((ValueError, FileExistsError)):
             pki_fixture.Fixture(self.root)
         self.assertEqual((self.root / "ca.der").read_bytes(), before)
+
+    def test_key_identifiers_bind_each_fixture_to_its_actual_issuer(self):
+        certificates = {name: x509.load_pem_x509_certificate(
+            (self.root / f"{name}.pem").read_bytes())
+            for name in ("other_ca", *self.metadata["fingerprints_sha256"])}
+        for name, certificate in certificates.items():
+            issuer = name if name in ("ca", "other_ca") else (
+                "other_ca" if name in ("untrusted_server", "wrong_issuer_client") else "ca")
+            with self.subTest(certificate=name, issuer=issuer):
+                subject_id = certificate.extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+                authority_id = certificate.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier)
+                issuer_id = certificates[issuer].extensions.get_extension_for_class(x509.SubjectKeyIdentifier)
+                self.assertFalse(subject_id.critical)
+                self.assertFalse(authority_id.critical)
+                self.assertEqual(len(subject_id.value.digest), 20)
+                self.assertEqual(authority_id.value.key_identifier, issuer_id.value.digest)
 
     def test_cli_control_reports_bounded_public_evidence_and_stops(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -114,6 +134,26 @@ class PkiFixtureTests(unittest.TestCase):
         self.assertIn(b"private CA verified", body)
         with self.assertRaises((ssl.SSLError, OSError)):
             self.request("public", trusted=False)
+
+    def test_strict_x509_verifies_server_and_client_chains_on_loopback(self):
+        # Force strict chain validation on Python versions whose default client
+        # context does not yet enable it, and verify the client chain at the server.
+        server = next(server for server in self.fixture._servers if server.endpoint == "mtls")
+        flags = server.tls.verify_flags
+        server.tls.verify_flags = flags | ssl.VERIFY_X509_STRICT
+        try:
+            status, _, body = self.request("public", strict=True)
+            self.assertEqual(status, 200)
+            self.assertIn(b"private CA verified", body)
+            status, _, body = self.request("mtls", path="/client-check", identity="client", strict=True)
+            self.assertEqual(status, 200)
+            self.assertIn(b"identity verified", body)
+        finally:
+            server.tls.verify_flags = flags
+        expected = self.metadata["fingerprints_sha256"]["client"]
+        self.assertTrue(any(event["endpoint"] == "mtls" and event["status"] == 200
+                            and event["client_fingerprint_sha256"] == expected
+                            for event in self.fixture.report()["events"]))
 
     def test_unknown_ca_wrong_hostname_and_expired_server_are_denied(self):
         for endpoint in ("untrusted", "wrong_hostname", "expired"):

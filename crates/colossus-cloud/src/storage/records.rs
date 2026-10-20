@@ -165,13 +165,25 @@ impl EntityValue {
                 root && value.host_id == key.id && value.project_id == key.project_id
             }
             Self::Node(value) => {
-                root && value.node_id == key.id && value.project_id == key.project_id
+                root && value.node_id == key.id
+                    && value.project_id == key.project_id
+                    && value.owner_user_id.as_ref().is_none_or(|owner| {
+                        !owner.is_empty()
+                            && owner.len() <= 256
+                            && !owner.chars().any(char::is_control)
+                    })
             }
             Self::Workspace(value) => {
                 root && value.workspace_id == key.id && value.project_id == key.project_id
             }
             Self::Thread(value) => {
-                root && value.thread_id == key.id && value.project_id == key.project_id
+                root && value.thread_id == key.id
+                    && value.project_id == key.project_id
+                    && value.owner_user_id.as_ref().is_none_or(|owner| {
+                        !owner.is_empty()
+                            && owner.len() <= 256
+                            && !owner.chars().any(char::is_control)
+                    })
             }
             Self::ThreadMessage(value) => {
                 value.message_id == key.id
@@ -190,7 +202,13 @@ impl EntityValue {
             }
             Self::Admission(_) | Self::Renewal(_) | Self::AuthFlow(_) => root,
             Self::Invitation(value) => {
-                root && value.token_hash == key.id && value.project_id == key.project_id
+                root && value.token_hash == key.id
+                    && value.project_id == key.project_id
+                    && value.owner_user_id.as_ref().is_none_or(|owner| {
+                        !owner.is_empty()
+                            && owner.len() <= 256
+                            && !owner.chars().any(char::is_control)
+                    })
             }
             Self::DisplaySettings(_) => {
                 root && key.project_id == crate::IDENTITY_NAMESPACE && key.id == "display"

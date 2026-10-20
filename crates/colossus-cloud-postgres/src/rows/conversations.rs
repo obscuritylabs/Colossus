@@ -12,6 +12,7 @@ use diesel::{
 use serde_json::Value;
 
 row!(ThreadRow {
+    owner_user_id: Option<String> => Nullable<Text>,
     node_id: String => Text,
     host_id: Option<String> => Nullable<Text>,
     workspace_id: Option<String> => Nullable<Text>,
@@ -33,6 +34,7 @@ impl DomainRow for ThreadRow {
         };
         Ok(Self {
             metadata,
+            owner_user_id: value.owner_user_id.clone(),
             node_id: value.node_id.clone(),
             host_id: value.host_id.clone(),
             workspace_id: value.workspace_id.clone(),
@@ -50,6 +52,7 @@ impl DomainRow for ThreadRow {
     }
     fn into_value(self) -> CloudResult<EntityValue> {
         Ok(CloudThread {
+            owner_user_id: self.owner_user_id,
             revision: self.metadata.revision()?,
             thread_id: self.metadata.id,
             project_id: self.metadata.project_id,

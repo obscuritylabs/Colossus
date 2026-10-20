@@ -4,7 +4,11 @@ import {
   type TextareaHTMLAttributes,
   type ButtonHTMLAttributes,
 } from "react";
-import { IconSend2 } from "@tabler/icons-react";
+import {
+  IconLoader2,
+  IconPlayerStopFilled,
+  IconSend2,
+} from "@tabler/icons-react";
 import { useComposerAutosize } from "../hooks/useComposerAutosize.js";
 
 /** Presentation only: the host decides when a draft is accepted or cleared. */
@@ -84,6 +88,31 @@ export function ComposerSendButton({
       className={`send-button ${className}`.trim()}
     >
       {children ?? <IconSend2 size={19} stroke={2} aria-hidden="true" />}
+    </button>
+  );
+}
+
+/** The host owns cancellation authority and acknowledgement. */
+export function ComposerStopButton({
+  stopping = false,
+  disabled = false,
+  className = "",
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & { stopping?: boolean }) {
+  return (
+    <button
+      aria-label={stopping ? "Stopping response" : "Stop response"}
+      title={stopping ? "Waiting for the response to stop" : "Stop response"}
+      {...props}
+      type="button"
+      disabled={disabled || stopping}
+      className={`send-button is-stop${stopping ? " is-stopping" : ""} ${className}`.trim()}
+    >
+      {stopping ? (
+        <IconLoader2 size={16} className="shared-spin" aria-hidden="true" />
+      ) : (
+        <IconPlayerStopFilled size={16} aria-hidden="true" />
+      )}
     </button>
   );
 }

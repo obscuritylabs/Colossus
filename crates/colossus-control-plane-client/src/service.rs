@@ -3,35 +3,67 @@ use crate::{
     transport::{Connection, validate_origin},
 };
 use serde_json::Value;
-use tokio::sync::{Mutex, Semaphore, SemaphorePermit};
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{Mutex, Semaphore, SemaphorePermit, watch};
 use zeroize::Zeroizing;
 
-/// One selected server and an in-memory human session, serialized across target changes.
-pub struct ControlPlaneClient {
-    connection: Mutex<Option<Connection>>,
+pub(crate) struct Selection {
+    pub generation: u64,
+    pub connection: Option<Connection>,
+    pub watches: HashMap<u64, watch::Sender<bool>>,
+    pub next_watch: u64,
+}
+impl Selection {
+    pub(crate) fn replace(&mut self, connection: Option<Connection>) {
+        self.generation = self.generation.wrapping_add(1);
+        self.connection = connection;
+        for (_, cancellation) in self.watches.drain() {
+            let _ = cancellation.send(true);
+        }
+    }
+}
+pub(crate) struct Inner {
+    pub selected: Mutex<Selection>,
     permits: Semaphore,
+}
+
+/// Native session custody. Snapshots never cross IPC, and every response is fenced to its session generation.
+#[derive(Clone)]
+pub struct ControlPlaneClient {
+    pub(crate) inner: Arc<Inner>,
 }
 impl Default for ControlPlaneClient {
     fn default() -> Self {
         Self {
-            connection: Mutex::new(None),
-            permits: Semaphore::new(8),
+            inner: Arc::new(Inner {
+                selected: Mutex::new(Selection {
+                    generation: 0,
+                    connection: None,
+                    watches: HashMap::new(),
+                    next_watch: 0,
+                }),
+                permits: Semaphore::new(8),
+            }),
         }
     }
 }
 impl ControlPlaneClient {
     fn admit(&self) -> Result<SemaphorePermit<'_>> {
-        self.permits
+        self.inner
+            .permits
             .try_acquire()
             .map_err(|_| Failure::new("busy", "Too many requests. Try again shortly."))
     }
-    /// Select an HTTPS origin and discover its sign-in methods. Replacing a server drops local custody.
+    /// Select an HTTPS origin and discover sign-in methods. Replacing a server immediately cancels watches.
     /// Debug builds additionally accept literal loopback HTTP for isolated development fixtures.
     pub async fn connect(&self, origin: &str) -> Result<Value> {
         let _permit = self.admit()?;
         let origin = validate_origin(origin, cfg!(debug_assertions))?;
-        let mut selected = self.connection.lock().await;
-        *selected = None;
+        let generation = {
+            let mut selected = self.inner.selected.lock().await;
+            selected.replace(None);
+            selected.generation
+        };
         let mut connection = Connection::new(origin)?;
         let configuration = connection.configuration().await?;
         if !configuration
@@ -43,7 +75,11 @@ impl ControlPlaneClient {
                 "This server does not provide a compatible Colossus sign-in service.",
             ));
         }
-        *selected = Some(connection);
+        let mut selected = self.inner.selected.lock().await;
+        if selected.generation != generation {
+            return Err(disconnected());
+        }
+        selected.connection = Some(connection);
         Ok(configuration)
     }
     /// Authenticate a local human account. Passwords and session cookies are never persisted or returned.
@@ -56,27 +92,60 @@ impl ControlPlaneClient {
                 "Check your username and password.",
             ));
         }
-        self.connection
-            .lock()
-            .await
-            .as_mut()
-            .ok_or(disconnected())?
-            .login(username, password)
-            .await
+        let (generation, mut connection) = {
+            let mut selected = self.inner.selected.lock().await;
+            let origin = selected
+                .connection
+                .as_ref()
+                .ok_or(disconnected())?
+                .origin
+                .clone();
+            let connection = Connection::new(origin)?;
+            selected.replace(Some(connection.clone()));
+            (selected.generation, connection)
+        };
+        let identity = connection.login(username, password).await?;
+        let mut selected = self.inner.selected.lock().await;
+        if selected.generation != generation {
+            return Err(disconnected());
+        }
+        selected.connection = Some(connection);
+        Ok(identity)
     }
     /// Submit one closed operation. Mutations are attempted once; uncertain outcomes require reconciliation.
+    /// Watches use separate admission slots so cancellation and interaction responses retain unary headroom.
     pub async fn request(&self, operation: Operation) -> Result<Value> {
         let _permit = self.admit()?;
-        let mut selected = self.connection.lock().await;
-        let connection = selected.as_mut().ok_or(disconnected())?;
+        let (generation, mut connection) = self.snapshot().await?;
         let (method, url, body) = operation.route(&connection.origin)?;
-        connection.request(method, url, body, true).await
+        let result = connection.request(method, url, body, true).await;
+        let mut selected = self.inner.selected.lock().await;
+        if selected.generation != generation {
+            return Err(disconnected());
+        }
+        if result
+            .as_ref()
+            .is_err_and(|error| error.code == "session_expired")
+        {
+            selected.replace(Some(Connection::new(connection.origin)?));
+        }
+        result
     }
-    /// Attempt remote logout and always discard the local session, even when the server is unreachable.
+    pub(crate) async fn snapshot(&self) -> Result<(u64, Connection)> {
+        let selected = self.inner.selected.lock().await;
+        Ok((
+            selected.generation,
+            selected.connection.clone().ok_or(disconnected())?,
+        ))
+    }
+    /// Attempt remote logout and immediately discard local custody and every active watch.
     pub async fn sign_out(&self) -> Result<()> {
-        // Logout cannot be rejected by the request admission limit. Remove the
-        // selected session before waiting for best-effort remote revocation.
-        let connection = self.connection.lock().await.take();
+        let connection = {
+            let mut selected = self.inner.selected.lock().await;
+            let connection = selected.connection.take();
+            selected.replace(None);
+            connection
+        };
         if let Some(mut connection) = connection {
             connection.logout().await;
         }
@@ -85,9 +154,8 @@ impl ControlPlaneClient {
     /// Construct a browser destination on the selected server. No credentials are included.
     pub async fn browser_url(&self, project: Option<&str>, task: Option<&str>) -> Result<String> {
         let _permit = self.admit()?;
-        let selected = self.connection.lock().await;
-        let connection = selected.as_ref().ok_or(disconnected())?;
-        let mut url = connection.origin.clone();
+        let (_, connection) = self.snapshot().await?;
+        let mut url = connection.origin;
         if let Some(project) = project {
             let mut segments = vec!["projects", project];
             if let Some(task) = task {

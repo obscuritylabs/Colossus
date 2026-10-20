@@ -52,6 +52,7 @@ export interface Host {
   last_seen_at: number | null;
 }
 export interface Thread {
+  owner_user_id?: string | null;
   thread_id: string;
   project_id: string;
   node_id: string;
@@ -195,3 +196,5 @@ export function visibleOutput(updates: Update[]): string {
   }
   return output;
 }
+
+export * from "./conversation.js";

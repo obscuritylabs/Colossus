@@ -63,6 +63,7 @@ impl DomainRow for AdmissionRow {
 }
 
 row!(InvitationRow {
+    owner_user_id: Option<String> => Nullable<Text>,
     node_id: String => Text,
     label: String => Text,
     roles: Vec<String> => Array<Text>,
@@ -78,6 +79,7 @@ impl DomainRow for InvitationRow {
         };
         Ok(Self {
             metadata,
+            owner_user_id: value.owner_user_id.clone(),
             node_id: value.node_id.clone(),
             label: value.label.clone(),
             roles: value.roles.iter().cloned().collect(),
@@ -89,6 +91,7 @@ impl DomainRow for InvitationRow {
     }
     fn into_value(self) -> CloudResult<EntityValue> {
         Ok(Enrollment {
+            owner_user_id: self.owner_user_id,
             token_hash: self.metadata.id,
             project_id: self.metadata.project_id,
             node_id: self.node_id,

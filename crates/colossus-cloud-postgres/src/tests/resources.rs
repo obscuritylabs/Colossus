@@ -73,6 +73,47 @@ async fn postgres_resource_replica_fencing_ownership_audit_and_retention() {
         replica.resource_read(&caller, &id).await.unwrap(),
         Some(ResourceReply::Result { .. })
     ));
+    let catalog = replica
+        .resource_submit(&caller, &lease, ResourceOperation::ModelCatalog {}, now)
+        .await
+        .unwrap();
+    assert_eq!(store.resource_take(&lease, now).await.unwrap().len(), 1);
+    store
+        .resource_complete(
+            &lease,
+            &catalog,
+            ResourceReply::Result {
+                value: json!({"model_profiles":[]}),
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    let viewer = CloudCaller::new(
+        "acceptance".into(),
+        "acceptance-project".into(),
+        BTreeSet::from([CloudPermission::Read]),
+    )
+    .unwrap();
+    assert!(matches!(
+        replica.resource_read(&viewer, &catalog).await,
+        Err(CloudError::PermissionDenied)
+    ));
+    assert!(matches!(
+        replica.resource_read(&caller, &catalog).await.unwrap(),
+        Some(ResourceReply::Result { .. })
+    ));
+    let mut conn = replica.pool.get().await.unwrap();
+    diesel::sql_query(r#"UPDATE runtime_resource_requests SET operation='{"operation":"context"}'::jsonb WHERE request_id=$1"#)
+        .bind::<diesel::sql_types::Text, _>(&catalog)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    drop(conn);
+    assert!(matches!(
+        replica.resource_read(&viewer, &catalog).await,
+        Err(CloudError::Storage)
+    ));
     if std::env::var_os("COLOSSUS_RESOURCE_TEST_CHECKPOINT").is_some() {
         store
             .export_audit_checkpoint("acceptance-project", "COLOSSUS_RESOURCE_TEST_CHECKPOINT")

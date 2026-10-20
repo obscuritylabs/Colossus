@@ -43,12 +43,38 @@ impl CloudRepository {
         title: Option<String>,
         request: CreateRunRequest,
     ) -> CloudResult<(CloudThread, CloudTask)> {
+        self.create_thread_with_visibility(caller, node_id, title, request, false)
+            .await
+    }
+    /// Create personal history owned by the authenticated account, without an owner argument.
+    /// Project administrators and other members cannot read or control this conversation.
+    pub async fn create_personal_thread(
+        &self,
+        caller: &CloudCaller,
+        node_id: &str,
+        title: Option<String>,
+        request: CreateRunRequest,
+    ) -> CloudResult<(CloudThread, CloudTask)> {
+        self.create_thread_with_visibility(caller, node_id, title, request, true)
+            .await
+    }
+    async fn create_thread_with_visibility(
+        &self,
+        caller: &CloudCaller,
+        node_id: &str,
+        title: Option<String>,
+        request: CreateRunRequest,
+        personal: bool,
+    ) -> CloudResult<(CloudThread, CloudTask)> {
         caller.require(CloudPermission::Execute)?;
         if request.session_id.is_some() {
             return Err(CloudError::InvalidArgument);
         }
         let id = format!("t{}", submission_id(caller, &request)?);
-        let node = self.node(caller.project_id(), node_id).await?;
+        let node = self.node_for_caller(caller, node_id).await?;
+        // A personal execution environment cannot produce project-shared history.
+        let owner_user_id =
+            (personal || node.owner_user_id.is_some()).then(|| caller.subject().to_owned());
         let title = title.unwrap_or_else(|| {
             request
                 .input
@@ -69,8 +95,14 @@ impl CloudRepository {
         valid_title(&title)?;
         let now = timestamp()?;
         let thread = match self.thread(caller.project_id(), &id).await {
-            Ok(existing) => existing,
+            Ok(existing)
+                if existing.owner_user_id == owner_user_id && existing.node_id == node_id =>
+            {
+                existing
+            }
+            Ok(_) => return Err(CloudError::Conflict),
             Err(CloudError::NotFound) => CloudThread {
+                owner_user_id,
                 thread_id: id.clone(),
                 project_id: caller.project_id().into(),
                 node_id: node_id.into(),
@@ -93,7 +125,7 @@ impl CloudRepository {
         let task = self
             .allocate_task(caller, node_id, request, Some((thread, 0)))
             .await?;
-        Ok((self.thread(caller.project_id(), &id).await?, task))
+        Ok((self.thread_for_caller(caller, &id).await?, task))
     }
     /// Retain the task entry point as an operational view of a conversation turn.
     pub async fn create_task(
@@ -118,7 +150,7 @@ impl CloudRepository {
         if request.session_id.is_some() {
             return Err(CloudError::InvalidArgument);
         }
-        let thread = self.thread(caller.project_id(), id).await?;
+        let thread = self.thread_for_caller(caller, id).await?;
         if !thread.can_continue || thread.archived {
             return Err(CloudError::PermissionDenied);
         }
@@ -136,7 +168,7 @@ impl CloudRepository {
                     Some((thread, expected_revision)),
                 )
                 .await?;
-            return Ok((self.thread(caller.project_id(), id).await?, task));
+            return Ok((self.thread_for_caller(caller, id).await?, task));
         }
         if thread.revision != expected_revision {
             return Err(CloudError::Conflict);
@@ -155,7 +187,7 @@ impl CloudRepository {
                 Some((thread, expected_revision)),
             )
             .await?;
-        Ok((self.thread(caller.project_id(), id).await?, task))
+        Ok((self.thread_for_caller(caller, id).await?, task))
     }
     /// Read a conversation within an authenticated project.
     pub async fn get_thread(
@@ -174,7 +206,7 @@ impl CloudRepository {
         message_after: Option<&str>,
     ) -> CloudResult<CloudThreadDetail> {
         caller.require(CloudPermission::Read)?;
-        let thread = self.thread(caller.project_id(), id).await?;
+        let thread = self.thread_for_caller(caller, id).await?;
         let records = self
             .store
             .list(&EntityQuery {
@@ -188,6 +220,7 @@ impl CloudRepository {
                 query: None,
                 status: None,
                 archived: None,
+                visible_to: Some(caller.subject().into()),
                 order: EntityOrder::CreatedDesc,
             })
             .await?;
@@ -211,6 +244,7 @@ impl CloudRepository {
                 query: None,
                 status: None,
                 archived: None,
+                visible_to: Some(caller.subject().into()),
                 order: EntityOrder::CreatedDesc,
             })
             .await?;
@@ -333,6 +367,7 @@ impl CloudRepository {
                 query,
                 status: None,
                 archived,
+                visible_to: Some(caller.subject().into()),
                 order: EntityOrder::UpdatedDesc,
             })
             .await?;
@@ -355,7 +390,7 @@ impl CloudRepository {
         archived: Option<bool>,
     ) -> CloudResult<CloudThread> {
         caller.require(CloudPermission::Control)?;
-        let mut thread = self.thread(caller.project_id(), id).await?;
+        let mut thread = self.thread_for_caller(caller, id).await?;
         if thread.revision != revision {
             return Err(CloudError::Conflict);
         }
@@ -376,6 +411,16 @@ impl CloudRepository {
             &thread,
         )
         .await?;
+        Ok(thread)
+    }
+    pub(super) async fn thread_for_caller(
+        &self,
+        caller: &CloudCaller,
+        id: &str,
+    ) -> CloudResult<CloudThread> {
+        let thread = self.thread(caller.project_id(), id).await?;
+        crate::visibility::require_thread(&thread, caller)?;
+        self.node_for_caller(caller, &thread.node_id).await?;
         Ok(thread)
     }
     pub(super) async fn thread(&self, project: &str, id: &str) -> CloudResult<CloudThread> {
@@ -607,7 +652,7 @@ impl CloudRepository {
         limit: usize,
     ) -> CloudResult<Vec<ReleasedEvent>> {
         caller.require(CloudPermission::Read)?;
-        self.thread(caller.project_id(), id).await?;
+        self.thread_for_caller(caller, id).await?;
         let head = self
             .store
             .cursor(caller.project_id(), "cloud-thread", id)
@@ -646,6 +691,7 @@ impl CloudRepository {
                     query: None,
                     status: None,
                     archived: None,
+                    visible_to: None,
                     order: EntityOrder::IdAsc,
                 })
                 .await?;
@@ -681,6 +727,7 @@ impl CloudRepository {
                     }
                     Err(CloudError::NotFound) => (
                         CloudThread {
+                            owner_user_id: node.owner_user_id.clone(),
                             thread_id: id.clone(),
                             project_id: project.into(),
                             node_id: task.node_id.clone(),

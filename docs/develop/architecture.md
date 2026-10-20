@@ -75,7 +75,8 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 | Security and catalog | `colossus-access`, `colossus-policy`, `colossus-tools` | Capability metadata, decisions, permits, and strict tool schemas |
 | Infrastructure | `colossus-provider`, `colossus-codex-auth`, `colossus-credentials`, journal/projection crates, `colossus-sandbox`, `colossus-browser-bridge`, `colossus-browser-presentation`, `colossus-integrations`, `colossus-mcp`, `colossus-plugins`, `colossus-bundles`, `colossus-search` | External systems, authentication, private browser transport and presentation, plugin OCI/lifecycle, release bundles, and storage adapters |
 | Public API and SDK | `colossus-api-proto`, `colossus-api`, `colossus-api-runtime`, `colossus-grpc`, `colossus-sdk` | Version public resources, authenticate applications, host durable runs, and provide transport-neutral clients |
-| Control Plane application | `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Project authority, durable fixed-node placement, OIDC browser access, and native outbound connections through the public SDK |
+| Control Plane application | `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Project and personal resource authority, durable fixed-node placement, browser access, and authenticated runtime connections through the public SDK |
+| Hosted chat composition | `colossus-cloud-chat` | Bind an authenticated project/user to protected state, purpose-bound credentials and the ordinary runtime/public SDK under the controlled-chat ceiling |
 | Mobile human client | `colossus-control-plane-client`, `apps/mobile` | Native human-session custody and closed Control Plane operations; touch presentation shares `@colossus/ui` and never hosts runtime execution |
 | Composition and interfaces | `colossus-runtime`, `colossus-worker-protocol`, `colossus-worker`, `colossus-cli`, `colossus-tui`, `colossus-presentation` | Narrow private transport contracts, wire services, host application contracts, and released-data rendering |
 
@@ -90,6 +91,39 @@ Each connector uses a dedicated native application grant; it cannot borrow the D
 primary or approval-broker credential. Cloud roles intersect that grant and never
 expand local tool, policy, or sandbox authority. The closed remote operation set does
 not expose private worker RPC, arbitrary network forwarding, or renderer credentials.
+
+Built-in web Chat is an optional hosted composition. `colossus-cloud-chat` opens the
+ordinary runtime separately for each authenticated project/user and exposes its
+caller-bound SDK; `colossus-cloud-server` supervises enrollment and the existing
+connector. It does not introduce a second execution protocol or put model/tool logic
+in React. Controlled chat permits reviewed provider and remote HTTP MCP effects and
+runtime-owned conversation services. Filesystem/process grants, stdio MCP, browser and
+computer hosts, plugin execution, and user-provisioned environments remain unavailable.
+
+Personal nodes, invitations and conversations retain immutable owner identities.
+Absent ownership preserves existing shared project history. Every human read, list,
+event stream, receipt, control and operational aggregate checks personal visibility;
+SQL filters it before pagination and counts. Project and global administration do not
+convey another user's personal history or runtime access. Internal authenticated
+connector recovery retains its separate fixed-node authority. An owner with current
+Execute and Control can answer the exact interaction in their own personal node and
+thread; shared execution keeps the independent project Approve requirement. Both paths
+still intersect the runtime application grant and one-use interaction binding.
+
+Hosted provider/MCP definitions are managed at project scope within an operator-owned
+origin ceiling. Personal authentication is the default; shared static credentials
+require an explicit project choice. Credential identities bind project, user or shared
+project scope, provider/MCP purpose, connection generation and endpoint. MCP OAuth uses
+a per-user protected vault; missing or corrupt personal custody never selects a shared
+identity. Shared hosted mode stores partitioned journals/projections, settings,
+credential envelopes, OAuth coordination and enrollment in PostgreSQL. Any API replica
+can serve an account; database-clock execution leases assign one project/user runtime
+owner with monotonic fencing, and existing durable command transport routes operations
+to that owner. Local lexical indexes are disposable. External masters derive keys by
+runtime namespace/purpose; an independently administered anchor service preserves
+rollback detection outside the journal database. The compatibility single-host mode
+retains local private state and remains limited to one replica. See
+[hosted chat operation](../admin/cloud-control-plane.md#scale-hosted-chat-across-replicas).
 
 Manual Desktop credentials and platform-backed MCP OAuth share the
 `colossus-credentials` adapter. `HostSecret` (64 KiB) and `VaultRecord` (1 MiB) are

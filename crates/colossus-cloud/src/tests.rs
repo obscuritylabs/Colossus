@@ -4,10 +4,20 @@ use colossus_cloud_protocol::{CloudReply, Command};
 use colossus_sdk::*;
 use std::{collections::BTreeSet, sync::Arc};
 
+#[path = "tests/discovery_snapshots.rs"]
+mod discovery_snapshots;
 #[path = "tests/inventory.rs"]
 mod inventory;
 #[path = "tests/message_authors.rs"]
 mod message_authors;
+#[path = "tests/personal.rs"]
+mod personal;
+#[path = "tests/personal_enrollment.rs"]
+mod personal_enrollment;
+#[path = "tests/personal_roles.rs"]
+mod personal_roles;
+#[path = "tests/plans.rs"]
+mod plans;
 #[path = "tests/resources.rs"]
 mod resources;
 
@@ -35,6 +45,7 @@ async fn fixture() -> (CloudRepository, CloudCaller, CloudNode) {
         .register_node(
             &caller,
             CloudNode {
+                owner_user_id: None,
                 node_id: "node-a".into(),
                 project_id: "project-a".into(),
                 instance_id: "instance-a".into(),

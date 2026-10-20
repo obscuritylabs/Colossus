@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, HostPlatformIcon } from "@colossus/ui";
 import {
   ConversationEntry,
   ConversationTimeline,
+  ReleasedRunActivity,
 } from "@colossus/ui/conversation";
 import {
   IconArrowLeft,
@@ -12,9 +13,9 @@ import {
 } from "@tabler/icons-react";
 import {
   terminalStatuses,
+  boundRunUpdates,
   taskStatus,
   statusLabel,
-  visibleOutput,
   type FleetNode,
   type Host,
   type Permission,
@@ -25,6 +26,9 @@ import { usePoll } from "./usePoll";
 import { useTaskFeed } from "./useTaskFeed";
 import { taskTitle } from "./TaskList";
 import { TaskStatus } from "./TaskStatus";
+import { MobileInteractions } from "./MobileInteractions";
+import { SessionViews } from "./SessionViews";
+import { taskReleasedOutput } from "./released-output";
 
 export function TaskDetail({
   client,
@@ -36,6 +40,7 @@ export function TaskDetail({
   onBack,
   onConversation,
   onLocked,
+  onTaskUpdated,
 }: {
   client: MobileClient;
   project: string;
@@ -46,6 +51,7 @@ export function TaskDetail({
   onBack: () => void;
   onConversation: (id: string) => Promise<void>;
   onLocked: (busy: boolean) => void;
+  onTaskUpdated: (task: Task) => void;
 }) {
   const snapshot = usePoll<{ task: Task }>(client, {
     kind: "task",
@@ -53,19 +59,41 @@ export function TaskDetail({
     task: initial.task_id,
   });
   const task = snapshot.value?.task ?? initial;
-  const feed = useTaskFeed(client, project, task.task_id);
+  useEffect(() => {
+    if (snapshot.value?.task) onTaskUpdated(snapshot.value.task);
+  }, [snapshot.value?.task, onTaskUpdated]);
+  async function refreshAfterResponse() {
+    try {
+      const current = await client.request<{ task: Task }>({
+        kind: "task",
+        project,
+        task: initial.task_id,
+      });
+      onTaskUpdated(current.task);
+    } catch (failure) {
+      setError(messageOf(failure));
+    } finally {
+      snapshot.refresh();
+    }
+  }
+
+  const feed = useTaskFeed(client, project, task.task_id, {
+    onThreadChanged: snapshot.refresh,
+  });
   const node = nodes.find((node) => node.node.node_id === task.node_id),
     host = hosts.get(node?.node.host_id ?? "");
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
+  const [interactionLocked, setInteractionLocked] = useState(false);
   const cancellation = useRef(crypto.randomUUID());
   useEffect(() => {
-    onLocked(busy);
+    onLocked(busy || interactionLocked);
     return () => onLocked(false);
-  }, [busy, onLocked]);
+  }, [busy, interactionLocked, onLocked]);
   async function cancel() {
-    if (busy || !task.run_id || task.source_read_only) return;
+    if (busy || interactionLocked || !task.run_id || task.source_read_only)
+      return;
     setBusy(true);
     setError("");
     try {
@@ -87,7 +115,7 @@ export function TaskDetail({
     }
   }
   async function openConversation() {
-    if (!task.thread_id || busy) return;
+    if (!task.thread_id || busy || interactionLocked) return;
     setBusy(true);
     setError("");
     try {
@@ -98,7 +126,11 @@ export function TaskDetail({
       setBusy(false);
     }
   }
-  const output = visibleOutput(feed.updates),
+  const taskUpdates = useMemo(
+    () => boundRunUpdates([task], feed.updates).get(task.task_id) ?? [],
+    [feed.updates, task],
+  );
+  const output = taskReleasedOutput(task, taskUpdates),
     finished = terminalStatuses.has(taskStatus(task));
   return (
     <main className="mobile-task-detail">
@@ -106,7 +138,7 @@ export function TaskDetail({
         <Button
           variant="tertiary"
           aria-label="Back to tasks"
-          disabled={busy}
+          disabled={busy || interactionLocked}
           onClick={onBack}
         >
           <IconArrowLeft size={20} />
@@ -172,7 +204,10 @@ export function TaskDetail({
       </dl>
       <div className="mobile-task-actions">
         {task.thread_id && (
-          <Button disabled={busy} onClick={() => void openConversation()}>
+          <Button
+            disabled={busy || interactionLocked}
+            onClick={() => void openConversation()}
+          >
             <IconMessage size={18} aria-hidden="true" />
             Open conversation
           </Button>
@@ -194,38 +229,37 @@ export function TaskDetail({
           Cancellation becomes available after the runtime allocates a run.
         </p>
       )}
-      {task.snapshot?.pending_interactions.some(
-        (interaction) => interaction.status === "pending",
-      ) && (
-        <section className="mobile-attention">
-          <h2>Your input is needed</h2>
-          {task.snapshot.pending_interactions
-            .filter((interaction) => interaction.status === "pending")
-            .map((interaction) => (
-              <p key={interaction.interaction_id}>
-                {interaction.content.approval?.reason ??
-                  interaction.content.user_prompt?.question ??
-                  "Review the runtime’s request."}
-              </p>
-            ))}
-          <Button
-            onClick={() =>
-              void client
-                .openBrowser(project, task.task_id)
-                .catch((failure) => setError(messageOf(failure)))
-            }
-          >
-            Review in Control Plane
-            <IconArrowUpRight size={16} aria-hidden="true" />
-          </Button>
-        </section>
-      )}
+      <MobileInteractions
+        client={client}
+        project={project}
+        task={task.task_id}
+        interactions={task.snapshot?.pending_interactions ?? []}
+        permissions={
+          task.source_read_only || node?.node.revoked ? [] : permissions
+        }
+        onUpdate={refreshAfterResponse}
+        onError={setError}
+        onLocked={setInteractionLocked}
+      />
       <section className="mobile-task-output">
         <h2>Run output</h2>
+        {feed.limited && !finished ? (
+          <p className="mobile-notice">
+            This output is partial because older activity has left the recent
+            window. Live updates continue.
+          </p>
+        ) : null}
         <ConversationTimeline>
           <ConversationEntry
             role="user"
             content={task.request.input.map((part) => part.text).join("\n\n")}
+          />
+          <ReleasedRunActivity
+            status={taskStatus(task)}
+            updates={taskUpdates}
+            terminal={task.snapshot?.run.terminal}
+            updatedAt={task.snapshot?.run.updated_at}
+            label="Run activity"
           />
           {output ? (
             <ConversationEntry role="assistant" content={output} />
@@ -258,10 +292,10 @@ export function TaskDetail({
         </p>
       )}
       <details className="mobile-task-events">
-        <summary>Event activity · {feed.updates.length} events</summary>
+        <summary>Event activity · {taskUpdates.length} events</summary>
         <ol>
-          {feed.updates.map((event) => (
-            <li key={event.sequence}>
+          {taskUpdates.map((event) => (
+            <li key={`${event.run_id}:${event.sequence}`}>
               <span>{event.sequence}</span>
               <strong>
                 {statusLabel(Object.keys(event.update)[0] ?? "Update")}
@@ -273,6 +307,18 @@ export function TaskDetail({
           ))}
         </ol>
       </details>
+      <SessionViews
+        client={client}
+        project={project}
+        tasks={[task]}
+        updates={taskUpdates}
+        available={Boolean(
+          node?.presence?.ready &&
+          !node.node.revoked &&
+          node.presence.capabilities.includes("agent_messages.read.v1"),
+        )}
+        onError={setError}
+      />
       <p className="mobile-caption mobile-wrap">Task {task.task_id}</p>
     </main>
   );

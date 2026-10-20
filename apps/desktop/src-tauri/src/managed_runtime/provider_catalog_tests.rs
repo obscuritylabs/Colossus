@@ -19,7 +19,7 @@ struct CatalogTestHome {
     parent: PathBuf,
     runtime_instance: Option<uuid::Uuid>,
     #[cfg(not(windows))]
-    _temporary_parent: tempfile::TempDir,
+    temporary_parent: std::sync::Arc<tempfile::TempDir>,
 }
 
 impl CatalogTestHome {
@@ -30,7 +30,7 @@ impl CatalogTestHome {
             .filter(|path| path.is_absolute())
             .expect("absolute LocalAppData test parent");
         #[cfg(not(windows))]
-        let temporary_parent = tempfile::tempdir().expect("test parent");
+        let temporary_parent = std::sync::Arc::new(tempfile::tempdir().expect("test parent"));
         #[cfg(not(windows))]
         let parent = temporary_parent.path().to_owned();
         let parent = std::fs::canonicalize(parent).expect("canonical test parent");
@@ -39,7 +39,25 @@ impl CatalogTestHome {
             parent,
             runtime_instance: None,
             #[cfg(not(windows))]
-            _temporary_parent: temporary_parent,
+            temporary_parent,
+        }
+    }
+
+    fn recreated_at(&self, path: PathBuf) -> Self {
+        assert_eq!(path.parent(), Some(self.parent.as_path()));
+        assert!(
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(ROOT_PREFIX))
+        );
+        assert_eq!(std::fs::canonicalize(&self.parent).unwrap(), self.parent);
+        assert!(!path.exists(), "recreated catalog home must start empty");
+        Self {
+            path,
+            parent: self.parent.clone(),
+            runtime_instance: None,
+            #[cfg(not(windows))]
+            temporary_parent: std::sync::Arc::clone(&self.temporary_parent),
         }
     }
 
@@ -112,6 +130,36 @@ impl Drop for CatalogTestHome {
     }
 }
 
+#[cfg(not(windows))]
+#[test]
+fn recreated_catalog_homes_keep_the_shared_parent_until_both_guards_drop() {
+    for original_first in [true, false] {
+        let mut original = CatalogTestHome::new();
+        let parent = original.parent.clone();
+        let original_path = original.path.clone();
+        std::fs::create_dir(&original_path).unwrap();
+        let retained_path = parent.join(format!("{ROOT_PREFIX}retained-{}", uuid::Uuid::now_v7()));
+        std::fs::rename(&original_path, &retained_path).unwrap();
+        original.path = retained_path.clone();
+        let recreated = original.recreated_at(original_path.clone());
+        std::fs::create_dir(&original_path).unwrap();
+        if original_first {
+            drop(original);
+            assert!(parent.is_dir());
+            assert!(!retained_path.exists());
+            assert!(original_path.is_dir());
+            drop(recreated);
+        } else {
+            drop(recreated);
+            assert!(parent.is_dir());
+            assert!(!original_path.exists());
+            assert!(retained_path.is_dir());
+            drop(original);
+        }
+        assert!(!parent.exists());
+    }
+}
+
 struct CatalogResponse {
     status: u16,
     body: &'static str,
@@ -175,8 +223,7 @@ fn native_catalog_recreated_home_does_not_reuse_previous_secure_anchor() {
             anchor.read().unwrap().is_some(),
             "old secure anchor survives the data reset"
         );
-        let mut recreated = CatalogTestHome::new();
-        recreated.path = original_path;
+        let mut recreated = original.recreated_at(original_path);
         let fresh = recreated.open_store();
         assert_ne!(recreated.runtime_instance, Some(old_id));
         let cards = discover_provider_models(

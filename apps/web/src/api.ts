@@ -58,7 +58,7 @@ export async function request<T>(
   path: string,
   body?: unknown,
   signal?: AbortSignal,
-  method?: "PATCH" | "DELETE",
+  method?: "PATCH" | "DELETE" | "PUT",
 ): Promise<T> {
   const response = await fetch(path, {
     method: method ?? (body === undefined ? "GET" : "POST"),

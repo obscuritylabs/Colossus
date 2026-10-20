@@ -342,6 +342,26 @@ jobs:
       - name: Validate desktop renderer
         run: cargo xtask check desktop
 
+      - name: Install Web browser test runtimes
+        working-directory: apps/web
+        run: npm exec -- playwright install --with-deps chromium webkit
+      - name: Exercise Web composer
+        working-directory: apps/web
+        run: npm run test:browser -- --retries=0
+      - name: Exercise WebKit workspace navigation
+        working-directory: apps/web
+        env:
+          PLAYWRIGHT_BROWSER_NAME: webkit
+        run: npm exec -- playwright test tests/browser/workspace.browser.ts --retries=0
+      - name: Upload Web browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-browser-pr-${{ github.event.pull_request.number }}
+          path: apps/web/output/playwright
+          if-no-files-found: ignore
+          retention-days: 7
+
   documentation:
     name: Documentation PR build
     if: needs.classify.outputs.docs_required == 'true'

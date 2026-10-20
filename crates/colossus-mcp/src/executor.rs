@@ -19,6 +19,10 @@ use std::{
     time::Duration,
 };
 
+mod oauth_browser;
+use oauth_browser::BrowserOAuthSessions;
+pub use oauth_browser::{McpOAuthBrowserCallbackPolicy, McpOAuthBrowserLogin};
+
 /// Permit-bound configured MCP adapter.
 pub struct McpExecutor {
     servers: BTreeMap<String, ConfiguredServer>,
@@ -33,6 +37,11 @@ pub struct McpExecutor {
     oauth_timeout_ms: u64,
     oauth_max_output_bytes: u64,
     oauth_sessions: Arc<tokio::sync::Mutex<BTreeMap<String, PendingAuthorization>>>,
+    // Serialize token read/refresh/write per server across run/read snapshots.
+    oauth_locks: BTreeMap<String, Arc<tokio::sync::Mutex<()>>>,
+    browser_oauth_sessions: Arc<BrowserOAuthSessions>,
+    browser_oauth_generation: u64,
+    browser_oauth_configuration: [u8; 32],
 }
 
 struct PendingAuthorization {
@@ -133,6 +142,19 @@ impl McpExecutor {
             oauth_timeout_ms: 30_000,
             oauth_max_output_bytes: 1024 * 1024,
             oauth_sessions: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            oauth_locks: config
+                .servers
+                .keys()
+                .map(|name| (name.clone(), Arc::new(tokio::sync::Mutex::new(()))))
+                .collect(),
+            browser_oauth_sessions: Arc::new(BrowserOAuthSessions::default()),
+            browser_oauth_generation: 0,
+            browser_oauth_configuration: Sha256::digest(
+                serde_json::to_vec(config).map_err(|_| {
+                    McpError::Invalid("MCP configuration could not be encoded".into())
+                })?,
+            )
+            .into(),
         })
     }
 
@@ -166,6 +188,18 @@ impl McpExecutor {
         snapshot.oauth_timeout_ms = self.oauth_timeout_ms;
         snapshot.oauth_max_output_bytes = self.oauth_max_output_bytes;
         snapshot.oauth_sessions = Arc::clone(&self.oauth_sessions);
+        for (name, lock) in &mut snapshot.oauth_locks {
+            if let Some(existing) = self.oauth_locks.get(name) {
+                *lock = existing.clone();
+            }
+        }
+        snapshot.browser_oauth_generation =
+            if snapshot.browser_oauth_configuration == self.browser_oauth_configuration {
+                self.browser_oauth_generation
+            } else {
+                self.browser_oauth_sessions.advance_generation()?
+            };
+        snapshot.browser_oauth_sessions = Arc::clone(&self.browser_oauth_sessions);
         Ok(snapshot)
     }
 
@@ -359,6 +393,7 @@ impl McpExecutor {
         server: &str,
         callback_url: &str,
     ) -> Result<McpOAuthStatus, McpError> {
+        let _oauth_guard = self.lock_oauth(server, self.oauth_timeout_ms).await?;
         let port = self.oauth_callback_port(server)?;
         validate_callback_url(callback_url, port)?;
         let session = self
@@ -412,13 +447,33 @@ impl McpExecutor {
 
     /// Clear local OAuth tokens without remote revocation.
     pub async fn oauth_logout(&self, server: &str) -> Result<McpOAuthStatus, McpError> {
+        let _oauth_guard = self.lock_oauth(server, self.oauth_timeout_ms).await?;
         let (configured, _) = self.oauth_server(server)?;
         self.oauth_credential_store(configured)?
             .clear()
             .await
             .map_err(safe_oauth_error)?;
         self.oauth_sessions.lock().await.remove(server);
+        self.browser_oauth_sessions.cancel_server(server).await;
         self.oauth_status(server).await
+    }
+
+    async fn lock_oauth(
+        &self,
+        server: &str,
+        timeout_ms: u64,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, McpError> {
+        let lock = self
+            .oauth_locks
+            .get(server)
+            .cloned()
+            .ok_or_else(|| McpError::UnknownServer(server.into()))?;
+        tokio::time::timeout(
+            Duration::from_millis(timeout_ms.min(30_000)),
+            lock.lock_owned(),
+        )
+        .await
+        .map_err(|_| McpError::OAuth("OAuth credential access is busy".into()))
     }
 
     /// Whether at least one server is explicitly configured.
@@ -702,6 +757,34 @@ impl McpExecutor {
             .oauth
             .as_ref()
             .ok_or_else(|| McpError::OAuth("OAuth is not configured".into()))?;
+        let redirect_uri = format!("http://127.0.0.1:{}/callback", oauth.callback_port);
+        self.oauth_manager_with_redirect(
+            server,
+            resource_authority,
+            network_destinations,
+            allowed_environment,
+            timeout_ms,
+            max_output_bytes,
+            &redirect_uri,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn oauth_manager_with_redirect(
+        &self,
+        server: &ConfiguredServer,
+        resource_authority: ResourceAuthority,
+        network_destinations: &[String],
+        allowed_environment: &[String],
+        timeout_ms: u64,
+        max_output_bytes: u64,
+        redirect_uri: &str,
+    ) -> Result<AuthorizationManager, McpError> {
+        let oauth = server
+            .oauth
+            .as_ref()
+            .ok_or_else(|| McpError::OAuth("OAuth is not configured".into()))?;
         let endpoint = server
             .url
             .as_deref()
@@ -721,7 +804,6 @@ impl McpExecutor {
         manager.set_credential_store(self.oauth_credential_store(server)?);
         let metadata = manager.resolve_metadata().await.map_err(safe_oauth_error)?;
         manager.set_metadata(metadata.metadata);
-        let redirect_uri = format!("http://127.0.0.1:{}/callback", oauth.callback_port);
         let mut client = OAuthClientConfig::new(&oauth.client_id, redirect_uri)
             .with_scopes(oauth.scopes.clone());
         if let Some(reference) = oauth.client_secret_reference.as_deref() {
@@ -1615,6 +1697,10 @@ impl EffectExecutor for McpExecutor {
             let timeout = Duration::from_millis(timeout_ms);
             let call_dispatched = AtomicBool::new(false);
             let result = if server.oauth.is_some() {
+                let _oauth_guard = self
+                    .lock_oauth(&server.name, timeout_ms)
+                    .await
+                    .map_err(mcp_oauth_execution_error)?;
                 let manager = self
                     .oauth_manager(
                         &server,

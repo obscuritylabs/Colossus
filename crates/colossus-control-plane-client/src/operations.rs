@@ -44,6 +44,61 @@ pub enum Operation {
         project: String,
         /// Exact conversation identity.
         thread: String,
+        /// Exclusive retained message cursor.
+        message_after: Option<String>,
+        /// Exclusive task history cursor.
+        task_after: Option<String>,
+    },
+    /// Read capability metadata for the exact connected runtime.
+    RuntimeContext {
+        /// Exact project identity.
+        project: String,
+        /// Enrolled execution target.
+        node: String,
+        /// Reviewed connection lease.
+        connection_id: String,
+    },
+    /// Read execute-authorized model choices for the exact connected runtime.
+    ModelCatalog {
+        /// Exact project identity.
+        project: String,
+        /// Enrolled execution target.
+        node: String,
+        /// Reviewed connection lease.
+        connection_id: String,
+    },
+    /// Answer one pending interaction under its reviewed concurrency token.
+    Respond {
+        /// Exact project identity.
+        project: String,
+        /// Exact execution request identity.
+        task: String,
+        /// Stable caller mutation identity for reconciliation.
+        mutation_id: String,
+        /// Existing typed response contract, independently validated by the server.
+        request: Value,
+    },
+    /// Read one mutation or inspection receipt.
+    Command {
+        /// Exact project identity.
+        project: String,
+        /// Exact execution request identity.
+        task: String,
+        /// Exact receipt identity.
+        command: String,
+    },
+    /// Inspect retained agent-session participants and messages.
+    InspectInboxes {
+        /// Exact project identity.
+        project: String,
+        /// Exact execution request identity.
+        task: String,
+        /// Stable caller inspection identity.
+        request_id: String,
+        /// Optional exact participant identity.
+        participant_id: Option<String>,
+        /// Exclusive message cursor.
+        after_sequence: u64,
     },
     /// Read one task's current runtime snapshot and dispatch outcome.
     Task {
@@ -95,6 +150,7 @@ pub enum Operation {
 impl Operation {
     /// Read the authenticated human identity.
     pub(crate) fn route(self, origin: &Url) -> Result<(Method, Url, Option<Value>)> {
+        let mut additional_query = Vec::new();
         let (segments, after, body) = match self {
             Self::Me => (vec!["api".into(), "me".into()], None, None),
             Self::Fleet { project, after } => (
@@ -117,16 +173,117 @@ impl Operation {
                 after,
                 None,
             ),
-            Self::Thread { project, thread } => (
+            Self::Thread {
+                project,
+                thread,
+                message_after,
+                task_after,
+            } => {
+                if let Some(cursor) = message_after {
+                    additional_query.push(("message_after", cursor));
+                }
+                if let Some(cursor) = task_after {
+                    additional_query.push(("task_after", cursor));
+                }
+                (
+                    vec![
+                        "api".into(),
+                        "projects".into(),
+                        project,
+                        "threads".into(),
+                        thread,
+                    ],
+                    None,
+                    None,
+                )
+            }
+            Self::RuntimeContext {
+                project,
+                node,
+                connection_id,
+            } => (
                 vec![
                     "api".into(),
                     "projects".into(),
                     project,
-                    "threads".into(),
-                    thread,
+                    "nodes".into(),
+                    node,
+                    "resources".into(),
+                ],
+                None,
+                Some(json!({"connection_id":connection_id,"operation":{"operation":"context"}})),
+            ),
+            Self::ModelCatalog {
+                project,
+                node,
+                connection_id,
+            } => (
+                vec![
+                    "api".into(),
+                    "projects".into(),
+                    project,
+                    "nodes".into(),
+                    node,
+                    "resources".into(),
+                ],
+                None,
+                Some(
+                    json!({"connection_id":connection_id,"operation":{"operation":"model_catalog"}}),
+                ),
+            ),
+            Self::Respond {
+                project,
+                task,
+                mutation_id,
+                request,
+            } => (
+                vec![
+                    "api".into(),
+                    "projects".into(),
+                    project,
+                    "tasks".into(),
+                    task,
+                    "respond".into(),
+                ],
+                None,
+                Some(json!({"mutation_id":mutation_id,"request":request})),
+            ),
+            Self::Command {
+                project,
+                task,
+                command,
+            } => (
+                vec![
+                    "api".into(),
+                    "projects".into(),
+                    project,
+                    "tasks".into(),
+                    task,
+                    "commands".into(),
+                    command,
                 ],
                 None,
                 None,
+            ),
+            Self::InspectInboxes {
+                project,
+                task,
+                request_id,
+                participant_id,
+                after_sequence,
+            } => (
+                vec![
+                    "api".into(),
+                    "projects".into(),
+                    project,
+                    "tasks".into(),
+                    task,
+                    "inboxes".into(),
+                ],
+                None,
+                Some(
+                    json!({"request_id":request_id,"participant_id":participant_id,"after_sequence":after_sequence}),
+                ),
             ),
             Self::Task { project, task } => (
                 vec![
@@ -200,6 +357,9 @@ impl Operation {
         };
         if segments.iter().any(|s| !valid_identity(s))
             || after.as_ref().is_some_and(|s| s.len() > 2048)
+            || additional_query
+                .iter()
+                .any(|(_, cursor)| cursor.len() > 2048)
         {
             return Err(Failure::new(
                 "invalid_argument",
@@ -212,6 +372,9 @@ impl Operation {
         }
         if let Some(after) = after {
             url.query_pairs_mut().append_pair("after", &after);
+        }
+        for (key, value) in additional_query {
+            url.query_pairs_mut().append_pair(key, &value);
         }
         Ok((
             if body.is_some() {

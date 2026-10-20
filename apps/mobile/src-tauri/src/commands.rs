@@ -1,6 +1,8 @@
-use colossus_control_plane_client::{ControlPlaneClient, Failure, Operation, Result};
+use colossus_control_plane_client::{
+    ControlPlaneClient, Failure, Operation, Result, StreamEvent, WatchScope,
+};
 use serde_json::Value;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, ipc::Channel};
 use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
@@ -45,4 +47,20 @@ pub(crate) async fn mobile_open_browser(
             code: "unavailable",
             message: "The browser could not open.",
         })
+}
+
+#[tauri::command]
+pub(crate) async fn mobile_watch(
+    state: State<'_, ControlPlaneClient>,
+    scope: WatchScope,
+    channel: Channel<StreamEvent>,
+) -> Result<u64> {
+    state
+        .watch(scope, move |event| channel.send(event).is_ok())
+        .await
+}
+#[tauri::command]
+pub(crate) async fn mobile_unwatch(state: State<'_, ControlPlaneClient>, id: u64) -> Result<()> {
+    state.unwatch(id).await;
+    Ok(())
 }

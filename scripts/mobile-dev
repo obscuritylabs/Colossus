@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+command -v node >/dev/null 2>&1 || {
+    printf '%s\n' 'mobile-dev: Node.js 22.12 or newer is required' >&2
+    exit 1
+}
+exec node "$script_dir/mobile-dev.mjs" "$@"
