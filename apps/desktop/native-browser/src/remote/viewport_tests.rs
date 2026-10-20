@@ -45,6 +45,7 @@ fn state() -> Mutex<State> {
     Mutex::new(State {
         configure: configure(1),
         lease: lease(1),
+        confirmed_hidden_lease: None,
         bounds,
         applied: bounds,
         visible: true,

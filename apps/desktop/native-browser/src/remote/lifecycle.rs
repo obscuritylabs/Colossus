@@ -1,5 +1,6 @@
 use super::{Owner, RemoteHostOwner, State};
 use crate::{BrowserError, presentation::PresentationSurface};
+use colossus_browser_presentation::{Lease, PresentationError};
 use std::{
     future::Future,
     sync::{
@@ -112,7 +113,7 @@ pub(super) async fn hide_host(
         std::time::Instant::now(),
         owner.revision.load(Ordering::Acquire),
     );
-    match owner.client.hide(lease).await {
+    match hide_once(&owner.state, lease, owner.client.hide(lease)).await {
         Ok(())
         | Err(
             colossus_browser_presentation::PresentationError::Stale
@@ -142,6 +143,33 @@ pub(super) async fn hide_host(
         }
     }
 }
+
+/// The caller holds the viewport operation lock; hiding never renews a lease.
+async fn hide_once(
+    state: &Mutex<State>,
+    lease: Lease,
+    hide: impl Future<Output = Result<(), PresentationError>>,
+) -> Result<(), PresentationError> {
+    {
+        let state = state
+            .lock()
+            .map_err(|_| PresentationError::OutcomeUnknown)?;
+        if state.lease == lease && state.confirmed_hidden_lease == Some(lease) {
+            return Ok(());
+        }
+    }
+    hide.await?;
+    let mut state = state
+        .lock()
+        .map_err(|_| PresentationError::OutcomeUnknown)?;
+    // Only a positive native ACK is cached. A newly configured lease cannot
+    // match this old receipt, even if its show superseded an in-flight hide.
+    if state.lease == lease {
+        state.confirmed_hidden_lease = Some(lease);
+    }
+    Ok(())
+}
+
 pub(super) async fn hide_surface(
     surface: Option<&Arc<PresentationSurface>>,
 ) -> Result<(), BrowserError> {

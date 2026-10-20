@@ -1,6 +1,6 @@
-use super::current_hide_failed;
+use super::{current_hide_failed, hide_once};
 use crate::{BrowserError, remote::State};
-use colossus_browser_presentation::{Configure, Lease};
+use colossus_browser_presentation::{Configure, Lease, PresentationError};
 use serde_json::json;
 use std::{
     sync::{
@@ -29,12 +29,98 @@ fn state() -> Mutex<State> {
             pixel_width: 800,
             pixel_height: 600,
         },
+        confirmed_hidden_lease: None,
         bounds: None,
         applied: None,
         visible: false,
         heartbeat: Instant::now(),
         surface: None,
     })
+}
+
+#[tokio::test]
+async fn acknowledged_hide_coalesces_pulses_but_not_a_new_lease() {
+    let state = state();
+    let first = state.lock().unwrap().lease;
+    let dispatched = AtomicU64::new(0);
+    for _ in 0..8 {
+        hide_once(&state, first, async {
+            dispatched.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+    assert_eq!(dispatched.load(Ordering::Acquire), 1);
+    assert_eq!(state.lock().unwrap().confirmed_hidden_lease, Some(first));
+
+    let next = Lease {
+        viewport_generation: first.viewport_generation + 1,
+        ..first
+    };
+    state.lock().unwrap().lease = next;
+    hide_once(&state, next, async {
+        dispatched.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(dispatched.load(Ordering::Acquire), 2);
+    assert_eq!(state.lock().unwrap().confirmed_hidden_lease, Some(next));
+}
+
+#[tokio::test]
+async fn rejected_hides_never_count_as_a_positive_ack() {
+    for error in [
+        PresentationError::OutcomeUnknown,
+        PresentationError::Unauthenticated,
+        PresentationError::Stale,
+        PresentationError::Hidden,
+        PresentationError::Expired,
+        PresentationError::Invalid,
+        PresentationError::LimitExceeded,
+    ] {
+        let state = state();
+        let lease = state.lock().unwrap().lease;
+        let dispatched = AtomicBool::new(false);
+        assert_eq!(
+            hide_once(&state, lease, async {
+                dispatched.store(true, Ordering::Release);
+                Err(error)
+            })
+            .await,
+            Err(error)
+        );
+        assert!(dispatched.load(Ordering::Acquire));
+        assert_eq!(state.lock().unwrap().confirmed_hidden_lease, None);
+    }
+}
+
+#[tokio::test]
+async fn a_late_hide_ack_cannot_mark_the_replacement_lease() {
+    let state = state();
+    let first = state.lock().unwrap().lease;
+    let next = Lease {
+        viewport_generation: first.viewport_generation + 1,
+        ..first
+    };
+    hide_once(&state, first, async {
+        tokio::task::yield_now().await;
+        state.lock().unwrap().lease = next;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert_eq!(state.lock().unwrap().confirmed_hidden_lease, None);
+    let dispatched = AtomicBool::new(false);
+    hide_once(&state, next, async {
+        dispatched.store(true, Ordering::Release);
+        Ok(())
+    })
+    .await
+    .unwrap();
+    assert!(dispatched.load(Ordering::Acquire));
+    assert_eq!(state.lock().unwrap().confirmed_hidden_lease, Some(next));
 }
 
 #[tokio::test]
