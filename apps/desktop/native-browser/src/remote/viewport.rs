@@ -33,7 +33,7 @@ pub(super) fn update(owner: &Arc<Owner>) {
                     break;
                 }
                 Err(BrowserError::Stale) => {
-                    if let Err(error) = wait_for_target(&owner).await {
+                    if let Err(error) = wait_for_target(&owner, applied).await {
                         #[cfg(all(
                             any(windows, target_os = "macos"),
                             feature = "native-test-driver",
@@ -415,15 +415,58 @@ fn trace_remaining(
     )))]
     let _ = (owner, lease, revision, stage, error);
 }
-async fn wait_for_target(owner: &Owner) -> Result<(), BrowserError> {
+async fn wait_for_target(owner: &Owner, revision: u64) -> Result<(), BrowserError> {
     let _operation = owner.operation.lock().await;
+    hide_stale_target(
+        &owner.state,
+        &owner.revision,
+        &owner.closing,
+        revision,
+        |surface, lease| async move {
+            lifecycle::hide_surface(surface.as_ref()).await?;
+            lifecycle::hide_host(owner, lease).await
+        },
+    )
+    .await
+}
+
+async fn hide_stale_target<F>(
+    state: &Mutex<super::State>,
+    revision: &std::sync::atomic::AtomicU64,
+    closing: &std::sync::atomic::AtomicBool,
+    expected: u64,
+    hide: impl FnOnce(
+        Option<Arc<crate::presentation::PresentationSurface>>,
+        colossus_browser_presentation::Lease,
+    ) -> F,
+) -> Result<(), BrowserError>
+where
+    F: Future<Output = Result<(), BrowserError>>,
+{
     let (surface, lease) = {
-        let mut state = owner.state.lock().map_err(|_| BrowserError::Closed)?;
+        let mut state = state.lock().map_err(|_| BrowserError::Closed)?;
+        // Stale can mean the trusted UI hid/resized this in-flight update.
+        // Only a still-current visible target needs target-change cleanup.
+        if !state.visible
+            || closing.load(Ordering::Acquire)
+            || revision.load(Ordering::Acquire) != expected
+        {
+            return Ok(());
+        }
         state.applied = None;
         (state.surface.clone(), state.lease)
     };
-    lifecycle::hide_surface(surface.as_ref()).await?;
-    lifecycle::hide_host(owner, lease).await
+    let result = hide(surface, lease).await;
+    // A concurrent hide/show may supersede this already-dispatched cleanup.
+    // Do not fail a later revision; its own authenticated update still has to
+    // prove a fresh lease, and current transport failures remain failures.
+    if closing.load(Ordering::Acquire)
+        || revision.load(Ordering::Acquire) != expected
+        || state.lock().is_ok_and(|state| !state.visible)
+    {
+        return Ok(());
+    }
+    result
 }
 fn remaining(owner: &Owner, revision: u64) -> Result<u16, BrowserError> {
     let state = owner.state.lock().map_err(|_| BrowserError::Closed)?;

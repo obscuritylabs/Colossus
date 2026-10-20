@@ -1,6 +1,12 @@
-use super::{Owner, RemoteHostOwner};
+use super::{Owner, RemoteHostOwner, State};
 use crate::{BrowserError, presentation::PresentationSurface};
-use std::sync::{Arc, atomic::Ordering};
+use std::{
+    future::Future,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 pub(super) struct Pending(pub Option<Arc<dyn RemoteHostOwner>>);
 impl Drop for Pending {
@@ -13,25 +19,59 @@ impl Drop for Pending {
     }
 }
 pub(super) fn hide(owner: &Arc<Owner>) -> Result<(), BrowserError> {
-    owner.revision.fetch_add(1, Ordering::AcqRel);
-    let (surface, lease) = {
+    let (surface, lease, revision) = {
         let mut state = owner.state.lock().map_err(|_| BrowserError::Closed)?;
+        let revision = owner
+            .revision
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
         state.visible = false;
         state.applied = None;
-        (state.surface.clone(), state.lease)
+        (state.surface.clone(), state.lease, revision)
     };
     let result = surface.as_ref().map_or(Ok(()), |surface| surface.hide());
     let owner = Arc::clone(owner);
     tauri::async_runtime::spawn(async move {
         let _operation = owner.operation.lock().await;
-        if owner.state.lock().is_ok_and(|state| state.lease == lease)
-            && hide_host(&owner, lease).await.is_err()
+        if current_hide_failed(
+            &owner.state,
+            &owner.revision,
+            revision,
+            lease,
+            hide_host(&owner, lease),
+        )
+        .await
         {
             owner.client.disconnect();
         }
     });
     result
 }
+
+async fn current_hide_failed(
+    state: &Mutex<State>,
+    revision: &AtomicU64,
+    expected: u64,
+    lease: colossus_browser_presentation::Lease,
+    hide: impl Future<Output = Result<(), BrowserError>>,
+) -> bool {
+    let current = || {
+        state.lock().is_ok_and(|state| {
+            state.lease == lease && !state.visible && revision.load(Ordering::Acquire) == expected
+        })
+    };
+    // Local pixels/input were already revoked synchronously. A later show owns
+    // fresh configuration; this obsolete queued hide cannot revoke that revision.
+    if !current() {
+        return false;
+    }
+    hide.await.is_err() && current()
+}
+
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod tests;
+
 pub(super) async fn close(owner: &Arc<Owner>) -> Result<(), BrowserError> {
     owner.closing.store(true, Ordering::Release);
     #[cfg(windows)]

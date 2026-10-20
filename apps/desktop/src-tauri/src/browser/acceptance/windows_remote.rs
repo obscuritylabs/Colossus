@@ -1,5 +1,8 @@
 //! Real Windows HWND rendering and native input for the supervised Core fixture.
-use super::{BrowserRect, PAGE_TIMEOUT, ViewportHeartbeat, present, title};
+use super::{
+    BrowserRect, ExpectedFrame, PAGE_TIMEOUT, RemoteAcceptanceProbe, ViewportHeartbeat,
+    accepted_frame, present, title,
+};
 use anyhow::{Context as _, ensure};
 use colossus_native_browser::{presentation::WindowsScreenEvidence, remote::RemoteSurface};
 use std::{fs::OpenOptions, path::Path, time::Duration};
@@ -162,10 +165,46 @@ pub(super) async fn human(
         initial.width, initial.height, resized.width, resized.height, resized.dpi
     );
     let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
+    let previous = view.acceptance_probe().await?;
     let controller = app
         .get_webview("main")
         .context("Desktop controller missing")?;
+    // UI dispatch acknowledges this pulse before its asynchronous remote resize
+    // settles. The overlay can revoke that in-flight presentation immediately.
+    present(app, tab, smaller).await?;
     controller.eval("const overlay=document.createElement('div');overlay.id='owned-windows-overlay';overlay.style.cssText='position:fixed;inset:0;z-index:2147483647;background:var(--surface-primary,#fff);color:var(--text-primary,#111)';overlay.textContent='Colossus Desktop native overlay acceptance';document.body.appendChild(overlay);")?;
+    hide_viewport(app, tab).await?;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let hidden = view.acceptance_windows_screen().await?;
+    ensure!(
+        hidden.foreground
+            && !hidden.visible
+            && !hidden.hit_test
+            && hidden.center_bgra != [255, 241, 231, 255],
+        "native browser pixels remained above the real Desktop overlay"
+    );
+    save(&hidden, home, "windows-overlay-foreground.png")?;
+    println!("PASS actual Desktop overlay occludes the native browser HWND");
+    controller.eval("document.getElementById('owned-windows-overlay')?.remove();")?;
+    restore_overlay(app, tab, view, rect, smaller, &previous).await?;
+    heartbeat.resume(tab, rect).await?;
+    background_visibility(app, tab, view, rect).await?;
+    view.acceptance_windows_keyboard_reentrancy()
+        .await
+        .context("Tao parent Return key reentrancy did not acknowledge completion")?;
+    // A returning native call alone is insufficient: require a fresh UI dispatch
+    // and visible browser pixels after the sent keyup re-entered Tao's keyboard handler.
+    let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
+    println!("PASS Tao parent Return key handles nested cross-thread keyup and remains responsive");
+    view.acceptance_windows_input().await?;
+    title(view, "Human input Ab3Ω😀").await?;
+    println!(
+        "PASS native HWND mouse/key dispatch, Unicode surrogate IME commit and IME cancel reached real Chromium"
+    );
+    Ok(())
+}
+
+async fn hide_viewport(app: &tauri::AppHandle, tab: &str) -> anyhow::Result<()> {
     let state = app.state::<crate::state::AppState>();
     let generation = state
         .browser
@@ -183,33 +222,50 @@ pub(super) async fn human(
             },
         )
         .await
-        .map_err(|error| anyhow::anyhow!(error.message))?;
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let hidden = view.acceptance_windows_screen().await?;
+        .map_err(|error| anyhow::anyhow!(error.message))
+}
+
+async fn restore_overlay(
+    app: &tauri::AppHandle,
+    tab: &str,
+    view: &RemoteSurface,
+    rect: BrowserRect,
+    smaller: BrowserRect,
+    previous: &RemoteAcceptanceProbe,
+) -> anyhow::Result<()> {
+    // Do not serialize each remote apply before the next trusted visibility
+    // change. A fresh pulse must recover without reviving an obsolete lease.
+    present(app, tab, smaller).await?;
+    hide_viewport(app, tab).await?;
+    let prior = previous
+        .frame
+        .context("human overlay baseline frame missing")?;
+    let restored = accepted_frame(
+        app,
+        tab,
+        view,
+        rect,
+        ExpectedFrame {
+            title: &previous.page.title,
+            url: &previous.page.url,
+            center_bgra: [255, 241, 231, 255],
+            core_target: Some(&previous.page.target),
+            previous: None,
+            after: Some(prior),
+        },
+    )
+    .await?;
     ensure!(
-        hidden.foreground
-            && !hidden.visible
-            && !hidden.hit_test
-            && hidden.center_bgra != [255, 241, 231, 255],
-        "native browser pixels remained above the real Desktop overlay"
+        view.human_control_available()
+            && restored.frame.is_some_and(|frame| {
+                frame.lease.viewport_generation > prior.lease.viewport_generation
+                    && frame.lease.control_generation == 0
+            }),
+        "human overlay restoration did not acquire a fresh presentation lease"
     );
-    save(&hidden, home, "windows-overlay-foreground.png")?;
-    println!("PASS actual Desktop overlay occludes the native browser HWND");
-    controller.eval("document.getElementById('owned-windows-overlay')?.remove();")?;
     let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
-    heartbeat.resume(tab, rect).await?;
-    background_visibility(app, tab, view, rect).await?;
-    view.acceptance_windows_keyboard_reentrancy()
-        .await
-        .context("Tao parent Return key reentrancy did not acknowledge completion")?;
-    // A returning native call alone is insufficient: require a fresh UI dispatch
-    // and visible browser pixels after the sent keyup re-entered Tao's keyboard handler.
-    let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
-    println!("PASS Tao parent Return key handles nested cross-thread keyup and remains responsive");
-    view.acceptance_windows_input().await?;
-    title(view, "Human input Ab3Ω😀").await?;
     println!(
-        "PASS native HWND mouse/key dispatch, Unicode surrogate IME commit and IME cancel reached real Chromium"
+        "PASS live human browser restored the same authenticated page and HWND pixels after overlapping overlay viewport updates"
     );
     Ok(())
 }
