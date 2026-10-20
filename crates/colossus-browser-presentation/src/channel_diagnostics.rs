@@ -2,7 +2,7 @@
 use crate::{PresentationCommand, PresentationError};
 use std::{
     sync::atomic::{AtomicU64, Ordering},
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 static NEXT_CHANNEL: AtomicU64 = AtomicU64::new(1);
@@ -71,8 +71,12 @@ pub(super) fn emit(trace: Option<Trace>, stage: &'static str, error: Option<Pres
         Some(PresentationError::LimitExceeded) => "limit_exceeded",
         Some(PresentationError::OutcomeUnknown) => "outcome_unknown",
     };
+    let utc_epoch_us = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_micros());
+    let producer_pid = std::process::id();
     eprintln!(
-        "EVIDENCE presentation-channel side={} channel={} call={} command={} stage={stage} failure={failure} elapsed_ms={}",
+        "EVIDENCE presentation-channel producer_pid={producer_pid} utc_epoch_us={utc_epoch_us} side={} channel={} call={} command={} stage={stage} failure={failure} elapsed_ms={}",
         trace.side,
         trace.channel,
         trace.call,

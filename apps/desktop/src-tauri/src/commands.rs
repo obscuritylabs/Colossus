@@ -7,6 +7,10 @@ use std::{fs::File, io::Read as _, path::Path};
 use tauri::{AppHandle, State, ipc::Channel};
 use tauri_plugin_dialog::DialogExt as _;
 
+#[cfg(all(windows, debug_assertions))]
+#[path = "commands/image_preview_timing.rs"]
+mod image_preview_timing;
+
 use crate::{
     desktop_settings::{AsideSetting, SettingsStore},
     dto::{
@@ -30,14 +34,20 @@ pub(crate) async fn read_image_artifact(
     thumbnail: bool,
 ) -> Result<String, CommandErrorDto> {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    #[cfg(all(windows, debug_assertions))]
+    let mut timing = image_preview_timing::Probe::begin(thumbnail);
     let target = target(&state, &target_id).await?;
     let _unary_slot = unary_slot(&target.target)?;
+    #[cfg(all(windows, debug_assertions))]
+    timing.advance(image_preview_timing::Phase::Download);
     let download = target
         .target
         .client
         .download_artifact(&artifact_id)
         .await
         .map_err(CommandErrorDto::from_api)?;
+    #[cfg(all(windows, debug_assertions))]
+    timing.advance(image_preview_timing::Phase::Validation);
     if download.artifact.size_bytes == 0
         || download.artifact.size_bytes > 16 * 1_048_576
         || !matches!(
@@ -50,6 +60,8 @@ pub(crate) async fn read_image_artifact(
             "This artifact is not a supported image.",
         ));
     }
+    #[cfg(all(windows, debug_assertions))]
+    timing.advance(image_preview_timing::Phase::Preview);
     let bytes = tauri::async_runtime::spawn_blocking(move || {
         colossus_media::image_preview(
             &download.artifact.file_name,
@@ -61,7 +73,12 @@ pub(crate) async fn read_image_artifact(
     .await
     .map_err(|_| CommandErrorDto::invalid("artifactId", "Image preview is unavailable."))?
     .map_err(|_| CommandErrorDto::invalid("artifactId", "Image preview is unavailable."))?;
-    Ok(format!("data:image/png;base64,{}", BASE64.encode(bytes)))
+    #[cfg(all(windows, debug_assertions))]
+    timing.advance(image_preview_timing::Phase::Encoding);
+    let source = format!("data:image/png;base64,{}", BASE64.encode(bytes));
+    #[cfg(all(windows, debug_assertions))]
+    timing.advance(image_preview_timing::Phase::Complete);
+    Ok(source)
 }
 
 #[tauri::command(rename_all = "camelCase")]
