@@ -1766,7 +1766,12 @@ async fn exercise_owned(
     if fixture.state.native_tabs {
         owned_tabs::checkpoint(app, &tab, &view, rect, fixture).await?;
     }
+    #[cfg(not(windows))]
     heartbeat.pause().await?;
+    #[cfg(windows)]
+    if !close_after_completion() {
+        heartbeat.pause().await?;
+    }
     #[cfg(windows)]
     let tab = if close_after_completion() {
         session_reopen::checkpoint(

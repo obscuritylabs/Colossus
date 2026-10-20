@@ -34,15 +34,7 @@ async fn transcript_closes_exact_a_opens_distinct_b_and_waits_for_its_frame_befo
     for title in [TITLE, ""] {
         let state = state();
         let mut names = Vec::new();
-        for (phase, call, result) in [
-            (6, "", json!({})),
-            (
-                7,
-                "fixture-6",
-                json!({"session_id":id("bs",'1'),"closed":true}),
-            ),
-            (8, "fixture-7", opened('2')),
-        ] {
+        for (phase, call, result) in [(6, "", json!({})), (8, "fixture-7", opened('2'))] {
             let reply = response(
                 phase,
                 &body(call, &result),
@@ -57,6 +49,25 @@ async fn transcript_closes_exact_a_opens_distinct_b_and_waits_for_its_frame_befo
                     .unwrap()
                     .to_owned(),
             );
+            if phase == 6 {
+                let closed = body(
+                    "fixture-6",
+                    &json!({"session_id":id("bs",'1'),"closed":true}),
+                );
+                let opening = response(7, &closed, "http://127.0.0.1:12345", &state);
+                tokio::pin!(opening);
+                assert!(futures_util::poll!(&mut opening).is_pending());
+                assert!(state.session_reopen.closed.load(Ordering::Acquire));
+                assert!(!state.session_reopen.gap_observed.load(Ordering::Acquire));
+                state.signal(&state.session_reopen.gap_observed);
+                let reply = opening.await.unwrap();
+                names.push(
+                    reply["choices"][0]["message"]["tool_calls"][0]["function"]["name"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                );
+            }
         }
         assert_eq!(names, ["browser_close", "browser_open", "browser_snapshot"]);
         let mut observed = snapshot();

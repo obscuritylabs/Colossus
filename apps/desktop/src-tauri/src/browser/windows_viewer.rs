@@ -1,8 +1,5 @@
 //! Reconcile Windows viewers through the canonical run and acknowledged native detach.
-use super::{
-    manager::BrowserManager,
-    registry::{CRASHED_MESSAGE, MAX_TABS},
-};
+use super::{manager::BrowserManager, registry::CRASHED_MESSAGE};
 use crate::{dto::CommandErrorDto, state::AppState};
 use colossus_sdk::{GetRunRequest, RunStatus};
 use std::time::Duration;
@@ -100,18 +97,8 @@ impl BrowserManager {
         if !crashed {
             return Ok(AgentViewerPlan::Keep);
         }
-        {
-            let mut registry = self.lock()?;
-            if registry.viewer_recoveries.len() >= MAX_TABS
-                && !registry.viewer_recoveries.contains_key(run_id)
-            {
-                return Ok(AgentViewerPlan::Keep);
-            }
-            let attempts = registry.viewer_recoveries.entry(run_id.into()).or_default();
-            if *attempts >= 2 {
-                return Ok(AgentViewerPlan::Keep);
-            }
-            *attempts += 1;
+        if !self.reserve_agent_recovery(run_id)? {
+            return Ok(AgentViewerPlan::Keep);
         }
         // Recovery retires only the failed presentation. Keep its tab and last
         // metadata until a fresh admission succeeds: Core can finish while the

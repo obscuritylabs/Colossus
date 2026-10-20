@@ -808,7 +808,7 @@ impl BrowserManager {
             feature = "windows-browser-functional-preview"
         ))]
         let admitted = if let Some(id) = &replacement {
-            self.recover_agent_presentation(scope, id, admission)
+            self.recover_agent_presentation(scope, run_id, id, admission)
                 .await?
         } else {
             admission.await?
