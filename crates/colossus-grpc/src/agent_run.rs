@@ -1,4 +1,9 @@
 use crate::{status::api_status, system::caller_context};
+
+#[cfg(all(windows, debug_assertions))]
+#[path = "agent_run/list_timing.rs"]
+mod list_timing;
+
 use colossus_api::{
     AgentRunApi, ApiError, ApiErrorReason, ApprovalRisk as CoreApprovalRisk,
     ArchiveThreadRequest as CoreArchiveThreadRequest, CallerContext,
@@ -433,6 +438,8 @@ impl AgentRunService for AgentRunServiceAdapter {
             if let Some(page_token) = page_token.as_deref() {
                 validate_opaque(&caller, "page.page_token", page_token)?;
             }
+            #[cfg(all(windows, debug_assertions))]
+            let timing = list_timing::Probe::begin();
             let response = self
                 .api
                 .list_runs(
@@ -445,8 +452,10 @@ impl AgentRunService for AgentRunServiceAdapter {
                         include_archived: request.include_archived,
                     },
                 )
-                .await
-                .map_err(api_status)?;
+                .await;
+            #[cfg(all(windows, debug_assertions))]
+            timing.finish(response.is_ok());
+            let response = response.map_err(api_status)?;
             let runs = response
                 .runs
                 .into_iter()
