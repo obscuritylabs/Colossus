@@ -394,6 +394,8 @@ fn role(runtime: &Runtime) -> RuntimeNativeBrowserAuthority {
 
 #[path = "expiry_tests.rs"]
 mod expiry_tests;
+#[path = "explicit_close_tests.rs"]
+mod explicit_close_tests;
 
 #[tokio::test]
 async fn agent_viewer_uses_existing_host_and_denies_foreign_conversations_and_human_input() {

@@ -2,6 +2,7 @@ use super::types::*;
 use crate::Runtime;
 use colossus_browser::BrowserError;
 use colossus_contracts::BrowserSessionId;
+use colossus_ports::BrowserDriverError;
 use std::sync::Arc;
 
 pub(super) struct WorkerGuard {
@@ -137,6 +138,48 @@ pub(in crate::browser_tools) async fn drain(browser: &super::super::RuntimeBrows
     for entry in entries {
         let _ = close_entry(browser, &entry).await;
     }
+}
+
+/// Propagate only the driver's positive full-cleanup acknowledgment to the exact
+/// retained viewers, before explicit tool close forgets the run's session.
+pub(in crate::browser_tools) fn retire_closed_session(
+    state: &NativeState,
+    session: &BrowserSessionId,
+) -> Result<(), BrowserDriverError> {
+    let mut entries = state
+        .entries
+        .lock()
+        .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+    let mut retired = Vec::new();
+    for (id, entry) in entries.iter() {
+        if !entry
+            .request
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .as_ref()
+            .is_some_and(|request| {
+                request.session_id == *session && request.binding == entry.binding
+            })
+        {
+            continue;
+        }
+        let mut view = entry
+            .view
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        entry.control.cancel();
+        view.fenced = true;
+        view.closed = true;
+        view.retired = true;
+        if let Some(client) = &view.client {
+            client.disconnect();
+        }
+        retired.push(*id);
+    }
+    for id in retired {
+        entries.remove(&id);
+    }
+    Ok(())
 }
 
 /// Retire native viewer metadata only after Core confirms every run-owned host
