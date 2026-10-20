@@ -180,6 +180,14 @@ class App final : public CefApp, public CefBrowserProcessHandler {
     if (const auto* selection = SyntheticProfileSwitch(process.empty()))
       line->AppendSwitch(selection);
     if (process.empty()) {
+#if defined(OS_WIN)
+      // CEF enables Chrome file logging by default, even with severity DISABLE.
+      // Before Chrome initializes logging, disable its destination as well: the
+      // default Windows log path may be unavailable in an owned private profile.
+      // Explicit Debug startup diagnostics retain their private startup.log.
+      if (!windows_startup_diagnostic)
+        line->AppendSwitch("disable-logging");
+#endif
       if (no_display_) {
         line->AppendSwitchWithValue("ozone-platform", "headless");
         line->AppendSwitch("disable-gpu");

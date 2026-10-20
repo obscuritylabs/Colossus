@@ -1,3 +1,7 @@
+param(
+    [ValidateSet('Debug', 'Release')][string]$HostProfile = 'Debug'
+)
+
 # Build/stage only. The private host requires native supervisor-owned channels;
 # it must not be launched directly or given renderer-nominated bootstrap paths.
 $ErrorActionPreference = "Stop"
@@ -31,7 +35,14 @@ try {
     $env:COLOSSUS_CEF_ROOT = $CefRoot
     $env:COLOSSUS_CEF_NATIVE_LIB_DIR = Join-Path $Build "Release"
     $Target = Join-Path $Repository ".local/cef-native-host-build-windows"
-    Invoke-Checked cargo @("build", "--locked", "--manifest-path", "native/browser/driver/Cargo.toml", "--target-dir", $Target, "--lib")
+    $HostArguments = @("build", "--locked", "--manifest-path", "native/browser/driver/Cargo.toml", "--target-dir", $Target, "--lib")
+    if ($HostProfile -eq 'Release') {
+        # Exercise installed startup without Debug-only logging diagnostics.
+        # The explicit feature also admits the ordinary-user fixture; inventory
+        # modes remain false and every process still needs private supervision.
+        $HostArguments += @('--release', '--features', 'windows-browser-functional-preview')
+    }
+    Invoke-Checked cargo $HostArguments
     # The checkout may have shared write access. Component admission must retain
     # safe ancestry rather than inheriting the checkout's permissions.
     $UserProfile = [Environment]::GetFolderPath('UserProfile')
@@ -40,10 +51,10 @@ try {
     Invoke-Checked python @("-B", "-c", 'import sys; from pathlib import Path; sys.path.insert(0, "native/browser/scripts"); from pki_fixture_private import private_directory; private_directory(Path(sys.argv[1]))', $StageParent)
     Write-Host "Private component allocation: $StageParent"
     $Stage = Join-Path $StageParent "component"
-    # Cargo links debug/ and debug/deps/ to the same MSVC DLL. Give the stager an
+    # Cargo links the profile and deps paths to the same MSVC DLL. Give the stager an
     # independent copy; installed component verification still rejects aliases.
     $ClientCopy = Join-Path $Target "stage-client-$([Guid]::NewGuid().ToString('N')).dll"
-    Copy-Item -LiteralPath (Join-Path $Target "debug/colossus_native_browser_host.dll") -Destination $ClientCopy
+    Copy-Item -LiteralPath (Join-Path $Target "$($HostProfile.ToLowerInvariant())/colossus_native_browser_host.dll") -Destination $ClientCopy
     try {
         $StageOutput = & python -B native/browser/scripts/stage_windows.py --host --cef-root $CefRoot --native-build $env:COLOSSUS_CEF_NATIVE_LIB_DIR --client-dll $ClientCopy --destination $Stage
         if ($LASTEXITCODE -ne 0) { throw "Private Windows browser host staging failed." }

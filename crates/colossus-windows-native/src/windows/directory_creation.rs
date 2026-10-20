@@ -57,6 +57,24 @@ impl PrivateDirectoryCreation {
         Self::allocate(parent, leaf, None)
     }
 
+    /// Allocate one fresh owner-private leaf beneath this process token's profile.
+    /// The existing OS parent must deny untrusted namespace mutation, but may
+    /// permit read-only access. The child uses the same exclusive allocation and
+    /// private descriptor as `create`; no caller-selected parent is accepted.
+    pub fn create_in_current_user_profile(
+        basename: &std::ffi::OsStr,
+    ) -> Result<Self, WindowsNativeError> {
+        if basename == "." || basename == ".." {
+            return Err(WindowsNativeError::InvalidInput);
+        }
+        let profile = super::profile::current_user_profile_directory()?;
+        let parent = open_bound(&profile, BoundKind::Directory)?;
+        parent.validate_immutable_directory_dacl()?;
+        parent.validate_ancestor_namespace_authority()?;
+        parent.revalidate()?;
+        Self::allocate(parent, basename, None)
+    }
+
     /// Create a fresh transfer directory beneath this process's exact enrolled profile.
     /// The current kernel token supplies the package SID; names are single components
     /// and allocation ownership is returned before fallible path binding.

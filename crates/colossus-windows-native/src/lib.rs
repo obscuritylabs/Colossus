@@ -31,7 +31,7 @@ pub use windows::AppContainerPrincipal;
 #[cfg(windows)]
 pub use windows::{
     ExclusiveAppContainerProfile, OwnedAppContainerWindowStation, PrivateDirectoryCreation,
-    system_windows_directory,
+    current_user_profile_directory, system_windows_directory,
 };
 
 #[cfg(windows)]

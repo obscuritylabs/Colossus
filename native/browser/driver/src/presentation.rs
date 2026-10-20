@@ -31,6 +31,7 @@ pub struct Adapter {
 pub(crate) struct Lane {
     receiver: mpsc::Receiver<Command>,
     revoked: Arc<AtomicBool>,
+    revocation_applied: bool,
     #[cfg(all(windows, debug_assertions))]
     waiting_observation_diagnosed: bool,
 }
@@ -49,13 +50,14 @@ impl Lane {
         Self {
             receiver,
             revoked,
+            revocation_applied: false,
             #[cfg(all(windows, debug_assertions))]
             waiting_observation_diagnosed: false,
         }
     }
     pub(crate) fn service(&mut self, host: &mut impl Target, waiting: bool) {
         if self.revoked.load(Ordering::Acquire) {
-            host.revoke();
+            self.revoke_once(host);
         }
         // Each caller retains its own absolute operation deadline. Continuous
         // viewer traffic cannot hold this main-thread wait or starve CEF work.
@@ -111,9 +113,20 @@ impl Lane {
                     };
                     let _ = sender.send(result);
                 }
-                Command::Revoke => host.revoke(),
+                Command::Revoke => self.revoke_once(host),
                 _ => {}
             }
+        }
+    }
+
+    fn revoke_once(&mut self, host: &mut impl Target) {
+        // Keep the terminal admission fence latched, including a queued revoke
+        // observed before its atomic notification. Later Core waits must not
+        // repeatedly hide or defocus a page activated by agent input.
+        self.revoked.store(true, Ordering::Release);
+        if !self.revocation_applied {
+            self.revocation_applied = true;
+            host.revoke();
         }
     }
 }

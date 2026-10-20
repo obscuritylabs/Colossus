@@ -67,6 +67,8 @@ mod appcontainer;
 pub use appcontainer::AppContainerPrincipal;
 mod package;
 pub use package::{ExclusiveAppContainerProfile, system_windows_directory};
+mod profile;
+pub use profile::current_user_profile_directory;
 mod directory_creation;
 pub use directory_creation::PrivateDirectoryCreation;
 pub(super) mod enrolled;

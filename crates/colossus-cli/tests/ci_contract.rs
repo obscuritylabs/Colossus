@@ -1831,7 +1831,7 @@ fn owned_windows_chromium_is_real_required_native_acceptance_with_bounded_eviden
     assert_eq!(field(native, "continue-on-error").as_bool(), Some(true));
     assert_eq!(
         field(native, "run").as_str(),
-        Some("./scripts/ci/browser-windows-native.ps1")
+        Some("./scripts/ci/browser-windows-native.ps1 -HostProfile Release")
     );
     let aggregate = named_step(desktop, "Require every Windows Desktop acceptance check");
     assert_eq!(

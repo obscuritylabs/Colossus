@@ -1,7 +1,8 @@
 param(
     [string]$EvidenceDirectory = '.local/windows-owned-browser-evidence',
     [string]$Component = '',
-    [ValidateSet('Containment', 'Development')][string]$Mode = 'Containment'
+    [ValidateSet('Containment', 'Development')][string]$Mode = 'Containment',
+    [ValidateSet('Debug', 'Release')][string]$HostProfile = 'Debug'
 )
 
 # Reviewed premerge diagnostic only. This script never accepts a release mode or
@@ -16,6 +17,7 @@ $Evidence = if ([IO.Path]::IsPathRooted($EvidenceDirectory)) { $EvidenceDirector
 if (Test-Path -LiteralPath $Evidence) { throw "Native evidence destination must be fresh." }
 $null = New-Item -ItemType Directory -Path $Evidence
 $Parent = $null
+$ManagedParent = $null
 $Passed = $false
 $ManifestHash = $null
 $Development = $Mode -eq 'Development'
@@ -30,13 +32,14 @@ $Checks = @(
     "full_job_and_io_cleanup", "cef_shutdown", "native_typed_automation", "native_tabs"
 )
 if (-not $Development) { $Checks += @('low_appcontainer_token', 'low_package_profile_label') }
+if ($HostProfile -eq 'Release') { $Checks += @('long_managed_path_short_private_profile_without_file_logging') }
 $Checked = @{}
 foreach ($Check in $Checks) { $Checked[$Check] = $false }
 $StartupChecked = [ordered]@{}
 Push-Location $Repository
 try {
     if ([string]::IsNullOrWhiteSpace($Component)) {
-        & (Join-Path $Repository "scripts/browser-native-host-windows.ps1")
+        & (Join-Path $Repository "scripts/browser-native-host-windows.ps1") -HostProfile $HostProfile
         $Component = $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT
     } else {
         & python -B native/browser/scripts/component.py verify --root $Component
@@ -54,15 +57,11 @@ try {
     $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT = $Component
     $UserProfile = [Environment]::GetFolderPath('UserProfile')
     if ([string]::IsNullOrWhiteSpace($UserProfile)) { throw "Native acceptance requires an owned user profile." }
-    $Parent = Join-Path $UserProfile ("ColossusBrowserCI-" + [Guid]::NewGuid().ToString("N"))
+    $ParentName = "ColossusBrowserCI-" + [Guid]::NewGuid().ToString("N")
+    $Parent = Join-Path $UserProfile $ParentName
     & python -B -c 'import sys; from pathlib import Path; sys.path.insert(0, "native/browser/scripts"); from pki_fixture_private import private_directory; private_directory(Path(sys.argv[1]))' $Parent
     if ($LASTEXITCODE -ne 0) { throw "Private fixture state allocation failed." }
     $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_STATE_PARENT = $Parent
-    $SavedPaths = @{}
-    foreach ($Name in @('LOCALAPPDATA', 'TEMP', 'TMP')) {
-        $SavedPaths[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
-        [Environment]::SetEnvironmentVariable($Name, $Parent, 'Process')
-    }
     if (-not $Development) {
         $StartupCases = @(
             @{
@@ -114,6 +113,28 @@ try {
             $StartupChecked[$Case.evidence] = $true
         }
     }
+    # Raw startup cases construct their CEF profile directly. Keep their parent
+    # short; only the runtime factory below splits long managed ancestry from a
+    # distinct short native engine allocation.
+    $FactoryParent = $Parent
+    if ($HostProfile -eq 'Release') {
+        $ManagedName = 'managed-' + [Guid]::NewGuid().ToString('N')
+        $Padding = [Math]::Max(1, 190 - $Parent.Length - 1 - $ManagedName.Length)
+        $ManagedName += '-' + ('r' * $Padding)
+        $ManagedParent = Join-Path $Parent $ManagedName
+        & python -B -c 'import sys; from pathlib import Path; sys.path.insert(0, "native/browser/scripts"); from pki_fixture_private import private_directory; private_directory(Path(sys.argv[1]))' $ManagedParent
+        if ($LASTEXITCODE -ne 0) { throw "Private managed fixture state allocation failed." }
+        $FactoryParent = $ManagedParent
+    }
+    $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_STATE_PARENT = $FactoryParent
+    $SavedPaths = @{}
+    foreach ($Name in @('LOCALAPPDATA', 'TEMP', 'TMP', 'COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_LONG_PROFILE')) {
+        $SavedPaths[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
+    }
+    foreach ($Name in @('LOCALAPPDATA', 'TEMP', 'TMP')) {
+        [Environment]::SetEnvironmentVariable($Name, $FactoryParent, 'Process')
+    }
+    $env:COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_LONG_PROFILE = if ($HostProfile -eq 'Release') { '1' } else { $null }
     # A rolling categorical log stays bounded even on a noisy compiler failure.
     $Lines = [Collections.Generic.Queue[string]]::new()
     $Bytes = 0
@@ -161,6 +182,10 @@ try {
     }
     # The actual fixture removes its owned subtree only after the complete native
     # shutdown receipt. Nonrecursive removal refuses any unknown surviving state.
+    if ($null -ne $ManagedParent) {
+        [IO.Directory]::Delete($ManagedParent)
+        $ManagedParent = $null
+    }
     [IO.Directory]::Delete($Parent)
     $Parent = $null
     $Passed = $true
@@ -170,6 +195,7 @@ try {
         passed = $Passed
         sourceDiagnostic = $true
         standardUserDevelopment = $Development
+        requestedNativeHostProfile = $HostProfile
         componentManifestSha256 = $ManifestHash
         checks = $Checked
         startupChecks = $StartupChecked

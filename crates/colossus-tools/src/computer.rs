@@ -14,7 +14,7 @@ pub(super) fn computer_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "computer.open",
-            "Acquire computer control for one previously observed opaque native window. A visible native control indicator lets the human pause or stop. Protected, elevated, and Colossus control windows are unavailable.",
+            "Acquire computer control for one previously observed opaque native window without activating it. Observe it next; if it is in the background, explicitly focus it and take a new snapshot before other input. A visible native control indicator lets the human pause or stop. Protected, elevated, and Colossus control windows are unavailable.",
             object(json!({"window_id":id("w")}), &["window_id"]),
         ),
         tool(
@@ -24,7 +24,7 @@ pub(super) fn computer_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "computer.snapshot",
-            "Read bounded native accessibility semantics for the selected window or a positively owned same-app dialog. The requested node count is an upper bound narrowed by workspace and native limits. Sensitive values are withheld. A released observation is required before each input action.",
+            "Read bounded native accessibility semantics without activating the selected window or positively owned same-app dialog. Match observation.window_id in observation.windows; if foreground is false, use computer.focus for that observed window and take a new snapshot before other input. The requested node count is narrowed by workspace and native limits. Sensitive values are withheld. Each input needs a fresh observation.",
             session(
                 json!({"max_nodes":{"type":"integer","minimum":1,"maximum":1024}}),
                 &[],
@@ -32,7 +32,7 @@ pub(super) fn computer_specs() -> Vec<ToolSpec> {
         ),
         tool(
             "computer.screenshot",
-            "Capture the actual selected native window as a verified PNG. After output policy release, returns an inline image and owner-only artifact plus a fresh observation. No paths or encoded image arguments.",
+            "Capture the actual selected native window as a verified PNG without activating it. After output policy release, returns an inline image and owner-only artifact plus a fresh observation. Use computer.snapshot to inspect foreground and accessible controls before input. No paths or encoded image arguments.",
             session(json!({}), &[]),
         ),
         tool(
@@ -44,7 +44,7 @@ pub(super) fn computer_specs() -> Vec<ToolSpec> {
     for (name, description, properties, required) in [
         (
             "computer.focus",
-            "Focus the selected window or a positively owned same-app dialog using a fresh observation.",
+            "Explicitly activate the selected window or a positively owned same-app dialog using its observed window_id and a fresh observation. Use when the observed target has foreground=false. Consumes the observation; take a new snapshot before other input. Windows may refuse activation; do not force focus through another route.",
             json!({"window_id":id("w")}),
             vec!["window_id"],
         ),
@@ -56,7 +56,7 @@ pub(super) fn computer_specs() -> Vec<ToolSpec> {
         ),
         (
             "computer.click",
-            "Click a fresh local physical point or observed semantic element. May submit data or trigger actions in an unsandboxed app; inspect first.",
+            "Click a fresh local physical point or observed semantic element in the foreground target. Does not activate a background window: explicitly computer.focus its observed window_id, then take a new snapshot first. May submit data or trigger actions in an unsandboxed app; inspect first.",
             json!({"target":{"oneOf":[object(json!({"kind":{"const":"point"},"x":coordinate(),"y":coordinate()}), &["kind","x","y"]),object(json!({"kind":{"const":"element"},"element_id":id("e")}), &["kind","element_id"])]},"button":{"type":"string","enum":["left","right","middle"]},"count":{"type":"integer","minimum":1,"maximum":2}}),
             vec!["target", "button", "count"],
         ),

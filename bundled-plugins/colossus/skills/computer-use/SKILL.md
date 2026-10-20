@@ -15,17 +15,25 @@ not confine actions performed through another app's interface.
 
 1. Call `computer.windows` and select an existing window from the returned list.
    Use its opaque `window_id` with `computer.open`. Never invent window handles,
-   process IDs, element IDs, session IDs, or control generations.
-2. Call `computer.snapshot` for accessible controls or `computer.screenshot` for
-   visual content. Screenshots return an image to image-capable models and an
-   inline preview to the user; a separate image upload is unnecessary.
-3. Choose one action using the returned session, generation, and observation ID.
+   process IDs, element IDs, session IDs, or control generations. Opening control
+   does not activate the window.
+2. Call `computer.snapshot` for accessible controls and current foreground metadata.
+3. Find the entry in `observation.windows` whose `window_id` matches
+   `observation.window_id`. If its `foreground` is `false`, use `computer.focus`
+   with that observed window ID and the fresh observation. Then take a new
+   snapshot before any other input. Snapshots and screenshots can read background
+   windows; they do not activate them, and clicks do not focus them automatically.
+4. Choose one action using the returned session, generation, and observation ID.
    Coordinates are physical pixels local to the captured window, including its
    frame, not coordinates on the full desktop. Prefer an observed element for a
    click when accessible semantics identify it accurately.
-4. Observe again after every action. Each input consumes its observation; moving
-   or resizing the window, switching apps, or changing control invalidates old
-   observations. A successful input receipt does not prove the intended result.
+5. Observe again after every action. Each input, including focus, consumes its
+   observation; moving or resizing the window, switching apps, or changing control
+   invalidates old observations. A successful input receipt does not prove the
+   intended result.
+
+Use `computer.screenshot` for visual content. It returns an image to image-capable
+models and an inline preview to the user; a separate image upload is unnecessary.
 
 Use only the observation from the latest `computer.snapshot` or
 `computer.screenshot`; another snapshot or screenshot replaces the previous one.
@@ -59,7 +67,11 @@ control. Do not repeatedly poll or try other input routes. A new run starts with
 no computer session: enumerate and open again rather than reusing a previous
 run's session, window, or observation IDs.
 
-On a stale observation, inspect the current session before choosing another action.
+On a stale observation, inspect `computer.status` and take a fresh snapshot before
+choosing another action. Check the selected window's `foreground` flag and follow
+the explicit focus sequence above if it is in the background. A fresh snapshot
+alone does not fix missing focus; stale can also mean expired evidence, changed
+geometry, or changed control, so do not assume that focus is always the cause.
 On an unknown external outcome, inspect the resulting app state and report the
 uncertainty. Never automatically repeat a click, submission, or text entry whose
 outcome is unknown. If the desktop is locked, Windows requests elevation, the app

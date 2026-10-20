@@ -2306,7 +2306,7 @@ fn released_computer_error(output: &str) -> Option<String> {
             (
                 ComputerDriverError::Stale,
                 "target_or_observation_changed",
-                "The computer target or observation changed. Check computer.status and take a fresh snapshot before choosing another action.",
+                "The computer target or observation changed. Check computer.status and take a fresh snapshot. If the selected window is in the background, use computer.focus with its observed window_id, then take a new snapshot before input.",
             ),
             (
                 ComputerDriverError::InvalidInput,
@@ -2328,6 +2328,9 @@ fn released_computer_error(output: &str) -> Option<String> {
                 colossus_policy::GatewayError::Execution(native.to_string()).to_string();
             let released_message = error.get("message").and_then(serde_json::Value::as_str);
             if released_message == Some(native_message.as_str())
+                // Existing history retains this exact pre-guidance native message.
+                || (native == ComputerDriverError::Stale
+                    && released_message == Some("effect failed: computer target or observation is stale"))
                 || (error.get("reason").and_then(serde_json::Value::as_str) == Some(reason)
                     && released_message == Some(guidance))
             {
@@ -3726,10 +3729,28 @@ mod tests {
             );
             assert_eq!(released_computer_error(&preview), Some(preview));
         }
+        let stale = ComputerDriverError::Stale;
+        let current_message = format!("effect failed: {stale}");
+        let output = |message: &str| {
+            serde_json::json!({"error": {
+                "type": "execution_error", "message": message, "recoverable": true,
+            }})
+            .to_string()
+        };
+        assert_eq!(
+            released_computer_error(&output(
+                "effect failed: computer target or observation is stale"
+            )),
+            released_computer_error(&output(&current_message)),
+            "exact historical native Stale errors retain the current safe recovery guidance"
+        );
         for message in [
-            "computer target or observation is stale",
-            "effect failed: computer target or observation is stale PRIVATE_SUFFIX",
-            "PRIVATE_PREFIX effect failed: computer target or observation is stale",
+            stale.to_string(),
+            format!("{current_message} PRIVATE_SUFFIX"),
+            format!("PRIVATE_PREFIX {current_message}"),
+            "computer target or observation is stale".into(),
+            "effect failed: computer target or observation is stale PRIVATE_SUFFIX".into(),
+            "PRIVATE_PREFIX effect failed: computer target or observation is stale".into(),
         ] {
             let output = serde_json::json!({"error": {
                 "type": "execution_error", "message": message, "recoverable": true,

@@ -232,6 +232,83 @@ async fn acceptance(
                 return Err("foreign window admitted into selected session".into());
             }
         }
+        if require_cover {
+            // Observation does not activate the target. Refreshing a background
+            // snapshot must never turn it into authority to click through cover.
+            for stage in [
+                "background_click_without_focus",
+                "background_click_after_fresh_snapshot",
+            ] {
+                let ComputerDriverReply::Snapshot(observation) =
+                    dispatch!(ComputerCommand::Snapshot {
+                        session_id: session.session_id.clone(),
+                        control_generation: session.control_generation,
+                        max_nodes: 512
+                    })
+                else {
+                    return Err("missing background native UIA tree".into());
+                };
+                if !observation
+                    .windows
+                    .iter()
+                    .any(|observed| observed.window_id == session.window_id && !observed.foreground)
+                    || !observation
+                        .nodes
+                        .iter()
+                        .any(|node| node.name == "Waiting for action")
+                {
+                    return Err("background click setup changed or applied an action".into());
+                }
+                let button = observation
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == "Fixture action")
+                    .ok_or("background native button missing from UIA")?;
+                evidence.set(stage);
+                let denied = driver
+                    .execute(
+                        ComputerDriverRequest {
+                            binding: binding.clone(),
+                            command: ComputerCommand::Input {
+                                session_id: session.session_id.clone(),
+                                control_generation: session.control_generation,
+                                observation_id: observation.observation_id,
+                                input: ComputerInput::Click {
+                                    target: ComputerTarget::Element {
+                                        element_id: button.element_id.clone(),
+                                    },
+                                    button: ComputerMouseButton::Left,
+                                    count: 1,
+                                },
+                            },
+                        },
+                        &control,
+                    )
+                    .await;
+                if denied != Err(ComputerDriverError::Stale) {
+                    return Err("background click did not fail as a known no-effect Stale".into());
+                }
+            }
+            let ComputerDriverReply::Snapshot(observation) = dispatch!(ComputerCommand::Snapshot {
+                session_id: session.session_id.clone(),
+                control_generation: session.control_generation,
+                max_nodes: 512
+            }) else {
+                return Err("missing background denial result".into());
+            };
+            if !observation
+                .windows
+                .iter()
+                .any(|observed| observed.window_id == session.window_id && !observed.foreground)
+                || !observation
+                    .nodes
+                    .iter()
+                    .any(|node| node.name == "Waiting for action")
+            {
+                return Err("denied background click changed focus or reached the fixture".into());
+            }
+            println!("PASS background clicks remain no-effect Stale after fresh snapshots");
+        }
         let ComputerDriverReply::Screenshot(capture) = dispatch!(ComputerCommand::Screenshot {
             session_id: session.session_id.clone(),
             control_generation: session.control_generation,
@@ -488,7 +565,11 @@ async fn acceptance(
     evidence.set("publish_receipt");
     colossus_windows_native::create_private_file(
         &output.join("acceptance.json"),
-        br#"{"schema_version":1,"passed":true,"owned_modal":true,"modal_reparent_denied":true,"writer_contention":true,"foreign_window_denied":true,"cancellation":true,"balanced_drag_helper_exit":true}"#,
+        &serde_json::to_vec(&serde_json::json!({
+            "schema_version":1,"passed":true,"owned_modal":true,"modal_reparent_denied":true,
+            "writer_contention":true,"foreign_window_denied":true,"cancellation":true,
+            "balanced_drag_helper_exit":true,"background_focus_regression_checked":require_cover
+        }))?,
     )?;
     println!("PASS native helper acknowledged cleanup; synthetic user apps remain running");
     Ok(())
