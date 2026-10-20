@@ -162,6 +162,10 @@ pub async fn serve_presentation(
             let budget = operation_timeout(&command);
             #[cfg(all(windows, debug_assertions))]
             let trace = diagnostics.begin(&command);
+            #[cfg(all(windows, debug_assertions))]
+            let mut read_trace = diagnostics.begin_read(&command);
+            #[cfg(all(windows, debug_assertions))]
+            let mut read_error = None;
             let result = tokio::time::timeout(budget, async {
                 if let PresentationCommand::Poll { lease } = command {
                     match host.frame(lease).await {
@@ -192,6 +196,10 @@ pub async fn serve_presentation(
                             .await?
                         }
                         Err(error) => {
+                            #[cfg(all(windows, debug_assertions))]
+                            {
+                                read_error = Some(error);
+                            }
                             write_control(
                                 channel.writer.as_mut(),
                                 &mut outgoing,
@@ -210,6 +218,10 @@ pub async fn serve_presentation(
                         Ok(reply) => reply,
                         Err(error) => PresentationReply::Error(error),
                     };
+                    #[cfg(all(windows, debug_assertions))]
+                    if let PresentationReply::Error(error) = &reply {
+                        read_error = Some(*error);
+                    }
                     #[cfg(all(windows, debug_assertions))]
                     diagnostics::emit(
                         trace,
@@ -237,10 +249,21 @@ pub async fn serve_presentation(
                         return Err(PresentationError::OutcomeUnknown);
                     }
                 }
+                #[cfg(all(windows, debug_assertions))]
+                diagnostics::read_stage(&mut read_trace, "response_write_complete");
                 Ok(())
             })
-            .await
-            .map_err(|_| {
+            .await;
+            #[cfg(all(windows, debug_assertions))]
+            diagnostics.finish_read(
+                read_trace,
+                match &result {
+                    Ok(Ok(())) => read_error,
+                    Ok(Err(error)) => Some(*error),
+                    Err(_) => Some(PresentationError::OutcomeUnknown),
+                },
+            );
+            let result = result.map_err(|_| {
                 #[cfg(all(windows, debug_assertions))]
                 diagnostics::emit(
                     trace,
@@ -295,7 +318,7 @@ struct ClientOwner {
     worker: AbortHandle,
     key: Zeroizing<[u8; 32]>,
     #[cfg(all(windows, debug_assertions))]
-    diagnostics: diagnostics::Diagnostics,
+    diagnostics: Arc<diagnostics::Diagnostics>,
 }
 impl Drop for ClientOwner {
     fn drop(&mut self) {
@@ -336,6 +359,10 @@ impl PresentationClient {
         }
         let (sender, mut receiver) = mpsc::channel::<Call>(16);
         let frame_key = Zeroizing::new(*key);
+        #[cfg(all(windows, debug_assertions))]
+        let diagnostics = Arc::new(diagnostics::Diagnostics::new("client"));
+        #[cfg(all(windows, debug_assertions))]
+        let worker_diagnostics = Arc::clone(&diagnostics);
         let worker = tokio::spawn(async move {
             let mut frames: Option<FrameCodec> = None;
             while let Some(mut call) = receiver.recv().await {
@@ -348,6 +375,8 @@ impl PresentationClient {
                 let read_only =
                     read_only_frame || matches!(&call.command, PresentationCommand::Observe { .. });
                 let budget = operation_timeout(&call.command);
+                #[cfg(all(windows, debug_assertions))]
+                let mut read_trace = worker_diagnostics.begin_read(&call.command);
                 let operation = async {
                     #[cfg(all(windows, debug_assertions))]
                     diagnostics::emit(call.trace, "dispatch", None);
@@ -356,8 +385,18 @@ impl PresentationClient {
                         .write_all(&outgoing.encode(&call.command)?)
                         .await
                         .map_err(|_| PresentationError::OutcomeUnknown)?;
+                    #[cfg(all(windows, debug_assertions))]
+                    {
+                        diagnostics::emit(call.trace, "wire_write_complete", None);
+                        diagnostics::read_stage(&mut read_trace, "wire_write_complete");
+                    }
                     let reply: PresentationReply =
                         read_control(channel.reader.as_mut(), &mut incoming).await?;
+                    #[cfg(all(windows, debug_assertions))]
+                    {
+                        diagnostics::emit(call.trace, "decoded_reply", None);
+                        diagnostics::read_stage(&mut read_trace, "decoded_reply");
+                    }
                     if !valid_reply(&call.command, &reply) {
                         return Err(PresentationError::OutcomeUnknown);
                     }
@@ -407,6 +446,8 @@ impl PresentationClient {
                     if let PresentationReply::Fenced(receipt) = &reply {
                         receipt.validate()?;
                     }
+                    #[cfg(all(windows, debug_assertions))]
+                    diagnostics::read_stage(&mut read_trace, "read_complete");
                     if let PresentationReply::Error(error) = reply {
                         if error == PresentationError::OutcomeUnknown {
                             return Err(error);
@@ -450,6 +491,14 @@ impl PresentationClient {
                         },
                     },
                 };
+                #[cfg(all(windows, debug_assertions))]
+                worker_diagnostics.finish_read(
+                    read_trace,
+                    match &result {
+                        Ok((PresentationReply::Error(error), _)) | Err(error) => Some(*error),
+                        _ => None,
+                    },
+                );
                 let disconnected = result.is_err();
                 let _ = call.response.send(result);
                 if disconnected {
@@ -462,7 +511,7 @@ impl PresentationClient {
             worker: worker.abort_handle(),
             key,
             #[cfg(all(windows, debug_assertions))]
-            diagnostics: diagnostics::Diagnostics::new("client"),
+            diagnostics,
         })))
     }
     /// Transfer a zeroizing native-only frame credential copy to the trusted pixel surface.
