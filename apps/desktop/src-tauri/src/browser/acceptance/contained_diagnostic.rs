@@ -56,6 +56,8 @@ use windows_frames::{accepted_frame, focus};
 
 mod native_input;
 mod owned_tabs;
+#[cfg(windows)]
+mod session_reopen;
 mod viewport_heartbeat;
 #[cfg(windows)]
 mod wait_continuity;
@@ -123,11 +125,34 @@ struct FixtureState {
     failure: Mutex<Option<String>>,
     #[cfg(windows)]
     wait_continuity: wait_continuity::State,
+    #[cfg(windows)]
+    session_reopen: session_reopen::State,
 }
 
 fn close_after_completion() -> bool {
     cfg!(windows)
         && std::env::var("COLOSSUS_BROWSER_ACCEPTANCE_CLOSE_AFTER_COMPLETION").as_deref() == Ok("1")
+}
+
+fn begin_model_turn(body: &Value, state: &FixtureState) -> anyhow::Result<usize> {
+    ensure!(
+        body["stream"] == false,
+        "fixture requires non-streaming model"
+    );
+    let turn = state.phase.fetch_add(1, Ordering::AcqRel);
+    let final_phase = if state.native_tabs {
+        11
+    } else if close_after_completion() {
+        9
+    } else {
+        7
+    };
+    ensure!(
+        turn <= final_phase + usize::from(cfg!(windows)),
+        "unexpected extra model turn {turn}"
+    );
+    state.signal(&state.model_seen);
+    Ok(turn)
 }
 
 impl FixtureState {
@@ -348,6 +373,16 @@ async fn serve(
             )
             .await?;
         }
+        #[cfg(windows)]
+        ("GET", "/reopened") => {
+            respond(
+                &mut stream,
+                200,
+                "text/html; charset=utf-8",
+                session_reopen::PAGE,
+            )
+            .await?;
+        }
         ("GET", "/favicon.ico") => {
             respond(&mut stream, 200, "image/x-icon", &[]).await?;
         }
@@ -357,20 +392,11 @@ async fn serve(
         }
         ("POST", "/v1/chat/completions") => {
             let body: Value = serde_json::from_slice(&request.body)?;
-            ensure!(
-                body["stream"] == false,
-                "fixture requires non-streaming model"
-            );
-            let turn = state.phase.fetch_add(1, Ordering::AcqRel);
-            ensure!(
-                turn <= (if state.native_tabs { 11 } else { 7 }) + usize::from(cfg!(windows)),
-                "unexpected extra model turn {turn}"
-            );
+            let turn = begin_model_turn(&body, state)?;
             #[cfg(windows)]
             let phase = wait_continuity::logical_phase(turn);
             #[cfg(not(windows))]
             let phase = turn;
-            state.signal(&state.model_seen);
             if phase == 0 {
                 state
                     .wait(&state.handoff_done, "native human-to-agent handoff")
@@ -659,10 +685,9 @@ async fn model_response(
             state
                 .wait(&state.viewer_detached, "native viewer detachment")
                 .await?;
+            #[cfg(windows)]
             if close_after_completion() {
-                return Ok(
-                    json!({"id":"fixture-natural-complete","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"Owned browser natural completion acceptance."},"finish_reason":"stop"}]}),
-                );
+                return session_reopen::response(phase, body, origin, state).await;
             }
             let target = session.context("missing owned target for Core close")?;
             Ok(model_tool(
@@ -673,6 +698,10 @@ async fn model_response(
                     "control_generation": target["control_generation"]
                 }),
             ))
+        }
+        #[cfg(windows)]
+        7..=9 if close_after_completion() => {
+            session_reopen::response(phase, body, origin, state).await
         }
         7..=11 if state.native_tabs => owned_tabs::response(phase, body, origin, state).await,
         7 => {
@@ -810,13 +839,17 @@ async fn start_sidecar(
     let availability = native.available().await;
     if !matches!(availability, Ok(true)) {
         // Once the authenticated child has started, an admission failure must
-        // await its shutdown. A successful SDK close proves sidecar exit here;
-        // no browser session exists from which to infer a direct-child receipt.
+        // await SDK close. Its platform-specific result is not a native browser
+        // cleanup receipt, since no browser session was admitted here.
         let close = client.close().await;
         eprintln!(
             "EVIDENCE contained diagnostic bootstrap cleanup SDKClose={}",
             if close.is_ok() {
-                "verifiedSidecarExit"
+                if cfg!(windows) {
+                    "returned_success"
+                } else {
+                    "verifiedSidecarExit"
+                }
             } else {
                 "unknown"
             }
@@ -1734,6 +1767,24 @@ async fn exercise_owned(
         owned_tabs::checkpoint(app, &tab, &view, rect, fixture).await?;
     }
     heartbeat.pause().await?;
+    #[cfg(windows)]
+    let tab = if close_after_completion() {
+        session_reopen::checkpoint(
+            app,
+            fixture,
+            session_reopen::RunIdentity {
+                run_id: &run.run_id,
+                conversation_id: &conversation,
+                first_tab: &tab,
+                first_session: &session,
+            },
+            rect,
+            heartbeat,
+        )
+        .await?
+    } else {
+        tab
+    };
     if close_after_completion() {
         ensure!(
             !fixture.state.native_tabs,
@@ -1766,8 +1817,10 @@ async fn exercise_owned(
                 ensure!(
                     completed.dto.control == "completed"
                         && completed.dto.completed_snapshot
-                        && completed.dto.page.url == format!("{}/agent", fixture.origin)
-                        && completed.dto.page.title == "Agent controlled page"
+                        && completed.dto.session_id == fixture.state.session_reopen.session_id()?
+                        && completed.dto.session_id != session
+                        && completed.dto.page.url == format!("{}/reopened", fixture.origin)
+                        && completed.dto.page.title == session_reopen::TITLE
                         && !completed.dto.page.loading
                         && !completed.dto.page.can_go_back
                         && !completed.dto.page.can_go_forward
@@ -1819,7 +1872,7 @@ async fn exercise_owned(
                 "selection or context reconciliation removed the completed snapshot tab"
             );
             println!(
-                "PASS completed Core run retained its selected read-only page snapshot across context reconciliation without native browser authority"
+                "PASS same-run explicit close and fresh reopen retained the second session's read-only page snapshot across completion and context reconciliation"
             );
             action(
                 app,
@@ -1986,8 +2039,8 @@ pub(super) async fn exercise(
             })
             .await;
     }
-    // These operations run even after a failed assertion. The sidecar owns the
-    // direct-child shutdown receipt; no helper-tree cleanup is inferred here.
+    // These operations run even after a failed assertion. Native viewer cleanup
+    // needs its own acknowledgment; Windows SDK close exposes no exit disposition.
     let drain = state.browser.close_all_settled().await;
     let close = client.close().await;
     state.configure_managed_browser_for(SPACE, None).await;
@@ -2004,7 +2057,11 @@ pub(super) async fn exercise(
             "EVIDENCE failed contained diagnostic cleanup ViewerDrain={} SDKClose={}",
             if drain.is_ok() { "ok" } else { "unknown" },
             if close.is_ok() {
-                "verifiedGracefulDirectChild"
+                if cfg!(windows) {
+                    "returned_success"
+                } else {
+                    "verifiedGracefulDirectChild"
+                }
             } else {
                 "unknown"
             }
@@ -2014,6 +2071,11 @@ pub(super) async fn exercise(
     fixture.state.check()?;
     drain.map_err(|error| anyhow::anyhow!(error.message))?;
     close?;
+    #[cfg(windows)]
+    println!(
+        "PASS SDK close returned success; Desktop native viewer shut down after acknowledged detach"
+    );
+    #[cfg(not(windows))]
     println!(
         "PASS verified sidecar exit required GracefulDirectChildExit; Desktop native viewer shut down"
     );

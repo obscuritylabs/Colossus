@@ -148,6 +148,7 @@ impl BrowserDriver for Registrar {
     }
     async fn close_session(&self, s: &BrowserSessionId) -> Result<(), BrowserDriverError> {
         self.0.driver.close_session(s).await?;
+        super::lifecycle::retire_closed_session(&self.0, s)?;
         self.0
             .agent_requests
             .lock()
