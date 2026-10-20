@@ -19,9 +19,10 @@ pub(super) const TITLE: &str = "Reopened agent page";
 pub(super) const PAGE: &[u8] = br#"<!doctype html><html><head><title>Reopened agent page</title></head><body style="background:#ffe8cc"><h1>Reopened agent page</h1><p>Fresh session B after exact session A close.</p></body></html>"#;
 
 #[derive(Clone)]
-struct Reopened {
-    session_id: String,
-    target: BrowserTarget,
+pub(super) struct Reopened {
+    pub(super) session_id: String,
+    pub(super) target: BrowserTarget,
+    pub(super) control_generation: u64,
 }
 
 #[derive(Default)]
@@ -34,7 +35,7 @@ pub(super) struct State {
 }
 
 impl State {
-    fn scope(&self) -> anyhow::Result<Reopened> {
+    pub(super) fn scope(&self) -> anyhow::Result<Reopened> {
         self.scope
             .lock()
             .unwrap()
@@ -109,6 +110,7 @@ pub(super) async fn response(
                 .context("reopened selected tab is absent")?;
             *state.session_reopen.scope.lock().unwrap() = Some(Reopened {
                 session_id: opened.session_id.to_string(),
+                control_generation: opened.control_generation,
                 target: BrowserTarget {
                     tab_id: tab.tab_id.clone(),
                     document_id: tab.document_id.clone(),
@@ -133,6 +135,7 @@ pub(super) async fn response(
             );
             *state.session_reopen.scope.lock().unwrap() = Some(Reopened {
                 session_id: scope.session_id,
+                control_generation: scope.control_generation,
                 target: BrowserTarget {
                     tab_id: observed.tab.tab_id,
                     document_id: observed.tab.document_id,

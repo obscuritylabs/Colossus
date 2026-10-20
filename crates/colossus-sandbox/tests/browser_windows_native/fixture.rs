@@ -165,6 +165,20 @@ fn serve(
                 let _ = connection.shutdown().await;
                 continue;
             }
+            if method == "GET" && path.starts_with("/continuity") {
+                let body = if path == "/continuity" {
+                    "<!doctype html><title>Retained session</title><input aria-label='Retained input' value='retained DOM value'><output>Ready</output><script>let ticks=0;setInterval(()=>{document.querySelector('output').textContent=String(++ticks);fetch('/continuity-pulse').catch(()=>{})},100)</script>"
+                } else {
+                    "pulse"
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = connection.write_all(response.as_bytes()).await;
+                let _ = connection.shutdown().await;
+                continue;
+            }
             if method == "GET" && path == "/download-redirect" && transfers.is_some() {
                 let _ = connection.write_all(b"HTTP/1.1 302 Found\r\nLocation: /download-final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
                 let _ = connection.shutdown().await;

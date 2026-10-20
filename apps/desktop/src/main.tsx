@@ -5,6 +5,7 @@ import { SetupPresentationProvider } from "./SetupPresentation";
 import { DesktopPreferencesProvider } from "./DesktopPreferencesProvider";
 
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
+import { installRendererFailureHandlers } from "./renderer-logging";
 import {
   AppearanceProvider,
   initializeAppearance,
@@ -22,6 +23,7 @@ import "@colossus/ui/styles/select.css";
 import "@colossus/ui/styles/settings.css";
 
 const root = document.getElementById("root");
+installRendererFailureHandlers();
 
 if (root === null) {
   throw new Error("Desktop root element is missing");

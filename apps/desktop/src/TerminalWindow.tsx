@@ -37,6 +37,7 @@ import "@xterm/xterm/css/xterm.css";
 const MAX_TERMINAL_TABS = 8;
 const MAX_SINGLE_TERMINAL_INPUT_BYTES = 256 * 1024;
 const MAX_PENDING_TERMINAL_INPUT_BYTES = 512 * 1024;
+const MAX_TERMINAL_COPY_BYTES = 256 * 1024;
 const TERMINAL_CONTEXT_REFRESH_MS = 1_000;
 
 function numericStyleValue(value: string): number {
@@ -176,6 +177,37 @@ function TerminalPane({
       windowOptions: {},
     });
     terminal.open(container);
+    terminal.attachCustomKeyEventHandler((event) => {
+      const copy =
+        event.type === "keydown" &&
+        event.isTrusted &&
+        event.key.toLowerCase() === "c" &&
+        !event.altKey &&
+        (event.ctrlKey || event.metaKey);
+      if (!copy || !terminal.hasSelection()) {
+        return true;
+      }
+      // Only the operator's copy chord can write the clipboard. PTY output,
+      // including arbitrary OSC 52 sequences, has no clipboard authority.
+      event.preventDefault();
+      const selection = terminal.getSelection();
+      if (
+        new TextEncoder().encode(selection).byteLength > MAX_TERMINAL_COPY_BYTES
+      ) {
+        setError("Select less terminal text to copy (maximum 256 KiB).");
+        return false;
+      }
+      void (async () => {
+        try {
+          await navigator.clipboard.writeText(selection);
+        } catch {
+          setError(
+            "Selected terminal text could not be copied to the clipboard.",
+          );
+        }
+      })();
+      return false;
+    });
     terminalRef.current = terminal;
     terminal.writeln(
       `\x1b[38;2;106;162;255m${TERMINAL_PRESENTATION[tab.kind].banner}\x1b[0m`,

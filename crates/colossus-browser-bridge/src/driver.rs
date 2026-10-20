@@ -223,6 +223,41 @@ impl Drop for CancelOnDrop {
 
 #[async_trait]
 impl BrowserDriver for BrowserBridgeDriver {
+    async fn suspend_session(
+        &self,
+        session: &BrowserSessionId,
+        through_generation: u64,
+    ) -> Result<(), BrowserDriverError> {
+        self.control(Request::Suspend {
+            session_id: session.clone(),
+            through_generation,
+        })
+        .await
+    }
+    async fn resume_session(
+        &self,
+        session: &BrowserSessionId,
+        run_id: &str,
+        generation: u64,
+        control: &BrowserDriverControl,
+    ) -> Result<(), BrowserDriverError> {
+        if control.is_cancelled() {
+            return Err(BrowserDriverError::Cancelled);
+        }
+        self.control(Request::Resume {
+            session_id: session.clone(),
+            run_id: run_id.to_owned(),
+            generation,
+        })
+        .await?;
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        let state = sessions.get_mut(session).ok_or(BrowserDriverError::Stale)?;
+        state.generation = generation;
+        Ok(())
+    }
     fn cancellation_disposition(&self) -> BrowserCancelDisposition {
         if self.enrollment.cancellation_closes_context {
             BrowserCancelDisposition::ClosesContext

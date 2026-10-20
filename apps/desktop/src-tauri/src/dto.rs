@@ -135,6 +135,7 @@ impl CommandErrorDto {
     }
 
     pub(crate) fn invalid(field: &str, description: &str) -> Self {
+        crate::logging::failure("invalid_argument", false, false);
         Self {
             code: "invalid_argument".into(),
             message: "The request is invalid.".into(),
@@ -148,6 +149,7 @@ impl CommandErrorDto {
     }
 
     fn local(code: &str, message: &str, retryable: bool, outcome_unknown: bool) -> Self {
+        crate::logging::failure(code, retryable, outcome_unknown);
         Self {
             code: code.into(),
             message: message.into(),
@@ -158,6 +160,11 @@ impl CommandErrorDto {
     }
 
     pub(crate) fn from_api(error: ApiError) -> Self {
+        crate::logging::failure(
+            api_error_code(error.code),
+            error.retryable,
+            error.code == ApiErrorCode::OutcomeUnknown,
+        );
         Self {
             code: api_error_code(error.code).into(),
             message: error.message,

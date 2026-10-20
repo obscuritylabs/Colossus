@@ -9,6 +9,7 @@ use colossus_ports::{
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+mod continuity;
 #[cfg(all(target_os = "linux", debug_assertions))]
 mod native;
 #[cfg(all(
@@ -40,6 +41,10 @@ struct Driver {
     capture_command: StdMutex<Option<BrowserDriverCommand>>,
     transfers: AtomicUsize,
     transfer: StdMutex<Option<transfer::Pending>>,
+    retain_completed: AtomicBool,
+    resumed: AtomicUsize,
+    suspend_started: AtomicUsize,
+    suspend_barrier: StdMutex<Option<Arc<tokio::sync::Notify>>>,
 }
 
 impl Driver {
@@ -70,12 +75,41 @@ impl Driver {
             capture_command: StdMutex::new(None),
             transfers: AtomicUsize::new(0),
             transfer: StdMutex::new(None),
+            retain_completed: AtomicBool::new(false),
+            resumed: AtomicUsize::new(0),
+            suspend_started: AtomicUsize::new(0),
+            suspend_barrier: StdMutex::new(None),
         }
     }
 }
 
 #[async_trait]
 impl BrowserDriver for Driver {
+    fn supports_suspension(&self) -> bool {
+        self.retain_completed.load(Ordering::SeqCst)
+    }
+    async fn suspend_session(
+        &self,
+        _: &BrowserSessionId,
+        _: u64,
+    ) -> Result<(), BrowserDriverError> {
+        let barrier = self.suspend_barrier.lock().unwrap().clone();
+        self.suspend_started.fetch_add(1, Ordering::SeqCst);
+        if let Some(barrier) = barrier {
+            barrier.notified().await;
+        }
+        Ok(())
+    }
+    async fn resume_session(
+        &self,
+        _: &BrowserSessionId,
+        _: &str,
+        _: u64,
+        _: &BrowserDriverControl,
+    ) -> Result<(), BrowserDriverError> {
+        self.resumed.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
     fn capabilities(&self) -> BrowserCapabilities {
         self.capabilities.clone()
     }

@@ -35,9 +35,19 @@ pub fn pump(
         Arc::clone(&lifetime.presentation_revoked),
     ));
     let result = loop {
-        while let Ok(queue::Control::Close(session, sender)) = channels.control.try_recv() {
-            let result = close_egress().and_then(|()| host.close(&session));
-            let _ = sender.send(result);
+        while let Ok(command) = channels.control.try_recv() {
+            match command {
+                queue::Control::Close(session, sender) => {
+                    let result = close_egress().and_then(|()| host.close(&session));
+                    let _ = sender.send(result);
+                }
+                queue::Control::Suspend(session, sender) => {
+                    let _ = sender.send(host.suspend(&session));
+                }
+                queue::Control::Resume(session, generation, sender) => {
+                    let _ = sender.send(host.resume(&session, generation));
+                }
+            }
         }
         if lifetime.finished.load(Ordering::Acquire) {
             break Ok(());

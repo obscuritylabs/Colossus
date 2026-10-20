@@ -34,10 +34,19 @@ fn accept(cache: &CompletedCache, viewport: u64) {
 }
 
 #[test]
-fn completion_rejects_a_previous_document_or_viewport_and_seals_cache() {
+fn completion_keeps_last_same_document_pixels_after_resize_and_seals_cache() {
     let cache = CompletedCache::default();
     accept(&cache, 1);
-    assert!(cache.take(frame(2).lease).is_none());
+    cache.observed(frame(2).lease, PageState::default());
+    assert_eq!(
+        cache
+            .take(frame(2).lease)
+            .unwrap()
+            .frame
+            .lease
+            .viewport_generation,
+        1
+    );
     accept(&cache, 2);
     assert!(cache.take(frame(2).lease).is_none());
 

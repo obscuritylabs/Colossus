@@ -122,26 +122,40 @@ impl EffectExecutor for BrowserEffect<'_> {
             }
             BrowserInvocation::Open { mut options } => {
                 options.public_web &= super::service::permits_public_web(obligations);
-                let summary = self
+                let resumed = self
                     .browser
                     .coordinator
-                    .open_for_run(&run.actor, options.clone(), &run.control)
+                    .resume_for_run(&run.actor, &options, &run.control)
                     .await
                     .map_err(execution_error)?;
+                let reused = resumed.is_some();
+                let summary = if let Some((summary, _)) = &resumed {
+                    summary.clone()
+                } else {
+                    self.browser
+                        .coordinator
+                        .open_for_run(&run.actor, options.clone(), &run.control)
+                        .await
+                        .map_err(execution_error)?
+                };
                 let lease_ms = self.browser.coordinator.capabilities().limits.max_lease_ms;
-                let lease = match self.browser.coordinator.grant_control(
-                    &run.actor,
-                    &summary.session_id,
-                    lease_ms,
-                ) {
-                    Ok(lease) => lease,
-                    Err(error) => {
-                        let _ = self
-                            .browser
-                            .coordinator
-                            .close(&run.actor.binding, &summary.session_id)
-                            .await;
-                        return Err(execution_error(error));
+                let lease = if let Some((_, lease)) = resumed {
+                    lease
+                } else {
+                    match self.browser.coordinator.grant_control(
+                        &run.actor,
+                        &summary.session_id,
+                        lease_ms,
+                    ) {
+                        Ok(lease) => lease,
+                        Err(error) => {
+                            let _ = self
+                                .browser
+                                .coordinator
+                                .close(&run.actor.binding, &summary.session_id)
+                                .await;
+                            return Err(execution_error(error));
+                        }
                     }
                 };
                 if self
@@ -164,6 +178,9 @@ impl EffectExecutor for BrowserEffect<'_> {
                     return Err(ExecutionError::Failed(
                         "browser run ended during allocation".into(),
                     ));
+                }
+                if reused {
+                    tracing::info!(target: "colossus.browser", event = "session_resumed", run_id = %run.actor.run_id, session_id = %summary.session_id, control_generation = lease.control_generation, "Browser session resumed under a fresh run lease");
                 }
                 json!({"session": self.browser.coordinator.get(&run.actor.binding, &summary.session_id).map_err(execution_error)?, "control_generation": lease.control_generation, "expires_at_ms": lease.expires_at_ms})
             }

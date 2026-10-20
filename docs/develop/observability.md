@@ -20,6 +20,26 @@ decorator. The worker host owns the global subscriber and exporter lifecycle. Ag
 workflow, provider, MCP, and gRPC adapters depend only on recording and propagation
 helpers; an embedded `Runtime` remains subscriber-neutral.
 
+Native Desktop and Managed Local additionally use the crate's `local-logs` feature
+for automatic operational JSON Lines files. The host supplies a validated
+`ConfinedRoot`; the renderer cannot select a log path, supply log content, or enable
+wire diagnostics. The shared sink uses no-follow private file bindings, a process
+lock, four fixed 4 MiB slots, a 1,024-record nonblocking queue, and a 32 KiB record
+ceiling. `ObservabilityGuard::install_native` composes local and optional
+remote layers in one subscriber. Retain and flush the guard before process exit.
+Native hosts reserve stdout for framed IPC; optional console JSON is routed to stderr
+in this composition. Ordinary worker console logging continues to use stdout.
+
+Use exact owned targets `colossus.desktop`, `colossus.lifecycle`, `colossus.provider`,
+`colossus.computer`, and `colossus.browser` for operational events. Include a stable
+`event_name`, bounded categorical `error_type`, relevant opaque run ID, provider kind
+and profile, status and duration. Never format raw errors, requests, responses,
+headers, prompts, native target descriptions, or paths into these events. Local
+layers exclude journal events, dependency diagnostics, and inherited span fields.
+Info is the default; `COLOSSUS_LOG_LEVEL=debug` enables owned debug events only.
+Provider events use the same contract for every adapter, including interrupted
+futures and HTTP retries. Remote log sinks also accept these operational events.
+
 ## Semantic-convention compatibility
 
 The GenAI conventions are Development status and have no authoritative generated Rust

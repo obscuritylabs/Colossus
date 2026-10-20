@@ -25,15 +25,19 @@ export function WorkspaceNavigation({
   onSelect,
   renderItem,
   workAttention = 0,
+  hiddenDestinations = [],
 }: {
   active: WorkspaceDestinationId;
   onSelect?: (id: WorkspaceDestinationId) => void;
   renderItem?: (item: WorkspaceDestination, children: ReactNode) => ReactNode;
   workAttention?: number;
+  hiddenDestinations?: readonly WorkspaceDestinationId[];
 }) {
   return (
     <nav className="space-destinations" aria-label="Workspace destinations">
-      {WORKSPACE_DESTINATIONS.map((item) => {
+      {WORKSPACE_DESTINATIONS.filter(
+        (item) => !hiddenDestinations.includes(item.id),
+      ).map((item) => {
         const { id, label, Icon } = item;
         const children = (
           <>

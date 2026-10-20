@@ -199,8 +199,11 @@ fn target(target: &ComputerTarget, nodes: &[ComputerNode]) -> Result<(i32, i32),
                 .iter()
                 .find(|node| &node.element_id == element_id)
                 .ok_or(Error::Stale)?;
-            if !node.enabled || node.is_password {
-                return Err(Error::Denied);
+            if !node.enabled {
+                return Err(Error::InvalidInput);
+            }
+            if node.is_password {
+                return Err(Error::ProtectedInput);
             }
             Ok((
                 node.bounds.x + (node.bounds.width / 2) as i32,
@@ -261,7 +264,7 @@ pub(crate) fn apply(
         // SAFETY: fixed key-state query; no human key is modified or released.
         (unsafe { GetAsyncKeyState(i32::from(*vk)) }) < 0
     }) {
-        return Err(Error::Busy);
+        return Err(Error::InputHeld);
     }
     if matches!(input, ComputerInput::Focus { .. }) {
         #[cfg(feature = "native-test-driver")]
@@ -301,7 +304,7 @@ pub(crate) fn apply(
         #[cfg(feature = "native-test-driver")]
         eprintln!("COMPUTER_NATIVE_FOCUS phase=activate accepted={accepted}");
         if !accepted {
-            return Err(Error::Denied);
+            return Err(Error::FocusDenied);
         }
         // Cross-process activation is asynchronous. Acknowledging WM_NULL lets
         // the foreign queue process its activation nudge without attaching queues
@@ -429,7 +432,7 @@ pub(crate) fn apply(
                     return Err(if gate.started {
                         Error::OutcomeUnknown
                     } else {
-                        Error::Denied
+                        Error::ProtectedInput
                     });
                 }
                 let mut events = Vec::with_capacity(chunk.len() * 2);
@@ -443,7 +446,7 @@ pub(crate) fn apply(
         }
         ComputerInput::Press { keys } => {
             if protected()? {
-                return Err(Error::Denied);
+                return Err(Error::ProtectedInput);
             }
             let mut events = Vec::new();
             let mut keys = keys

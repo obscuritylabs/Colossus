@@ -134,7 +134,11 @@ impl AgentService {
         if owns_run.load(Ordering::Acquire)
             && let Some(lifecycle) = &self.lifecycle
         {
-            lifecycle.finish_run(&owned_run_id).await;
+            if result.is_ok() && inbox_closed.is_ok() {
+                lifecycle.complete_run(&owned_run_id).await;
+            } else {
+                lifecycle.finish_run(&owned_run_id).await;
+            }
         }
         drop(guard);
         inbox_closed?;
@@ -398,6 +402,9 @@ impl AgentService {
             initiator.clone(),
         )?;
         messages.push(user_message);
+        // The just-appended human turn ends the previous run's transient native
+        // observations, including when no ContextPreparer is installed.
+        messages = project_model_tool_observations(&messages);
         let instructions = if needs_initial_title
             && definitions
                 .iter()

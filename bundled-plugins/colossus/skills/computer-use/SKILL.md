@@ -54,6 +54,8 @@ they fit the task; desktop input is not a way to bypass their authority limits.
 
 The visible native control card lets the user pause or stop input. Physical
 Escape stops computer control, and Ctrl+Alt+P pauses it without resuming it.
+Moving the mouse alone leaves control active. Human clicks, scrolling, or typing
+pause control so the user can take over.
 Only the human's Resume button can resume paused control. Pause blocks native
 computer input; it does not suspend the whole model run. Stop immediately fences
 computer input and cancels the owning run when its native stop receipt reaches

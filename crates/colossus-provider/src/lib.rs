@@ -66,6 +66,7 @@ mod profile;
 pub use profile::*;
 
 mod executor;
+mod logging;
 pub use executor::*;
 mod continuation;
 pub use continuation::{ProviderAdapterStreamItem, ProviderAdapterTurn};

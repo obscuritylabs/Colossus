@@ -29,7 +29,8 @@ $Checks = @(
     "native_windows_factory",
     "authenticated_bgra", "native_input", "read_only_viewer_detach",
     "exact_origin_denial", "native_upload_actual_http_bytes", "native_download_actual_http_bytes",
-    "full_job_and_io_cleanup", "cef_shutdown", "native_typed_automation", "native_tabs"
+    "full_job_and_io_cleanup", "cef_shutdown", "native_typed_automation", "native_tabs", "suspended_session_continuity",
+    "native_untrusted_tls_rejected_with_safe_diagnostic"
 )
 if (-not $Development) { $Checks += @('low_appcontainer_token', 'low_package_profile_label') }
 if ($HostProfile -eq 'Release') { $Checks += @('long_managed_path_short_private_profile_without_file_logging') }

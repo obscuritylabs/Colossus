@@ -399,6 +399,13 @@ downloads with exact server-observed bytes, tab allocation/selection/close and
 full Job/pipe/profile cleanup. The Core fixture separately requires real semantic
 observations, clicks, navigation and a released PNG artifact.
 
+The native fixture also freezes a page that sends timer-driven HTTP requests,
+requires server-observed silence after egress drain, and resumes the same DOM
+under a new writer generation. The natural-completion Desktop case runs a second
+agent turn in the same conversation, requires the same session/document with a
+fresh writer and native frame, replaces its old completed tab, and retains the
+second last view before shutdown.
+
 The actual Desktop fixture uses a deterministic local model provider through
 the ordinary authenticated SDK/sidecar/worker channels. It authorizes the real
 controller document, hands its human page to an agent and requires native click,

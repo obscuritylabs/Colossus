@@ -9,6 +9,72 @@ use windows_sys::Win32::UI::{
 
 struct Parent(HWND);
 
+#[test]
+fn provider_prompt_displays_immutable_destination_beside_the_secure_edit() {
+    let _ownership = TEST_OWNERSHIP.lock().unwrap();
+    for text_size in [
+        crate::TextSize::Compact,
+        crate::TextSize::Comfortable,
+        crate::TextSize::Large,
+    ] {
+        let parent = Parent::new();
+        let (completion, mut result) = Completion::acquire().unwrap();
+        let endpoint = "https://models.example.test:8443/custom/v1";
+        let context =
+            ProviderCredentialContext::new(crate::CredentialProvider::AnthropicMessages, endpoint)
+                .unwrap();
+        let window = unsafe {
+            create_for(
+                parent.0,
+                Arc::new(AtomicBool::new(false)),
+                completion,
+                false,
+                DialogAppearance {
+                    text_size,
+                    ..DialogAppearance::default()
+                },
+                Purpose::Token,
+                Some(context),
+            )
+        }
+        .unwrap();
+        let session = unsafe { &*(GetWindowLongPtrW(window, GWLP_USERDATA) as *const Session) };
+        let text = |handle| {
+            let length = unsafe { GetWindowTextLengthW(handle) };
+            let mut buffer = vec![0; usize::try_from(length).unwrap() + 1];
+            let copied = unsafe { GetWindowTextW(handle, buffer.as_mut_ptr(), length + 1) };
+            String::from_utf16(&buffer[..usize::try_from(copied).unwrap()]).unwrap()
+        };
+        assert_eq!(
+            text(session.destination_label),
+            "Use this token for Anthropic Messages at:"
+        );
+        assert_eq!(text(session.destination), endpoint);
+        assert!(text(session.input).is_empty());
+        let readonly = unsafe {
+            GetWindowLongPtrW(
+                session.destination,
+                windows_sys::Win32::UI::WindowsAndMessaging::GWL_STYLE,
+            )
+        };
+        assert_ne!(
+            readonly & windows_sys::Win32::UI::WindowsAndMessaging::ES_READONLY as isize,
+            0
+        );
+        let mut endpoint_bounds = RECT::default();
+        let mut token_bounds = RECT::default();
+        unsafe {
+            GetWindowRect(session.destination, &raw mut endpoint_bounds);
+            GetWindowRect(session.label, &raw mut token_bounds);
+        }
+        assert!(endpoint_bounds.bottom < token_bounds.top);
+        unsafe {
+            DestroyWindow(window);
+        }
+        assert!(matches!(result.try_recv(), Ok(Err(PromptError::Cancelled))));
+    }
+}
+
 impl Parent {
     fn new() -> Self {
         let window = unsafe {

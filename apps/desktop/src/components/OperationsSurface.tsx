@@ -1,9 +1,7 @@
-import { ArtifactLibrary } from "@colossus/ui";
-import "@colossus/ui/styles/library.css";
+import { CapabilitiesSurface } from "./CapabilitiesSurface";
+
 import { WorkspaceSurfaceHeader as SurfaceHeader } from "@colossus/ui";
 import {
-  IconArchive,
-  IconArrowUpRight,
   IconChevronDown,
   IconDownload,
   IconFileText,
@@ -12,7 +10,6 @@ import {
   IconPlus,
   IconPlugConnected,
   IconRefresh,
-  IconRobot,
   IconShieldCheck,
   IconTerminal2,
   IconTopologyStar3,
@@ -21,7 +18,6 @@ import {
 import { useEffect, useRef } from "react";
 
 import type { PresentedArtifact } from "../presenters";
-import { agentRoleLabel, presentRunStatus } from "../presenters";
 import type {
   ConnectionStatus,
   DesktopStatus,
@@ -29,7 +25,6 @@ import type {
   TerminalKind,
 } from "../types";
 import type { AgentParticipant } from "./AgentFlow";
-import { AgentFlow } from "./AgentFlow";
 import { ManagedSettingsPane } from "./ManagedSettingsPane";
 import { ControlPlaneConnections } from "./ControlPlaneConnections";
 import { PluginsSurface } from "./PluginsSurface";
@@ -89,229 +84,6 @@ interface OperationsSurfaceProps {
   onRemoveCaBundle: () => void;
   onImportClientIdentity: () => void;
   onRemoveClientIdentity: () => void;
-}
-
-function FleetView({
-  runs,
-  desktop,
-  demoParticipants,
-  onOpenRun,
-  onSelectTarget,
-}: Pick<
-  OperationsSurfaceProps,
-  "runs" | "desktop" | "demoParticipants" | "onOpenRun" | "onSelectTarget"
->) {
-  const active = runs.filter((run) =>
-    ["queued", "running", "waiting", "cancelling"].includes(run.status),
-  );
-  return (
-    <>
-      <SurfaceHeader
-        eyebrow="Capabilities / This Workspace"
-        title="Derived capability catalog"
-        description="A read-only view derived from the selected sidecar, access profile, tools, Agent Plugins, workflows, and agents."
-      />
-      <div className="overview-scroll" tabIndex={0}>
-        <section className="overview-section">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Authenticated discovery</p>
-              <h3>Available orchestration</h3>
-            </div>
-          </div>
-          <div className="target-grid">
-            <article className="capability-summary-card">
-              <span className="target-node-icon" aria-hidden="true">
-                <IconShieldCheck size={20} stroke={1.6} />
-              </span>
-              <span>
-                <strong>Tool access</strong>
-                <small>
-                  {desktop.accessProfile.replaceAll("_", " ")} profile ·{" "}
-                  {desktop.executionBoundary.replaceAll("_", " ")} boundary
-                </small>
-              </span>
-              <span className="status-chip tone-success">Derived</span>
-            </article>
-            {desktop.capabilities.files ? (
-              <article className="capability-summary-card">
-                <span className="target-node-icon" aria-hidden="true">
-                  <IconFolder size={20} stroke={1.6} />
-                </span>
-                <span>
-                  <strong>Workspace tools</strong>
-                  <small>
-                    The selected Workspace advertises bounded file browsing and
-                    workspace-aware tool execution.
-                  </small>
-                </span>
-                <span className="status-chip tone-success">Available</span>
-              </article>
-            ) : null}
-            {desktop.capabilities.delegation ? (
-              <article className="capability-summary-card">
-                <span className="target-node-icon" aria-hidden="true">
-                  <IconRobot size={20} stroke={1.6} />
-                </span>
-                <span>
-                  <strong>Delegated agents</strong>
-                  <small>
-                    Child runs inherit the caller&apos;s exact tool ceiling and
-                    cannot delegate recursively.
-                  </small>
-                </span>
-                <span className="status-chip tone-success">Available</span>
-              </article>
-            ) : null}
-            {desktop.capabilities.agentWorkflows ? (
-              <article className="capability-summary-card">
-                <span className="target-node-icon" aria-hidden="true">
-                  <IconTopologyStar3 size={20} stroke={1.6} />
-                </span>
-                <span>
-                  <strong>Durable workflows</strong>
-                  <small>
-                    Registered workflow definitions can run through the same
-                    policy and approval gateway.
-                  </small>
-                </span>
-                <span className="status-chip tone-success">Available</span>
-              </article>
-            ) : null}
-            {desktop.capabilities.plugins ? (
-              <article className="capability-summary-card">
-                <span className="target-node-icon" aria-hidden="true">
-                  <IconArchive size={20} stroke={1.6} />
-                </span>
-                <span>
-                  <strong>Agent Plugins</strong>
-                  <small>
-                    Portable plugins and their skills are available through the
-                    authenticated runtime catalog.
-                  </small>
-                </span>
-                <span className="status-chip tone-success">Available</span>
-              </article>
-            ) : null}
-          </div>
-        </section>
-        <section className="overview-section">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Runtime targets</p>
-              <h3>{desktop.targets.length} available nodes</h3>
-            </div>
-            <span className="status-chip tone-neutral">
-              {
-                desktop.targets.filter((target) => target.state === "ready")
-                  .length
-              }{" "}
-              ready
-            </span>
-          </div>
-          <div className="target-grid">
-            {desktop.targets.map((target) => (
-              <button
-                type="button"
-                key={target.targetId}
-                className={target.selected ? "is-selected" : undefined}
-                aria-pressed={target.selected}
-                onClick={() => onSelectTarget(target.targetId)}
-              >
-                <span className="target-node-icon" aria-hidden="true">
-                  {target.kind === "managed_local" ? (
-                    <IconRobot size={20} stroke={1.6} />
-                  ) : (
-                    <IconTopologyStar3 size={20} stroke={1.6} />
-                  )}
-                </span>
-                <span>
-                  <strong>{target.label}</strong>
-                  <small>
-                    {target.kind === "managed_local"
-                      ? (target.workspace?.displayName ?? "Local workspace")
-                      : "External daemon"}
-                  </small>
-                </span>
-                <span className={`target-state target-state-${target.state}`}>
-                  {target.state.replace("_", " ")}
-                </span>
-              </button>
-            ))}
-            {desktop.targets.length === 0 ? (
-              <p className="inline-empty">
-                Configure Managed Local or connect an external daemon.
-              </p>
-            ) : null}
-          </div>
-        </section>
-
-        {demoParticipants !== null ? (
-          <section className="overview-section">
-            <div className="section-heading">
-              <div>
-                <p className="eyebrow">Live topology</p>
-                <h3>Advertised agent topology</h3>
-              </div>
-              <span className="status-chip tone-progress">4 connected</span>
-            </div>
-            <AgentFlow participants={demoParticipants} />
-          </section>
-        ) : (
-          <section className="honest-empty">
-            <IconTopologyStar3 size={28} stroke={1.4} aria-hidden="true" />
-            <div>
-              <strong>Agent identities are not exposed by this API yet</strong>
-              <p>
-                Current run roles are workload labels, not stable
-                connected-agent identities. Fleet topology will activate when
-                the public API exposes an authorized agent inventory.
-              </p>
-            </div>
-          </section>
-        )}
-
-        <section className="overview-section">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Current workload</p>
-              <h3>{active.length} active work items</h3>
-            </div>
-          </div>
-          <div className="workload-grid">
-            {active.map((run) => {
-              const status = presentRunStatus(run.status);
-              return (
-                <button
-                  type="button"
-                  key={run.runId}
-                  onClick={() => onOpenRun(run)}
-                >
-                  <span className={`workload-icon tone-${status.tone}`}>
-                    <IconRobot size={19} stroke={1.7} aria-hidden="true" />
-                  </span>
-                  <span>
-                    <strong>{agentRoleLabel(run.role)}</strong>
-                    <small>{status.copy}</small>
-                  </span>
-                  <IconArrowUpRight size={17} stroke={1.6} aria-hidden="true" />
-                </button>
-              );
-            })}
-            {active.length === 0 ? (
-              <p className="inline-empty">
-                No active work is cached in this session.
-              </p>
-            ) : null}
-          </div>
-        </section>
-      </div>
-    </>
-  );
-}
-
-function LibraryView({ artifacts }: Pick<OperationsSurfaceProps, "artifacts">) {
-  return <ArtifactLibrary artifacts={artifacts} />;
 }
 
 function ConnectionsView({
@@ -978,7 +750,9 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
           <span className="compact-action-copy">Workspaces</span>
         </button>
       ) : null}
-      {props.surface === "fleet" ? <FleetView {...props} /> : null}
+      {props.surface === "fleet" ? (
+        <CapabilitiesSurface desktop={props.desktop} />
+      ) : null}
       {props.surface === "workflows" ? (
         <WorkflowsSurface
           onCreateWithAgent={props.onCreateWithAgent}
@@ -1031,9 +805,7 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
           }
         />
       ) : null}
-      {props.surface === "library" ? (
-        <LibraryView artifacts={props.artifacts} />
-      ) : null}
+
       {props.surface === "connections" ? <ConnectionsView {...props} /> : null}
       {props.surface === "settings" ? (
         <SettingsView

@@ -11,7 +11,8 @@ mod styling;
 pub(crate) mod tests;
 
 use crate::{
-    DialogAppearance, NativePassword, PromptError, lifecycle::Completion, purpose::Purpose,
+    DialogAppearance, NativePassword, PromptError, ProviderCredentialContext,
+    lifecycle::Completion, purpose::Purpose,
 };
 use formatter::TokenFormatter;
 use objc2::{
@@ -163,6 +164,7 @@ pub(crate) fn open(
     completion: Completion,
     appearance: DialogAppearance,
     purpose: Purpose,
+    context: Option<ProviderCredentialContext>,
 ) {
     let Some(mtm) = MainThreadMarker::new() else {
         completion.finish(Err(PromptError::Unavailable));
@@ -182,7 +184,9 @@ pub(crate) fn open(
         completion.finish(Err(PromptError::Cancelled));
         return;
     }
-    open_sheet_for(&parent, mtm, cancelled, completion, appearance, purpose);
+    open_sheet_for(
+        &parent, mtm, cancelled, completion, appearance, purpose, context,
+    );
 }
 
 #[cfg(feature = "native-test-driver")]
@@ -200,6 +204,7 @@ fn open_sheet(
         completion,
         appearance,
         Purpose::Token,
+        None,
     );
 }
 
@@ -210,6 +215,7 @@ fn open_sheet_for(
     completion: Completion,
     appearance: DialogAppearance,
     purpose: Purpose,
+    context: Option<ProviderCredentialContext>,
 ) {
     let controller = Controller::new(mtm);
     let style = styling::Style::new(parent, appearance);
@@ -217,7 +223,12 @@ fn open_sheet_for(
     // the owning reference. All views, targets and callbacks stay main-thread.
     let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
         NSPanel::alloc(mtm),
-        style.rect(0.0, 0.0, 560.0, 324.0),
+        style.rect(
+            0.0,
+            0.0,
+            560.0,
+            if context.is_some() { 412.0 } else { 324.0 },
+        ),
         NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
         NSBackingStoreType::Buffered,
         false,
@@ -231,7 +242,14 @@ fn open_sheet_for(
         completion.finish(Err(PromptError::Unavailable));
         return;
     };
-    let [heading, description, label] = style.labels(mtm, purpose);
+    let [heading, description, label] = style.labels(mtm, purpose, context.is_some());
+    if let Some(context) = &context {
+        let [destination_label, endpoint] = style.destination(mtm, context);
+        unsafe {
+            content.addSubview(&destination_label);
+            content.addSubview(&endpoint);
+        }
+    }
     let input = NSSecureTextField::initWithFrame(
         NSSecureTextField::alloc(mtm),
         style.rect(28.0, 145.0, 504.0, 44.0),

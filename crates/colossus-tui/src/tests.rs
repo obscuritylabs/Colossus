@@ -3814,6 +3814,46 @@ fn scrolled_up_state_counts_new_items_without_losing_position() {
 }
 
 #[test]
+fn text_selection_preserves_draft_and_releases_keyboard_control_without_hiding_interrupts() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.composer.insert("unsent draft");
+    assert!(handle_text_selection_key(
+        &mut state,
+        KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE)
+    ));
+    assert!(state.selecting_text);
+    let scroll = state.scroll_from_bottom;
+    assert!(!handle_mouse(
+        &mut state,
+        MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        }
+    ));
+    assert_eq!(state.scroll_from_bottom, scroll);
+    state.overlay = Some(Overlay::QueuePaused);
+    assert!(handle_text_selection_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+    ));
+    assert!(!state.selecting_text);
+    assert!(matches!(state.overlay, Some(Overlay::QueuePaused)));
+    assert_eq!(state.composer.draft, "unsent draft");
+    state.overlay = None;
+    handle_text_selection_key(&mut state, KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
+    assert!(!handle_text_selection_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+    ));
+    assert!(
+        !state.selecting_text,
+        "a forwarded Ctrl+C retains normal interrupt handling"
+    );
+}
+
+#[test]
 fn mouse_wheel_scrolls_transcript_by_lines_and_returns_to_live_output() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.transcript_height = 4;

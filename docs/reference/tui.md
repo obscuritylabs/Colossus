@@ -29,6 +29,7 @@ interface. The default view fills the alternate screen. Add the global
 | Terminal scroll shortcuts | Read finalized output when using `--no-alt-screen`. |
 | `PageUp` / `PageDown` | Scroll the transcript in the default full-screen view. |
 | `End` | Return to live output in the full-screen view. |
+| `F6` | Freeze the conversation view and enable terminal-native text selection. Drag to highlight text, then use your terminal's Copy shortcut. Press F6 or Esc to return. |
 | `Ctrl-C` | Exit when idle. During a run, request cancellation; press again to exit. |
 | `Ctrl-D` | Exit from an empty, idle composer. |
 
@@ -37,6 +38,13 @@ If Shift-Enter submits instead of inserting a newline, use Ctrl-J or open
 and Ctrl-D submits a nonempty prompt.
 Ctrl-Enter and Alt-Enter also submit when your terminal reports them distinctly.
 `/multiline off` restores the default; `/multiline toggle` switches modes.
+
+Text selection pauses screen updates while the agent continues working; new output
+appears when you return. This prevents streaming output from clearing a mouse
+selection. In Desktop, copy highlighted text with Ctrl-Shift-C (Cmd-C on macOS).
+Other terminal emulators use their own Copy and Paste shortcuts. Pasting returns
+to the composer without submitting. Ctrl-C retains its normal interrupt behavior
+when the terminal has no highlighted selection.
 
 Typing `/` at the start of a draft offers slash-command completion. Typing `@` at a
 skill token offers active plugin skills as `@PLUGIN/SKILL`. Esc closes suggestions.

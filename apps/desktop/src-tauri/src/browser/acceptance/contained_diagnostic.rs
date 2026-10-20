@@ -58,6 +58,8 @@ mod native_input;
 mod owned_tabs;
 #[cfg(windows)]
 mod session_reopen;
+#[cfg(windows)]
+mod turn_continuity;
 mod viewport_heartbeat;
 #[cfg(windows)]
 mod wait_continuity;
@@ -127,11 +129,19 @@ struct FixtureState {
     wait_continuity: wait_continuity::State,
     #[cfg(windows)]
     session_reopen: session_reopen::State,
+    #[cfg(windows)]
+    turn_continuity: turn_continuity::State,
 }
 
 fn close_after_completion() -> bool {
     cfg!(windows)
         && std::env::var("COLOSSUS_BROWSER_ACCEPTANCE_CLOSE_AFTER_COMPLETION").as_deref() == Ok("1")
+}
+
+fn cross_turn_continuity() -> bool {
+    cfg!(windows)
+        && close_after_completion()
+        && std::env::var("COLOSSUS_BROWSER_ACCEPTANCE_CROSS_TURN").as_deref() == Ok("1")
 }
 
 fn begin_model_turn(body: &Value, state: &FixtureState) -> anyhow::Result<usize> {
@@ -140,7 +150,9 @@ fn begin_model_turn(body: &Value, state: &FixtureState) -> anyhow::Result<usize>
         "fixture requires non-streaming model"
     );
     let turn = state.phase.fetch_add(1, Ordering::AcqRel);
-    let final_phase = if state.native_tabs {
+    let final_phase = if cross_turn_continuity() {
+        13
+    } else if state.native_tabs {
         11
     } else if close_after_completion() {
         9
@@ -423,7 +435,9 @@ async fn serve(
                     .await?;
             }
             #[cfg(windows)]
-            let response = if turn == 4 {
+            let response = if cross_turn_continuity() && phase >= 10 {
+                turn_continuity::response(phase, &body, origin, state).await?
+            } else if turn == 4 {
                 wait_continuity::model_wait(&body, state)?
             } else {
                 if turn == 5 {
@@ -1773,7 +1787,7 @@ async fn exercise_owned(
         heartbeat.pause().await?;
     }
     #[cfg(windows)]
-    let tab = if close_after_completion() {
+    let mut tab = if close_after_completion() {
         session_reopen::checkpoint(
             app,
             fixture,
@@ -1879,6 +1893,18 @@ async fn exercise_owned(
             println!(
                 "PASS same-run explicit close and fresh reopen retained the second session's read-only page snapshot across completion and context reconciliation"
             );
+            if cross_turn_continuity() {
+                tab = turn_continuity::checkpoint(
+                    app,
+                    client,
+                    fixture,
+                    &conversation,
+                    &tab,
+                    rect,
+                    heartbeat,
+                )
+                .await?;
+            }
             action(
                 app,
                 BrowserAction::Close {

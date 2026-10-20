@@ -68,7 +68,11 @@ pub(super) unsafe fn handle(
                 refresh(window, pointer, u32::try_from(wparam & 0xffff).unwrap());
             }
             let suggested = unsafe { &*(lparam as *const RECT) };
-            let (width, height) = unsafe { (*pointer).visuals.outer_size() };
+            let (width, height) = unsafe {
+                (*pointer)
+                    .visuals
+                    .outer_size_with_context((*pointer).context.is_some())
+            };
             unsafe {
                 SetWindowPos(
                     window,
@@ -149,11 +153,16 @@ unsafe fn paint(window: HWND, pointer: *const Session) {
         GetClientRect(window, &raw mut bounds);
         FillRect(dc, &raw const bounds, visual.surface);
     }
+    let offset = if unsafe { (*pointer).context.is_some() } {
+        88
+    } else {
+        0
+    };
     let field = RECT {
         left: visual.px(28),
-        top: visual.px(136),
+        top: visual.px(136 + offset),
         right: (bounds.right - visual.px(28)).max(visual.px(28) + 1),
-        bottom: visual.px(180),
+        bottom: visual.px(180 + offset),
     };
     let border = if unsafe { (*pointer).has_error.get() } {
         visual.colors.danger
@@ -174,9 +183,9 @@ unsafe fn paint(window: HWND, pointer: *const Session) {
     }
     let divider = RECT {
         left: visual.px(28),
-        top: visual.px(240),
+        top: visual.px(240 + offset),
         right: (bounds.right - visual.px(28)).max(visual.px(28) + 1),
-        bottom: visual.px(240) + 1,
+        bottom: visual.px(240 + offset) + 1,
     };
     let brush = unsafe { CreateSolidBrush(color(visual.colors.border)) };
     unsafe {

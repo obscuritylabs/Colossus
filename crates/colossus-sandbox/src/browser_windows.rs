@@ -247,6 +247,9 @@ impl WindowsBrowserSupervisor {
 }
 #[async_trait]
 impl BrowserHostFactory for WindowsBrowserSupervisor {
+    fn supports_suspension(&self) -> bool {
+        self.installation.user_development
+    }
     fn capabilities(&self) -> BrowserCapabilities {
         if self.stopped.load(Ordering::Acquire) {
             BrowserCapabilities::unavailable()

@@ -40,6 +40,8 @@ mod codex_catalog_tests;
 mod failure_tests;
 #[path = "image_view_tests.rs"]
 mod image_view_tests;
+#[path = "logging_gateway_tests.rs"]
+mod logging_gateway_tests;
 #[path = "retry_tests.rs"]
 mod retry_tests;
 #[path = "stream_diagnostics_tests.rs"]

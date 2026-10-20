@@ -98,7 +98,7 @@ impl CompletedCache {
             if state
                 .frame
                 .as_ref()
-                .is_some_and(|frame| frame.frame.lease != lease)
+                .is_some_and(|frame| !same_document(frame.frame.lease, lease))
             {
                 state.frame.take();
             }
@@ -126,7 +126,6 @@ impl CompletedCache {
         };
         // Release the previous candidate only after exact current metadata is
         // found. A late old paint cannot remove a newer accepted document.
-        state.frame.take();
         let Some(reservation) = Reservation::acquire(frame.pixels.capacity()) else {
             return;
         };
@@ -140,10 +139,10 @@ impl CompletedCache {
     pub(super) fn take(&self, lease: Lease) -> Option<Arc<RetainedFrame>> {
         let mut state = self.0.lock().ok()?;
         state.sealed = true;
-        state
-            .frame
-            .take()
-            .filter(|frame| frame.frame.lease == lease)
+        state.frame.take().filter(|frame| {
+            same_document(frame.frame.lease, lease)
+                && frame.frame.lease.viewport_generation <= lease.viewport_generation
+        })
     }
     pub(crate) fn clear(&self) {
         if let Ok(mut state) = self.0.lock() {
@@ -156,6 +155,12 @@ impl CompletedCache {
 
 fn authority(lease: Lease) -> (u64, u64) {
     (lease.session_generation, lease.control_generation)
+}
+
+fn same_document(frame: Lease, current: Lease) -> bool {
+    authority(frame) == authority(current)
+        && frame.tab == current.tab
+        && frame.document_generation == current.document_generation
 }
 
 #[cfg(test)]

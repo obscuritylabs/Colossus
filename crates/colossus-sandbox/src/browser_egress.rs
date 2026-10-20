@@ -24,7 +24,7 @@ use std::{
 use thiserror::Error;
 use tokio::{
     net::TcpListener,
-    sync::oneshot,
+    sync::{mpsc, oneshot},
     task::{JoinHandle, JoinSet},
     time::Instant,
 };
@@ -43,7 +43,7 @@ pub struct BrowserEgressLimits {
     pub max_connection_bytes: u64,
 }
 
-/// Egress lifecycle. Only `Revoked` confirms that every tracked socket was dropped.
+/// Egress lifecycle. `Paused` drains sockets; `Revoked` also retires the listener.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum BrowserEgressState {
@@ -55,6 +55,10 @@ pub enum BrowserEgressState {
     Revoked = 2,
     /// Quiescence could not be confirmed; the host must retain its cleanup obligation.
     Interrupted = 3,
+    /// New traffic is fenced while active connections are being drained for retention.
+    Pausing = 4,
+    /// All active sockets are drained; the original listener and deadline remain owned.
+    Paused = 5,
 }
 
 /// Categorical failures; proxy credentials, URLs, and TLS bytes never enter diagnostics.
@@ -88,6 +92,12 @@ pub struct BrowserEgressLease {
     task: Option<JoinHandle<Result<(), BrowserEgressError>>>,
     terminal: Option<Result<(), BrowserEgressError>>,
     deadline: Instant,
+    suspension: mpsc::Sender<Suspension>,
+}
+
+enum Suspension {
+    Pause(oneshot::Sender<Result<(), BrowserEgressError>>),
+    Resume(oneshot::Sender<Result<(), BrowserEgressError>>),
 }
 
 impl fmt::Debug for BrowserEgressLease {
@@ -190,6 +200,7 @@ impl BrowserEgressLease {
             destinations.push("*".into());
         }
         let deadline = Instant::now() + limits.lifetime;
+        let (suspension, suspending) = mpsc::channel(2);
         let task = tokio::spawn(serve(
             listener,
             ipv6,
@@ -200,6 +211,7 @@ impl BrowserEgressLease {
                 shutdown: shutdown_rx,
                 state: Arc::clone(&state),
                 deadline,
+                suspending,
             },
         ));
         Ok(Self {
@@ -211,6 +223,7 @@ impl BrowserEgressLease {
             task: Some(task),
             terminal: None,
             deadline,
+            suspension,
         })
     }
 
@@ -235,8 +248,50 @@ impl BrowserEgressLease {
             0 => BrowserEgressState::Active,
             1 => BrowserEgressState::Revoking,
             2 => BrowserEgressState::Revoked,
+            4 => BrowserEgressState::Pausing,
+            5 => BrowserEgressState::Paused,
             _ => BrowserEgressState::Interrupted,
         }
+    }
+
+    /// Stop new admissions and acknowledge closure of every accepted socket.
+    /// This retains the same private listener, credentials, scope and absolute deadline.
+    pub async fn pause(&mut self) -> Result<(), BrowserEgressError> {
+        if self.state() == BrowserEgressState::Paused {
+            return Ok(());
+        }
+        self.state
+            .compare_exchange(
+                BrowserEgressState::Active as u8,
+                BrowserEgressState::Pausing as u8,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .map_err(|_| BrowserEgressError::OutcomeUnknown)?;
+        let (send, receive) = oneshot::channel();
+        self.suspension
+            .send(Suspension::Pause(send))
+            .await
+            .map_err(|_| BrowserEgressError::OutcomeUnknown)?;
+        receive
+            .await
+            .map_err(|_| BrowserEgressError::OutcomeUnknown)?
+    }
+
+    /// Reopen the unchanged envelope only after a fresh runtime permit.
+    /// Expiry is permanent; a new run cannot extend the original authority clock.
+    pub async fn resume(&mut self) -> Result<(), BrowserEgressError> {
+        if self.state() != BrowserEgressState::Paused || Instant::now() >= self.deadline {
+            return Err(BrowserEgressError::OutcomeUnknown);
+        }
+        let (send, receive) = oneshot::channel();
+        self.suspension
+            .send(Suspension::Resume(send))
+            .await
+            .map_err(|_| BrowserEgressError::OutcomeUnknown)?;
+        receive
+            .await
+            .map_err(|_| BrowserEgressError::OutcomeUnknown)?
     }
 
     /// Block new traffic, abort every accepted connection, and await socket teardown.
@@ -327,6 +382,7 @@ struct Revocation {
     shutdown: oneshot::Receiver<()>,
     state: Arc<AtomicU8>,
     deadline: Instant,
+    suspending: mpsc::Receiver<Suspension>,
 }
 
 async fn serve(
@@ -341,6 +397,7 @@ async fn serve(
         mut shutdown,
         state,
         deadline,
+        mut suspending,
     } = revocation;
     let origins = Arc::new(origins);
     let mut connections = JoinSet::new();
@@ -350,6 +407,35 @@ async fn serve(
             biased;
             _ = &mut shutdown => break,
             _ = tokio::time::sleep_until(deadline) => break,
+            request = suspending.recv() => {
+                match request {
+                    Some(Suspension::Pause(acknowledge)) => {
+                        connections.abort_all();
+                        while let Some(done) = connections.join_next().await {
+                            if done.is_err_and(|error| !error.is_cancelled()) {
+                                result = Err(BrowserEgressError::OutcomeUnknown);
+                            }
+                        }
+                        if result.is_ok() {
+                            state.store(BrowserEgressState::Paused as u8, Ordering::Release);
+                        }
+                        let _ = acknowledge.send(result);
+                        if result.is_err() { break; }
+                    }
+                    Some(Suspension::Resume(acknowledge)) => {
+                        let admitted = if Instant::now() < deadline {
+                            state.compare_exchange(
+                                BrowserEgressState::Paused as u8,
+                                BrowserEgressState::Active as u8,
+                                Ordering::AcqRel,
+                                Ordering::Acquire,
+                            ).map(|_| ()).map_err(|_| BrowserEgressError::OutcomeUnknown)
+                        } else { Err(BrowserEgressError::OutcomeUnknown) };
+                        let _ = acknowledge.send(admitted);
+                    }
+                    None => break,
+                }
+            }
             done = connections.join_next(), if !connections.is_empty() => {
                 if done.is_some_and(|done| done.is_err()) {
                     result = Err(BrowserEgressError::OutcomeUnknown);

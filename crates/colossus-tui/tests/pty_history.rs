@@ -307,6 +307,9 @@ impl InteractiveHost for FixtureHost {
             }))
             .await
             .map_err(|_| "stream receiver closed")?;
+        if std::env::var_os("COLOSSUS_TUI_SELECTION_FIXTURE").is_some() {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+        }
         events
             .send(HostEvent::Run(RunEventEnvelope {
                 schema_version: 1,
@@ -634,6 +637,78 @@ fn fixture_process() {
 #[test]
 fn enhanced_shift_enter_composes_a_multiline_turn_and_restores_keyboard_mode() {
     multiline_turn_and_keyboard_restoration(b"\x1b[13;2u");
+}
+
+#[test]
+fn text_selection_freezes_stream_redraw_and_restores_captured_input() {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("selection PTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.args(["--exact", "fixture_process", "--nocapture"]);
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_STREAM_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_SELECTION_FIXTURE", "1");
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .expect("spawn selection fixture");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("selection reader");
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        while let Ok(read) = reader.read(&mut buffer) {
+            if read == 0 {
+                break;
+            }
+            reader_output
+                .lock()
+                .expect("output")
+                .extend_from_slice(&buffer[..read]);
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("selection writer");
+    #[cfg(windows)]
+    answer_cursor_position_query(&output, &mut writer);
+    wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    writer
+        .write_all(b"inspect\r")
+        .expect("submit streaming turn");
+    writer.flush().expect("flush streaming turn");
+    wait_for_screen(&output, 24, 80, "commentary-before-tool");
+    writer
+        .write_all(b"\x1b[17~")
+        .expect("F6 selects native text");
+    writer.flush().expect("flush F6");
+    wait_for_screen(&output, 24, 80, "Select text");
+    wait_for_mouse_capture_count(&output, false, 1);
+    let frozen = output.lock().expect("output").clone();
+    thread::sleep(Duration::from_millis(1200));
+    assert_eq!(
+        *output.lock().expect("output"),
+        frozen,
+        "streaming/spinner redraw cleared native selection"
+    );
+    writer
+        .write_all(b"\x1b")
+        .expect("Escape returns to live output");
+    writer.flush().expect("flush Escape");
+    wait_for_screen(&output, 24, 80, "stream-final-row-30");
+    wait_for_mouse_capture_count(&output, true, 2);
+    writer.write_all(&[3, 3]).expect("ordinary Ctrl+C exits");
+    writer.flush().expect("flush exit");
+    let status = child.wait().expect("selection fixture status");
+    drop(writer);
+    drop(pair.master);
+    reader_thread.join().expect("selection reader thread");
+    assert!(status.success());
 }
 
 #[test]
@@ -1938,6 +2013,34 @@ fn f4_dictation_displays_a_meter_and_enter_submits_the_final_revision() {
 
 fn wait_for_raw(output: &Arc<Mutex<Vec<u8>>>, needle: &[u8]) {
     wait_for_raw_count(output, needle, 1);
+}
+
+fn wait_for_mouse_capture_count(output: &Arc<Mutex<Vec<u8>>>, enabled: bool, expected: usize) {
+    // ConPTY projects native console-mode changes into a combined sequence;
+    // POSIX emulators receive Crossterm's individual mode commands.
+    let needles = if enabled {
+        [b"\x1b[?1000h".as_slice(), b"\x1b[?1003;1006h".as_slice()]
+    } else {
+        [b"\x1b[?1000l".as_slice(), b"\x1b[?1003;1006l".as_slice()]
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let raw = output.lock().expect("output");
+        let count = needles
+            .iter()
+            .map(|needle| {
+                raw.windows(needle.len())
+                    .filter(|bytes| bytes == needle)
+                    .count()
+            })
+            .sum::<usize>();
+        if count >= expected {
+            return;
+        }
+        drop(raw);
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("PTY did not change mouse capture to {enabled} {expected} times");
 }
 
 fn raw_contains(raw: &[u8], needle: &[u8]) -> bool {

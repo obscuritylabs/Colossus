@@ -32,6 +32,7 @@ mod devtools;
 #[cfg(windows)]
 mod interaction_windows;
 mod presentation;
+mod suspension;
 mod transfer;
 
 #[derive(Default)]
@@ -352,6 +353,7 @@ pub struct Host {
     next_tab: u64,
     next_command: i32,
     initialized: bool,
+    suspended: bool,
     expected_revision: Option<(u64, u64, u64)>,
     presentation: presentation::State,
     screenshot: Option<capture::Transfer>,
@@ -369,6 +371,7 @@ impl Host {
             next_tab: 1,
             next_command: 1,
             initialized: true,
+            suspended: false,
             expected_revision: None,
             presentation: presentation::State::default(),
             screenshot: None,

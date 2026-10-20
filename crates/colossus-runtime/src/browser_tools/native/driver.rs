@@ -9,6 +9,59 @@ use std::sync::{Arc, atomic::Ordering};
 pub(in crate::browser_tools) struct Registrar(pub(in crate::browser_tools) Arc<NativeState>);
 #[async_trait]
 impl BrowserDriver for Registrar {
+    fn supports_suspension(&self) -> bool {
+        self.0.driver.supports_suspension()
+    }
+    async fn suspend_session(
+        &self,
+        s: &BrowserSessionId,
+        generation: u64,
+    ) -> Result<(), BrowserDriverError> {
+        self.0.driver.suspend_session(s, generation).await
+    }
+    async fn resume_session(
+        &self,
+        s: &BrowserSessionId,
+        run_id: &str,
+        generation: u64,
+        k: &BrowserDriverControl,
+    ) -> Result<(), BrowserDriverError> {
+        self.0
+            .driver
+            .resume_session(s, run_id, generation, k)
+            .await?;
+        for entry in self
+            .0
+            .entries
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .values()
+        {
+            if entry
+                .request
+                .lock()
+                .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+                .as_ref()
+                .is_some_and(|request| request.session_id == *s)
+            {
+                let mut view = entry
+                    .view
+                    .lock()
+                    .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+                view.agent_generation = Some(generation);
+                #[cfg(windows)]
+                {
+                    view.viewer_detached = true;
+                }
+            }
+        }
+        self.0
+            .agent_generations
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .insert(s.clone(), generation);
+        Ok(())
+    }
     fn capabilities(&self) -> BrowserCapabilities {
         self.0.driver.capabilities()
     }

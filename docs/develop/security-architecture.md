@@ -762,6 +762,11 @@ the destination of a saved key requires native confirmation when saving the prov
 before the new binding is persisted. Unsaved enrollment bindings remain bounded and
 native-only; they allow catalog retries without another key-entry prompt. Unbound
 credential handles cannot authorize catalog network requests.
+Fresh provider enrollment shows the validated provider kind and exact ASCII endpoint
+inside the native token-entry prompt. Only acceptance of that immutable context can
+produce an enrollment binding; missing or changed contexts cannot reuse its secret.
+Standalone credential entry carries no provider authority. This keeps new key entry
+to one native prompt while retaining destination review for saved-key retargeting.
 
 Desktop setup files are untrusted, bounded ZIP inputs, selected through a native
 picker and read into memory without filesystem extraction. The importer rejects
@@ -852,6 +857,19 @@ authenticated action, cancellation and presentation channels carry only closed
 typed browser contracts. Each allocation retains an independently supervised process
 and egress obligation before launch. Context-destroying cancellation interrupts the
 session and requires a fresh allocation rather than renewing control of a closed page.
+
+Successful conversation runs in the ordinary-user Windows composition can instead
+suspend their page. Core first revokes the writer, then the proxy blocks admissions
+and acknowledges closure of every accepted socket; the private host acknowledges
+freezing all owned pages. A new `browser.open` effect can resume only the exact
+application/workspace/conversation and unchanged allocation options. Its newly
+consumed permit is checked against the full original origin envelope, and it receives
+a new writer generation with invalidated snapshots. Idle suspension never renews
+the original network deadline. Retained coordinator metadata is retired by the
+allocation's original hard lifetime ceiling, even after a later run resumes it.
+Expiry, failed suspension, cancellation and uncertain effects retain terminal cleanup.
+The native last view is a bounded static pixel copy
+and carries no browser authority.
 
 The contained Windows launcher keeps its process Jobs, completion ports, egress fence
 and profile authority in Core. Two fixed trusted helper roles run before CEF: one

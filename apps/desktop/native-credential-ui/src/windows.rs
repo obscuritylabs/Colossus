@@ -10,8 +10,8 @@ mod tests;
 mod visuals;
 
 use crate::{
-    DialogAppearance, NativePassword, PromptError, lifecycle::Completion, purpose::Purpose,
-    validation,
+    DialogAppearance, NativePassword, PromptError, ProviderCredentialContext,
+    lifecycle::Completion, purpose::Purpose, validation,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -51,6 +51,8 @@ struct Session {
     parent: HWND,
     heading: HWND,
     description: HWND,
+    destination_label: HWND,
+    destination: HWND,
     label: HWND,
     input: HWND,
     status: HWND,
@@ -59,6 +61,7 @@ struct Session {
     cancel: HWND,
     visuals: visuals::Visuals,
     purpose: Purpose,
+    context: Option<ProviderCredentialContext>,
     has_error: Cell<bool>,
     hovered: Cell<HWND>,
     cancelled: Arc<AtomicBool>,
@@ -73,6 +76,7 @@ pub(crate) fn open(
     completion: Completion,
     appearance: DialogAppearance,
     purpose: Purpose,
+    context: Option<ProviderCredentialContext>,
 ) {
     let Ok(handle) = parent.hwnd() else {
         completion.finish(Err(PromptError::Unavailable));
@@ -82,7 +86,9 @@ pub(crate) fn open(
     // SAFETY: Called on Tauri's UI thread with a live native parent. The owned
     // window retains the boxed session until WM_NCDESTROY. No callback blocks.
     unsafe {
-        create_for(parent, cancelled, completion, true, appearance, purpose);
+        create_for(
+            parent, cancelled, completion, true, appearance, purpose, context,
+        );
     }
 }
 
@@ -102,6 +108,7 @@ unsafe fn create(
             visible,
             appearance,
             Purpose::Token,
+            None,
         )
     }
 }
@@ -113,6 +120,7 @@ unsafe fn create_for(
     visible: bool,
     appearance: DialogAppearance,
     purpose: Purpose,
+    context: Option<ProviderCredentialContext>,
 ) -> Option<HWND> {
     if cancelled.load(Ordering::Acquire) || unsafe { IsWindow(parent) } == 0 {
         completion.finish(Err(PromptError::Cancelled));
@@ -138,11 +146,13 @@ unsafe fn create_for(
         completion.finish(Err(PromptError::Unavailable));
         return None;
     }
-    let (width, height) = visuals.outer_size();
+    let (width, height) = visuals.outer_size_with_context(context.is_some());
     let session = Box::new(Session {
         parent,
         heading: null_mut(),
         description: null_mut(),
+        destination_label: null_mut(),
+        destination: null_mut(),
         label: null_mut(),
         input: null_mut(),
         status: null_mut(),
@@ -151,6 +161,7 @@ unsafe fn create_for(
         cancel: null_mut(),
         visuals,
         purpose,
+        context,
         has_error: Cell::new(false),
         hovered: Cell::new(null_mut()),
         cancelled,

@@ -1357,6 +1357,7 @@ export function WorkSidebar({
 
       <WorkspaceNavigation
         active={surface}
+        hiddenDestinations={["library"]}
         onSelect={onSelectSurface}
         workAttention={selectedSpace?.attentionCount ?? 0}
       />

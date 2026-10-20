@@ -782,8 +782,16 @@ impl BrowserManager {
         {
             return Ok(());
         }
-        if replacement.is_none() && self.lock()?.tabs.len() >= MAX_TABS {
-            return Err(error("Close a browser tab before attaching another page."));
+        if replacement.is_none() {
+            let state = self.lock()?;
+            let completed = state.tabs.iter().any(|tab| {
+                tab.scope == scope
+                    && tab.dto.conversation_id.as_deref() == Some(conversation_id)
+                    && tab.dto.control == "completed"
+            });
+            if state.tabs.len() >= MAX_TABS && !completed {
+                return Err(error("Close a browser tab before attaching another page."));
+            }
         }
         let window = app
             .get_window("main")
@@ -821,7 +829,22 @@ impl BrowserManager {
         let Some(view) = admitted else {
             return Ok(());
         };
-        self.register_agent_view(scope, run_id, conversation_id, id, replacement, view)
+        let registered = self.register_agent_view(
+            scope,
+            run_id,
+            conversation_id,
+            id,
+            replacement,
+            view.clone(),
+        );
+        if registered.is_err() {
+            // Capacity can change during native admission. Positively detach
+            // the unregistered relay so a rejected tab cannot strand its lease.
+            view.close().await.map_err(|_| {
+                error("The new browser view is still detaching. Retry after it closes.")
+            })?;
+        }
+        registered
     }
 
     #[cfg(any(
@@ -844,6 +867,24 @@ impl BrowserManager {
             .to_owned();
         self.hide_all();
         let mut state = self.lock()?;
+        // A fresh run can resume the same suspended native context. Replace
+        // only its exact conversation/session's static image after the new
+        // authenticated attachment exists, without accumulating a tab per turn.
+        let replacement = replacement.or_else(|| {
+            state
+                .tabs
+                .iter()
+                .find(|tab| {
+                    tab.scope == scope
+                        && tab.dto.session_id == session_id
+                        && tab.dto.conversation_id.as_deref() == Some(conversation_id)
+                        && tab.dto.control == "completed"
+                })
+                .map(|tab| tab.dto.id.clone())
+        });
+        if replacement.is_none() && state.tabs.len() >= MAX_TABS {
+            return Err(error("Close a browser tab before attaching another page."));
+        }
         if let Some(replaced) = replacement {
             state.tabs.retain(|tab| tab.dto.id != replaced);
         }

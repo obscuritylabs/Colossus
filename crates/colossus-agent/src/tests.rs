@@ -3072,6 +3072,17 @@ async fn resumed_session_restores_prior_messages_and_persists_new_turn() {
 
 #[tokio::test]
 async fn resumed_legacy_session_projects_oversized_tool_history_without_a_context_service() {
+    assert_legacy_tool_history_projection("echo", false).await;
+}
+
+#[tokio::test]
+async fn resumed_native_history_archives_before_provider_dispatch_without_a_context_service() {
+    for tool_name in ["computer.windows", "browser.snapshot"] {
+        assert_legacy_tool_history_projection(tool_name, true).await;
+    }
+}
+
+async fn assert_legacy_tool_history_projection(tool_name: &str, archived: bool) {
     let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
         ProviderEvent::FinalOutput {
             text: "continued".into(),
@@ -3097,7 +3108,7 @@ async fn resumed_legacy_session_projects_oversized_tool_history_without_a_contex
             tool_call_id: None,
             tool_calls: vec![ModelToolCall {
                 call_id: "legacy-large-call".into(),
-                name: "echo".into(),
+                name: tool_name.into(),
                 arguments: json!({"text": "old"}),
             }],
         },
@@ -3134,6 +3145,15 @@ async fn resumed_legacy_session_projects_oversized_tool_history_without_a_contex
         .find(|message| message.role == ModelMessageRole::Tool)
         .expect("projected legacy tool result");
     assert!(serde_json::to_vec(projected).expect("message").len() <= MAX_MODEL_TOOL_MESSAGE_BYTES);
+    let output: Value = serde_json::from_str(projected.content.as_text().unwrap()).unwrap();
+    assert_eq!(
+        output
+            .pointer("/data/_colossusArchived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        archived
+    );
+    colossus_contracts::validate_model_transcript(&requests[0].messages).unwrap();
     drop(requests);
     let canonical = sessions
         .list_messages("legacy-large")

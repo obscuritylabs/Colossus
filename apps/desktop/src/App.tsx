@@ -2869,20 +2869,16 @@ export default function App() {
         return "clear";
       }
       case "select_surface":
-        if (
-          action.surface === "fleet" &&
-          !desktop.capabilities.delegation &&
-          !desktop.capabilities.agentWorkflows &&
-          !desktop.capabilities.plugins
-        ) {
-          setSlashCommandError("Agents are unavailable for this target.");
-          return "preserve";
-        }
         if (action.surface === "library" && !desktop.capabilities.artifacts) {
           setSlashCommandError("Artifacts are unavailable for this target.");
           return "preserve";
         }
         setWorkNavigationOpen(false);
+        if (action.surface === "library") {
+          setSurface("work");
+          setActiveSessionWorkspaceView("resources");
+          return "clear";
+        }
         setSurface(action.surface);
         return "clear";
       case "select_session_view":

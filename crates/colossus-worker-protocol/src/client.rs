@@ -66,6 +66,16 @@ impl WorkerControlClient {
         self.call(ControlOperation::ObservabilityDoctor).await
     }
 
+    /// Return active tool metadata without running a tool or discovering remote servers.
+    pub async fn tools(&self) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::ToolsList).await
+    }
+
+    /// Return configured search-profile metadata without issuing a search request.
+    pub async fn search_profiles(&self) -> Result<serde_json::Value, WorkerControlError> {
+        self.call(ControlOperation::SearchProfiles).await
+    }
+
     /// Change the worker-wide mode used outside client-scoped overrides.
     pub async fn set_approval_mode(
         &self,

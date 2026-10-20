@@ -6,6 +6,9 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 
+#[path = "observation_history.rs"]
+mod history;
+
 /// Maximum serialized size of one model-visible tool-result message.
 pub const MAX_MODEL_TOOL_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum combined serialized size of model-visible tool results in one user logical turn.
@@ -168,10 +171,12 @@ fn released_tool_image_message(result: &ToolResult) -> Option<ModelMessage> {
 ///
 /// This is also the compatibility path for sessions written before observations were
 /// bounded. Non-tool messages remain byte-for-byte equivalent, tool messages remain
-/// unchanged when their complete logical turn fits, and the canonical input slice is
-/// never mutated.
+/// unchanged when their complete logical turn fits, except transient browser/computer
+/// observations from completed human turns become provenance-only archive markers.
+/// The canonical input slice is never mutated.
 pub fn project_model_tool_observations(messages: &[ModelMessage]) -> Vec<ModelMessage> {
     let mut projected = messages.to_vec();
+    history::archive_previous_observations(&mut projected);
     let mut logical_start = 0;
     for index in 1..=projected.len() {
         let logical_end = index == projected.len() || projected[index].begins_user_turn();

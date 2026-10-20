@@ -421,6 +421,8 @@ pub struct TuiState {
     pub(super) new_items: usize,
     pub(super) transcript_height: usize,
     pub(super) transcript_width: usize,
+    /// Freeze the rendered view and release captured mouse input for terminal-native selection.
+    pub(super) selecting_text: bool,
     pub(super) loading_older: bool,
     pub(super) older_page_failed: bool,
     pub(super) native_history_pages_loaded: usize,
@@ -515,6 +517,7 @@ impl TuiState {
             new_items: 0,
             transcript_height: 1,
             transcript_width: 80,
+            selecting_text: false,
             loading_older: false,
             older_page_failed: false,
             native_history_pages_loaded: 0,

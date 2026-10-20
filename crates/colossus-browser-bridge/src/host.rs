@@ -20,6 +20,7 @@ use crate::{
 mod capture;
 mod dispatch;
 mod handoff;
+mod suspension;
 mod transfer;
 
 struct Session {
@@ -34,6 +35,7 @@ struct SessionState {
     writer_run: Option<String>,
     cancelled_through: Option<u64>,
     quiescing: bool,
+    suspended: bool,
     closing: bool,
     authority: RunControl,
     transfer: Option<capture::Transfer>,
@@ -124,7 +126,13 @@ async fn channel_loop(
         // Idle inherited channels can remain open; each accepted operation is bounded.
         let request = channel.read::<Request>(b"request", sequence).await?;
         let correct_channel = matches!(&request, Request::Ready {})
-            || matches!(&request, Request::Cancel { .. } | Request::Close { .. }) == control;
+            || matches!(
+                &request,
+                Request::Cancel { .. }
+                    | Request::Close { .. }
+                    | Request::Suspend { .. }
+                    | Request::Resume { .. }
+            ) == control;
         if !correct_channel {
             return Err(BrowserDriverError::Denied);
         }
@@ -170,6 +178,7 @@ impl Host {
                 writer_run: None,
                 cancelled_through: None,
                 quiescing: false,
+                suspended: false,
                 closing: false,
                 authority: RunControl::default(),
                 transfer: None,
@@ -314,6 +323,7 @@ impl Host {
         crate::validation::command(command, open, &self.enrollment)?;
         if state.closing
             || state.quiescing
+            || state.suspended
             || command.control_generation < state.generation
             || state
                 .cancelled_through

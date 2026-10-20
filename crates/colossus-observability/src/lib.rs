@@ -9,6 +9,8 @@
 mod config;
 mod conventions;
 mod journal;
+#[cfg(feature = "local-logs")]
+mod local_logs;
 mod metrics;
 #[cfg(feature = "host-exporters")]
 mod sdk;
@@ -17,6 +19,8 @@ mod trace_context;
 pub use config::*;
 pub use conventions::*;
 pub use journal::*;
+#[cfg(feature = "local-logs")]
+pub use local_logs::*;
 pub use metrics::*;
 #[cfg(feature = "host-exporters")]
 pub use sdk::*;

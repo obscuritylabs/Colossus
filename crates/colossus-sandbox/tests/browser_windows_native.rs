@@ -4,6 +4,8 @@
 mod actions;
 #[path = "browser_windows_native/capture.rs"]
 mod capture;
+#[path = "browser_windows_native/continuity.rs"]
+mod continuity;
 #[path = "browser_windows_native/exercise.rs"]
 mod exercise;
 #[path = "browser_windows_native/fixture.rs"]
@@ -12,6 +14,8 @@ mod fixture;
 mod keyboard;
 #[path = "browser_windows_native/logging.rs"]
 mod logging;
+#[path = "browser_windows_native/tls.rs"]
+mod tls;
 #[path = "browser_windows_native/transfer.rs"]
 mod transfer;
 
@@ -93,6 +97,7 @@ async fn run(user_development: bool) {
         .as_ref()
         .map_or_else(|| state_path.clone(), |state| state.path().to_owned());
     let fixture = fixture::Fixture::start().await;
+    let tls_fixture = tls::Fixture::start().await;
     let request = BrowserDriverOpenRequest {
         binding: BrowserSessionBinding {
             runtime_id: "windows-native-runtime".into(),
@@ -110,7 +115,10 @@ async fn run(user_development: bool) {
             public_web: false,
             profile: Default::default(),
             mode: BrowserMode::Embedded,
-            allowed_origins: vec![BrowserOrigin::parse(&fixture.origin).unwrap()],
+            allowed_origins: vec![
+                BrowserOrigin::parse(&fixture.origin).unwrap(),
+                BrowserOrigin::parse(&tls_fixture.target.origin).unwrap(),
+            ],
             initial_url: Some(BrowserUrl::parse(format!("{}/fixture", fixture.origin)).unwrap()),
         },
     };
@@ -181,13 +189,17 @@ async fn run(user_development: bool) {
     let mut check = tokio::spawn(exercise::run(
         runner,
         request,
-        denied,
-        fixture.origin.clone(),
-        Arc::clone(&fixture.uploaded),
-        long_profile.then_some(logging::Layout {
-            managed_root: state_path.clone(),
-            engine_root: engine_state_path.clone(),
-        }),
+        exercise::Fixtures {
+            denied,
+            origin: fixture.origin.clone(),
+            uploaded: Arc::clone(&fixture.uploaded),
+            requests: Arc::clone(&fixture.allowed_requests),
+            tls: tls_fixture.target.clone(),
+            long_profile_layout: long_profile.then_some(logging::Layout {
+                managed_root: state_path.clone(),
+                engine_root: engine_state_path.clone(),
+            }),
+        },
     ));
     let result = tokio::time::timeout(Duration::from_secs(90), &mut check).await;
     if result.is_err() {
@@ -201,6 +213,7 @@ async fn run(user_development: bool) {
     let denied = fixture.denied_requests.load(Ordering::SeqCst);
     let uploaded = fixture.uploaded.load(Ordering::SeqCst);
     fixture.finish().await;
+    tls_fixture.finish().await;
     assert!(
         matches!(cleanup, Ok(Ok(()))),
         "full native cleanup unknown; preserve exact private state obligation"
@@ -259,6 +272,8 @@ async fn run(user_development: bool) {
         "exact_origin_denial":true,"native_upload_actual_http_bytes":true,
         "native_download_actual_http_bytes":true,"full_job_and_io_cleanup":true,
         "native_typed_automation":true,"native_tabs":true,
+        "suspended_session_continuity":true,
+        "native_untrusted_tls_rejected_with_safe_diagnostic":true,
         "long_managed_path_short_private_profile_without_file_logging":long_profile,
         "cef_shutdown":true,"whole_host_network_acceptance":false,"production_containment":false})
     );

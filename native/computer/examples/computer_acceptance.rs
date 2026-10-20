@@ -341,6 +341,37 @@ async fn acceptance(
         if replay != Err(ComputerDriverError::Stale) {
             return Err("consumed observation was reusable".into());
         }
+        let ComputerDriverReply::Snapshot(pointer_observation) =
+            dispatch!(ComputerCommand::Snapshot {
+                session_id: session.session_id.clone(),
+                control_generation: session.control_generation,
+                max_nodes: 512
+            })
+        else {
+            return Err("missing pointer-motion observation".into());
+        };
+        evidence.set("foreign_pointer_motion_retains_control");
+        fixture_pointer_motion(&title)?;
+        let ComputerDriverReply::Status(pointer_status) = dispatch!(ComputerCommand::Status {
+            session_id: session.session_id.clone()
+        }) else {
+            return Err("missing pointer-motion control state".into());
+        };
+        if pointer_status.state != ComputerControlState::Active
+            || pointer_status.control_generation != session.control_generation
+            || pointer_status.reason.is_some()
+        {
+            return Err("foreign pointer movement interrupted native control".into());
+        }
+        dispatch!(ComputerCommand::Input {
+            session_id: session.session_id.clone(),
+            control_generation: session.control_generation,
+            observation_id: pointer_observation.observation_id,
+            input: ComputerInput::Move { x: 20, y: 20 }
+        });
+        println!(
+            "PASS foreign pointer motion preserves control and the next native input succeeds"
+        );
         let ComputerDriverReply::Snapshot(observation) = dispatch!(ComputerCommand::Snapshot {
             session_id: session.session_id.clone(),
             control_generation: session.control_generation,
@@ -568,10 +599,76 @@ async fn acceptance(
         &serde_json::to_vec(&serde_json::json!({
             "schema_version":1,"passed":true,"owned_modal":true,"modal_reparent_denied":true,
             "writer_contention":true,"foreign_window_denied":true,"cancellation":true,
-            "balanced_drag_helper_exit":true,"background_focus_regression_checked":require_cover
+            "balanced_drag_helper_exit":true,"background_focus_regression_checked":require_cover,
+            "foreign_pointer_motion_continued":true
         }))?,
     )?;
     println!("PASS native helper acknowledged cleanup; synthetic user apps remain running");
+    Ok(())
+}
+
+#[cfg(windows)]
+fn fixture_pointer_motion(title: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use windows_sys::Win32::{
+        Foundation::RECT,
+        UI::{Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
+    };
+    let wide = |value: &str| value.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    let mut bounds = RECT::default();
+    // SAFETY: exact nonce fixture/class and foreground queries; no personal app
+    // is admitted. This acceptance-only input is pointer motion with no buttons.
+    let (root, width, height, origin_x, origin_y) = unsafe {
+        let root = FindWindowW(
+            wide("ColossusDisposableComputerFixture").as_ptr(),
+            wide(title).as_ptr(),
+        );
+        if root.is_null() || GetForegroundWindow() != root || GetWindowRect(root, &mut bounds) == 0
+        {
+            return Err(
+                "pointer regression requires the exact foreground synthetic fixture".into(),
+            );
+        }
+        (
+            root,
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN),
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+        )
+    };
+    if width <= 1 || height <= 1 {
+        return Err("pointer regression requires bounded virtual desktop geometry".into());
+    }
+    let center = |near: i32, far: i32| (i64::from(near) + i64::from(far)) / 2;
+    let normalize =
+        |coordinate: i64, origin: i32, size: i32| -> Result<i32, Box<dyn std::error::Error>> {
+            let offset = coordinate - i64::from(origin);
+            if !(0..i64::from(size)).contains(&offset) {
+                return Err("synthetic pointer target lies outside the virtual desktop".into());
+            }
+            Ok(i32::try_from(offset * 65535 / i64::from(size - 1))?)
+        };
+    let input = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: normalize(center(bounds.left, bounds.right), origin_x, width)?,
+                dy: normalize(center(bounds.top, bounds.bottom), origin_y, height)?,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    // SAFETY: one fully initialized mouse-motion event. Recheck the exact
+    // synthetic foreground before sending; no click or key can be generated.
+    if unsafe {
+        GetForegroundWindow() != root
+            || SendInput(1, &input, std::mem::size_of::<INPUT>() as i32) != 1
+    } {
+        return Err("foreign synthetic pointer motion was not accepted".into());
+    }
     Ok(())
 }
 

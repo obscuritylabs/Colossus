@@ -129,6 +129,56 @@ impl BrowserHostPool {
 
 #[async_trait]
 impl BrowserDriver for BrowserHostPool {
+    fn supports_suspension(&self) -> bool {
+        self.inner.factory.supports_suspension()
+    }
+
+    async fn suspend_session(
+        &self,
+        id: &BrowserSessionId,
+        through_generation: u64,
+    ) -> Result<(), BrowserDriverError> {
+        let entry = self.entry(id)?.ok_or(BrowserDriverError::Stale)?;
+        let _operation = entry.operation.lock().await;
+        let driver = {
+            let state = entry
+                .state
+                .lock()
+                .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+            if state.terminal || entry.admission_fenced.load(Ordering::Acquire) {
+                return Err(BrowserDriverError::Stale);
+            }
+            state.driver.clone().ok_or(BrowserDriverError::Stale)?
+        };
+        transfer::retire(&entry)?;
+        driver.suspend_session(id, through_generation).await
+    }
+
+    async fn resume_session(
+        &self,
+        id: &BrowserSessionId,
+        run_id: &str,
+        generation: u64,
+        control: &BrowserDriverControl,
+    ) -> Result<(), BrowserDriverError> {
+        let entry = self.entry(id)?.ok_or(BrowserDriverError::Stale)?;
+        let _operation = entry.operation.lock().await;
+        let driver = {
+            let state = entry
+                .state
+                .lock()
+                .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+            if state.terminal
+                || entry.admission_fenced.load(Ordering::Acquire)
+                || control.is_cancelled()
+            {
+                return Err(BrowserDriverError::Stale);
+            }
+            state.driver.clone().ok_or(BrowserDriverError::Stale)?
+        };
+        driver.resume_session(id, run_id, generation, control).await
+    }
+
     fn cancellation_disposition(&self) -> BrowserCancelDisposition {
         BrowserCancelDisposition::ClosesContext
     }

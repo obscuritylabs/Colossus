@@ -70,6 +70,11 @@ impl EffectExecutor for ComputerEffect<'_> {
             command: command.clone(),
         };
         let observed_at = Instant::now();
+        tracing::debug!(
+            target: "colossus.computer",
+            action = request.action.as_str(),
+            "native computer dispatch started"
+        );
         let reply = tokio::time::timeout(
             Duration::from_millis(u64::from(self.computer.limits.action_timeout_ms)),
             self.computer.driver.execute(native, &run.control),
@@ -78,6 +83,14 @@ impl EffectExecutor for ComputerEffect<'_> {
         let reply = match reply {
             Ok(Ok(reply)) => reply,
             Ok(Err(error)) => {
+                tracing::warn!(
+                    target: "colossus.computer",
+                    action = request.action.as_str(),
+                    error_kind = ?error,
+                    outcome_certainty = if error == ComputerDriverError::OutcomeUnknown { "unknown" } else { "not_executed" },
+                    elapsed_ms = observed_at.elapsed().as_millis() as u64,
+                    "native computer dispatch failed"
+                );
                 if matches!(
                     error,
                     ComputerDriverError::OutcomeUnknown | ComputerDriverError::UserStopped
@@ -87,6 +100,14 @@ impl EffectExecutor for ComputerEffect<'_> {
                 return Err(driver_error(error));
             }
             Err(_) => {
+                tracing::warn!(
+                    target: "colossus.computer",
+                    action = request.action.as_str(),
+                    error_kind = "timeout",
+                    outcome_certainty = if mutation(&command) { "unknown" } else { "not_executed" },
+                    elapsed_ms = observed_at.elapsed().as_millis() as u64,
+                    "native computer dispatch timed out"
+                );
                 self.computer.cancel_run(&run.binding.run_id);
                 return Err(if mutation(&command) {
                     unknown()
@@ -95,6 +116,12 @@ impl EffectExecutor for ComputerEffect<'_> {
                 });
             }
         };
+        tracing::debug!(
+            target: "colossus.computer",
+            action = request.action.as_str(),
+            elapsed_ms = observed_at.elapsed().as_millis() as u64,
+            "native computer dispatch completed"
+        );
         self.computer.run(&request.context).map_err(|_| unknown())?;
         let result = stage_reply(
             self.computer,
@@ -180,7 +207,10 @@ fn admit_command(
     if matches!(command, ComputerCommand::Close { .. }) {
         return Ok(());
     }
-    if session.state != ComputerControlState::Active || state.paused || state.stopped {
+    if session.state == ComputerControlState::Paused || state.paused {
+        return Err(driver_error(ComputerDriverError::Paused));
+    }
+    if session.state != ComputerControlState::Active || state.stopped {
         return Err(driver_error(ComputerDriverError::Denied));
     }
     if let ComputerCommand::Input {

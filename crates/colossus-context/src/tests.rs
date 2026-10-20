@@ -605,6 +605,68 @@ async fn bounded_recent_tool_result_allows_automatic_compaction() {
 }
 
 #[tokio::test]
+async fn prior_native_history_is_archived_before_budgeting_without_rewriting_evidence() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_journal, sessions, snapshots, service) = fixture(ContextConfig::default(), provider);
+    let mut assistant = message(ModelMessageRole::Assistant, "");
+    assistant.tool_calls.push(ModelToolCall {
+        call_id: "old-windows".into(),
+        name: "computer.windows".into(),
+        arguments: json!({}),
+    });
+    let tool = ModelMessage {
+        agent_message_origin: None,
+        role: ModelMessageRole::Tool,
+        content: json!({"windows": [{"title": "old app", "nodes": "x".repeat(200_000)}]})
+            .to_string()
+            .into(),
+        tool_call_id: Some("old-windows".into()),
+        tool_calls: vec![],
+    };
+    let messages = vec![
+        message(ModelMessageRole::User, "Inspect the app"),
+        assistant,
+        tool.clone(),
+        message(
+            ModelMessageRole::Assistant,
+            "The earlier inspection is complete.",
+        ),
+        message(ModelMessageRole::User, "Start the next request"),
+    ];
+    for value in &messages {
+        sessions
+            .append_message("session-1", "prior-native-run", value.clone(), user_actor())
+            .unwrap();
+    }
+
+    let prepared = service
+        .prepare(preparation_request(messages.clone(), false))
+        .await
+        .unwrap();
+
+    assert!(
+        !prepared.snapshot_created,
+        "stale window trees must not force a model summary"
+    );
+    assert!(prepared.token_estimate < prepared.threshold_tokens);
+    assert_eq!(prepared.messages.len(), messages.len());
+    assert_eq!(prepared.messages.last(), messages.last());
+    assert_eq!(prepared.messages[2].tool_call_id, tool.tool_call_id);
+    let archived: Value =
+        serde_json::from_str(prepared.messages[2].content.as_text().unwrap()).unwrap();
+    assert_eq!(archived["data"]["_colossusArchived"], true);
+    colossus_contracts::validate_model_transcript(&prepared.messages).unwrap();
+    assert_eq!(
+        sessions.list_messages("session-1").unwrap()[2].message,
+        tool
+    );
+    assert!(snapshots.list("session-1").unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn oversized_legacy_tool_result_is_projected_without_rewriting_canonical_history() {
     let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
         output: None,

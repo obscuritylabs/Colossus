@@ -394,13 +394,32 @@ impl EffectExecutor for ProviderExecutor {
                 .await?;
             return collector.finish(terminal, &permit);
         }
-        self.execute_permitted(request, &permit)
+        let operation = crate::logging::ProviderOperation::begin(
+            self.profile.kind,
+            &self.profile.name,
+            request,
+            false,
+        );
+        let result = self
+            .execute_permitted(request, &permit)
             .await
-            .map_err(provider_execution_error)
+            .map_err(provider_execution_error);
+        operation.finish(&result);
+        result
     }
 }
 
 pub(super) fn provider_execution_error(error: ProviderError) -> ExecutionError {
+    let category = match &error {
+        ProviderError::Progress(_) => "release_or_observer",
+        ProviderError::Configuration(_) => "configuration",
+        ProviderError::Credential(_) => "credential",
+        ProviderError::Transport(_) => "transport",
+        ProviderError::Rejected(failure) => failure.reason.code(),
+        ProviderError::Status { .. } => "http_status",
+        ProviderError::Malformed(_) => "malformed_response",
+    };
+    tracing::debug!(target: "colossus.provider", event_name = "provider.adapter_error", error_type = category);
     match error {
         ProviderError::Rejected(failure) => ExecutionError::ProviderRejected(failure),
         ProviderError::Progress(error) => *error,
@@ -459,8 +478,17 @@ impl ProviderExecutor {
             permit.obligations().timeout_ms,
         );
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
-        self.execute_stream_permitted(effect, permit, observer, deadline)
-            .await
+        let operation = crate::logging::ProviderOperation::begin(
+            self.profile.kind,
+            &self.profile.name,
+            effect,
+            true,
+        );
+        let result = self
+            .execute_stream_permitted(effect, permit, observer, deadline)
+            .await;
+        operation.finish(&result);
+        result
     }
 
     async fn execute_stream_permitted(
@@ -1184,6 +1212,7 @@ impl ProviderExecutor {
             drop(response);
             drop(secrets);
             retries += 1;
+            tracing::info!(target: "colossus.provider", event_name = "provider.retry", provider = self.profile.kind.as_str(), provider_profile = crate::logging::safe_identifier(&self.profile.name), http_status = last_status, attempt = retries, delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX));
             let retry_deadline = tokio::time::Instant::now() + delay;
             let retry_at = (OffsetDateTime::now_utc()
                 + time::Duration::try_from(delay)
@@ -1273,6 +1302,11 @@ impl ProviderExecutor {
                 builder.timeout(deadline.saturating_duration_since(tokio::time::Instant::now()));
         }
         let response = builder.send().await?;
+        if response.status().is_success() {
+            tracing::debug!(target: "colossus.provider", event_name = "provider.connected", provider = self.profile.kind.as_str(), provider_profile = crate::logging::safe_identifier(&self.profile.name), http_status = response.status().as_u16(), streaming);
+        } else {
+            tracing::warn!(target: "colossus.provider", event_name = "provider.http_failed", provider = self.profile.kind.as_str(), provider_profile = crate::logging::safe_identifier(&self.profile.name), http_status = response.status().as_u16(), streaming);
+        }
         Ok((response, secrets))
     }
 
@@ -1658,6 +1692,7 @@ impl ProviderExecutor {
         let mut continuation_events = Vec::new();
         let mut terminal_diagnostic = None;
         let mut raw_bytes = 0_usize;
+        let stream_started = std::time::Instant::now();
         let mut stream = response.bytes_stream();
         let mut emitter = ProviderStreamEmitter::new(permit, observer);
         let mut flush_interval = tokio::time::interval(STREAMED_MODEL_DELTA_FLUSH_INTERVAL);
@@ -1684,6 +1719,9 @@ impl ProviderExecutor {
                 let chunk = chunk.map_err(|error| {
                     provider_execution_error(ProviderError::Transport(error.to_string()))
                 })?;
+                if raw_bytes == 0 {
+                    tracing::debug!(target: "colossus.provider", event_name = "provider.first_chunk", provider = self.profile.kind.as_str(), provider_profile = crate::logging::safe_identifier(&self.profile.name), elapsed_ms = u64::try_from(stream_started.elapsed().as_millis()).unwrap_or(u64::MAX));
+                }
                 raw_bytes = raw_bytes.saturating_add(chunk.len());
                 if raw_bytes > limit {
                     return Err(provider_execution_error(ProviderError::Malformed(

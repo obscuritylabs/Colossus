@@ -319,8 +319,13 @@ impl Broker {
         if operator_control::user_stopped(&session.summary) {
             return Err(Error::UserStopped);
         }
+        if session.summary.state == ComputerControlState::Paused {
+            return Err(Error::Paused);
+        }
+        if session.summary.control_generation != generation {
+            return Err(Error::Stale);
+        }
         if session.summary.state != ComputerControlState::Active
-            || session.summary.control_generation != generation
             || self.cancel.load(Ordering::Acquire)
         {
             #[cfg(feature = "native-test-driver")]
@@ -742,7 +747,7 @@ impl Broker {
                         .signals,
                 );
                 if signals.human.load(Ordering::Acquire) != observation.human {
-                    return Err(Error::Denied);
+                    return Err(Error::Paused);
                 }
                 if signals.native_epoch.load(Ordering::Acquire) != observation.native_epoch {
                     return Err(Error::Stale);

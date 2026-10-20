@@ -3,7 +3,7 @@ use std::sync::{Arc, atomic::AtomicBool};
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use crate::ColorScheme;
-use crate::{DialogAppearance, NativePassword, purpose::Purpose};
+use crate::{DialogAppearance, NativePassword, ProviderCredentialContext, purpose::Purpose};
 use colossus_contracts::HostSecret;
 
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
@@ -44,7 +44,22 @@ pub async fn prompt(
     parent: tauri::Window,
     appearance: DialogAppearance,
 ) -> Result<HostSecret, PromptError> {
-    prompt_for(parent, appearance, Purpose::Token)
+    prompt_for(parent, appearance, Purpose::Token, None)
+        .await?
+        .into_token()
+}
+
+/// Accept a token while showing the host-validated provider and exact destination.
+/// The context is immutable for the lifetime of this native prompt.
+///
+/// # Errors
+/// Returns the same categorical cancellation and native-entry failures as [`prompt`].
+pub async fn prompt_provider(
+    parent: tauri::Window,
+    appearance: DialogAppearance,
+    context: ProviderCredentialContext,
+) -> Result<HostSecret, PromptError> {
+    prompt_for(parent, appearance, Purpose::Token, Some(context))
         .await?
         .into_token()
 }
@@ -61,17 +76,18 @@ pub async fn prompt_password(
     parent: tauri::Window,
     appearance: DialogAppearance,
 ) -> Result<NativePassword, PromptError> {
-    prompt_for(parent, appearance, Purpose::Pkcs12Password).await
+    prompt_for(parent, appearance, Purpose::Pkcs12Password, None).await
 }
 
 async fn prompt_for(
     parent: tauri::Window,
     appearance: DialogAppearance,
     purpose: Purpose,
+    context: Option<ProviderCredentialContext>,
 ) -> Result<NativePassword, PromptError> {
     #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
-        let _ = (parent, appearance, purpose);
+        let _ = (parent, appearance, purpose, context);
         return Err(PromptError::Unsupported);
     }
     #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
@@ -91,11 +107,32 @@ async fn prompt_for(
         parent
             .run_on_main_thread(move || {
                 #[cfg(windows)]
-                crate::windows::open(&native_parent, cancelled, completion, appearance, purpose);
+                crate::windows::open(
+                    &native_parent,
+                    cancelled,
+                    completion,
+                    appearance,
+                    purpose,
+                    context,
+                );
                 #[cfg(target_os = "macos")]
-                crate::macos::open(&native_parent, cancelled, completion, appearance, purpose);
+                crate::macos::open(
+                    &native_parent,
+                    cancelled,
+                    completion,
+                    appearance,
+                    purpose,
+                    context,
+                );
                 #[cfg(target_os = "linux")]
-                crate::linux::open(&native_parent, cancelled, completion, appearance, purpose);
+                crate::linux::open(
+                    &native_parent,
+                    cancelled,
+                    completion,
+                    appearance,
+                    purpose,
+                    context,
+                );
             })
             .map_err(|_| PromptError::Unavailable)?;
         receiver.await.map_err(|_| PromptError::Cancelled)?

@@ -102,6 +102,10 @@ impl BrowserCoordinator {
                     }),
                     quiescing: false,
                     cleanup_scheduled: false,
+                    suspended: false,
+                    retirement_deadline: std::time::Instant::now()
+                        + Duration::from_millis(u64::from(self.capabilities.limits.max_lease_ms)),
+                    retirement_scheduled: false,
                     snapshots: BTreeMap::new(),
                     needs_snapshot: true,
                 },

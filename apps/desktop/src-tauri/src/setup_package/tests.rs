@@ -666,3 +666,94 @@ fn instruction_links_validate_and_canonicalize_the_destination_shown_for_native_
             .is_err()
     );
 }
+#[test]
+fn saved_setup_keys_require_exact_destination_binding_after_import_review() {
+    use crate::{
+        desktop_settings::{DesktopSettings, ProviderKindSetting, ProviderSetting},
+        managed_configuration::{
+            CredentialBackendSetting, CredentialKindSetting, CredentialMetadataSetting,
+        },
+        state::AppState,
+    };
+    let state = AppState::default();
+    let mut settings = DesktopSettings::default();
+    settings
+        .global_configuration
+        .credentials
+        .push(CredentialMetadataSetting {
+            id: "saved-key".into(),
+            label: "Saved key".into(),
+            kind: CredentialKindSetting::ApiKey,
+            backend: CredentialBackendSetting::Desktop,
+            created_at_ms: 0,
+        });
+    let original = ProviderSetting {
+        credential_required: false,
+        profile: "package-provider".into(),
+        kind: ProviderKindSetting::Compatible,
+        base_url: "https://models.example.test/v1".into(),
+        credential_id: Some("saved-key".into()),
+        timeout_ms: None,
+    };
+    settings.providers.push(original.clone());
+    assert!(
+        super::commands::reused_setup_credential_origin(
+            &state,
+            &settings,
+            &original,
+            "unknown-key"
+        )
+        .is_err()
+    );
+    assert_eq!(
+        super::commands::reused_setup_credential_origin(&state, &settings, &original, "saved-key")
+            .unwrap(),
+        None
+    );
+    let mut package_destination = original.clone();
+    package_destination.base_url = "https://other.example.test/custom/v1".into();
+    assert_eq!(
+        super::commands::reused_setup_credential_origin(
+            &state,
+            &settings,
+            &package_destination,
+            "saved-key"
+        )
+        .unwrap(),
+        Some("package-provider: https://other.example.test/custom/v1".into())
+    );
+    package_destination.base_url = original.base_url.clone();
+    package_destination.kind = ProviderKindSetting::Responses;
+    assert!(
+        super::commands::reused_setup_credential_origin(
+            &state,
+            &settings,
+            &package_destination,
+            "saved-key"
+        )
+        .unwrap()
+        .is_some()
+    );
+    // The native enrollment cache can authorize the same binding before saving
+    // the provider; unrelated key handles never acquire that authority.
+    crate::provider_catalog::remember_credential_destination(
+        &state,
+        &settings,
+        &crate::provider_enrollment::AcceptedProviderDestination::synthetic(
+            package_destination.kind,
+            &package_destination.base_url,
+        ),
+        "saved-key",
+    )
+    .unwrap();
+    assert_eq!(
+        super::commands::reused_setup_credential_origin(
+            &state,
+            &settings,
+            &package_destination,
+            "saved-key"
+        )
+        .unwrap(),
+        None
+    );
+}

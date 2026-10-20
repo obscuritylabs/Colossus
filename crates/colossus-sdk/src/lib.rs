@@ -25,6 +25,8 @@ mod grpc;
 mod keyring_provider;
 #[cfg(all(feature = "sidecar", target_os = "linux"))]
 mod linux_credential_session;
+#[cfg(all(feature = "sidecar", any(unix, windows)))]
+mod logging_options;
 #[cfg(all(
     feature = "sidecar",
     any(

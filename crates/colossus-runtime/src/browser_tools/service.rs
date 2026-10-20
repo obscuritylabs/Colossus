@@ -154,6 +154,7 @@ impl RuntimeBrowserTools {
             self.finish_run(&run.actor.run_id).await;
         }
         super::native::lifecycle::drain(self).await;
+        let _ = self.coordinator.shutdown().await;
     }
 }
 

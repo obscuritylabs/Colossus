@@ -168,6 +168,35 @@ fn ordinary_human_input_still_pauses_and_stop_dominates_takeover() {
 }
 
 #[test]
+fn pointer_motion_preserves_active_generation_until_click_or_explicit_escape() {
+    let human = AtomicU64::new(0);
+    let mut session = active();
+    for _ in 0..100 {
+        foreign_pointer(&human, true);
+        assert_eq!(
+            decide(session.state, None, human.load(Ordering::Acquire) != 0),
+            None
+        );
+    }
+    assert_eq!(session.control_generation, 1);
+    let keyboard = Keyboard::new();
+    let escape = keyboard.route(true, Key::Escape, true, false);
+    decide(session.state, escape.action, false)
+        .unwrap()
+        .apply(&mut session);
+    assert_eq!(session.state, State::Stopped);
+    assert_eq!(session.reason, Some(Reason::UserStopped));
+
+    let mut session = active();
+    foreign_pointer(&human, false);
+    decide(session.state, None, human.load(Ordering::Acquire) != 0)
+        .unwrap()
+        .apply(&mut session);
+    assert_eq!(session.state, State::Paused);
+    assert_eq!(session.reason, Some(Reason::UserTakeover));
+}
+
+#[test]
 fn delayed_pause_after_takeover_cannot_resume_the_session() {
     let mut session = active();
     assert_eq!(decide(session.state, Some(Action::Resume), false), None);
@@ -290,13 +319,7 @@ fn stop_is_positive_before_dispatch_but_never_relabels_possible_input() {
 
 #[test]
 fn pending_stop_is_categorical_only_before_the_first_input_effect() {
-    for pending in [
-        0,
-        Action::Resume as u8,
-        Action::Pause as u8,
-        Action::WindowClosed as u8,
-        255,
-    ] {
+    for pending in [0, Action::Resume as u8, Action::WindowClosed as u8, 255] {
         assert_eq!(
             undispatched_failure(ComputerDriverError::Denied, pending),
             ComputerDriverError::Denied
@@ -309,6 +332,10 @@ fn pending_stop_is_categorical_only_before_the_first_input_effect() {
             ComputerDriverError::OutcomeUnknown
         );
     }
+    assert_eq!(
+        undispatched_failure(ComputerDriverError::Denied, Action::Pause as u8),
+        ComputerDriverError::Paused
+    );
     assert_eq!(
         undispatched_failure(ComputerDriverError::Denied, Action::Stop as u8),
         ComputerDriverError::UserStopped

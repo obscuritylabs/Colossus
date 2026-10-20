@@ -9,6 +9,7 @@ mod appearance;
 mod lifecycle;
 mod password;
 mod prompt;
+mod provider;
 mod purpose;
 mod validation;
 
@@ -22,7 +23,8 @@ mod windows;
 
 pub use appearance::{ColorScheme, DialogAppearance, TextSize};
 pub use password::NativePassword;
-pub use prompt::{PromptError, prompt, prompt_password};
+pub use prompt::{PromptError, prompt, prompt_password, prompt_provider};
+pub use provider::{CredentialProvider, ProviderCredentialContext};
 
 /// Run isolated, synthetic `AppKit` control acceptance on the process main thread.
 /// This entry point exists only in explicitly enabled native test builds.

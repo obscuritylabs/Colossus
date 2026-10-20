@@ -846,6 +846,37 @@ and removal of positively owned native keys. Signed installed components must
 bind that acceptance to their exact browser/helper builds and OS policy. Never
 substitute a certificate-error continuation or ignored TLS errors for CA trust.
 
+The Windows ordinary-user host uses Chromium's server verifier, which reads the
+current user's and machine's trusted roots, intermediate CAs and explicit distrust
+stores, including enterprise policy roots. A temporary browser profile does not
+replace this OS trust. The CONNECT proxy preserves end-to-end TLS; Colossus network
+CA bundles do not configure Chromium. Client identities require separate exact-origin
+native review and enrollment; trusting a server CA does not authorize a private key.
+
+A rejected Windows server certificate emits `browser.tls_verification_failed` to
+the local operational log. The record contains numeric Chromium certificate/error
+status and a categorical Windows SSL-chain diagnostic. The Windows check uses
+existing OS trust with cached revocation data and performs no AIA, CRL, OCSP or root
+downloads. `verified_cached` means that this separate Windows check succeeded;
+Chromium still rejected the connection. `revocation_unknown` means no conclusive
+cached revocation result was available. Neither outcome changes Chromium's decision.
+URLs, hostnames, certificate subjects, fingerprints and keys are excluded.
+
+After configuring the native Windows build, the diagnostic contract has a separate
+automated fixture. Use Python 3.11+ with `cryptography` 50.x and a fresh directory:
+
+```powershell
+cmake --build .local/cef-build-windows64 --config Release --target colossus-browser-system-trust-test
+python -B native/browser/scripts/test_system_trust_win.py --executable .local/cef-build-windows64/Release/colossus-browser-system-trust-test.exe --directory .local/system-trust-fixture
+```
+
+The native fixture uses exclusive in-memory trust anchors and CRLs to check valid,
+untrusted, wrong-hostname, expired, revoked, wrong-usage, corrupted-signature and
+uncached-revocation cases. A loopback trap requires zero certificate-network
+retrievals. It opens OS stores read-only without installing certificates or keys.
+This validates diagnostics, not an installed custom-CA Chromium handshake or
+certificate custody; retain the operator-driven native acceptance tier for those.
+
 The dedicated macOS host's HOME also uses retained parent/directory ownership and
 exclusive retirement before descriptor-relative cleanup. A reused basename or
 replaced directory remains untouched or quarantined with an unknown outcome;

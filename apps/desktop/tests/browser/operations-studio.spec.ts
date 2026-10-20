@@ -812,8 +812,6 @@ test("artifact, file, and workspace destination surfaces follow both themes", as
   await page.getByRole("button", { name: "Close tool pane" }).click();
 
   for (const [destination, selector, expectedBackground] of [
-    ["Capabilities", ".overview-section", "rgb(255, 255, 255)"],
-    ["Library", ".artifact-library-list article", "rgb(255, 255, 255)"],
     ["Connections", ".target-grid > button:nth-child(2)", "rgb(240, 244, 248)"],
   ] as const) {
     await page

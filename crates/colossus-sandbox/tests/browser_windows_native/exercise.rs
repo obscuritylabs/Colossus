@@ -12,14 +12,28 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub async fn run(
+pub(super) struct Fixtures {
+    pub origin: String,
+    pub denied: String,
+    pub uploaded: Arc<std::sync::atomic::AtomicUsize>,
+    pub requests: Arc<std::sync::atomic::AtomicUsize>,
+    pub tls: super::tls::Target,
+    pub long_profile_layout: Option<super::logging::Layout>,
+}
+
+pub(super) async fn run(
     supervisor: Arc<WindowsBrowserSupervisor>,
     request: BrowserDriverOpenRequest,
-    denied: String,
-    origin: String,
-    uploaded: Arc<std::sync::atomic::AtomicUsize>,
-    long_profile_layout: Option<super::logging::Layout>,
+    fixtures: Fixtures,
 ) {
+    let Fixtures {
+        origin,
+        denied,
+        uploaded,
+        requests,
+        tls,
+        long_profile_layout,
+    } = fixtures;
     let control = BrowserDriverControl::new(RunControl::default(), RunControl::default());
     use colossus_browser_bridge::BrowserHostFactory as _;
     let driver = supervisor.launch(&request, &control).await.expect(
@@ -252,6 +266,16 @@ pub async fn run(
     attachment.client.disconnect();
     super::keyboard::check(&*driver, &request, &mut configure.target, &control, &origin).await;
     let _ = snapshot(&*driver, &request, &configure.target, &control, 50).await;
+    super::continuity::check(
+        &*driver,
+        &request,
+        &mut configure.target,
+        &control,
+        &origin,
+        &requests,
+    )
+    .await;
+    super::tls::check(&tls, &*driver, &request, &configure.target, &control).await;
     if let Some(layout) = &long_profile_layout {
         layout.assert_short_private_profile_without_logs();
     }

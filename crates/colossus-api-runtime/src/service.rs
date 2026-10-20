@@ -1365,6 +1365,7 @@ impl RuntimeAgentRunApi {
             let mut observer = PublicRunObserver {
                 writer: Arc::clone(&writer),
                 accepts_related_run_events: true,
+                output: Default::default(),
             };
             let objective = request
                 .input
@@ -1432,6 +1433,7 @@ impl RuntimeAgentRunApi {
         let mut observer = PublicRunObserver {
             writer: Arc::clone(&writer),
             accepts_related_run_events,
+            output: Default::default(),
         };
         let kind = match request.plan_action.as_ref() {
             Some(PlanRunAction::Execute { strategy, .. }) => {
@@ -2038,16 +2040,18 @@ impl AgentRunApi for RuntimeAgentRunApi {
 struct PublicRunObserver {
     writer: Arc<RunWriter>,
     accepts_related_run_events: bool,
+    output: crate::output_projection::OutputProjection,
 }
 
 #[async_trait]
 impl RunEventObserver for PublicRunObserver {
-    async fn observe(&mut self, envelope: RunEventEnvelope) -> Result<(), ModelProviderError> {
+    async fn observe(&mut self, mut envelope: RunEventEnvelope) -> Result<(), ModelProviderError> {
         if !self.accepts_related_run_events && envelope.run_id != self.writer.run_id() {
             return Err(ModelProviderError::Failed(
                 "public run event identity did not match".into(),
             ));
         }
+        self.output.apply(&mut envelope.event);
         self.writer
             .append(public_event(envelope.event))
             .map(|_| ())
@@ -2302,6 +2306,31 @@ fn released_computer_error(output: &str) -> Option<String> {
                 ComputerDriverError::Denied,
                 "native_denied",
                 "Native computer control denied the request. Check computer.status and the selected target's restrictions.",
+            ),
+            (
+                ComputerDriverError::Paused,
+                "control_paused",
+                "Computer control is paused. Check computer.status and wait for the user to choose Resume on the native control card.",
+            ),
+            (
+                ComputerDriverError::TargetRestricted,
+                "target_restricted",
+                "The selected app is restricted. Choose an accessible ordinary-user app; elevated apps, Colossus, and its protected processes cannot be controlled.",
+            ),
+            (
+                ComputerDriverError::FocusDenied,
+                "foreground_activation_denied",
+                "Windows refused to activate the selected app. Ask the user to bring it forward, then take a fresh snapshot before input.",
+            ),
+            (
+                ComputerDriverError::ProtectedInput,
+                "protected_input",
+                "The selected input is protected. The user must enter this value.",
+            ),
+            (
+                ComputerDriverError::InputHeld,
+                "physical_input_held",
+                "A mouse button or modifier key is held by the user. Release it, then take a fresh snapshot before input.",
             ),
             (
                 ComputerDriverError::Stale,
@@ -3704,6 +3733,14 @@ mod tests {
             (ComputerDriverError::Unavailable, "unavailable"),
             (ComputerDriverError::Busy, "busy"),
             (ComputerDriverError::Denied, "native_denied"),
+            (ComputerDriverError::Paused, "control_paused"),
+            (ComputerDriverError::TargetRestricted, "target_restricted"),
+            (
+                ComputerDriverError::FocusDenied,
+                "foreground_activation_denied",
+            ),
+            (ComputerDriverError::ProtectedInput, "protected_input"),
+            (ComputerDriverError::InputHeld, "physical_input_held"),
             (ComputerDriverError::Stale, "target_or_observation_changed"),
             (ComputerDriverError::InvalidInput, "invalid_input"),
             (ComputerDriverError::Failed, "host_failed"),
@@ -3723,9 +3760,10 @@ mod tests {
             );
             assert!(parsed["error"].get("outcome_certainty").is_none());
             assert!(!preview.contains("PRIVATE"));
-            assert!(
-                !preview.contains("paused"),
-                "native denial does not establish a pause"
+            assert_eq!(
+                preview.contains("paused"),
+                native == ComputerDriverError::Paused,
+                "only a positive native pause receipt establishes a pause"
             );
             assert_eq!(released_computer_error(&preview), Some(preview));
         }

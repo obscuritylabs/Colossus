@@ -60,8 +60,13 @@ does not advertise embedded availability without an accepted platform supervisor
 channels, validates readiness on both channels, and owns a bounded per-session host
 pool. The supervisor retains each allocation before attempting process startup.
 Unknown allocation and teardown results remain owned obligations. Native CEF
-terminal cancellation and run completion close the owned context. The coordinator
-requires a new session instead of issuing a writer lease for a destroyed page.
+terminal cancellation closes the owned context. Unsupported engines and workflows
+also close on normal completion. The ordinary-user Windows composition can retain
+a completed conversation's page after acknowledged egress suspension and native
+page freezing. Reopening with the same authenticated owner and allocation options
+requires a new effect permit, writer lease and snapshot; it preserves neither the
+old run's authority nor its element references. The original network deadline is
+immutable. Expired or destroyed contexts require a fresh allocation.
 
 Availability remains false until the installed engine can enforce the complete
 network envelope. CEF navigation and resource callbacks alone do not contain
@@ -298,7 +303,7 @@ and custody crash recovery remain unaccepted. Reproduction and evidence scope ar
 | Shared authority and artifacts | Typed tools, one writer, stale-reference fencing, authenticated private channels, retained cleanup, screenshot/upload/download gateway release | Native action and cleanup acceptance must match the exact installed component and image |
 | macOS human preview | Native rendering, AppKit coexistence and preview lifecycle acceptance. Separate Debug host staging signs a fixed main entry and five paired helper entries; bounded native Seatbelt checks deny unselected loopback ports for the main/network helper and all tested helper traffic for renderer, proxy-resolver and print roles | Implement the independent separate-host process owner, complete request-origin enforcement and owned certificate custody, then accept Core/Desktop native composition; preview or policy-fixture success does not enable automation |
 | macOS Core diagnostic | Signed separate-host launch, authenticated page control, decoded screenshots, native Retina frames, overlays, human-to-agent handoff, viewer detachment and verified Core/Desktop direct-host shutdown passed for a temporary HTTP loopback fixture | Independent complete helper cleanup and parent-crash recovery, authenticated HTTPS origin/TLS broker, owned certificate custody, native keyboard/IME and installed-package acceptance. Production discovery remains disabled |
-| Native Desktop attachment | Managed SDK/sidecar/worker admission, canonical conversation ownership, native human fence and atomic human-to-agent handoff, read-only native frames | Connected Windows/macOS OS acceptance; same-page agent-to-human takeover is absent. Terminal cancellation and run completion close the owned context; human access requires a fresh session |
+| Native Desktop attachment | Managed SDK/sidecar/worker admission, canonical conversation ownership, native human fence and atomic human-to-agent handoff, read-only native frames; ordinary-user Windows conversation completion can suspend a page and require fresh authorization on the next run | Connected Windows/macOS OS acceptance; same-page agent-to-human takeover is absent. Cancellation and unsupported completion close the owned context; human access requires a fresh session |
 | Linux contained host | Networkless OCI supervisor, authenticated egress relay, exact process identity and cleanup ownership; actual Core open/snapshot, read-only frames/detach, profile restart/reset and per-request PKI fixtures with graceful physical cleanup | Broker/socket denial, crash/reaping and installed-package acceptance |
 | Windows contained host | AppContainer/Job/WFP supervisor, private I/O, pinned helper/client staging and native frame/input fixtures; source checks | Actual Windows SDK/OS execution, browser/network-service/helper denial, full-tree cleanup, native input and installed signing acceptance |
 | PKI | Native exact-origin reviewed identity selection; Linux owned NSS provisioning and actual Core per-request fixtures. A signed Mac no-CEF fixture passed private Keychain import, server-observed native mTLS, socket drainage and durable exact-generation removal while default/search metadata stayed unchanged | Linux broker custody remains unaccepted. Mac Core enrollment, full-component key isolation and custody crash recovery require acceptance; Windows owned-store and broker acceptance remain incomplete. Existing OS-user stores are not isolated by a temporary browser profile |

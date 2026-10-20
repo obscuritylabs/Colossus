@@ -22,11 +22,11 @@ impl BrowserManager {
             .find(|tab| tab.scope == scope && tab.dto.id == id)
             .and_then(|tab| tab.pending_completed_view.clone());
         let snapshot = match pending {
-            // A prior complete canonical replay already admitted this hidden
-            // copy. Retrying its detach needs no new pixel extraction.
-            Some(snapshot) => Some(snapshot),
+            // Recovery can privately stage pixels before detach. Release still
+            // requires the same complete canonical no-close evidence.
+            Some(snapshot) if retain_pixels => Some(snapshot),
             None if retain_pixels => view.completed_snapshot().await.ok().flatten(),
-            None => None,
+            _ => None,
         };
         // Native detach can need a retry. Keep the hidden copy with its tab so
         // a missing acknowledgment cannot consume the only accepted frame.

@@ -14,12 +14,14 @@ use crate::{
         DesktopSettings, ProviderKindSetting, ProviderSetting, revalidate_workspace,
     },
     dto::CommandErrorDto,
-    managed_configuration::CredentialKindSetting,
     managed_configuration_commands::enroll_credential,
     managed_runtime,
     provider_enrollment::DialogAppearanceInput,
     state::AppState,
 };
+
+#[cfg(test)]
+use crate::managed_configuration::CredentialKindSetting;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -40,6 +42,13 @@ pub(crate) struct ProviderModelCatalogDto {
     models: Vec<ProviderModelInfo>,
     credential_id: Option<String>,
     error_message: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CredentialProviderOriginInput {
+    pub(crate) kind: ProviderKindSetting,
+    pub(crate) base_url: String,
 }
 
 #[tauri::command]
@@ -68,18 +77,27 @@ pub(crate) async fn discover_managed_provider_models(
             Some(reusable_credential(&settings, &request, &enrolled)?)
         }
         CredentialActionInput::Replace => {
-            let id = enroll_credential(
+            let destination = crate::provider_enrollment::ProviderCredentialDestination::new(
+                request.provider_kind,
+                &request.base_url,
+            )?;
+            let enrolled = enroll_credential(
                 credential_parent(&app)?,
                 &state,
                 &store,
                 &mut settings,
                 "Provider setup",
-                CredentialKindSetting::ApiKey,
+                crate::provider_enrollment::CredentialEnrollment::Provider(destination.clone()),
                 appearance,
             )
             .await?;
-            remember_catalog_credential(&state, &settings, &request, &id)?;
-            Some(id)
+            remember_credential_destination(
+                &state,
+                &settings,
+                enrolled.provider_destination(&destination)?,
+                &enrolled.id,
+            )?;
+            Some(enrolled.id)
         }
     };
     // Native prompts can remain open while a selected folder is replaced externally.
@@ -239,6 +257,48 @@ pub(crate) fn saved_catalog_credential_matches(
         .any(|provider| catalog_credential_matches(provider, kind, base_url, id))
 }
 
+pub(crate) fn confirmed_credential_destination(
+    state: &AppState,
+    settings: &DesktopSettings,
+    kind: ProviderKindSetting,
+    base_url: &str,
+    id: &str,
+) -> bool {
+    saved_catalog_credential_matches(settings, kind, base_url, id)
+        || state.catalog_credentials.lock().is_ok_and(|enrolled| {
+            enrolled
+                .iter()
+                .any(|provider| catalog_credential_matches(provider, kind, base_url, id))
+        })
+}
+
+pub(crate) fn provider_requires_origin_confirmation(
+    state: &AppState,
+    settings: &DesktopSettings,
+    provider: &ManagedProviderInput,
+) -> bool {
+    provider.credential_action == CredentialActionInput::Reuse
+        && provider
+            .credential_id
+            .as_deref()
+            .or_else(|| {
+                settings
+                    .providers
+                    .iter()
+                    .find(|current| current.profile == provider.profile)
+                    .and_then(|current| current.credential_id.as_deref())
+            })
+            .is_some_and(|id| {
+                !confirmed_credential_destination(
+                    state,
+                    settings,
+                    provider.provider_kind,
+                    &provider.base_url,
+                    id,
+                )
+            })
+}
+
 fn catalog_credential_matches(
     provider: &ProviderSetting,
     kind: ProviderKindSetting,
@@ -250,10 +310,10 @@ fn catalog_credential_matches(
         && provider.credential_id.as_deref() == Some(id)
 }
 
-fn remember_catalog_credential(
+pub(crate) fn remember_credential_destination(
     state: &AppState,
     settings: &DesktopSettings,
-    request: &DiscoverManagedProviderModelsInput,
+    destination: &crate::provider_enrollment::AcceptedProviderDestination,
     id: &str,
 ) -> Result<(), CommandErrorDto> {
     let mut enrolled = state
@@ -276,8 +336,8 @@ fn remember_catalog_credential(
     enrolled.push(ProviderSetting {
         credential_required: false,
         profile: "setup-provider".into(),
-        kind: request.provider_kind,
-        base_url: request.base_url.clone(),
+        kind: destination.kind(),
+        base_url: destination.base_url().to_owned(),
         credential_id: Some(id.into()),
         timeout_ms: Some(30_000),
     });
@@ -425,6 +485,51 @@ pub(crate) fn credentials_to_retire(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_provider_entry_skips_warning_but_saved_key_retargeting_requires_it() {
+        let state = AppState::default();
+        let settings = DesktopSettings::default();
+        let mut provider: ManagedProviderInput = serde_json::from_value(serde_json::json!({
+            "profile": "provider", "providerKind": "openai_compatible",
+            "baseUrl": "https://models.example.test/v1", "credentialAction": "replace",
+        }))
+        .unwrap();
+        assert!(!provider_requires_origin_confirmation(
+            &state, &settings, &provider
+        ));
+        provider.credential_action = CredentialActionInput::None;
+        assert!(!provider_requires_origin_confirmation(
+            &state, &settings, &provider
+        ));
+        provider.credential_action = CredentialActionInput::Reuse;
+        provider.credential_id = Some("newly-entered".into());
+        assert!(provider_requires_origin_confirmation(
+            &state, &settings, &provider
+        ));
+        remember_credential_destination(
+            &state,
+            &settings,
+            &crate::provider_enrollment::AcceptedProviderDestination::synthetic(
+                provider.provider_kind,
+                &provider.base_url,
+            ),
+            "newly-entered",
+        )
+        .unwrap();
+        assert!(!provider_requires_origin_confirmation(
+            &state, &settings, &provider
+        ));
+        provider.base_url = "https://other.example.test/v1".into();
+        assert!(provider_requires_origin_confirmation(
+            &state, &settings, &provider
+        ));
+        provider.base_url = "https://models.example.test/v1".into();
+        provider.provider_kind = ProviderKindSetting::Responses;
+        assert!(provider_requires_origin_confirmation(
+            &state, &settings, &provider
+        ));
+    }
 
     #[test]
     fn discovery_only_offers_models_supported_by_the_managed_runtime() {
@@ -668,7 +773,16 @@ mod tests {
                 "credentialAction": "replace"
             }))
             .unwrap();
-        remember_catalog_credential(&state, &settings, &request, "fresh-key").unwrap();
+        remember_credential_destination(
+            &state,
+            &settings,
+            &crate::provider_enrollment::AcceptedProviderDestination::synthetic(
+                request.provider_kind,
+                &request.base_url,
+            ),
+            "fresh-key",
+        )
+        .unwrap();
         request.credential_action = CredentialActionInput::Reuse;
         request.credential_id = Some("fresh-key".into());
         let enrolled = state.catalog_credentials.lock().unwrap();

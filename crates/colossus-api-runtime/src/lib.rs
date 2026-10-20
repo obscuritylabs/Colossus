@@ -10,6 +10,7 @@ mod admission;
 mod communication;
 mod feed;
 mod interactions;
+mod output_projection;
 #[cfg(test)]
 mod plugin_tests;
 mod plugins;

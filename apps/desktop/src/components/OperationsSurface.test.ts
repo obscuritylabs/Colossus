@@ -148,24 +148,23 @@ describe("OperationsSurface runtime targets", () => {
 
     expect(markup).toContain('aria-label="Open Workspace navigation"');
     expect(markup).toContain('aria-controls="work-navigation"');
-    expect(markup).toContain('class="overview-scroll" tabindex="0"');
+    expect(markup).toContain(
+      'class="overview-scroll capabilities-scroll" tabindex="0"',
+    );
   });
 
-  it("shows and marks the selected external target in fleet view", () => {
+  it("uses capability inventories instead of workload and target cards", () => {
     const markup = renderSurface("fleet");
 
-    expect(markup).toContain("2 available nodes");
-    expect(markup).toContain("Managed Local");
-    expect(markup).toContain("Lab fleet");
-    expect(openingButtonTag(markup, "Lab fleet")).toContain(
-      'aria-pressed="true"',
-    );
-    expect(openingButtonTag(markup, "Managed Local")).toContain(
-      'aria-pressed="false"',
-    );
+    expect(markup).toContain("Tools");
+    expect(markup).toContain("MCP servers");
+    expect(markup).toContain("Search services");
+    expect(markup).toContain("Plugins");
+    expect(markup).not.toContain("available nodes");
+    expect(markup).not.toContain("active work items");
   });
 
-  it("renders only orchestration capabilities advertised by the selected target", () => {
+  it("does not infer active tools from general UI capability flags", () => {
     const markup = renderSurface(
       "fleet",
       desktop({
@@ -184,7 +183,8 @@ describe("OperationsSurface runtime targets", () => {
       }),
     );
 
-    expect(markup).toContain("Delegated agents");
+    expect(markup).not.toContain("Delegated agents");
+    expect(markup).toContain("Inventory unavailable.");
     expect(markup).not.toContain("Durable workflows");
     expect(markup).not.toContain("Declarative skills");
   });

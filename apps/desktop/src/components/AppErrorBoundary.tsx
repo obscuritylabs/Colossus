@@ -7,6 +7,7 @@ import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 
 import { exportDiagnostics } from "../api";
+import { reportRendererFailure } from "../renderer-logging";
 
 interface AppErrorBoundaryProps {
   children: ReactNode;
@@ -33,6 +34,7 @@ export class AppErrorBoundary extends Component<
   componentDidCatch(_error: Error, _errorInfo: ErrorInfo): void {
     // Error content can contain prompts or private runtime details. It is
     // deliberately neither persisted nor sent across the native boundary.
+    reportRendererFailure("render");
   }
 
   private exportLocalDiagnostics = async (): Promise<void> => {

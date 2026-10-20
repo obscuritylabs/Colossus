@@ -282,10 +282,22 @@ impl RuntimeNativeBrowserSession {
             .view
             .lock()
             .map_err(|_| RuntimeNativeBrowserError::OutcomeUnknown)?;
-        let retarget = state
-            .retarget_lease
-            .as_ref()
-            .is_some_and(|(prior, target)| state.lease == Some(*prior) && target == &config.target);
+        // A resumed run can already have navigated or selected another tab by
+        // the time Desktop reattaches. Its old viewport cannot authenticate an
+        // Observe under the new writer; the new native Configure receipt must
+        // instead match the exact target already accepted by Core.
+        let new_writer = state.agent_generation == Some(config.control_generation)
+            && state.agent_target.as_ref() == Some(&config.target)
+            && state
+                .lease
+                .is_some_and(|old| old.control_generation < config.control_generation);
+        let retarget = new_writer
+            || state
+                .retarget_lease
+                .as_ref()
+                .is_some_and(|(prior, target)| {
+                    state.lease == Some(*prior) && target == &config.target
+                });
         if state.closed
             || state.fenced && state.agent_generation.is_none()
             || config.session != self.session_id
@@ -304,7 +316,7 @@ impl RuntimeNativeBrowserSession {
             .configure
             .as_ref()
             .ok_or(RuntimeNativeBrowserError::Stale)?;
-        if config.target != expected.target
+        if config.target != expected.target && !new_writer
             || config.viewport_generation < expected.viewport_generation
         {
             return Err(RuntimeNativeBrowserError::Stale);

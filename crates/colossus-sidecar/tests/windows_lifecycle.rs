@@ -137,39 +137,55 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
         Vec::<String>::new(),
     )
     .expect("application grant");
-    let bootstrap = SidecarBootstrapConfig::new(
-        &workspace,
-        ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal)
-            .with_execution_boundary(ManagedExecutionBoundary::OfflineIsolated),
-        grant,
-    )
-    .expect("bootstrap")
-    .with_expected_workspace_identity(workspace_identity(&workspace))
-    .expect("expected workspace identity")
-    .with_approval_broker_grant(
-        SidecarApprovalBrokerGrant::new(
-            "app:native-sidecar-windows-acceptance",
-            ["primary".into()],
+    let mut runtime = ManagedRuntimeConfig::echo(ManagedAccessProfile::Minimal)
+        .with_execution_boundary(ManagedExecutionBoundary::OfflineIsolated);
+    runtime.telemetry = Some(colossus_sidecar_protocol::ManagedTelemetryConfig {
+        name: "colossus-sidecar-log-test".into(),
+        endpoint: None,
+        protocol: colossus_sidecar_protocol::ManagedOtlpProtocol::Grpc,
+        timeout_ms: 1000,
+        traces_enabled: false,
+        trace_sample_ratio_millionths: 1_000_000,
+        metrics_enabled: false,
+        metric_export_interval_ms: 60_000,
+        logs_otlp: false,
+        logs_stdout_json: true,
+        journal_payloads: colossus_sidecar_protocol::ManagedJournalPayloadMode::Metadata,
+        acknowledge_sensitive_content: false,
+        acknowledge_insecure_transport: false,
+        resource_attributes: Default::default(),
+    });
+    // Console metadata must never enter the length-framed stdout bootstrap channel.
+    let bootstrap = SidecarBootstrapConfig::new(&workspace, runtime, grant)
+        .expect("bootstrap")
+        .with_expected_workspace_identity(workspace_identity(&workspace))
+        .expect("expected workspace identity")
+        .with_approval_broker_grant(
+            SidecarApprovalBrokerGrant::new(
+                "app:native-sidecar-windows-acceptance",
+                ["primary".into()],
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    )
-    .expect("approval broker")
-    .with_connector_grant(
-        SidecarApplicationGrant::new(
-            "app:cloud-windows-acceptance",
-            [
-                ApiScope::new(scopes::RUNS_EXECUTE).unwrap(),
-                ApiScope::new(scopes::RUNS_READ).unwrap(),
-            ],
-            ["primary".into()],
-            Vec::<String>::new(),
+        .expect("approval broker")
+        .with_connector_grant(
+            SidecarApplicationGrant::new(
+                "app:cloud-windows-acceptance",
+                [
+                    ApiScope::new(scopes::RUNS_EXECUTE).unwrap(),
+                    ApiScope::new(scopes::RUNS_READ).unwrap(),
+                ],
+                ["primary".into()],
+                Vec::<String>::new(),
+            )
+            .unwrap(),
         )
-        .unwrap(),
-    )
-    .expect("independent cloud grant")
-    .with_risk_auto_approvals()
-    .with_worker_ipc_authentication(colossus_sdk::Secret::new(vec![0x5a; 32]).expect("worker key"))
-    .expect("worker authentication");
+        .expect("independent cloud grant")
+        .with_risk_auto_approvals()
+        .with_worker_ipc_authentication(
+            colossus_sdk::Secret::new(vec![0x5a; 32]).expect("worker key"),
+        )
+        .expect("worker authentication");
     let lifecycle = NativeSidecarLifecycle::new(bootstrap);
     let options = SidecarOptions::new(
         InstanceId::from_uuid(instance_id),
@@ -305,6 +321,26 @@ async fn verified_sidecar_bootstraps_pinned_grpc_runs_echo_and_closes() {
         RunStatus::Completed
     );
     client.close().await.expect("graceful close");
+    let logs = (0..4)
+        .filter_map(|slot| {
+            std::fs::read_to_string(instance.path.join(format!("logs/sidecar-{slot}.jsonl"))).ok()
+        })
+        .collect::<String>();
+    for expected in [
+        "sidecar.starting",
+        "sidecar.ready",
+        "provider.started",
+        "provider.completed",
+        "sidecar.stopped",
+        &run_id,
+    ] {
+        assert!(
+            logs.contains(expected),
+            "missing operational event {expected}"
+        );
+    }
+    assert!(!logs.contains("managed sidecar self-test"));
+    assert!(!logs.contains("Windows cloud grant self-test"));
     let restarted = Colossus::start_sidecar(&lifecycle, options)
         .await
         .expect("restart sidecar");

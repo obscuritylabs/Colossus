@@ -1,6 +1,7 @@
 //! Owned GTK password entry on Tauri's existing UI thread; no nested event loop.
 use crate::{
-    DialogAppearance, NativePassword, PromptError, lifecycle::Completion, purpose::Purpose,
+    DialogAppearance, NativePassword, PromptError, ProviderCredentialContext,
+    lifecycle::Completion, purpose::Purpose,
 };
 use gtk::{glib, prelude::*};
 use std::{
@@ -22,6 +23,7 @@ pub(crate) fn open(
     completion: Completion,
     appearance: DialogAppearance,
     purpose: Purpose,
+    context: Option<ProviderCredentialContext>,
 ) {
     let Ok(parent) = parent.gtk_window() else {
         completion.finish(Err(PromptError::Unavailable));
@@ -33,6 +35,7 @@ pub(crate) fn open(
         completion,
         appearance,
         purpose,
+        context,
     );
 }
 
@@ -43,7 +46,14 @@ fn create(
     completion: Completion,
     appearance: DialogAppearance,
 ) -> Result<(gtk::Dialog, gtk::Entry), PromptError> {
-    create_for(parent, cancelled, completion, appearance, Purpose::Token)
+    create_for(
+        parent,
+        cancelled,
+        completion,
+        appearance,
+        Purpose::Token,
+        None,
+    )
 }
 
 fn create_for(
@@ -52,6 +62,7 @@ fn create_for(
     completion: Completion,
     appearance: DialogAppearance,
     purpose: Purpose,
+    context: Option<ProviderCredentialContext>,
 ) -> Result<(gtk::Dialog, gtk::Entry), PromptError> {
     let dialog = gtk::Dialog::builder()
         .title(purpose.title())
@@ -91,6 +102,20 @@ fn create_for(
     error.set_xalign(0.0);
     error.style_context().add_class("credential-error");
     content.add(&description);
+    if let Some(context) = context {
+        let destination_label = gtk::Label::new(Some(&context.heading()));
+        destination_label.set_xalign(0.0);
+        destination_label
+            .style_context()
+            .add_class("credential-label");
+        let destination = gtk::Entry::new();
+        destination.set_text(context.endpoint());
+        destination.set_editable(false);
+        destination.set_hexpand(true);
+        destination_label.set_mnemonic_widget(Some(&destination));
+        content.add(&destination_label);
+        content.add(&destination);
+    }
     content.add(&label);
     content.add(&entry);
     content.add(&error);
@@ -223,6 +248,43 @@ mod tests {
         dialog.response(gtk::ResponseType::Cancel);
         assert_eq!(
             wait_for_completion(&mut received).unwrap_err(),
+            PromptError::Cancelled
+        );
+        parent.close();
+    }
+
+    #[test]
+    #[ignore = "operator-owned: xvfb-run and a GTK display; see cloud development guide"]
+    fn provider_destination_is_shown_in_the_same_native_prompt() {
+        let _ownership = crate::lifecycle::TEST_OWNERSHIP.lock().unwrap();
+        gtk::init().unwrap();
+        let parent = gtk::Window::new(gtk::WindowType::Toplevel);
+        let endpoint = "https://models.example.test:8443/custom/v1";
+        let context =
+            ProviderCredentialContext::new(crate::CredentialProvider::AnthropicMessages, endpoint)
+                .unwrap();
+        let (completion, mut result) = Completion::acquire().unwrap();
+        let (dialog, token) = create_for(
+            &parent,
+            Arc::new(AtomicBool::new(false)),
+            completion,
+            DialogAppearance::default(),
+            Purpose::Token,
+            Some(context),
+        )
+        .unwrap();
+        let endpoint_field = dialog
+            .content_area()
+            .children()
+            .into_iter()
+            .filter_map(|widget| widget.downcast::<gtk::Entry>().ok())
+            .find(|entry| entry.text() == endpoint)
+            .expect("exact native destination");
+        assert!(!endpoint_field.is_editable());
+        assert!(token.text().is_empty());
+        dialog.response(gtk::ResponseType::Cancel);
+        assert_eq!(
+            wait_for_completion(&mut result).unwrap_err(),
             PromptError::Cancelled
         );
         parent.close();

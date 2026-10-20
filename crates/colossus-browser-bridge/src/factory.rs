@@ -20,6 +20,11 @@ pub trait BrowserHostFactory: Send + Sync {
     /// Immutable accepted installation/containment ceiling, never child self-report.
     fn capabilities(&self) -> BrowserCapabilities;
 
+    /// Installed native owner can retain frozen pages behind a drained egress fence.
+    fn supports_suspension(&self) -> bool {
+        false
+    }
+
     /// Launch a dedicated host without allocating its initial native tab yet.
     ///
     /// The request supplies trusted ownership and the whole-process destination envelope.

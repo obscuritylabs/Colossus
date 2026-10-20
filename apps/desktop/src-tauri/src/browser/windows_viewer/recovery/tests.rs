@@ -162,6 +162,46 @@ async fn completion_during_missing_replacement_retains_agent_tab_and_selection()
 }
 
 #[tokio::test]
+async fn privately_staged_recovery_pixels_require_complete_terminal_no_close_evidence() {
+    for evidence in [Some(false), None] {
+        let manager = manager();
+        manager
+            .lock()
+            .unwrap()
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.dto.id == "agent")
+            .unwrap()
+            .pending_completed_view = Some(BrowserView::Empty);
+        let admitted: Option<()> = manager
+            .recover_agent_presentation("workspace", "run", "agent", async { Ok(None) })
+            .await
+            .unwrap();
+        assert!(admitted.is_none());
+        assert!(
+            manager
+                .lock()
+                .unwrap()
+                .tabs
+                .iter()
+                .find(|tab| tab.dto.id == "agent")
+                .unwrap()
+                .pending_completed_view
+                .is_some()
+        );
+        manager
+            .settle_terminal_agent("workspace", "agent", evidence)
+            .await
+            .unwrap();
+        let state = manager.lock().unwrap();
+        let tab = state.tabs.iter().find(|tab| tab.dto.id == "agent").unwrap();
+        assert_eq!(tab.dto.completed_snapshot, evidence == Some(false));
+        assert!(tab.pending_completed_view.is_none());
+        assert_eq!(tab.dto.control, "completed");
+    }
+}
+
+#[tokio::test]
 async fn rejected_replacement_preserves_last_page_for_terminal_reconciliation() {
     let manager = manager();
     let admitted: Result<Option<()>, _> = manager

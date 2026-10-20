@@ -10,7 +10,7 @@ pub(super) fn browser_specs() -> Vec<ToolSpec> {
     let mut specs = vec![
         tool(
             "browser.open",
-            "Create an isolated owned browser session. Workspace settings and policy govern public HTTPS browsing and page dependencies; otherwise every request is restricted to the listed origins. Use embedded presentation in Desktop to let the user watch, or headless where supported.",
+            "Open an isolated owned browser session. A supported Desktop engine resumes this conversation's suspended page when the allocation options match, using a new run lease; take a fresh snapshot before input. The original network deadline never extends across turns: an expired retained page is closed and a new session opens. Workspace settings and policy govern public HTTPS browsing and page dependencies; otherwise every request is restricted to the listed origins. Use embedded presentation in Desktop to let the user watch, or headless where supported.",
             object_schema(
                 json!({
                     "mode": {"type": "string", "enum": ["embedded", "headless"]},

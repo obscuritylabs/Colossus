@@ -129,6 +129,33 @@ pub trait BrowserDriver: Send + Sync {
         BrowserCancelDisposition::RetainsContext
     }
 
+    /// Whether normal completion can retain a page behind an acknowledged network fence.
+    /// Cancellation and unknown outcomes retain their independent terminal semantics.
+    fn supports_suspension(&self) -> bool {
+        false
+    }
+
+    /// Revoke a completed writer, freeze its pages, and acknowledge complete egress drain.
+    async fn suspend_session(
+        &self,
+        _session: &BrowserSessionId,
+        _through_generation: u64,
+    ) -> Result<(), BrowserDriverError> {
+        Err(BrowserDriverError::Unsupported)
+    }
+
+    /// Resume only under a new authenticated writer and already-consumed effect permit.
+    /// The original destination envelope and absolute network deadline cannot change.
+    async fn resume_session(
+        &self,
+        _session: &BrowserSessionId,
+        _run_id: &str,
+        _generation: u64,
+        _control: &BrowserDriverControl,
+    ) -> Result<(), BrowserDriverError> {
+        Err(BrowserDriverError::Unsupported)
+    }
+
     /// Allocate isolated browser context and initial tab using only supplied opaque identities.
     async fn open_session(
         &self,

@@ -216,6 +216,34 @@ pub(in crate::browser_tools) fn retire_run(
     });
 }
 
+/// Retain the frozen context independently of its completed run's Desktop relay.
+pub(in crate::browser_tools) fn suspend_run(
+    state: &NativeState,
+    run: &super::super::service::BrowserRun,
+) {
+    let Ok(entries) = state.entries.lock() else {
+        return;
+    };
+    for entry in entries.values() {
+        if entry.binding != run.actor.binding
+            || !entry.request.lock().is_ok_and(|request| {
+                request
+                    .as_ref()
+                    .is_some_and(|request| run.sessions.contains_key(&request.session_id))
+            })
+        {
+            continue;
+        }
+        if let Ok(mut view) = entry.view.lock() {
+            view.fenced = true;
+            #[cfg(windows)]
+            {
+                view.viewer_detached = true;
+            }
+        }
+    }
+}
+
 impl Runtime {
     /// Explicit native user close reaps the entire owned browser context.
     /// The cleanup task survives loss of its caller and retains uncertain ownership.
@@ -254,6 +282,7 @@ impl Runtime {
             .ok_or(RuntimeNativeBrowserError::Unavailable)?
             .clone();
         let owned = entry(&browser, role, session)?;
+        let session = session.clone();
         let (sender, receiver) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let operation = owned.operation.lock().await;
@@ -269,30 +298,42 @@ impl Runtime {
                         view.closed,
                     )
                 });
-            let result = match state {
-                Ok((Some(_), Some(client), Some(lease), false)) => {
-                    let result = client
-                        .hide(lease)
-                        .await
-                        .map_err(RuntimeNativeBrowserError::from);
-                    #[cfg(windows)]
-                    let result = result.and_then(|()| {
-                        owned
-                            .view
-                            .lock()
-                            .map_err(|_| RuntimeNativeBrowserError::OutcomeUnknown)?
-                            .viewer_detached = true;
-                        Ok(())
-                    });
-                    result
-                }
-                Ok((Some(_), _, _, false)) => Err(RuntimeNativeBrowserError::Stale),
-                Ok(_) => {
-                    drop(operation);
-                    close_entry(&browser, &owned).await
-                }
-                Err(error) => Err(error),
-            };
+            let result =
+                match state {
+                    Ok((Some(_), Some(client), Some(lease), false)) => {
+                        let paused = browser.coordinator.get(&owned.binding, &session).is_ok_and(
+                            |summary| {
+                                summary.control == colossus_contracts::BrowserControlState::Paused
+                                    && summary.lifecycle
+                                        == colossus_contracts::BrowserLifecycle::Ready
+                            },
+                        );
+                        let result = if paused {
+                            Ok(())
+                        } else {
+                            client
+                                .hide(lease)
+                                .await
+                                .map_err(RuntimeNativeBrowserError::from)
+                        };
+                        #[cfg(windows)]
+                        let result = result.and_then(|()| {
+                            owned
+                                .view
+                                .lock()
+                                .map_err(|_| RuntimeNativeBrowserError::OutcomeUnknown)?
+                                .viewer_detached = true;
+                            Ok(())
+                        });
+                        result
+                    }
+                    Ok((Some(_), _, _, false)) => Err(RuntimeNativeBrowserError::Stale),
+                    Ok(_) => {
+                        drop(operation);
+                        close_entry(&browser, &owned).await
+                    }
+                    Err(error) => Err(error),
+                };
             let _ = sender.send(result);
         });
         receiver

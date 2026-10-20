@@ -44,6 +44,11 @@ pub trait AgentRunLifecycle: Send + Sync {
     }
     /// Signal cleanup synchronously, including when a run future is dropped.
     fn cancel_run(&self, run_id: &str);
+    /// Successful completion may retain suspended, caller-owned resources without
+    /// retaining the old run's authority. Other resources still finish normally.
+    async fn complete_run(&self, run_id: &str) {
+        self.finish_run(run_id).await;
+    }
     /// Finish run ownership and await cleanup of run-owned or unlaunched jobs.
     async fn finish_run(&self, run_id: &str);
 }

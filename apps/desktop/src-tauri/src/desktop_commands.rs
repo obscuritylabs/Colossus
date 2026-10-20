@@ -1233,8 +1233,20 @@ async fn configure_managed_provider_runtime(
     appearance: colossus_native_credential_ui::DialogAppearance,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
     let previous_settings = settings.clone();
-    let secret =
-        provider_enrollment::request_provider_secret(credential_parent(app)?, appearance).await?;
+    let destination = provider_enrollment::ProviderCredentialDestination::new(
+        request.provider_kind,
+        request
+            .base_url
+            .as_deref()
+            .unwrap_or_else(|| crate::desktop_settings::provider_base_url(request.provider_kind)),
+    )?;
+    let secret = provider_enrollment::request_provider_secret(
+        credential_parent(app)?,
+        appearance,
+        destination.clone(),
+    )
+    .await?
+    .into_secret_for(&destination)?;
     let vault = DesktopCredentials::for_settings(state, store)?;
     let native_store = store.clone();
     let (next, rotation) = tokio::task::spawn_blocking(move || {
@@ -1361,6 +1373,7 @@ async fn configure_managed_codex_runtime(
                 .push(credential_id.clone());
         }
     }
+    crate::managed_configuration::select_configured_models(settings)?;
     store.save(settings)?;
     state
         .select_target(settings.selected_space_id.clone())
@@ -1416,7 +1429,7 @@ pub(crate) async fn apply_managed_model_configuration_locked(
         &store,
         &mut settings,
         &previous_settings,
-        &credentials.fresh_ids,
+        &credentials,
         appearance.into(),
     )
     .await?;
@@ -1486,29 +1499,28 @@ async fn confirm_managed_model_configuration(
     revalidate_workspace(workspace)?;
     reject_active_managed_runs(state).await?;
 
-    let changed_origins = request
-        .providers
-        .iter()
-        .filter(|provider| {
-            settings
-                .providers
-                .iter()
-                .find(|current| current.profile == provider.profile)
-                .is_none_or(|current| {
-                    current.kind != provider.provider_kind || current.base_url != provider.base_url
-                })
-        })
-        .flat_map(|provider| {
-            if provider.provider_kind == ProviderKindSetting::Codex {
-                vec![
-                    format!("{}: https://chatgpt.com", provider.profile),
-                    format!("{} refresh: https://auth.openai.com", provider.profile),
-                ]
-            } else {
-                vec![format!("{}: {}", provider.profile, provider.base_url)]
-            }
-        })
-        .collect::<Vec<_>>();
+    let mut changed_origins = Vec::new();
+    for provider in &request.providers {
+        // Fresh native credential entry already authorizes its displayed endpoint.
+        // Reusing an existing credential for another destination needs review.
+        if !crate::provider_catalog::provider_requires_origin_confirmation(
+            state, settings, provider,
+        ) {
+            continue;
+        }
+        if provider.provider_kind == ProviderKindSetting::Codex {
+            changed_origins.extend([
+                format!("{}: https://chatgpt.com", provider.profile),
+                format!("{} refresh: https://auth.openai.com", provider.profile),
+            ]);
+        } else {
+            changed_origins.push(format!(
+                "{}: {}",
+                provider.profile,
+                provider_enrollment::canonical_provider_endpoint(&provider.base_url)?
+            ));
+        }
+    }
     if !changed_origins.is_empty() && !confirm_provider_origins(app, &changed_origins).await? {
         return Err(CommandErrorDto::local_sanitized(
             "provider_origin_confirmation",
@@ -1522,6 +1534,7 @@ async fn confirm_managed_model_configuration(
 struct ProviderCredentialPlan {
     by_profile: BTreeMap<String, Option<String>>,
     fresh_ids: Vec<String>,
+    fresh_destinations: BTreeMap<String, provider_enrollment::ProviderCredentialDestination>,
     retired_ids: Vec<String>,
 }
 
@@ -1538,6 +1551,7 @@ async fn plan_provider_credentials(
         .collect::<BTreeMap<_, _>>();
     let mut by_profile = BTreeMap::new();
     let mut fresh_ids = Vec::new();
+    let mut fresh_destinations = BTreeMap::new();
     for provider in &request.providers {
         let credential_id = match provider.credential_action {
             CredentialActionInput::None => None,
@@ -1566,6 +1580,11 @@ async fn plan_provider_credentials(
             }
             CredentialActionInput::Replace => {
                 let credential_id = Uuid::now_v7().to_string();
+                let destination = provider_enrollment::ProviderCredentialDestination::new(
+                    provider.provider_kind,
+                    &provider.base_url,
+                )?;
+                fresh_destinations.insert(credential_id.clone(), destination);
                 fresh_ids.push(credential_id.clone());
                 Some(credential_id)
             }
@@ -1592,6 +1611,7 @@ async fn plan_provider_credentials(
     Ok(ProviderCredentialPlan {
         by_profile,
         fresh_ids,
+        fresh_destinations,
         retired_ids,
     })
 }
@@ -1602,9 +1622,10 @@ async fn stage_provider_credentials(
     store: &SettingsStore,
     settings: &mut DesktopSettings,
     previous_settings: &DesktopSettings,
-    fresh_ids: &[String],
+    credentials: &ProviderCredentialPlan,
     appearance: colossus_native_credential_ui::DialogAppearance,
 ) -> Result<(), CommandErrorDto> {
+    let fresh_ids = &credentials.fresh_ids;
     // Persist cleanup intent before creating any encrypted credential records. A crash
     // during enrollment can therefore be repaired on the next Desktop startup.
     settings
@@ -1613,9 +1634,10 @@ async fn stage_provider_credentials(
     store.save(settings)?;
     for credential_id in fresh_ids {
         let result = async {
-            let secret =
-                provider_enrollment::request_provider_secret(credential_parent(app)?, appearance)
-                    .await?;
+            let destination = credentials.fresh_destinations.get(credential_id).ok_or_else(|| CommandErrorDto::invalid("providerOrigin", "The provider credential destination is missing. Review the provider and retry."))?;
+            let secret = provider_enrollment::request_provider_secret(
+                credential_parent(app)?, appearance, destination.clone(),
+            ).await?.into_secret_for(destination)?;
             DesktopCredentials::for_settings(state, store)?
                 .write(credential_id, secret)
                 .await
@@ -1827,7 +1849,9 @@ fn persist_reused_provider_configuration(
     settings
         .selected_target_id
         .clone_from(&settings.selected_space_id);
-    if let Err(error) = save_settings(settings) {
+    if let Err(error) = crate::managed_configuration::select_configured_models(settings)
+        .and_then(|()| save_settings(settings))
+    {
         *settings = previous;
         return Err(error);
     }
@@ -1905,7 +1929,9 @@ fn persist_provider_rotation(
     if let Some(previous) = previous_credential_id.as_ref() {
         settings.pending_provider_cleanup_ids.push(previous.clone());
     }
-    if let Err(error) = save_settings(settings) {
+    if let Err(error) = crate::managed_configuration::select_configured_models(settings)
+        .and_then(|()| save_settings(settings))
+    {
         // Durable settings still reference the previous provider and retain the
         // cleanup marker for the fresh key. Preserve that same view in memory.
         *settings = cleanup_staged;
@@ -3102,6 +3128,51 @@ mod tests {
 
     fn provider_secret() -> zeroize::Zeroizing<String> {
         zeroize::Zeroizing::new("sk-or-v1-test-secret".into())
+    }
+
+    #[test]
+    fn reused_provider_can_leave_minimal_after_catalog_initialization() {
+        for profile in [
+            AccessProfileSetting::Development,
+            AccessProfileSetting::AllowAll,
+        ] {
+            let mut settings = settings_with_provider(&Uuid::now_v7().to_string());
+            settings.access_profile = AccessProfileSetting::Minimal;
+            // Bind a real directory identity without starting a runtime or writing
+            // into the checkout. A Unix-shaped synthetic path is invalid on Windows.
+            let workspace = validate_workspace(&std::env::current_dir().unwrap()).unwrap();
+            settings.add_space(workspace).unwrap();
+            let mut settings =
+                crate::desktop_settings::normalized_settings_snapshot(&settings).unwrap();
+            let space_id = settings.selected_space_id.clone().unwrap();
+            let mut request = provider_request();
+            request.access_profile = profile;
+            persist_reused_provider_configuration(&mut settings, &mut request, |persisted| {
+                let roundtrip: DesktopSettings = serde_json::from_slice(
+                    &serde_json::to_vec(
+                        &crate::desktop_settings::normalized_settings_snapshot(persisted).unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                let resolved =
+                    crate::managed_configuration_commands::resolved_for(&roundtrip, &space_id)
+                        .unwrap();
+                assert_eq!(resolved.access_profile, profile);
+                assert_eq!(resolved.models[0].model, "new-model");
+                managed_runtime::preflight_runtime_configuration(&roundtrip, &space_id).unwrap();
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(
+                settings
+                    .space(&space_id)
+                    .unwrap()
+                    .configuration
+                    .access_profile_override,
+                Some(profile)
+            );
+        }
     }
 
     fn settings_with_provider(credential_id: &str) -> DesktopSettings {
