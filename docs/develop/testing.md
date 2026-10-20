@@ -805,7 +805,14 @@ must run on the process main thread:
 The Windows driver uses an isolated window station and clipboard to exercise native
 paste and keyboard messages without changing the user's clipboard:
 `cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --features native-test-driver --test native-windows`.
-Both platform lanes own these checks. Manual acceptance additionally pastes 761, 762,
+Both platform lanes own these checks.
+
+Linux's native GTK control checks require an operator-owned display or Xvfb. Run
+`xvfb-run -a cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --lib linux::tests:: -- --ignored --test-threads=1`
+to check secure entry, cancellation, appearance and the provider destination shown
+inside the same prompt. Windows tests do not establish GTK or AppKit acceptance.
+
+Manual acceptance additionally pastes 761, 762,
 2,560, 2,561, 8,192, and 65,536 bytes, rejects 65,537, tests keyboard navigation,
 cancellation and parent closure, and follows save/restart/load through a real MCP
 discovery and tool call. Record actual Splunk deployment acceptance separately;

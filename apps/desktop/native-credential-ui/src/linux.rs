@@ -206,7 +206,7 @@ mod tests {
         }
     }
     #[test]
-    #[ignore = "operator-owned: xvfb-run and a GTK display; see cloud development guide"]
+    #[ignore = "operator-owned GTK/Xvfb display; see docs/develop/testing.md"]
     fn native_linux_password_entry_and_cancel() {
         let _ownership = crate::lifecycle::TEST_OWNERSHIP.lock().unwrap();
         gtk::init().unwrap();
@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "operator-owned: xvfb-run and a GTK display; see cloud development guide"]
+    #[ignore = "operator-owned GTK/Xvfb display; see docs/develop/testing.md"]
     fn provider_destination_is_shown_in_the_same_native_prompt() {
         let _ownership = crate::lifecycle::TEST_OWNERSHIP.lock().unwrap();
         gtk::init().unwrap();
