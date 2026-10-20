@@ -26,6 +26,8 @@ struct Reopened {
 
 #[derive(Default)]
 pub(super) struct State {
+    closed: AtomicBool,
+    gap_observed: AtomicBool,
     observed: AtomicBool,
     presented: AtomicBool,
     scope: Mutex<Option<Reopened>>,
@@ -76,6 +78,13 @@ pub(super) async fn response(
                 closed["closed"] == true && closed["session_id"] == first["session_id"],
                 "Core did not positively close the exact first session"
             );
+            state.signal(&state.session_reopen.closed);
+            state
+                .wait(
+                    &state.session_reopen.gap_observed,
+                    "Desktop context polls before the replacement session opens",
+                )
+                .await?;
             Ok(model_tool(
                 phase,
                 &alias(body, "browser.open")?,
@@ -155,6 +164,17 @@ pub(super) async fn checkpoint(
     fixture
         .state
         .wait(
+            &fixture.state.session_reopen.closed,
+            "exact first-session close",
+        )
+        .await?;
+    poll_closed_gap(app, &run, heartbeat).await?;
+    fixture
+        .state
+        .signal(&fixture.state.session_reopen.gap_observed);
+    fixture
+        .state
+        .wait(
             &fixture.state.session_reopen.observed,
             "Core close and fresh-session snapshot",
         )
@@ -167,17 +187,8 @@ pub(super) async fn checkpoint(
     let state = app.state::<AppState>();
     let deadline = tokio::time::Instant::now() + PAGE_TIMEOUT;
     let tab = loop {
-        // Inspect observes old-channel retirement just as normal browser_context does.
-        state
-            .browser
-            .snapshot()
-            .await
-            .map_err(|error| anyhow::anyhow!(error.message))?;
-        state
-            .browser
-            .watch_agent(app, SPACE, run.run_id, run.conversation_id)
-            .await
-            .map_err(|error| anyhow::anyhow!(error.message))?;
+        // Use the controller's real watch-then-snapshot ordering and operation lock.
+        context(app, &run).await?;
         let attached = {
             let registry = state
                 .browser
@@ -234,9 +245,72 @@ pub(super) async fn checkpoint(
         .state
         .signal(&fixture.state.session_reopen.presented);
     println!(
-        "PASS same Core run explicitly closed A, freshly attached distinct B, and displayed B's exact authenticated frame"
+        "PASS same Core run polled the closed-A gap three times, freshly attached distinct B, and displayed B's exact authenticated frame"
     );
     Ok(tab)
+}
+
+async fn poll_closed_gap(
+    app: &tauri::AppHandle,
+    run: &RunIdentity<'_>,
+    heartbeat: &ViewportHeartbeat,
+) -> anyhow::Result<()> {
+    // The renderer keeps pulsing A while the next model turn has no replacement.
+    // First observe its closed channel, then poll beyond the recovery budget.
+    let deadline = tokio::time::Instant::now() + PAGE_TIMEOUT;
+    loop {
+        heartbeat.check()?;
+        if closed_context(app, run).await? {
+            break;
+        }
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "Desktop did not observe the exact first-session channel closure"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    for _ in 0..3 {
+        heartbeat.check()?;
+        ensure!(
+            closed_context(app, run).await?,
+            "missing replacement changed the exact first-session failure"
+        );
+    }
+    Ok(())
+}
+
+async fn closed_context(app: &tauri::AppHandle, run: &RunIdentity<'_>) -> anyhow::Result<bool> {
+    let snapshot = context(app, run).await?;
+    let tab = snapshot
+        .tabs
+        .iter()
+        .find(|tab| tab.id == run.first_tab)
+        .context("missing replacement discarded the first-session viewer")?;
+    ensure!(
+        snapshot.selected_tab_id.as_deref() == Some(run.first_tab)
+            && tab.session_id == run.first_session
+            && tab.control == "agent",
+        "missing replacement changed the first-session identity or selection"
+    );
+    Ok(tab.error.as_deref() == Some(crate::browser::registry::CRASHED_MESSAGE))
+}
+
+async fn context(
+    app: &tauri::AppHandle,
+    run: &RunIdentity<'_>,
+) -> anyhow::Result<crate::browser::dto::BrowserSnapshotDto> {
+    let caller = app
+        .get_webview("main")
+        .context("Desktop controller missing")?;
+    crate::browser::commands::browser_context(
+        app.clone(),
+        caller,
+        app.state::<AppState>(),
+        Some(run.run_id.into()),
+        Some(run.conversation_id.into()),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!(error.message))
 }
 
 #[cfg(test)]

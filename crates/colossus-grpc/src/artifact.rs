@@ -4,7 +4,7 @@ use colossus_api::{
     ArtifactPurpose as CoreArtifactPurpose, ArtifactReference as CoreArtifactReference,
     ArtifactState as CoreArtifactState,
     CreateArtifactUploadRequest as CoreCreateArtifactUploadRequest, IdempotencyKey,
-    MAX_ARTIFACT_BYTES,
+    MAX_ARTIFACT_BYTES, scopes,
 };
 use colossus_api_proto::v1alpha1::{
     ArtifactPurpose, ArtifactReference, ArtifactState, CreateArtifactUploadRequest,
@@ -15,6 +15,7 @@ use colossus_api_proto::v1alpha1::{
 use futures::Stream;
 use prost_types::Timestamp;
 use std::{pin::Pin, sync::Arc};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tonic::{Request, Response, Status, Streaming};
 
 const MAX_UPLOAD_CHUNKS: usize =
@@ -24,12 +25,34 @@ const MAX_UPLOAD_CHUNKS: usize =
 #[derive(Clone)]
 pub struct ArtifactServiceAdapter {
     api: Arc<dyn ArtifactApi>,
+    reads: Arc<Semaphore>,
 }
 
 impl ArtifactServiceAdapter {
     /// Wrap one transport-neutral artifact service.
     pub fn new(api: Arc<dyn ArtifactApi>) -> Self {
-        Self { api }
+        Self {
+            api,
+            reads: Arc::new(Semaphore::new(4)),
+        }
+    }
+
+    fn read_slot(
+        &self,
+        caller: &colossus_api::CallerContext,
+    ) -> Result<OwnedSemaphorePermit, Status> {
+        caller
+            .require_scope(scopes::ARTIFACTS_READ)
+            .map_err(api_status)?;
+        self.reads.clone().try_acquire_owned().map_err(|_| {
+            api_status(
+                colossus_api::ApiError::bounded_resource_exhausted(
+                    colossus_api::ApiErrorReason::CapacityExceeded,
+                    "artifact read capacity reached; retry the read later",
+                )
+                .with_correlation_id(caller.request_id().clone()),
+            )
+        })
     }
 }
 
@@ -129,13 +152,23 @@ impl ArtifactService for ArtifactServiceAdapter {
         request: Request<GetArtifactRequest>,
     ) -> Result<Response<GetArtifactResponse>, Status> {
         let caller = caller_context(&request)?.clone();
-        let artifact = self
-            .api
-            .get(&caller, &request.into_inner().artifact_id)
-            .await
-            .map_err(api_status)?;
+        let permit = self.read_slot(&caller)?;
+        let request = request.into_inner();
+        let api = Arc::clone(&self.api);
+        let runtime = tokio::runtime::Handle::current();
+        let artifact = tokio::task::spawn_blocking(move || {
+            // Keep admission charged until the actual read finishes, including
+            // when the RPC caller drops its future while storage is blocked.
+            let _permit = permit;
+            let artifact = runtime
+                .block_on(api.get(&caller, &request.artifact_id))
+                .map_err(api_status)?;
+            reference_to_proto(artifact)
+        })
+        .await
+        .map_err(|_| Status::internal("artifact read did not complete"))??;
         Ok(Response::new(GetArtifactResponse {
-            artifact: Some(reference_to_proto(artifact)?),
+            artifact: Some(artifact),
         }))
     }
 
@@ -144,30 +177,38 @@ impl ArtifactService for ArtifactServiceAdapter {
         request: Request<DownloadArtifactRequest>,
     ) -> Result<Response<Self::DownloadArtifactStream>, Status> {
         let caller = caller_context(&request)?.clone();
+        let permit = self.read_slot(&caller)?;
         let request = request.into_inner();
         let start = request.offset;
-        let download = self
-            .api
-            .download(&caller, &request.artifact_id, start)
-            .await
-            .map_err(api_status)?;
-        let chunks = download
-            .bytes
-            .chunks(ARTIFACT_CHUNK_BYTES)
-            .enumerate()
-            .map(|(index, data)| {
-                let relative = u64::try_from(index)
-                    .ok()
-                    .and_then(|index| index.checked_mul(ARTIFACT_CHUNK_BYTES as u64))
-                    .ok_or_else(|| Status::internal("artifact chunk offset overflowed"))?;
-                Ok(DownloadArtifactResponse {
-                    offset: start
-                        .checked_add(relative)
-                        .ok_or_else(|| Status::internal("artifact chunk offset overflowed"))?,
-                    data: data.to_vec(),
-                })
-            })
-            .collect::<Vec<_>>();
+        let api = Arc::clone(&self.api);
+        let runtime = tokio::runtime::Handle::current();
+        let chunks = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let download = runtime
+                .block_on(api.download(&caller, &request.artifact_id, start))
+                .map_err(api_status)?;
+            Ok::<_, Status>(
+                download
+                    .bytes
+                    .chunks(ARTIFACT_CHUNK_BYTES)
+                    .enumerate()
+                    .map(|(index, data)| {
+                        let relative = u64::try_from(index)
+                            .ok()
+                            .and_then(|index| index.checked_mul(ARTIFACT_CHUNK_BYTES as u64))
+                            .ok_or_else(|| Status::internal("artifact chunk offset overflowed"))?;
+                        Ok(DownloadArtifactResponse {
+                            offset: start.checked_add(relative).ok_or_else(|| {
+                                Status::internal("artifact chunk offset overflowed")
+                            })?,
+                            data: data.to_vec(),
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .await
+        .map_err(|_| Status::internal("artifact read did not complete"))??;
         Ok(Response::new(Box::pin(tokio_stream::iter(chunks))))
     }
 }
@@ -213,3 +254,7 @@ fn parse_timestamp(value: &str) -> Result<Timestamp, Status> {
         .parse::<Timestamp>()
         .map_err(|_| Status::internal("artifact timestamp is invalid"))
 }
+
+#[cfg(test)]
+#[path = "artifact/tests.rs"]
+mod tests;

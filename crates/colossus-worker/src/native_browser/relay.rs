@@ -13,6 +13,8 @@ pub(super) struct NativeRelay {
     frames: Mutex<Option<(Lease, FrameCodec)>>,
     #[cfg(all(windows, debug_assertions))]
     observe_diagnostics: std::sync::atomic::AtomicU8,
+    #[cfg(all(windows, debug_assertions))]
+    native_diagnostics: std::sync::atomic::AtomicU32,
 }
 impl NativeRelay {
     pub(super) fn new(
@@ -27,6 +29,8 @@ impl NativeRelay {
             frames: Mutex::new(None),
             #[cfg(all(windows, debug_assertions))]
             observe_diagnostics: std::sync::atomic::AtomicU8::new(0),
+            #[cfg(all(windows, debug_assertions))]
+            native_diagnostics: std::sync::atomic::AtomicU32::new(0),
         }
     }
     #[cfg(all(windows, debug_assertions))]
@@ -34,6 +38,35 @@ impl NativeRelay {
         if self.observe_diagnostics.fetch_or(bit, Ordering::AcqRel) & bit == 0 {
             // Fixed provenance categories only: no target, page or native payload.
             eprintln!("EVIDENCE native-relay-observe stage={stage}");
+        }
+    }
+    #[cfg(all(windows, debug_assertions))]
+    fn trace_native(&self, stage: &'static str, error: Option<PresentationError>) {
+        let offset = match stage {
+            "observe_failed" => 0,
+            "configure_dispatch" => 7,
+            "configure_ack" => 8,
+            "configure_failed" => 9,
+            "hide_dispatch" => 16,
+            "hide_ack" => 17,
+            "hide_failed" => 18,
+            _ => return,
+        };
+        let (category, failure) = match error {
+            None => (0, "none"),
+            Some(PresentationError::Expired) => (0, "expired"),
+            Some(PresentationError::Invalid) => (1, "invalid"),
+            Some(PresentationError::Stale) => (2, "stale"),
+            Some(PresentationError::Unauthenticated) => (3, "unauthenticated"),
+            Some(PresentationError::Hidden) => (4, "hidden"),
+            Some(PresentationError::LimitExceeded) => (5, "limit_exceeded"),
+            Some(PresentationError::OutcomeUnknown) => (6, "outcome_unknown"),
+        };
+        let bit = 1 << (offset + category);
+        if self.native_diagnostics.fetch_or(bit, Ordering::AcqRel) & bit == 0 {
+            // At most one fixed line per stage/error category for this relay.
+            // A prior benign stale read cannot suppress a later channel failure.
+            eprintln!("EVIDENCE native-relay-native stage={stage} failure={failure}");
         }
     }
     fn active(&self) -> Result<(), PresentationError> {
@@ -91,7 +124,15 @@ impl NativeRelay {
                 None => return Err(PresentationError::Stale),
             }
         } else {
-            let lease = self.client.configure(value.clone()).await?;
+            #[cfg(all(windows, debug_assertions))]
+            self.trace_native("configure_dispatch", None);
+            let configured = self.client.configure(value.clone()).await;
+            #[cfg(all(windows, debug_assertions))]
+            match configured {
+                Ok(_) => self.trace_native("configure_ack", None),
+                Err(error) => self.trace_native("configure_failed", Some(error)),
+            }
+            let lease = configured?;
             // Only the authenticated private native ACK reaches Runtime.
             self.session
                 .confirm_presentation_lease(&value, lease)
@@ -125,7 +166,10 @@ impl PresentationHost for NativeRelay {
             PresentationCommand::Observe { lease } => {
                 let state = self.client.observe(lease).await.map_err(|error| {
                     #[cfg(all(windows, debug_assertions))]
-                    self.trace_observe(1, "native_rejected");
+                    {
+                        self.trace_observe(1, "native_rejected");
+                        self.trace_native("observe_failed", Some(error));
+                    }
                     self.read_error(error)
                 })?;
                 self.session
@@ -153,7 +197,21 @@ impl PresentationHost for NativeRelay {
             | PresentationCommand::Ready
             | PresentationCommand::Poll { .. } => Err(PresentationError::Invalid),
             command => {
-                self.client.command(command).await?;
+                #[cfg(all(windows, debug_assertions))]
+                let hiding = matches!(command, PresentationCommand::Hide { .. });
+                #[cfg(all(windows, debug_assertions))]
+                if hiding {
+                    self.trace_native("hide_dispatch", None);
+                }
+                let dispatched = self.client.command(command).await;
+                #[cfg(all(windows, debug_assertions))]
+                if hiding {
+                    match dispatched {
+                        Ok(()) => self.trace_native("hide_ack", None),
+                        Err(error) => self.trace_native("hide_failed", Some(error)),
+                    }
+                }
+                dispatched?;
                 self.acknowledged()?;
                 Ok(PresentationReply::Ack)
             }

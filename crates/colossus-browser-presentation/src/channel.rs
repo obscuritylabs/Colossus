@@ -9,6 +9,10 @@ use tokio::{
 };
 use zeroize::Zeroizing;
 
+#[cfg(all(windows, debug_assertions))]
+#[path = "channel_diagnostics.rs"]
+mod diagnostics;
+
 use crate::{
     CONTROL_HEADER_BYTES, Configure, ControlCodec, Frame, FrameCodec, HEADER_BYTES,
     HumanFenceReceipt, Input, Lease, PageState, PresentationCommand, PresentationError,
@@ -123,6 +127,8 @@ pub async fn serve_presentation(
     host: Arc<dyn PresentationHost>,
 ) -> Result<(), PresentationError> {
     let _revoke_on_drop = RevokeOnDrop(Arc::clone(&host));
+    #[cfg(all(windows, debug_assertions))]
+    let diagnostics = diagnostics::Diagnostics::new("server");
     let mut incoming = ControlCodec::new(Zeroizing::new(*key), enrollment, Role::NativeToHost);
     let mut outgoing = ControlCodec::new(Zeroizing::new(*key), enrollment, Role::HostToNative);
     let mut frames: Option<FrameCodec> = None;
@@ -154,6 +160,12 @@ pub async fn serve_presentation(
                 return Err(PresentationError::Stale);
             }
             let budget = operation_timeout(&command);
+            #[cfg(all(windows, debug_assertions))]
+            let trace = diagnostics.begin(&command);
+            #[cfg(all(windows, debug_assertions))]
+            let mut read_trace = diagnostics.begin_read(&command);
+            #[cfg(all(windows, debug_assertions))]
+            let mut read_error = None;
             let result = tokio::time::timeout(budget, async {
                 if let PresentationCommand::Poll { lease } = command {
                     match host.frame(lease).await {
@@ -184,6 +196,10 @@ pub async fn serve_presentation(
                             .await?
                         }
                         Err(error) => {
+                            #[cfg(all(windows, debug_assertions))]
+                            {
+                                read_error = Some(error);
+                            }
                             write_control(
                                 channel.writer.as_mut(),
                                 &mut outgoing,
@@ -196,10 +212,25 @@ pub async fn serve_presentation(
                         }
                     }
                 } else {
+                    #[cfg(all(windows, debug_assertions))]
+                    diagnostics::emit(trace, "host_dispatch", None);
                     let reply = match host.dispatch(command).await {
                         Ok(reply) => reply,
                         Err(error) => PresentationReply::Error(error),
                     };
+                    #[cfg(all(windows, debug_assertions))]
+                    if let PresentationReply::Error(error) = &reply {
+                        read_error = Some(*error);
+                    }
+                    #[cfg(all(windows, debug_assertions))]
+                    diagnostics::emit(
+                        trace,
+                        "host_return",
+                        match &reply {
+                            PresentationReply::Error(error) => Some(*error),
+                            _ => None,
+                        },
+                    );
                     if let PresentationReply::Configured(lease) = &reply {
                         lease.validate()?;
                         frames = Some(FrameCodec::new(Zeroizing::new(*key), enrollment, *lease)?);
@@ -218,10 +249,29 @@ pub async fn serve_presentation(
                         return Err(PresentationError::OutcomeUnknown);
                     }
                 }
+                #[cfg(all(windows, debug_assertions))]
+                diagnostics::read_stage(&mut read_trace, "response_write_complete");
                 Ok(())
             })
-            .await
-            .map_err(|_| PresentationError::OutcomeUnknown)?;
+            .await;
+            #[cfg(all(windows, debug_assertions))]
+            diagnostics.finish_read(
+                read_trace,
+                match &result {
+                    Ok(Ok(())) => read_error,
+                    Ok(Err(error)) => Some(*error),
+                    Err(_) => Some(PresentationError::OutcomeUnknown),
+                },
+            );
+            let result = result.map_err(|_| {
+                #[cfg(all(windows, debug_assertions))]
+                diagnostics::emit(
+                    trace,
+                    "serve_timeout",
+                    Some(PresentationError::OutcomeUnknown),
+                );
+                PresentationError::OutcomeUnknown
+            })?;
             result?;
         }
     }
@@ -260,11 +310,15 @@ fn valid_reply(command: &PresentationCommand, reply: &PresentationReply) -> bool
 struct Call {
     command: PresentationCommand,
     response: oneshot::Sender<Response>,
+    #[cfg(all(windows, debug_assertions))]
+    trace: Option<diagnostics::Trace>,
 }
 struct ClientOwner {
     sender: mpsc::Sender<Call>,
     worker: AbortHandle,
     key: Zeroizing<[u8; 32]>,
+    #[cfg(all(windows, debug_assertions))]
+    diagnostics: Arc<diagnostics::Diagnostics>,
 }
 impl Drop for ClientOwner {
     fn drop(&mut self) {
@@ -305,24 +359,44 @@ impl PresentationClient {
         }
         let (sender, mut receiver) = mpsc::channel::<Call>(16);
         let frame_key = Zeroizing::new(*key);
+        #[cfg(all(windows, debug_assertions))]
+        let diagnostics = Arc::new(diagnostics::Diagnostics::new("client"));
+        #[cfg(all(windows, debug_assertions))]
+        let worker_diagnostics = Arc::clone(&diagnostics);
         let worker = tokio::spawn(async move {
             let mut frames: Option<FrameCodec> = None;
             while let Some(mut call) = receiver.recv().await {
                 if call.response.is_closed() {
+                    #[cfg(all(windows, debug_assertions))]
+                    diagnostics::emit(call.trace, "cancel_before_dispatch", None);
                     continue;
                 }
                 let read_only_frame = matches!(&call.command, PresentationCommand::Poll { .. });
                 let read_only =
                     read_only_frame || matches!(&call.command, PresentationCommand::Observe { .. });
                 let budget = operation_timeout(&call.command);
+                #[cfg(all(windows, debug_assertions))]
+                let mut read_trace = worker_diagnostics.begin_read(&call.command);
                 let operation = async {
+                    #[cfg(all(windows, debug_assertions))]
+                    diagnostics::emit(call.trace, "dispatch", None);
                     channel
                         .writer
                         .write_all(&outgoing.encode(&call.command)?)
                         .await
                         .map_err(|_| PresentationError::OutcomeUnknown)?;
+                    #[cfg(all(windows, debug_assertions))]
+                    {
+                        diagnostics::emit(call.trace, "wire_write_complete", None);
+                        diagnostics::read_stage(&mut read_trace, "wire_write_complete");
+                    }
                     let reply: PresentationReply =
                         read_control(channel.reader.as_mut(), &mut incoming).await?;
+                    #[cfg(all(windows, debug_assertions))]
+                    {
+                        diagnostics::emit(call.trace, "decoded_reply", None);
+                        diagnostics::read_stage(&mut read_trace, "decoded_reply");
+                    }
                     if !valid_reply(&call.command, &reply) {
                         return Err(PresentationError::OutcomeUnknown);
                     }
@@ -372,6 +446,8 @@ impl PresentationClient {
                     if let PresentationReply::Fenced(receipt) = &reply {
                         receipt.validate()?;
                     }
+                    #[cfg(all(windows, debug_assertions))]
+                    diagnostics::read_stage(&mut read_trace, "read_complete");
                     if let PresentationReply::Error(error) = reply {
                         if error == PresentationError::OutcomeUnknown {
                             return Err(error);
@@ -386,16 +462,43 @@ impl PresentationClient {
                     // authority. Finish validating its bounded reply before taking
                     // the next call; abandoning it mid-frame would desynchronize the
                     // stream and unnecessarily kill an otherwise healthy viewer.
-                    _ = call.response.closed(), if !read_only => break,
+                    _ = call.response.closed(), if !read_only => {
+                        #[cfg(all(windows, debug_assertions))]
+                        diagnostics::emit(call.trace, "response_dropped", None);
+                        break;
+                    },
                     result = tokio::time::timeout(budget, operation) => match result {
-                        Ok(Ok(reply)) => Ok(reply),
+                        Ok(Ok(reply)) => {
+                            #[cfg(all(windows, debug_assertions))]
+                            diagnostics::emit(call.trace, "reply", match &reply.0 {
+                                PresentationReply::Error(error) => Some(*error),
+                                _ => None,
+                            });
+                            Ok(reply)
+                        },
                         // Poll has no human effect. Preserve a verified parser's
                         // categorical rejection for diagnostics, but terminate
                         // this channel below just as an uncertain effect does.
-                        Ok(Err(error)) if read_only_frame => Err(error),
-                        _ => Err(PresentationError::OutcomeUnknown),
+                        Ok(Err(error)) => {
+                            #[cfg(all(windows, debug_assertions))]
+                            diagnostics::emit(call.trace, "operation_error", Some(error));
+                            Err(if read_only_frame { error } else { PresentationError::OutcomeUnknown })
+                        },
+                        Err(_) => {
+                            #[cfg(all(windows, debug_assertions))]
+                            diagnostics::emit(call.trace, "operation_timeout", Some(PresentationError::OutcomeUnknown));
+                            Err(PresentationError::OutcomeUnknown)
+                        },
                     },
                 };
+                #[cfg(all(windows, debug_assertions))]
+                worker_diagnostics.finish_read(
+                    read_trace,
+                    match &result {
+                        Ok((PresentationReply::Error(error), _)) | Err(error) => Some(*error),
+                        _ => None,
+                    },
+                );
                 let disconnected = result.is_err();
                 let _ = call.response.send(result);
                 if disconnected {
@@ -407,6 +510,8 @@ impl PresentationClient {
             sender,
             worker: worker.abort_handle(),
             key,
+            #[cfg(all(windows, debug_assertions))]
+            diagnostics,
         })))
     }
     /// Transfer a zeroizing native-only frame credential copy to the trusted pixel surface.
@@ -422,18 +527,61 @@ impl PresentationClient {
         command: PresentationCommand,
     ) -> Result<(PresentationReply, Option<Vec<u8>>), PresentationError> {
         command.validate()?;
+        #[cfg(all(windows, debug_assertions))]
+        let trace = self.0.diagnostics.begin(&command);
+        #[cfg(all(windows, debug_assertions))]
+        diagnostics::emit(trace, "queue_enter", None);
         let (response, receiver) = oneshot::channel();
         tokio::time::timeout(
             CONTROL_OPERATION_TIMEOUT,
-            self.0.sender.send(Call { command, response }),
+            self.0.sender.send(Call {
+                command,
+                response,
+                #[cfg(all(windows, debug_assertions))]
+                trace,
+            }),
         )
         .await
-        .map_err(|_| PresentationError::OutcomeUnknown)?
-        .map_err(|_| PresentationError::OutcomeUnknown)?;
+        .map_err(|_| {
+            #[cfg(all(windows, debug_assertions))]
+            diagnostics::emit(
+                trace,
+                "queue_timeout",
+                Some(PresentationError::OutcomeUnknown),
+            );
+            PresentationError::OutcomeUnknown
+        })?
+        .map_err(|_| {
+            #[cfg(all(windows, debug_assertions))]
+            diagnostics::emit(
+                trace,
+                "queue_closed",
+                Some(PresentationError::OutcomeUnknown),
+            );
+            PresentationError::OutcomeUnknown
+        })?;
+        #[cfg(all(windows, debug_assertions))]
+        diagnostics::emit(trace, "queued", None);
         let result = tokio::time::timeout(CALL_RESPONSE_TIMEOUT, receiver)
             .await
-            .map_err(|_| PresentationError::OutcomeUnknown)?
-            .map_err(|_| PresentationError::OutcomeUnknown)??;
+            .map_err(|_| {
+                #[cfg(all(windows, debug_assertions))]
+                diagnostics::emit(
+                    trace,
+                    "response_timeout",
+                    Some(PresentationError::OutcomeUnknown),
+                );
+                PresentationError::OutcomeUnknown
+            })?
+            .map_err(|_| {
+                #[cfg(all(windows, debug_assertions))]
+                diagnostics::emit(
+                    trace,
+                    "response_closed",
+                    Some(PresentationError::OutcomeUnknown),
+                );
+                PresentationError::OutcomeUnknown
+            })??;
         if let PresentationReply::Error(error) = result.0 {
             return Err(error);
         }

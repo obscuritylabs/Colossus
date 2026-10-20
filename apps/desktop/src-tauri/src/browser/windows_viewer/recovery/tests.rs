@@ -57,13 +57,92 @@ fn assert_retained(manager: &BrowserManager, control: &str) {
     assert_eq!(agent.dto.session_id, "session-agent");
     assert_eq!(agent.dto.control, control);
     assert!(!agent.close_requested);
+    let human = state.tabs.iter().find(|tab| tab.dto.id == "human").unwrap();
+    assert_eq!(human.dto.control, "human");
+    assert_eq!(human.dto.session_id, "session-human");
+    assert_eq!(human.dto.page.url, "https://example.com/");
+    assert!(human.agent_run_id.is_none());
+    assert!(!human.close_requested);
+}
+
+#[tokio::test]
+async fn absent_pages_do_not_exhaust_admission_before_the_next_same_run_session() {
+    let manager = manager();
+    // Ordinary UI polling can outpace the next model turn after session A
+    // closes. None is the authenticated watch's missing-page reply, not a failed
+    // attempt to attach session B.
+    for _ in 0..4 {
+        assert!(manager.reserve_agent_recovery("run").unwrap());
+        let admitted: Option<&str> = manager
+            .recover_agent_presentation("workspace", "run", "agent", async { Ok(None) })
+            .await
+            .unwrap();
+        assert!(admitted.is_none());
+        assert_retained(&manager, "agent");
+    }
+    assert!(manager.reserve_agent_recovery("run").unwrap());
+    let admitted = manager
+        .recover_agent_presentation("workspace", "run", "agent", async { Ok(Some("session-B")) })
+        .await
+        .unwrap();
+    assert_eq!(admitted, Some("session-B"));
+    assert_retained(&manager, "agent");
+}
+
+#[tokio::test]
+async fn missing_pages_refund_only_their_attempt_and_preserve_real_recovery_bounds() {
+    let manager = manager();
+    assert!(manager.reserve_agent_recovery("run").unwrap());
+    let failed: Result<Option<()>, _> = manager
+        .recover_agent_presentation("workspace", "run", "agent", async {
+            Err(error("The read-only admission is stale."))
+        })
+        .await;
+    assert!(failed.is_err());
+    for _ in 0..4 {
+        assert!(manager.reserve_agent_recovery("run").unwrap());
+        let admitted: Option<()> = manager
+            .recover_agent_presentation("workspace", "run", "agent", async { Ok(None) })
+            .await
+            .unwrap();
+        assert!(admitted.is_none());
+    }
+    assert!(manager.reserve_agent_recovery("run").unwrap());
+    let admitted = manager
+        .recover_agent_presentation("workspace", "run", "agent", async { Ok(Some("session-B")) })
+        .await
+        .unwrap();
+    assert_eq!(admitted, Some("session-B"));
+    assert!(!manager.reserve_agent_recovery("run").unwrap());
+    assert_retained(&manager, "agent");
+}
+
+#[tokio::test]
+async fn cancelled_admission_keeps_its_recovery_reservation() {
+    let manager = manager();
+    for _ in 0..2 {
+        assert!(manager.reserve_agent_recovery("run").unwrap());
+        let admission = manager.recover_agent_presentation::<()>(
+            "workspace",
+            "run",
+            "agent",
+            std::future::pending(),
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(1), admission)
+                .await
+                .is_err()
+        );
+    }
+    assert!(!manager.reserve_agent_recovery("run").unwrap());
+    assert_retained(&manager, "agent");
 }
 
 #[tokio::test]
 async fn completion_during_missing_replacement_retains_agent_tab_and_selection() {
     let manager = manager();
     let admitted: Option<()> = manager
-        .recover_agent_presentation("workspace", "agent", async {
+        .recover_agent_presentation("workspace", "run", "agent", async {
             // Core finished after the earlier nonterminal GetRun. Its watch now
             // admits no live page; canonical terminal replay proves no close.
             assert_retained(&manager, "agent");
@@ -86,7 +165,7 @@ async fn completion_during_missing_replacement_retains_agent_tab_and_selection()
 async fn rejected_replacement_preserves_last_page_for_terminal_reconciliation() {
     let manager = manager();
     let admitted: Result<Option<()>, _> = manager
-        .recover_agent_presentation("workspace", "agent", async {
+        .recover_agent_presentation("workspace", "run", "agent", async {
             Err(error("The read-only admission is stale."))
         })
         .await;
@@ -111,7 +190,7 @@ async fn rejected_replacement_preserves_last_page_for_terminal_reconciliation() 
 async fn proven_explicit_close_still_removes_a_tab_after_missing_recovery_admission() {
     let manager = manager();
     let admitted: Option<()> = manager
-        .recover_agent_presentation("workspace", "agent", async { Ok(None) })
+        .recover_agent_presentation("workspace", "run", "agent", async { Ok(None) })
         .await
         .unwrap();
     assert!(admitted.is_none());

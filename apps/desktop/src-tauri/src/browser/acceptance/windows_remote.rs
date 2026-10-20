@@ -1,5 +1,8 @@
 //! Real Windows HWND rendering and native input for the supervised Core fixture.
-use super::{BrowserRect, PAGE_TIMEOUT, ViewportHeartbeat, present, title};
+use super::{
+    BrowserRect, ExpectedFrame, PAGE_TIMEOUT, RemoteAcceptanceProbe, ViewportHeartbeat,
+    accepted_frame, present, title,
+};
 use anyhow::{Context as _, ensure};
 use colossus_native_browser::{presentation::WindowsScreenEvidence, remote::RemoteSurface};
 use std::{fs::OpenOptions, path::Path, time::Duration};
@@ -162,10 +165,122 @@ pub(super) async fn human(
         initial.width, initial.height, resized.width, resized.height, resized.dpi
     );
     let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
+    let previous = view.acceptance_probe().await?;
     let controller = app
         .get_webview("main")
         .context("Desktop controller missing")?;
-    controller.eval("const overlay=document.createElement('div');overlay.id='owned-windows-overlay';overlay.style.cssText='position:fixed;inset:0;z-index:2147483647;background:var(--surface-primary,#fff);color:var(--text-primary,#111)';overlay.textContent='Colossus Desktop native overlay acceptance';document.body.appendChild(overlay);")?;
+    // UI dispatch acknowledges this pulse before its asynchronous remote resize
+    // settles. The overlay can revoke that in-flight presentation immediately.
+    present(app, tab, smaller).await?;
+    controller.eval("(()=>{const overlay=document.createElement('dialog');overlay.id='owned-windows-overlay';overlay.dataset.browserOccluded='';overlay.style.cssText='position:fixed;inset:0;margin:0;width:100vw;height:100vh;max-width:none;max-height:none;background:var(--surface-primary,#fff);color:var(--text-primary,#111)';overlay.textContent='Colossus Desktop native overlay acceptance';document.body.appendChild(overlay);overlay.showModal();})()")?;
+    hide_viewport(app, tab).await?;
+    require_modal_overlay(&controller).await?;
+    let hidden = poll_hidden_overlay(app, tab, view, &previous).await?;
+    save(&hidden, home, "windows-overlay-foreground.png")?;
+    println!("PASS actual Desktop overlay occludes the native browser HWND");
+    controller.eval("(()=>{const overlay=document.getElementById('owned-windows-overlay');overlay?.close();overlay?.remove();})()")?;
+    restore_overlay(app, tab, view, rect, smaller, &previous).await?;
+    heartbeat.resume(tab, rect).await?;
+    background_visibility(app, tab, view, rect).await?;
+    view.acceptance_windows_keyboard_reentrancy()
+        .await
+        .context("Tao parent Return key reentrancy did not acknowledge completion")?;
+    // A returning native call alone is insufficient: require a fresh UI dispatch
+    // and visible browser pixels after the sent keyup re-entered Tao's keyboard handler.
+    let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
+    println!("PASS Tao parent Return key handles nested cross-thread keyup and remains responsive");
+    view.acceptance_windows_input().await?;
+    title(view, "Human input Ab3Ω😀").await?;
+    println!(
+        "PASS native HWND mouse/key dispatch, Unicode surrogate IME commit and IME cancel reached real Chromium"
+    );
+    Ok(())
+}
+
+async fn require_modal_overlay(controller: &tauri::Webview) -> anyhow::Result<()> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let send = std::sync::Mutex::new(Some(send));
+    controller.eval_with_callback(
+        "document.getElementById('owned-windows-overlay')?.matches('dialog:modal') === true",
+        move |result| {
+            if let Some(send) = send.lock().expect("overlay callback").take() {
+                let _ = send.send(result);
+            }
+        },
+    )?;
+    let value = tokio::time::timeout(Duration::from_secs(2), receive)
+        .await
+        .context("native overlay modal query timed out")??;
+    ensure!(
+        serde_json::from_str::<bool>(&value)?,
+        "the real Desktop HTML dialog did not enter its modal top layer"
+    );
+    Ok(())
+}
+
+async fn poll_hidden_overlay(
+    app: &tauri::AppHandle,
+    tab: &str,
+    view: &RemoteSurface,
+    previous: &RemoteAcceptanceProbe,
+) -> anyhow::Result<WindowsScreenEvidence> {
+    let started = tokio::time::Instant::now();
+    // The renderer repeats hidden viewport pulses independently of its context
+    // polling. Neither path may show or renew the expired visibility lease.
+    let pulses = async {
+        for index in 0..8 {
+            tokio::time::sleep_until(started + Duration::from_millis(index * 400)).await;
+            hide_viewport(app, tab).await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+    let contexts = async {
+        for index in 0..4 {
+            tokio::time::sleep_until(started + Duration::from_millis(index * 750)).await;
+            let caller = app
+                .get_webview("main")
+                .context("Desktop controller missing")?;
+            let snapshot = crate::browser::commands::browser_context(
+                app.clone(),
+                caller,
+                app.state::<crate::state::AppState>(),
+                None,
+                Some(view.conversation_id().into()),
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))?;
+            ensure!(
+                snapshot.selected_tab_id.as_deref() == Some(tab)
+                    && snapshot.tabs.iter().any(|candidate| {
+                        candidate.id == tab
+                            && candidate.session_id == view.session_id()
+                            && candidate.control == "human"
+                            && candidate.error.is_none()
+                            && candidate.page.url == previous.page.url
+                            && candidate.page.title == previous.page.title
+                    }),
+                "hidden controller polling lost or failed the exact human browser session"
+            );
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+    tokio::try_join!(pulses, contexts)?;
+    tokio::time::sleep_until(started + Duration::from_secs(3)).await;
+    let hidden = view.acceptance_windows_screen().await?;
+    ensure!(
+        hidden.foreground
+            && !hidden.visible
+            && !hidden.hit_test
+            && hidden.center_bgra != [255, 241, 231, 255],
+        "native browser pixels remained above the real Desktop overlay"
+    );
+    println!(
+        "PASS hidden human browser survived controller context polling beyond the native visibility TTL"
+    );
+    Ok(hidden)
+}
+
+async fn hide_viewport(app: &tauri::AppHandle, tab: &str) -> anyhow::Result<()> {
     let state = app.state::<crate::state::AppState>();
     let generation = state
         .browser
@@ -183,33 +298,50 @@ pub(super) async fn human(
             },
         )
         .await
-        .map_err(|error| anyhow::anyhow!(error.message))?;
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let hidden = view.acceptance_windows_screen().await?;
+        .map_err(|error| anyhow::anyhow!(error.message))
+}
+
+async fn restore_overlay(
+    app: &tauri::AppHandle,
+    tab: &str,
+    view: &RemoteSurface,
+    rect: BrowserRect,
+    smaller: BrowserRect,
+    previous: &RemoteAcceptanceProbe,
+) -> anyhow::Result<()> {
+    // Do not serialize each remote apply before the next trusted visibility
+    // change. A fresh pulse must recover without reviving an obsolete lease.
+    present(app, tab, smaller).await?;
+    hide_viewport(app, tab).await?;
+    let prior = previous
+        .frame
+        .context("human overlay baseline frame missing")?;
+    let restored = accepted_frame(
+        app,
+        tab,
+        view,
+        rect,
+        ExpectedFrame {
+            title: &previous.page.title,
+            url: &previous.page.url,
+            center_bgra: [255, 241, 231, 255],
+            core_target: Some(&previous.page.target),
+            previous: None,
+            after: Some(prior),
+        },
+    )
+    .await?;
     ensure!(
-        hidden.foreground
-            && !hidden.visible
-            && !hidden.hit_test
-            && hidden.center_bgra != [255, 241, 231, 255],
-        "native browser pixels remained above the real Desktop overlay"
+        view.human_control_available()
+            && restored.frame.is_some_and(|frame| {
+                frame.lease.viewport_generation > prior.lease.viewport_generation
+                    && frame.lease.control_generation == 0
+            }),
+        "human overlay restoration did not acquire a fresh presentation lease"
     );
-    save(&hidden, home, "windows-overlay-foreground.png")?;
-    println!("PASS actual Desktop overlay occludes the native browser HWND");
-    controller.eval("document.getElementById('owned-windows-overlay')?.remove();")?;
     let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
-    heartbeat.resume(tab, rect).await?;
-    background_visibility(app, tab, view, rect).await?;
-    view.acceptance_windows_keyboard_reentrancy()
-        .await
-        .context("Tao parent Return key reentrancy did not acknowledge completion")?;
-    // A returning native call alone is insufficient: require a fresh UI dispatch
-    // and visible browser pixels after the sent keyup re-entered Tao's keyboard handler.
-    let _ = screen(app, tab, view, rect, [255, 241, 231, 255]).await?;
-    println!("PASS Tao parent Return key handles nested cross-thread keyup and remains responsive");
-    view.acceptance_windows_input().await?;
-    title(view, "Human input Ab3Ω😀").await?;
     println!(
-        "PASS native HWND mouse/key dispatch, Unicode surrogate IME commit and IME cancel reached real Chromium"
+        "PASS live human browser restored the same authenticated page and HWND pixels after overlapping overlay viewport updates"
     );
     Ok(())
 }

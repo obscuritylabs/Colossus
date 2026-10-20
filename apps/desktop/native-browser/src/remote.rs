@@ -40,11 +40,26 @@ struct Bounds {
 struct State {
     configure: Configure,
     lease: Lease,
+    confirmed_hidden_lease: Option<Lease>,
     bounds: Option<Bounds>,
     applied: Option<Bounds>,
     visible: bool,
     heartbeat: Instant,
     surface: Option<Arc<PresentationSurface>>,
+}
+impl State {
+    fn new(configure: Configure, lease: Lease, surface: PresentationSurface) -> Self {
+        Self {
+            configure,
+            lease,
+            confirmed_hidden_lease: None,
+            bounds: None,
+            applied: None,
+            visible: false,
+            heartbeat: Instant::now(),
+            surface: Some(Arc::new(surface)),
+        }
+    }
 }
 enum Event {
     Focus(Lease, bool),
@@ -432,15 +447,7 @@ impl RemoteSurface {
             digest,
             native,
             sink,
-            state: Mutex::new(State {
-                configure,
-                lease,
-                bounds: None,
-                applied: None,
-                visible: false,
-                heartbeat: Instant::now(),
-                surface: Some(Arc::new(surface)),
-            }),
+            state: Mutex::new(State::new(configure, lease, surface)),
             events,
             revision: AtomicU64::new(1),
             viewport: AtomicU64::new(viewport),

@@ -1,4 +1,4 @@
-use super::initialize_configured;
+use super::{hide_stale_target, initialize_configured};
 use crate::{
     BrowserError,
     remote::{Bounds, State},
@@ -8,7 +8,7 @@ use serde_json::json;
 use std::{
     sync::{
         Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -45,12 +45,66 @@ fn state() -> Mutex<State> {
     Mutex::new(State {
         configure: configure(1),
         lease: lease(1),
+        confirmed_hidden_lease: None,
         bounds,
         applied: bounds,
         visible: true,
         heartbeat: Instant::now(),
         surface: None,
     })
+}
+
+#[tokio::test]
+async fn superseded_stale_update_cannot_hide_the_restored_visible_layout() {
+    let state = state();
+    let revision = AtomicU64::new(1);
+    let closing = AtomicBool::new(false);
+    let hidden = AtomicBool::new(false);
+    // The observed update belonged to revision1. Opening and closing an overlay
+    // synchronously revokes it, then admits a fresh visible intent on revision3.
+    state.lock().unwrap().visible = false;
+    revision.store(2, Ordering::Release);
+    state.lock().unwrap().visible = true;
+    revision.store(3, Ordering::Release);
+    hide_stale_target(&state, &revision, &closing, 1, |_, _| async {
+        hidden.store(true, Ordering::Release);
+        Err(BrowserError::Closed)
+    })
+    .await
+    .unwrap();
+    assert!(!hidden.load(Ordering::Acquire));
+    let current = state.lock().unwrap();
+    assert_eq!(current.lease, lease(1));
+    assert!(current.visible && current.applied == current.bounds);
+}
+
+#[tokio::test]
+async fn current_target_cleanup_stays_required_but_cannot_fail_a_newer_show() {
+    let state = state();
+    let revision = AtomicU64::new(1);
+    let closing = AtomicBool::new(false);
+    let result = hide_stale_target(&state, &revision, &closing, 1, |_, current| async move {
+        assert_eq!(current, lease(1));
+        Err(BrowserError::Closed)
+    })
+    .await;
+    assert_eq!(result, Err(BrowserError::Closed));
+    assert!(state.lock().unwrap().applied.is_none());
+    let result = hide_stale_target(&state, &revision, &closing, 1, |_, _| async {
+        tokio::task::yield_now().await;
+        state.lock().unwrap().visible = false;
+        revision.store(2, Ordering::Release);
+        state.lock().unwrap().visible = true;
+        revision.store(3, Ordering::Release);
+        Err(BrowserError::Closed)
+    })
+    .await;
+    assert_eq!(result, Ok(()));
+    let current = state.lock().unwrap();
+    assert_eq!(current.lease, lease(1));
+    // Supersession does not revive the old layout/input. A new authenticated
+    // Configure and native surface are still required before it can be shown.
+    assert!(current.visible && current.applied.is_none());
 }
 
 #[tokio::test]
