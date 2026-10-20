@@ -17,6 +17,7 @@ pub(super) struct Fixtures {
     pub denied: String,
     pub uploaded: Arc<std::sync::atomic::AtomicUsize>,
     pub requests: Arc<std::sync::atomic::AtomicUsize>,
+    pub pulse_requests: Arc<std::sync::atomic::AtomicUsize>,
     pub tls: super::tls::Target,
     pub long_profile_layout: Option<super::logging::Layout>,
 }
@@ -31,6 +32,7 @@ pub(super) async fn run(
         denied,
         uploaded,
         requests,
+        pulse_requests,
         tls,
         long_profile_layout,
     } = fixtures;
@@ -273,6 +275,7 @@ pub(super) async fn run(
         &control,
         &origin,
         &requests,
+        &pulse_requests,
     )
     .await;
     super::tls::check(&tls, &*driver, &request, &configure.target, &control).await;

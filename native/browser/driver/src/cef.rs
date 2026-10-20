@@ -31,6 +31,8 @@ mod developer_windows;
 mod devtools;
 #[cfg(windows)]
 mod interaction_windows;
+#[cfg(test)]
+mod navigation_tests;
 mod presentation;
 mod suspension;
 mod transfer;
@@ -51,6 +53,17 @@ struct State {
     drag_data: HashMap<u64, Value>,
     #[cfg(windows)]
     inspection_paused: HashSet<u64>,
+}
+impl State {
+    fn tab_outcome(&self, tab: u64) -> Result<(), BrowserDriverError> {
+        if self.failed.contains(&tab) || self.closed.contains(&tab) {
+            // The native failure may follow earlier network or input effects.
+            // Never report success or make a safe-to-retry no-effect claim.
+            Err(BrowserDriverError::OutcomeUnknown)
+        } else {
+            Ok(())
+        }
+    }
 }
 pub struct Callbacks {
     state: Mutex<State>,
@@ -970,9 +983,7 @@ impl Host {
                 )
             })
             .ok_or(BrowserDriverError::Stale)?;
-        if self.state(|state| state.failed.contains(&native))? {
-            return Err(BrowserDriverError::OutcomeUnknown);
-        }
+        self.state(|state| state.tab_outcome(native))??;
         let actual_native_document = self.native_document(native)?;
         let actual_revision = self.metadata(native)?.2;
         if document != command.target.document_id {
@@ -1062,8 +1073,10 @@ impl Host {
                 // SAFETY: main-thread exact owned native tab; native URL policy also checks.
                 status_result(unsafe { ffi::colossus_cef_navigate(native, 1, url.as_ptr()) })?;
                 self.until(Some(control), Duration::from_secs(60), |state| {
-                    !state.loading.contains(&native)
-                        && state.completed.get(&native).copied().unwrap_or_default() > completed
+                    state.tab_outcome(native).is_err()
+                        || (!state.loading.contains(&native)
+                            && state.completed.get(&native).copied().unwrap_or_default()
+                                > completed)
                 })?;
             }
             BrowserAction::Back {}
@@ -1301,6 +1314,7 @@ impl Host {
             .get(&selected)
             .ok_or(BrowserDriverError::Stale)?
             .native;
+        self.state(|state| state.tab_outcome(selected_native))??;
         let (origin, title, new_revision) = self.metadata(selected_native)?;
         let new_native_document = self.native_document(selected_native)?;
         let tab = self

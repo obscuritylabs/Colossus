@@ -14,6 +14,7 @@ pub struct Fixture {
     pub allowed_requests: Arc<AtomicUsize>,
     pub denied_requests: Arc<AtomicUsize>,
     pub uploaded: Arc<AtomicUsize>,
+    pub pulse_requests: Arc<AtomicUsize>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 impl Fixture {
@@ -52,18 +53,21 @@ catch(error) {{ document.querySelector('#file-read').textContent = 'Owned file f
         let allowed_requests = Arc::new(AtomicUsize::new(0));
         let denied_requests = Arc::new(AtomicUsize::new(0));
         let uploaded = Arc::new(AtomicUsize::new(0));
+        let pulse_requests = Arc::new(AtomicUsize::new(0));
         let tasks = vec![
             serve(
                 allowed,
                 page,
                 Arc::clone(&allowed_requests),
                 Some((origin.clone(), Arc::clone(&uploaded))),
+                Arc::clone(&pulse_requests),
             ),
             serve(
                 denied,
                 "denied fixture".into(),
                 Arc::clone(&denied_requests),
                 None,
+                Arc::clone(&pulse_requests),
             ),
         ];
         Self {
@@ -72,6 +76,7 @@ catch(error) {{ document.querySelector('#file-read').textContent = 'Owned file f
             allowed_requests,
             denied_requests,
             uploaded,
+            pulse_requests,
             tasks,
         }
     }
@@ -95,6 +100,7 @@ fn serve(
     page: String,
     observed: Arc<AtomicUsize>,
     transfers: Option<(String, Arc<AtomicUsize>)>,
+    pulse_requests: Arc<AtomicUsize>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut submitted = 0;
@@ -166,6 +172,9 @@ fn serve(
                 continue;
             }
             if method == "GET" && path.starts_with("/continuity") {
+                if path == "/continuity-pulse" {
+                    pulse_requests.fetch_add(1, Ordering::SeqCst);
+                }
                 let body = if path == "/continuity" {
                     "<!doctype html><title>Retained session</title><input aria-label='Retained input' value='retained DOM value'><output>Ready</output><script>let ticks=0;setInterval(()=>{document.querySelector('output').textContent=String(++ticks);fetch('/continuity-pulse').catch(()=>{})},100)</script>"
                 } else {

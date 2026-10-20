@@ -120,9 +120,23 @@ pub(super) async fn check(
     command.run_id = "next-native-run".into();
     command.control_generation = 2;
     let result = driver.execute(command, control).await;
+    let outcome = match &result {
+        Ok(_) => "accepted_navigation",
+        Err(BrowserDriverError::Failed) => "failed",
+        Err(BrowserDriverError::Stale) => "stale",
+        Err(BrowserDriverError::Denied) => "denied",
+        Err(BrowserDriverError::OutcomeUnknown) => "outcome_unknown",
+        Err(_) => "other_error",
+    };
+    eprintln!(
+        "EVIDENCE untrusted_tls navigation={outcome} connections={} http_bytes={} safe_diagnostics={}",
+        fixture.connections.load(Ordering::SeqCst),
+        fixture.http_bytes.load(Ordering::SeqCst),
+        fixture.evidence.accepted.load(Ordering::SeqCst),
+    );
     assert!(
-        matches!(result, Err(BrowserDriverError::Failed)),
-        "CEF must reject an admitted untrusted TLS server before HTTP"
+        matches!(result, Err(BrowserDriverError::OutcomeUnknown)),
+        "native TLS failure cannot report navigation success or admit automatic retry"
     );
     let deadline = Instant::now() + Duration::from_secs(3);
     while fixture.evidence.accepted.load(Ordering::SeqCst) == before {

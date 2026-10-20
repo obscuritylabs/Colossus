@@ -15,6 +15,7 @@ pub(super) async fn check(
     control: &BrowserDriverControl,
     origin: &str,
     requests: &AtomicUsize,
+    pulse_requests: &AtomicUsize,
 ) {
     let navigated = driver
         .execute(
@@ -42,12 +43,18 @@ pub(super) async fn check(
             .iter()
             .any(|node| node.value.as_deref() == Some("retained DOM value"))
     );
-    let active = requests.load(Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_millis(350)).await;
-    assert!(
-        requests.load(Ordering::SeqCst) > active,
-        "the active page must really send timer-driven HTTP requests"
-    );
+    // Chromium may throttle a detached page's 100ms timer to roughly 1Hz.
+    // Measure two actual pulse-only requests rather than counting navigation
+    // or favicon traffic, and never assume the visible-page timer frequency.
+    let first = pulse_after(
+        pulse_requests,
+        pulse_requests.load(Ordering::SeqCst),
+        "active",
+    )
+    .await;
+    let first_at = tokio::time::Instant::now();
+    pulse_after(pulse_requests, first, "active").await;
+    let silence = first_at.elapsed().max(Duration::from_secs(1)) + Duration::from_millis(250);
     driver
         .suspend_session(&request.session_id, 1)
         .await
@@ -69,7 +76,8 @@ pub(super) async fn check(
     );
     tokio::time::sleep(Duration::from_millis(50)).await;
     let paused = requests.load(Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_millis(350)).await;
+    let paused_pulses = pulse_requests.load(Ordering::SeqCst);
+    tokio::time::sleep(silence).await;
     assert_eq!(
         requests.load(Ordering::SeqCst),
         paused,
@@ -101,12 +109,23 @@ pub(super) async fn check(
             .iter()
             .any(|node| node.value.as_deref() == Some("retained DOM value"))
     );
-    tokio::time::sleep(Duration::from_millis(350)).await;
-    assert!(
-        requests.load(Ordering::SeqCst) > paused,
-        "the same native page resumes only under the new writer"
-    );
+    pulse_after(pulse_requests, paused_pulses, "resumed").await;
     eprintln!(
         "PASS native suspended session retains DOM, drains HTTP traffic and resumes under a fresh generation"
     );
+}
+
+async fn pulse_after(requests: &AtomicUsize, previous: usize, phase: &str) -> usize {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let current = requests.load(Ordering::SeqCst);
+        if current > previous {
+            return current;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the {phase} native page did not emit its periodic HTTP pulse"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }

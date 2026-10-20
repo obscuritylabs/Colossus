@@ -194,6 +194,7 @@ async fn run(user_development: bool) {
             origin: fixture.origin.clone(),
             uploaded: Arc::clone(&fixture.uploaded),
             requests: Arc::clone(&fixture.allowed_requests),
+            pulse_requests: Arc::clone(&fixture.pulse_requests),
             tls: tls_fixture.target.clone(),
             long_profile_layout: long_profile.then_some(logging::Layout {
                 managed_root: state_path.clone(),
