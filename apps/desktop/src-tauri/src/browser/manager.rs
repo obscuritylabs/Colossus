@@ -797,15 +797,7 @@ impl BrowserManager {
             .get_window("main")
             .ok_or_else(|| error("The Desktop window has closed."))?;
         let id = format!("browser-{}", uuid::Uuid::new_v4());
-        let weak = Arc::downgrade(&self.data);
-        let event_id = id.clone();
-        let sink: EventSink = Arc::new(move |event| {
-            if let Some(data) = weak.upgrade()
-                && let Ok(mut state) = data.lock()
-            {
-                state.event(&event_id, event);
-            }
-        });
+        let sink = self.agent_event_sink(&id);
         let admission = async {
             super::contained::watch_agent(&window, scope, run_id, conversation_id, sink)
                 .await
@@ -845,6 +837,23 @@ impl BrowserManager {
             })?;
         }
         registered
+    }
+
+    #[cfg(any(
+        feature = "macos-contained-browser-diagnostic",
+        feature = "windows-browser-development",
+        feature = "windows-browser-functional-preview"
+    ))]
+    fn agent_event_sink(&self, id: &str) -> EventSink {
+        let weak = Arc::downgrade(&self.data);
+        let event_id = id.to_owned();
+        Arc::new(move |event| {
+            if let Some(data) = weak.upgrade()
+                && let Ok(mut state) = data.lock()
+            {
+                state.event(&event_id, event);
+            }
+        })
     }
 
     #[cfg(any(

@@ -19,6 +19,25 @@ impl Reservation {
             None
         }
     }
+    fn grow_to(&mut self, bytes: usize) -> bool {
+        if bytes == 0 {
+            return false;
+        }
+        if bytes > self.0 {
+            if !reserve(&RETAINED_BYTES, bytes - self.0, MAX_RETAINED_BYTES) {
+                return false;
+            }
+            self.0 = bytes;
+        }
+        true
+    }
+    fn shrink_to(&mut self, bytes: usize) {
+        if bytes < self.0 {
+            let released = self.0 - bytes;
+            self.0 = bytes;
+            RETAINED_BYTES.fetch_sub(released, Ordering::AcqRel);
+        }
+    }
 }
 impl Drop for Reservation {
     fn drop(&mut self) {
@@ -37,7 +56,7 @@ fn reserve(counter: &AtomicUsize, bytes: usize, limit: usize) -> bool {
 pub(super) struct RetainedFrame {
     pub(super) frame: Frame,
     pub(super) page: PageState,
-    _reservation: Reservation,
+    reservation: Reservation,
 }
 #[derive(Default)]
 struct State {
@@ -126,13 +145,27 @@ impl CompletedCache {
         };
         // Release the previous candidate only after exact current metadata is
         // found. A late old paint cannot remove a newer accepted document.
+        if let Some(current) = state.frame.as_mut().and_then(Arc::get_mut) {
+            let bytes = frame.pixels.capacity();
+            if !current.reservation.grow_to(bytes) {
+                return;
+            }
+            // Only the cache owns these pixels. Transfer its existing charge,
+            // admitting growth first and releasing shrinkage after the old
+            // allocation drops. External Arc custody takes the full-charge
+            // replacement path below and keeps its original reservation.
+            current.frame = frame;
+            current.page = page;
+            current.reservation.shrink_to(bytes);
+            return;
+        }
         let Some(reservation) = Reservation::acquire(frame.pixels.capacity()) else {
             return;
         };
         state.frame = Some(Arc::new(RetainedFrame {
             frame,
             page,
-            _reservation: reservation,
+            reservation,
         }));
     }
     /// One-way extraction: later frames cannot replace a completed tab's pixels.
@@ -163,6 +196,9 @@ fn same_document(frame: Lease, current: Lease) -> bool {
         && frame.document_generation == current.document_generation
 }
 
+#[cfg(test)]
+#[path = "completed_cache_budget_tests.rs"]
+mod budget_tests;
 #[cfg(test)]
 #[path = "completed_cache_tests.rs"]
 mod tests;
