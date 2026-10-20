@@ -287,6 +287,124 @@ async fn exact_hide_and_revocation_settle_during_wait_and_revoked_lane_cannot_re
 }
 
 #[tokio::test]
+async fn terminal_revocation_applies_once_while_future_pumps_and_commands_stay_fenced() {
+    let (sender, receiver) = mpsc::channel(32);
+    let revoked = Arc::new(AtomicBool::new(true));
+    let mut lane = Lane::new(receiver, revoked.clone());
+    let mut host = MemoryHost::default();
+    let human = Lease {
+        control_generation: 0,
+        ..lease()
+    };
+    // Adapter::revoke sets the atomic fence before queuing its notification.
+    // Neither duplicate notifications nor later CEF pumps may re-hide the page.
+    for waiting in [true, false, true, false] {
+        sender.send(Command::Revoke).await.unwrap();
+        sender.send(Command::Revoke).await.unwrap();
+        let mut replies = Vec::new();
+        for command in [
+            PresentationCommand::Configure(configuration()),
+            PresentationCommand::Renew {
+                lease: lease(),
+                lease_ms: 1000,
+            },
+            PresentationCommand::Observe { lease: lease() },
+            PresentationCommand::Observe { lease: human },
+            PresentationCommand::Human {
+                lease: human,
+                command: colossus_browser_presentation::HumanCommand::Reload,
+            },
+            PresentationCommand::Focus {
+                lease: human,
+                focused: true,
+            },
+            PresentationCommand::FenceHuman { lease: human },
+            PresentationCommand::Input {
+                lease: human,
+                input: colossus_browser_presentation::Input::MouseMove { x: 1, y: 1 },
+                modifiers: 0,
+            },
+        ] {
+            let (reply, result) = oneshot::channel();
+            sender.send(Command::Control(command, reply)).await.unwrap();
+            replies.push(result);
+        }
+        let mut frames = Vec::new();
+        for lease in [lease(), human] {
+            let (reply, result) = oneshot::channel();
+            sender.send(Command::Frame(lease, reply)).await.unwrap();
+            frames.push(result);
+        }
+        let mut closing_replies = Vec::new();
+        for command in [
+            PresentationCommand::Hide { lease: lease() },
+            PresentationCommand::Focus {
+                lease: human,
+                focused: false,
+            },
+        ] {
+            let (reply, result) = oneshot::channel();
+            sender.send(Command::Control(command, reply)).await.unwrap();
+            closing_replies.push(result);
+        }
+        lane.service(&mut host, waiting);
+        for reply in replies {
+            assert!(matches!(
+                reply.await.unwrap(),
+                Err(PresentationError::Hidden)
+            ));
+        }
+        for frame in frames {
+            assert!(matches!(
+                frame.await.unwrap(),
+                Err(PresentationError::Hidden)
+            ));
+        }
+        for reply in closing_replies {
+            assert!(matches!(reply.await.unwrap(), Ok(PresentationReply::Ack)));
+        }
+        assert!(revoked.load(Ordering::Acquire));
+    }
+    // Empty pumps must not defocus agent input after it activates the page.
+    lane.service(&mut host, true);
+    lane.service(&mut host, false);
+    assert_eq!(host.revoked, 1);
+    assert_eq!(host.frames, 0);
+    assert_eq!(host.controls.len(), 8);
+    assert!(host.controls.iter().all(|command| matches!(
+        command,
+        PresentationCommand::Hide { .. } | PresentationCommand::Focus { focused: false, .. }
+    )));
+}
+
+#[tokio::test]
+async fn queued_revocation_latches_the_terminal_fence_before_later_commands() {
+    let (sender, receiver) = mpsc::channel(8);
+    let revoked = Arc::new(AtomicBool::new(false));
+    let mut lane = Lane::new(receiver, revoked.clone());
+    let mut host = MemoryHost::default();
+    sender.send(Command::Revoke).await.unwrap();
+    let (reply, observation) = oneshot::channel();
+    sender
+        .send(Command::Control(
+            PresentationCommand::Observe { lease: lease() },
+            reply,
+        ))
+        .await
+        .unwrap();
+    sender.send(Command::Revoke).await.unwrap();
+    lane.service(&mut host, false);
+    assert!(matches!(
+        observation.await.unwrap(),
+        Err(PresentationError::Hidden)
+    ));
+    assert!(revoked.load(Ordering::Acquire));
+    lane.service(&mut host, true);
+    assert_eq!(host.revoked, 1);
+    assert!(host.controls.is_empty());
+}
+
+#[tokio::test]
 async fn continuous_queue_traffic_has_a_fixed_per_pump_bound() {
     let (sender, receiver) = mpsc::channel(32);
     let mut lane = Lane::new(receiver, Arc::new(AtomicBool::new(false)));
