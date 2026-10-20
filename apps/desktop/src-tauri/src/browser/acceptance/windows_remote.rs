@@ -174,15 +174,7 @@ pub(super) async fn human(
     present(app, tab, smaller).await?;
     controller.eval("const overlay=document.createElement('div');overlay.id='owned-windows-overlay';overlay.style.cssText='position:fixed;inset:0;z-index:2147483647;background:var(--surface-primary,#fff);color:var(--text-primary,#111)';overlay.textContent='Colossus Desktop native overlay acceptance';document.body.appendChild(overlay);")?;
     hide_viewport(app, tab).await?;
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let hidden = view.acceptance_windows_screen().await?;
-    ensure!(
-        hidden.foreground
-            && !hidden.visible
-            && !hidden.hit_test
-            && hidden.center_bgra != [255, 241, 231, 255],
-        "native browser pixels remained above the real Desktop overlay"
-    );
+    let hidden = poll_hidden_overlay(app, tab, view, &previous).await?;
     save(&hidden, home, "windows-overlay-foreground.png")?;
     println!("PASS actual Desktop overlay occludes the native browser HWND");
     controller.eval("document.getElementById('owned-windows-overlay')?.remove();")?;
@@ -202,6 +194,57 @@ pub(super) async fn human(
         "PASS native HWND mouse/key dispatch, Unicode surrogate IME commit and IME cancel reached real Chromium"
     );
     Ok(())
+}
+
+async fn poll_hidden_overlay(
+    app: &tauri::AppHandle,
+    tab: &str,
+    view: &RemoteSurface,
+    previous: &RemoteAcceptanceProbe,
+) -> anyhow::Result<WindowsScreenEvidence> {
+    let started = tokio::time::Instant::now();
+    // Renderer context polling continues under a modal. Cross the unchanged
+    // 1.5s visibility TTL without any trusted show or viewport renewal.
+    for index in 0..3 {
+        tokio::time::sleep_until(started + Duration::from_millis(index * 750)).await;
+        let caller = app
+            .get_webview("main")
+            .context("Desktop controller missing")?;
+        let snapshot = crate::browser::commands::browser_context(
+            app.clone(),
+            caller,
+            app.state::<crate::state::AppState>(),
+            None,
+            Some(view.conversation_id().into()),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!(error.message))?;
+        ensure!(
+            snapshot.selected_tab_id.as_deref() == Some(tab)
+                && snapshot.tabs.iter().any(|candidate| {
+                    candidate.id == tab
+                        && candidate.session_id == view.session_id()
+                        && candidate.control == "human"
+                        && candidate.error.is_none()
+                        && candidate.page.url == previous.page.url
+                        && candidate.page.title == previous.page.title
+                }),
+            "hidden controller polling lost or failed the exact human browser session"
+        );
+    }
+    tokio::time::sleep_until(started + Duration::from_secs(2)).await;
+    let hidden = view.acceptance_windows_screen().await?;
+    ensure!(
+        hidden.foreground
+            && !hidden.visible
+            && !hidden.hit_test
+            && hidden.center_bgra != [255, 241, 231, 255],
+        "native browser pixels remained above the real Desktop overlay"
+    );
+    println!(
+        "PASS hidden human browser survived controller context polling beyond the native visibility TTL"
+    );
+    Ok(hidden)
 }
 
 async fn hide_viewport(app: &tauri::AppHandle, tab: &str) -> anyhow::Result<()> {
