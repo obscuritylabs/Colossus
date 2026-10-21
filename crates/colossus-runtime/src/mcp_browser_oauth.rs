@@ -3,6 +3,14 @@
 use super::*;
 
 impl Runtime {
+    /// Keep host-authorized browser sign-ins resident until completion or expiry.
+    pub async fn has_pending_mcp_browser_oauth(&self) -> bool {
+        match self.plugin_catalog.mcp_template.get() {
+            Some(executor) => executor.has_pending_browser_oauth().await,
+            None => false,
+        }
+    }
+
     fn browser_oauth_executor(&self) -> Result<Arc<McpExecutor>, RuntimeError> {
         self._workspace_lease.identity().revalidate()?;
         // Keep one immutable executor across the human redirect. Ordinary run

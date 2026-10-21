@@ -143,6 +143,7 @@ fn callback(login: &McpOAuthBrowserLogin) -> String {
 async fn browser_oauth_binds_caller_callback_state_and_single_use_while_preserving_pkce() {
     let executor = executor();
     let http = Arc::new(TokenHttp::default());
+    assert!(!executor.has_pending_browser_oauth().await);
     let first = begin(
         &executor,
         http.clone(),
@@ -157,6 +158,7 @@ async fn browser_oauth_binds_caller_callback_state_and_single_use_while_preservi
         "project-user-session-two",
     )
     .await;
+    assert!(executor.has_pending_browser_oauth().await);
     assert_ne!(first.authorization_url, second.authorization_url);
     let valid = callback(&first);
     let authorization = url::Url::parse(&first.authorization_url).unwrap();
@@ -207,6 +209,7 @@ async fn browser_oauth_binds_caller_callback_state_and_single_use_while_preservi
         .await
         .unwrap();
     assert!(status.authenticated);
+    assert!(executor.has_pending_browser_oauth().await);
     {
         let requests = http.0.lock().unwrap();
         assert_eq!(requests.len(), 1);
@@ -250,6 +253,7 @@ async fn browser_oauth_binds_caller_callback_state_and_single_use_while_preservi
         .await
         .unwrap();
     assert_eq!(http.0.lock().unwrap().len(), 2);
+    assert!(!executor.has_pending_browser_oauth().await);
 }
 
 #[tokio::test]
@@ -257,6 +261,7 @@ async fn browser_oauth_rejects_expiry_cancellation_logout_and_configuration_gene
     let executor = executor();
     let http = Arc::new(TokenHttp::default());
     let expired = begin(&executor, http.clone(), "expired", "caller").await;
+    assert!(executor.has_pending_browser_oauth().await);
     executor
         .browser_oauth_sessions
         .flows
@@ -265,6 +270,7 @@ async fn browser_oauth_rejects_expiry_cancellation_logout_and_configuration_gene
         .get_mut("expired")
         .unwrap()
         .deadline = Instant::now() - Duration::from_secs(1);
+    assert!(!executor.has_pending_browser_oauth().await);
     assert!(
         executor
             .oauth_browser_login_complete("fixture", "expired", "caller", &callback(&expired))
@@ -272,6 +278,7 @@ async fn browser_oauth_rejects_expiry_cancellation_logout_and_configuration_gene
             .is_err()
     );
     let cancelled = begin(&executor, http.clone(), "cancelled", "caller").await;
+    assert!(executor.has_pending_browser_oauth().await);
     assert!(
         executor
             .oauth_browser_login_cancel("fixture", "cancelled", "other")
@@ -282,6 +289,7 @@ async fn browser_oauth_rejects_expiry_cancellation_logout_and_configuration_gene
         .oauth_browser_login_cancel("fixture", "cancelled", "caller")
         .await
         .unwrap();
+    assert!(!executor.has_pending_browser_oauth().await);
     assert!(
         executor
             .oauth_browser_login_complete("fixture", "cancelled", "caller", &callback(&cancelled))
@@ -289,7 +297,9 @@ async fn browser_oauth_rejects_expiry_cancellation_logout_and_configuration_gene
             .is_err()
     );
     let logged_out = begin(&executor, http.clone(), "logged-out", "caller").await;
+    assert!(executor.has_pending_browser_oauth().await);
     executor.oauth_logout("fixture").await.unwrap();
+    assert!(!executor.has_pending_browser_oauth().await);
     assert!(
         executor
             .oauth_browser_login_complete("fixture", "logged-out", "caller", &callback(&logged_out))
@@ -297,11 +307,14 @@ async fn browser_oauth_rejects_expiry_cancellation_logout_and_configuration_gene
             .is_err()
     );
     let changed = begin(&executor, http.clone(), "changed", "caller").await;
+    assert!(executor.has_pending_browser_oauth().await);
     let mut updated = config();
     updated.servers.get_mut("fixture").unwrap().url = Some("https://other.example/mcp".into());
     let snapshot = executor
         .snapshot_configuration(&updated, Path::new("."), "native")
         .unwrap();
+    assert!(!executor.has_pending_browser_oauth().await);
+    assert!(!snapshot.has_pending_browser_oauth().await);
     assert!(
         snapshot
             .oauth_browser_login_complete("fixture", "changed", "caller", &callback(&changed))

@@ -134,6 +134,7 @@ impl HostedExecution {
                     .await
                     .values()
                     .any(|flow| Arc::ptr_eq(&flow.live, &live) && flow.expires_at > now())
+                || live.runtime.runtime().has_pending_mcp_browser_oauth().await
                 || self.unfinished(&live.project_id, &live.node_id).await?
             {
                 continue;

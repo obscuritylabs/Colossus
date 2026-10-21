@@ -82,6 +82,23 @@ impl BrowserOAuthSessions {
 }
 
 impl McpExecutor {
+    /// Whether an unexpired browser authorization still needs this executor.
+    /// Consumed, cancelled and invalidated flows do not retain their owning runtime.
+    pub async fn has_pending_browser_oauth(&self) -> bool {
+        let flows = self.browser_oauth_sessions.flows.lock().await;
+        let generation = self
+            .browser_oauth_sessions
+            .generation
+            .load(Ordering::Acquire);
+        let now = Instant::now();
+        flows.values().any(|flow| {
+            flow.generation == generation
+                && flow.deadline > now
+                && !flow.cancelled
+                && flow.pending.is_some()
+        })
+    }
+
     /// Begin browser authorization with an exact callback selected by the host.
     ///
     /// `flow_id` must be a unique opaque ASCII token of at most 128 bytes.

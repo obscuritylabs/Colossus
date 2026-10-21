@@ -593,6 +593,17 @@ async fn acceptance() {
     )
     .await;
     let authorization = url::Url::parse(login["authorization_url"].as_str().unwrap()).unwrap();
+    // Pending SQL-coordinated sign-in must survive automatic capacity eviction on either replica.
+    for state in [&state_a, &state_b] {
+        let host = state.hosted.as_ref().unwrap();
+        let _lifecycle = host.lifecycle.lock().await;
+        host.evict_idle(state, true).await.unwrap();
+    }
+    assert_eq!(
+        get(&client, &origin_b, &alice, "/api/projects/project-a/hosted").await["target"]["execution"]
+            ["state"],
+        "warm"
+    );
     let query: HashMap<_, _> = authorization.query_pairs().into_owned().collect();
     assert_eq!(query["code_challenge_method"], "S256");
     let callback = format!(
