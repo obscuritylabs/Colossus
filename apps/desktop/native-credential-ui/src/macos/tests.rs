@@ -128,8 +128,8 @@ fn provider_destination(mtm: MainThreadMarker) {
         let session = borrowed.as_ref().unwrap();
         (session.panel.clone(), session.input.clone())
     };
-    let content = panel.contentView().unwrap();
-    let fields = content
+    let container = panel.contentView().unwrap();
+    let fields = container
         .subviews()
         .iter()
         .filter_map(|view| {

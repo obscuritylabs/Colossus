@@ -3290,15 +3290,15 @@ test("fork retains visible source context after the first message is sent", asyn
   await expect(context).toBeVisible();
 });
 
-test("fork draft opens the full composer at minimum size with Large text", async ({
-  page,
-}) => {
-  for (const [colorTheme, darkPalette] of [
-    ["light", "colossus"],
-    ["dark", "colossus"],
-    ["dark", "neutral"],
-    ["dark", "hacker"],
-  ]) {
+for (const [colorTheme, darkPalette] of [
+  ["light", "colossus"],
+  ["dark", "colossus"],
+  ["dark", "neutral"],
+  ["dark", "hacker"],
+]) {
+  test(`fork draft opens the full composer at minimum size with Large text (${colorTheme}/${darkPalette})`, async ({
+    page,
+  }) => {
     await page.addInitScript(
       ({ colorTheme, darkPalette }) => {
         localStorage.removeItem("colossus.thread-forks:v1");
@@ -3371,8 +3371,8 @@ test("fork draft opens the full composer at minimum size with Large text", async
     await page.screenshot({
       path: `output/playwright/thread-fork-${colorTheme}-${darkPalette}.png`,
     });
-  }
-});
+  });
+}
 
 test("search scope is part of the search control", async ({ page }) => {
   await page.getByRole("button", { name: "Open work navigation" }).click();

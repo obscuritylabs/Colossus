@@ -219,16 +219,12 @@ fn open_sheet_for(
 ) {
     let controller = Controller::new(mtm);
     let style = styling::Style::new(parent, appearance);
+    let panel_height = if context.is_some() { 412.0 } else { 324.0 };
     // SAFETY: Window lifetime is explicitly retained; close must not autorelease
     // the owning reference. All views, targets and callbacks stay main-thread.
     let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
         NSPanel::alloc(mtm),
-        style.rect(
-            0.0,
-            0.0,
-            560.0,
-            if context.is_some() { 412.0 } else { 324.0 },
-        ),
+        style.rect(0.0, 0.0, 560.0, panel_height),
         NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
         NSBackingStoreType::Buffered,
         false,
@@ -238,17 +234,16 @@ fn open_sheet_for(
     }
     panel.setTitle(&NSString::from_str(purpose.title()));
     style.panel(&panel);
-    let Some(content) = panel.contentView() else {
+    let Some(container) = panel.contentView() else {
         completion.finish(Err(PromptError::Unavailable));
         return;
     };
     let [heading, description, label] = style.labels(mtm, purpose, context.is_some());
-    if let Some(context) = &context {
-        let [destination_label, endpoint] = style.destination(mtm, context);
-        unsafe {
-            content.addSubview(&destination_label);
-            content.addSubview(&endpoint);
-        }
+    if let Some([destination_label, endpoint]) =
+        context.map(|provider| style.destination(mtm, &provider))
+    {
+        container.addSubview(&destination_label);
+        container.addSubview(&endpoint);
     }
     let input = NSSecureTextField::initWithFrame(
         NSSecureTextField::alloc(mtm),
@@ -287,14 +282,14 @@ fn open_sheet_for(
     input.setFormatter(Some(&formatter));
     unsafe {
         input.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
-        content.addSubview(&heading);
-        content.addSubview(&description);
-        content.addSubview(&label);
-        content.addSubview(&input);
-        content.addSubview(&count);
-        content.addSubview(&status);
-        content.addSubview(&save);
-        content.addSubview(&cancel);
+        container.addSubview(&heading);
+        container.addSubview(&description);
+        container.addSubview(&label);
+        container.addSubview(&input);
+        container.addSubview(&count);
+        container.addSubview(&status);
+        container.addSubview(&save);
+        container.addSubview(&cancel);
     }
     panel.setDelegate(Some(ProtocolObject::from_ref(&*controller)));
     // Let AppKit maintain the loop as it inserts/removes the shared field editor
