@@ -195,10 +195,13 @@ is a fresh private allocation beneath the authenticated worker instance.
 This edition retains Chromium's sandbox, whole-Job supervision, authenticated
 native channels, typed authority and temporary sessions. It reports
 `restrictive_egress: false` and offers no private CA import or persistent profile
-capability. Existing Windows client identities require a separate native approval
-of the pending HTTPS origin and public certificate fingerprint. Cancel is the
-default, and the bounded review is invalidated by navigation, run cancellation,
-writer changes and shutdown. The native key stays in Windows; this grants no
+capability. Desktop's native policy automatically selects exactly one eligible identity
+from Chromium's issuer-filtered list for the pending HTTPS origin. Multiple identities
+require approval in a trusted child inside the main Desktop window, with public
+certificate labels and fingerprints. Cancel is the default, and the bounded review
+is invalidated by navigation, run cancellation, writer changes and shutdown. The
+independent native admission channel supports initial TLS before a viewer exists;
+ordinary renderer/tool requests cannot select a certificate. The native key stays in Windows; this grants no
 per-profile private-store custody. It does not promote production component modes or claim
 AppContainer/WFP containment. Missing, changed or untrusted installed bytes fail
 closed. An unavailable ordinary-user desktop prerequisite leaves the capability

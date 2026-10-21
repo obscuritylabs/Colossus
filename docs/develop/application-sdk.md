@@ -382,6 +382,15 @@ Production attachment remains unavailable without an accepted Embedded superviso
 package. See [owned browser readiness](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work)
 for functional gaps and the distinct native acceptance requirements.
 
+The native client also discovers expiring client-certificate requests independently of
+an in-flight initial browser open. Review metadata contains only the native request
+reference and public certificate details. Desktop can explicitly permit one eligible
+matching identity, or display multiple candidates in its trusted in-window review.
+Runtime revalidates the current application, original allocation and canonical writer
+before a keyed selection; a lost acknowledgement never retries that request. The
+ordinary presentation relay rejects these operations. Native request references and
+sidecar incarnation snapshots stay out of renderer DTOs.
+
 Provider YAML for Managed Local contains a validated `host:<opaque-id>` reference. The
 key remains in the desktop keychain and is copied into a zeroizing, in-memory sidecar
 resolver during bootstrap. The provider adapter can resolve it only after policy has

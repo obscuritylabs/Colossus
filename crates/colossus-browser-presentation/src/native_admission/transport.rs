@@ -10,6 +10,11 @@ use zeroize::Zeroizing;
 const MAGIC: &[u8; 8] = b"CLSNADM1";
 const DEADLINE: Duration = Duration::from_secs(5);
 const EFFECT_DEADLINE: Duration = Duration::from_secs(40);
+// Initial native navigation has its own 60-second limit and can include a
+// 45-second identity review. The old 40-second reply wait could abandon that
+// still-owned request before its ordinary native deadline. Other operations
+// retain their original reply bound; no host or review deadline is renewed.
+const OPEN_DEADLINE: Duration = Duration::from_secs(90);
 type Auth = Hmac<Sha256>;
 
 fn mac(
@@ -100,7 +105,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AdmissionChannel<S> {
     ) -> Result<NativeBrowserReply, PresentationError> {
         request.validate()?;
         self.write(request).await?;
-        self.read(EFFECT_DEADLINE).await
+        self.read(if matches!(request, NativeBrowserRequest::Open(_)) {
+            OPEN_DEADLINE
+        } else {
+            EFFECT_DEADLINE
+        })
+        .await
     }
     /// Receive native intent only after the fresh authenticated endpoint handshake.
     pub async fn receive_request(&mut self) -> Result<NativeBrowserRequest, PresentationError> {

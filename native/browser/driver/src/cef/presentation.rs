@@ -237,6 +237,31 @@ impl Host {
     ) -> Result<PresentationReply, PresentationError> {
         command.validate()?;
         match command {
+            PresentationCommand::PendingClientIdentity { policy } => {
+                #[cfg(windows)]
+                let challenge = self.pending_client_identity(policy)?;
+                #[cfg(not(windows))]
+                let challenge = {
+                    let _ = policy;
+                    None
+                };
+                Ok(PresentationReply::ClientIdentity { challenge })
+            }
+            PresentationCommand::SelectClientIdentity {
+                key,
+                fingerprint_sha256,
+            } => {
+                #[cfg(windows)]
+                {
+                    self.select_client_identity(key, fingerprint_sha256)?;
+                    Ok(PresentationReply::Ack)
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = (key, fingerprint_sha256);
+                    Err(PresentationError::Invalid)
+                }
+            }
             PresentationCommand::Configure(value) => {
                 Ok(PresentationReply::Configured(self.configure_view(value)?))
             }

@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
-use crate::{Input, Lease, PresentationError};
+use crate::{
+    ClientIdentityChallenge, ClientIdentityKey, ClientIdentityPolicy, Input, Lease,
+    PresentationError,
+};
 
 /// Maximum authenticated control payload, excluding pixels.
 pub const MAX_CONTROL_BYTES: usize = 16 * 1024;
@@ -102,6 +105,18 @@ pub enum HumanCommand {
 pub enum PresentationCommand {
     /// Authenticated readiness; availability remains supervisor-owned.
     Ready,
+    /// Review the current native TLS request under an explicit native-owner policy.
+    PendingClientIdentity {
+        /// Automatic selection is permitted only by this separate native request.
+        policy: ClientIdentityPolicy,
+    },
+    /// Submit one exact native review; an acknowledgment is not TLS-login proof.
+    SelectClientIdentity {
+        /// Exact retained request; no visible viewer lease is required.
+        key: ClientIdentityKey,
+        /// An offered public fingerprint, or no identity for explicit cancellation.
+        fingerprint_sha256: Option<String>,
+    },
     /// Configure an opaque native-owned target.
     Configure(Configure),
     /// Renew an unchanged live visibility lease.
@@ -159,7 +174,17 @@ impl PresentationCommand {
     /// Reject oversized or invalid effects before dispatch.
     pub fn validate(&self) -> Result<(), PresentationError> {
         match self {
-            Self::Ready => Ok(()),
+            Self::Ready | Self::PendingClientIdentity { .. } => Ok(()),
+            Self::SelectClientIdentity {
+                key,
+                fingerprint_sha256,
+            } => {
+                key.validate()?;
+                if let Some(fingerprint) = fingerprint_sha256 {
+                    crate::client_identity::validate_fingerprint(fingerprint)?;
+                }
+                Ok(())
+            }
             Self::Configure(value) => value.validate(),
             Self::Renew { lease, lease_ms } => {
                 lease.validate()?;
@@ -267,6 +292,11 @@ pub enum PresentationReply {
     Ready,
     /// Native effect acknowledged.
     Ack,
+    /// Bounded current native client identity review, or no pending choice.
+    ClientIdentity {
+        /// Native metadata only; never expose the numeric request key to web IPC.
+        challenge: Option<ClientIdentityChallenge>,
+    },
     /// Fresh configured native frame lease.
     Configured(Lease),
     /// Bounded native metadata.

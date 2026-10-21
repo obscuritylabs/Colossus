@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "client-identity-review",
+  "description": "Only the fixed trusted child document can read and finish its native-owned one-use certificate review.",
+  "local": true,
+  "webviews": ["client-identity-review"],
+  "permissions": [
+    "allow-client-identity-review-context",
+    "allow-finish-client-identity-review"
+  ]
+}

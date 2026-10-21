@@ -1,11 +1,83 @@
 //! Real system-store PKI through Core's authenticated owner and effect gateway.
 use super::*;
+use colossus_browser_presentation::{ClientIdentityKey, ClientIdentityPolicy};
 use colossus_windows_native::{BoundPath, PrivateDirectoryCreation};
 use std::collections::BTreeMap;
 
 #[derive(serde::Deserialize)]
 struct Fixture {
     urls: BTreeMap<String, String>,
+    fingerprints_sha256: BTreeMap<String, String>,
+}
+
+/// Act only through Runtime's enrolled native admission authority, independently
+/// of an in-flight browser effect or a not-yet-created viewer/Opened result.
+async fn reviewed<T>(
+    runtime: &Runtime,
+    authority: &crate::RuntimeNativeBrowserAuthority,
+    fixture: &Fixture,
+    case: &str,
+    control: &RunControl,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    tokio::pin!(future);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(55);
+    let mut submitted: Vec<ClientIdentityKey> = Vec::new();
+    loop {
+        tokio::select! {
+            result = &mut future => return result,
+            () = tokio::time::sleep_until(deadline) => panic!("Core native PKI operation exceeded its original bound"),
+            () = tokio::time::sleep(Duration::from_millis(20)) => {
+                let policy = if case == "unique_initial_identity" {
+                    ClientIdentityPolicy::AutomaticIfUnique
+                } else { ClientIdentityPolicy::Review };
+                let Some(review) = runtime.pending_native_browser_client_identity(authority, policy)
+                    .await.expect("Core native review discovery/automatic submission acknowledged") else { continue; };
+                assert_ne!(case, "unique_initial_identity", "the sole initial identity must require no picker");
+                assert!(submitted.len() < 8 && !submitted.contains(&review.challenge.key),
+                    "one-use native choice must never be replayed");
+                assert!(review.challenge.candidates.len() >= 2,
+                    "multiple actual eligible OS-held identities must reach review");
+                let origin = review.challenge.origin.as_str();
+                let fingerprint = match case {
+                    "missing_identity" => None,
+                    "alternate_identity" => Some(fixture.fingerprints_sha256["alternate_client"].clone()),
+                    "exact_identity" => Some(fixture.fingerprints_sha256["client"].clone()),
+                    "changed_origin" if origin == fixture.urls["mtls"] =>
+                        Some(fixture.fingerprints_sha256["client"].clone()),
+                    "changed_origin" if origin == fixture.urls["redirect_mtls"] => None,
+                    "cancelled_request" => {
+                        control.cancel();
+                        submitted.push(review.challenge.key);
+                        continue;
+                    }
+                    _ => panic!("unexpected Core client-key challenge in fixture case"),
+                };
+                assert!(origin == fixture.urls["mtls"] || origin == fixture.urls["redirect_mtls"]);
+                runtime.select_native_browser_client_identity(authority, &review.session,
+                    review.challenge.key, fingerprint).await.expect("one exact native choice acknowledged");
+                submitted.push(review.challenge.key);
+            }
+        }
+    }
+}
+
+async fn alternate_fixture(directory: &std::path::Path) -> Fixture {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let ready = directory.join("alternate-client-ready.json");
+    while !ready.exists() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "alternate fixture identity was not provisioned"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(std::fs::metadata(&ready).unwrap().len() <= 64 * 1024);
+    let bytes = std::fs::read(ready).unwrap();
+    assert!(bytes.len() <= 64 * 1024);
+    let fixture: Fixture = serde_json::from_slice(&bytes).unwrap();
+    assert!(fixture.fingerprints_sha256.contains_key("alternate_client"));
+    fixture
 }
 
 async fn titled_page(
@@ -43,7 +115,7 @@ async fn titled_page(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires generated fixture-only CurrentUser ROOT/MY+CNG keys, pinned CEF component and exact native dialog driver"]
+#[ignore = "requires generated fixture-only CurrentUser ROOT/MY+CNG keys, pinned CEF component and native Runtime review bridge"]
 async fn core_authenticates_system_ca_and_reviewed_client_identity_after_policy() {
     let directory = PathBuf::from(
         std::env::var_os("COLOSSUS_WINDOWS_PKI_FIXTURE").expect("explicit owned fixture"),
@@ -52,7 +124,7 @@ async fn core_authenticates_system_ca_and_reviewed_client_identity_after_policy(
     source.validate_private_owner_dacl().unwrap();
     let encoded = std::fs::read(directory.join("fixture.json")).unwrap();
     assert!(encoded.len() <= 64 * 1024);
-    let fixture: Fixture = serde_json::from_slice(&encoded).unwrap();
+    let mut fixture: Fixture = serde_json::from_slice(&encoded).unwrap();
     let component = PathBuf::from(
         std::env::var_os("COLOSSUS_BROWSER_WINDOWS_ACCEPTANCE_COMPONENT")
             .expect("verified CEF stage"),
@@ -115,7 +187,9 @@ async fn core_authenticates_system_ca_and_reviewed_client_identity_after_policy(
             RuntimeOpenOptions::for_workspace(workspace.path())
                 .unwrap()
                 .with_browser_host(
-                    RuntimeBrowserHost::from_supervised_factory(captured.clone()).unwrap(),
+                    RuntimeBrowserHost::from_supervised_factory(captured.clone())
+                        .unwrap()
+                        .with_presenter(captured.clone()),
                 ),
         )
         .unwrap(),
@@ -148,7 +222,20 @@ async fn core_authenticates_system_ca_and_reviewed_client_identity_after_policy(
             .unwrap()
             .finish_run("core-pki-policy-denied")
             .await;
+        let authority = runtime
+            .bind_native_browser_authority("authenticated-pki-app", Uuid::now_v7())
+            .unwrap();
+        assert!(
+            runtime.native_browser_available(&authority),
+            "live fixture must compose the private presenter before opening TLS"
+        );
         for (name, endpoint, route, expected) in [
+            (
+                "unique_initial_identity",
+                "mtls",
+                "/client-check",
+                Some("Colossus mTLS identity verified"),
+            ),
             (
                 "trusted_ca",
                 "public",
@@ -201,12 +288,19 @@ async fn core_authenticates_system_ca_and_reviewed_client_identity_after_policy(
                     control.clone(),
                 )
                 .unwrap();
-            let opened = call(
-                &executor,
-                &context,
-                "browser.open",
-                json!({"mode":"embedded",
-                "allowed_origins":fixture.urls.values().collect::<Vec<_>>()}),
+            let mut open_arguments = json!({"mode":"embedded",
+                "allowed_origins":fixture.urls.values().collect::<Vec<_>>()});
+            if name == "unique_initial_identity" {
+                open_arguments["initial_url"] =
+                    format!("{}{}", fixture.urls[endpoint], route).into();
+            }
+            let opened = reviewed(
+                runtime,
+                &authority,
+                &fixture,
+                name,
+                &control,
+                call(&executor, &context, "browser.open", open_arguments),
             )
             .await
             .unwrap();
@@ -236,36 +330,42 @@ async fn core_authenticates_system_ca_and_reviewed_client_identity_after_policy(
                 .unwrap(),
             )
             .unwrap();
-            let mut arguments = observed_target(&opened, &blank);
-            arguments["url"] = format!("{}{}", fixture.urls[endpoint], route).into();
-            let cancellation_directory = directory.clone();
-            let cancellation = if name == "cancelled_request" {
-                Some(tokio::spawn(async move {
-                    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-                    while !cancellation_directory
-                        .join("cancelled-request-dialog-seen")
-                        .exists()
-                    {
-                        assert!(
-                            tokio::time::Instant::now() < deadline,
-                            "real native prompt required before Core cancellation"
-                        );
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                    }
-                    control.cancel();
-                }))
+            let result = if name == "unique_initial_identity" {
+                assert_eq!(
+                    request.options.initial_url.as_ref().unwrap().origin(),
+                    BrowserUrl::parse(format!("{}{}", fixture.urls[endpoint], route))
+                        .unwrap()
+                        .origin()
+                );
+                assert_eq!(
+                    runtime
+                        .browser
+                        .as_ref()
+                        .unwrap()
+                        .native
+                        .identity_attempts
+                        .lock()
+                        .unwrap()
+                        .get(&request.session_id)
+                        .unwrap()
+                        .control_generation,
+                    0,
+                    "automatic exact choice must precede first writer grant and Opened"
+                );
+                Ok(serde_json::to_value(blank).unwrap())
             } else {
-                None
+                let mut arguments = observed_target(&opened, &blank);
+                arguments["url"] = format!("{}{}", fixture.urls[endpoint], route).into();
+                reviewed(
+                    runtime,
+                    &authority,
+                    &fixture,
+                    name,
+                    &control,
+                    call(&executor, &context, "browser.navigate", arguments),
+                )
+                .await
             };
-            let result = tokio::time::timeout(
-                Duration::from_secs(55),
-                call(&executor, &context, "browser.navigate", arguments),
-            )
-            .await
-            .unwrap();
-            if let Some(cancellation) = cancellation {
-                cancellation.await.unwrap();
-            }
             if let Some(expected) = expected {
                 let observation: BrowserObservation =
                     serde_json::from_value(result.unwrap()).unwrap();
@@ -302,6 +402,19 @@ async fn core_authenticates_system_ca_and_reviewed_client_identity_after_policy(
             );
             task_acknowledged.fetch_add(1, Ordering::SeqCst);
             eprintln!("PASS windows-pki case={name} core_effect_gateway=true");
+            if name == "unique_initial_identity" {
+                eprintln!("EVIDENCE windows-pki stage=provision_alternate");
+                let next = alternate_fixture(&directory).await;
+                assert_eq!(
+                    next.urls, fixture.urls,
+                    "alternate provisioning cannot change the admitted origins"
+                );
+                assert_eq!(
+                    next.fingerprints_sha256["client"],
+                    fixture.fingerprints_sha256["client"]
+                );
+                fixture = next;
+            }
         }
     });
     let result = tokio::time::timeout(Duration::from_secs(300), &mut work).await;
@@ -326,7 +439,7 @@ async fn core_authenticates_system_ca_and_reviewed_client_identity_after_policy(
         Ok(Err(error)) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
         _ => panic!("real Windows Core PKI acceptance did not finish"),
     }
-    assert_eq!(acknowledged.load(Ordering::SeqCst), 9);
+    assert_eq!(acknowledged.load(Ordering::SeqCst), 10);
     assert_eq!(
         receipts.len(),
         1,

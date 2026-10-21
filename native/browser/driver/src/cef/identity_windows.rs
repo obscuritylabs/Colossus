@@ -1,5 +1,8 @@
 //! Apply a native human decision only on the owning CEF thread and live request.
 use super::*;
+use colossus_browser_presentation::{
+    ClientIdentityChallenge, ClientIdentityKey, ClientIdentityPolicy, PresentationError,
+};
 
 impl Callbacks {
     pub fn enable_windows_identity_review(&self, enabled: bool) -> Result<(), BrowserDriverError> {
@@ -12,17 +15,8 @@ impl Callbacks {
 }
 
 impl Host {
-    pub(super) fn service_identity_review(&self) {
-        let ready = self
-            .callbacks
-            .identity_review
-            .lock()
-            .ok()
-            .and_then(|mut review| review.ready());
-        let Some((request, index)) = ready else {
-            return;
-        };
-        let current = !request.cancelled()
+    fn identity_current(&self, request: &crate::identity_windows::Request) -> bool {
+        !request.cancelled()
             && !self.suspended
             && !self.cancelled.load(Ordering::Acquire)
             && !self.callbacks.identity_revoked.load(Ordering::Acquire)
@@ -35,7 +29,69 @@ impl Host {
                 .callbacks
                 .origins
                 .lock()
-                .is_ok_and(|origins| origins.contains(&request.origin));
+                .is_ok_and(|origins| origins.contains(&request.origin))
+    }
+    pub(super) fn pending_client_identity(
+        &self,
+        policy: ClientIdentityPolicy,
+    ) -> Result<Option<ClientIdentityChallenge>, PresentationError> {
+        let request = self
+            .callbacks
+            .identity_review
+            .lock()
+            .map_err(|_| PresentationError::OutcomeUnknown)?
+            .request();
+        let Some(request) = request else {
+            return Ok(None);
+        };
+        let current = self.identity_current(&request);
+        let mut review = self
+            .callbacks
+            .identity_review
+            .lock()
+            .map_err(|_| PresentationError::OutcomeUnknown)?;
+        if !current {
+            review.cancel(Some(request.request_id));
+            return Ok(None);
+        }
+        review.pending(policy)
+    }
+    pub(super) fn select_client_identity(
+        &self,
+        key: ClientIdentityKey,
+        fingerprint: Option<String>,
+    ) -> Result<(), PresentationError> {
+        let request = self
+            .callbacks
+            .identity_review
+            .lock()
+            .map_err(|_| PresentationError::OutcomeUnknown)?
+            .request()
+            .filter(|request| request.key() == key)
+            .ok_or(PresentationError::Stale)?;
+        let current = self.identity_current(&request);
+        let mut review = self
+            .callbacks
+            .identity_review
+            .lock()
+            .map_err(|_| PresentationError::OutcomeUnknown)?;
+        if !current {
+            review.cancel(Some(request.request_id));
+            return Err(PresentationError::Stale);
+        }
+        review.select(key, fingerprint)
+    }
+    pub(super) fn service_identity_review(&self) {
+        let ready = self
+            .callbacks
+            .identity_review
+            .lock()
+            .ok()
+            .and_then(|mut review| review.ready());
+        let Some((request, index)) = ready else {
+            return;
+        };
+        let current = self.identity_current(&request);
         let selected = if current { index } else { -1 };
         // SAFETY: exact native pending request on the CEF owning thread. The
         // native one-use ID independently rejects changed documents, cancelled

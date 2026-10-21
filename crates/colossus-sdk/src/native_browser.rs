@@ -12,10 +12,13 @@ use std::sync::{
 };
 use zeroize::Zeroizing;
 
+mod identity;
 mod owner;
 mod platform;
 mod types;
 pub use colossus_browser_presentation::native_admission::NativeBrowserOpen as NativeBrowserOpenRequest;
+pub use colossus_browser_presentation::native_admission::NativeClientIdentityReview;
+pub use colossus_browser_presentation::{ClientIdentityChallenge, ClientIdentityPolicy};
 pub use owner::NativeBrowserSessionOwner;
 pub use types::{NativeBrowserAttachment, NativeBrowserHandoff};
 
@@ -26,6 +29,14 @@ pub struct NativeBrowserClient {
     authentication: Arc<Zeroizing<[u8; 32]>>,
     enrollment: NativeBrowserEnrollment,
     child: Arc<AtomicU32>,
+}
+
+/// Native-only snapshot of one activated sidecar incarnation; it carries no credential.
+/// It is deliberately opaque and cannot be serialized into a renderer request.
+#[derive(Clone, Eq, PartialEq)]
+pub struct NativeBrowserIncarnation {
+    enrollment_digest: [u8; 32],
+    child: u32,
 }
 impl std::fmt::Debug for NativeBrowserClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -79,6 +90,26 @@ impl NativeSidecarLifecycle {
     }
 }
 impl NativeBrowserClient {
+    /// Snapshot this native client's currently activated sidecar for an expiring UI review.
+    pub fn incarnation(&self) -> SdkResult<NativeBrowserIncarnation> {
+        let child = self.child.load(Ordering::Acquire);
+        if child == 0 || self.enrollment.parent_process_id != std::process::id() {
+            return Err(SdkError::SidecarFailed);
+        }
+        Ok(NativeBrowserIncarnation {
+            enrollment_digest: self
+                .enrollment
+                .digest()
+                .map_err(|_| SdkError::IdentityMismatch)?,
+            child,
+        })
+    }
+
+    /// Check a retained native UI snapshot without reconnecting or exposing process IDs.
+    pub fn matches_incarnation(&self, expected: &NativeBrowserIncarnation) -> bool {
+        self.incarnation().is_ok_and(|current| &current == expected)
+    }
+
     async fn connect(
         &self,
     ) -> SdkResult<

@@ -96,3 +96,113 @@ fn invalid_extreme_native_dimensions_fail_before_arithmetic_or_allocation() {
     intent.scale_milli = 4000;
     assert!(intent.validate().is_err());
 }
+
+fn review() -> NativeClientIdentityReview {
+    NativeClientIdentityReview {
+        session: BrowserSessionId::parse(format!("bs_{:032x}", 1)).unwrap(),
+        challenge: ClientIdentityChallenge {
+            key: ClientIdentityKey {
+                tab: 1,
+                generation: 1,
+                request_id: 1,
+                control_generation: 0,
+            },
+            origin: colossus_contracts::BrowserOrigin::parse("https://example.test").unwrap(),
+            candidates: vec![crate::ClientIdentityCandidate {
+                fingerprint_sha256: "a".repeat(64),
+                label: "Test identity".into(),
+            }],
+            remaining_ms: 45_000,
+        },
+    }
+}
+
+#[test]
+fn native_identity_wire_is_strict_and_contains_only_public_metadata() {
+    let review = review();
+    review.validate().unwrap();
+    let wire = serde_json::to_value(&review).unwrap();
+    assert_eq!(
+        serde_json::from_value::<NativeClientIdentityReview>(wire.clone()).unwrap(),
+        review
+    );
+    let mut forged = wire;
+    forged["private_key_path"] = serde_json::json!("untrusted");
+    assert!(serde_json::from_value::<NativeClientIdentityReview>(forged).is_err());
+    let request = NativeBrowserRequest::SelectClientIdentity {
+        session: review.session,
+        key: review.challenge.key,
+        fingerprint_sha256: Some("a".repeat(64)),
+    };
+    request.validate().unwrap();
+    let mut forged = serde_json::to_value(&request).unwrap();
+    forged["SelectClientIdentity"]["origin"] = serde_json::json!("https://foreign.test");
+    assert!(serde_json::from_value::<NativeBrowserRequest>(forged).is_err());
+    let NativeBrowserRequest::SelectClientIdentity { session, key, .. } = request else {
+        unreachable!()
+    };
+    for fingerprint in ["A".repeat(64), "a".repeat(63), "g".repeat(64)] {
+        assert!(
+            NativeBrowserRequest::SelectClientIdentity {
+                session: session.clone(),
+                key,
+                fingerprint_sha256: Some(fingerprint),
+            }
+            .validate()
+            .is_err()
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn initial_open_can_finish_review_after_the_ordinary_effect_reply_deadline() {
+    let intent = NativeBrowserOpen {
+        conversation_id: None,
+        url: BrowserUrl::parse("https://example.test").unwrap(),
+        width: 800,
+        height: 600,
+        scale_milli: 1000,
+        viewport_generation: 1,
+        lease_ms: 1000,
+    };
+    let (client, server) = tokio::io::duplex(32768);
+    let authentication = Zeroizing::new([7; 32]);
+    let (client, server) = tokio::join!(
+        client_handshake(client, &authentication, [1; 32]),
+        server_handshake(server, &authentication, [1; 32]),
+    );
+    let mut client = client.unwrap();
+    let mut server = server.unwrap();
+    let request = NativeBrowserRequest::Open(intent);
+    let (result, ()) = tokio::join!(client.request(&request), async {
+        assert!(matches!(
+            server.receive_request().await.unwrap(),
+            NativeBrowserRequest::Open(_)
+        ));
+        tokio::time::sleep(std::time::Duration::from_secs(44)).await;
+        server
+            .reply(&NativeBrowserReply::Unavailable)
+            .await
+            .unwrap();
+    },);
+    assert!(matches!(result.unwrap(), NativeBrowserReply::Unavailable));
+}
+
+#[tokio::test(start_paused = true)]
+async fn ordinary_admission_operations_keep_the_original_bounded_reply_wait() {
+    let (client, server) = tokio::io::duplex(32768);
+    let authentication = Zeroizing::new([7; 32]);
+    let (client, server) = tokio::join!(
+        client_handshake(client, &authentication, [1; 32]),
+        server_handshake(server, &authentication, [1; 32]),
+    );
+    let mut client = client.unwrap();
+    let mut server = server.unwrap();
+    let start = tokio::time::Instant::now();
+    let (result, ()) = tokio::join!(client.request(&NativeBrowserRequest::Probe), async {
+        server.receive_request().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(41)).await;
+    },);
+    assert_eq!(result.unwrap_err(), PresentationError::OutcomeUnknown);
+    assert_eq!(start.elapsed(), std::time::Duration::from_secs(41));
+}

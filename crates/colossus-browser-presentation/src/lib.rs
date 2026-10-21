@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod channel;
+mod client_identity;
 mod control;
 mod frame;
 mod lease;
@@ -10,6 +11,9 @@ pub mod native_admission;
 mod queue;
 
 pub use channel::{PresentationChannel, PresentationClient, PresentationHost, serve_presentation};
+pub use client_identity::{
+    ClientIdentityCandidate, ClientIdentityChallenge, ClientIdentityKey, ClientIdentityPolicy,
+};
 pub use control::{
     CONTROL_HEADER_BYTES, Configure, ControlCodec, HumanCommand, HumanFenceReceipt,
     MAX_CONTROL_BYTES, PageState, PresentationCommand, PresentationReply, Role,
