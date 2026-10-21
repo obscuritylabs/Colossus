@@ -9573,6 +9573,10 @@ textarea {
   box-shadow: inset 3px 0 0 var(--blue);
 }
 
+.managed-field-row.is-search-target small {
+  color: var(--accent-text);
+}
+
 .managed-field-row textarea {
   min-height: 68px;
   resize: vertical;

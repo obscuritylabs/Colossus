@@ -3,6 +3,75 @@ import { expect, test } from "@playwright/test";
 
 test.use({ colorScheme: "dark" });
 
+for (const [theme, palette] of [
+  ["light", "colossus"],
+  ["dark", "colossus"],
+  ["dark", "neutral"],
+  ["dark", "hacker"],
+] as const) {
+  test(`effect timeout defaults and search highlight remain readable in ${theme} ${palette}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 700, height: 990 });
+    await page.addInitScript(
+      ({ theme, palette }) => {
+        localStorage.setItem(
+          "colossus.desktop.appearance.v1",
+          JSON.stringify({
+            colorTheme: theme,
+            darkPalette: palette,
+            textSize: "large",
+          }),
+        );
+      },
+      { theme, palette },
+    );
+    await page.goto("/?fixture=operations-studio");
+    await page.getByRole("button", { name: "Open work navigation" }).click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page
+      .getByRole("searchbox", { name: "Search settings" })
+      .fill("Effect timeout");
+    await page.getByRole("button", { name: /Effect timeout/u }).click();
+
+    const timeout = page.getByRole("spinbutton", {
+      name: "Effect timeout",
+      exact: true,
+    });
+    await expect(timeout).toHaveValue("900000");
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-text-size",
+      "large",
+    );
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    await expect(page.locator("html")).toHaveAttribute("data-palette", palette);
+    const row = page.locator('[id="managed-setting-sandbox.timeoutMs"]');
+    await expect(row).toHaveClass(/is-search-target/u);
+    await timeout.focus();
+    await expect(timeout).toBeFocused();
+    await timeout.fill("120000");
+    const inherit = row.getByRole("button", { name: "Inherit", exact: true });
+    await expect(inherit).toBeEnabled();
+    await inherit.focus();
+    await page.keyboard.press("Enter");
+    await expect(timeout).toHaveValue("900000");
+    await expect(inherit).toBeDisabled();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    const audit = await new AxeBuilder({ page })
+      .include(".managed-settings-shell")
+      .analyze();
+    expect(audit.violations).toEqual([]);
+    await page.screenshot({
+      path: `output/playwright/settings-effect-timeout-${theme}-${palette}.png`,
+      fullPage: true,
+    });
+  });
+}
+
 for (const width of [1586, 880, 700]) {
   test(`dedicated settings preserves scope geometry and edits at ${width}px`, async ({
     page,
