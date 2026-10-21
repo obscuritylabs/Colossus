@@ -11,7 +11,6 @@ use crate::{dto::CommandErrorDto, state::AppState};
 #[cfg(any(
     test,
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic",
     feature = "windows-browser-development",
     feature = "windows-browser-functional-preview"
 ))]
@@ -19,21 +18,18 @@ mod display;
 #[cfg(any(
     test,
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic",
     feature = "windows-browser-development",
     feature = "windows-browser-functional-preview"
 ))]
 pub(crate) use display::ClientIdentityDisplay;
 #[cfg(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic",
     feature = "windows-browser-development",
     feature = "windows-browser-functional-preview"
 ))]
 mod runner;
 #[cfg(any(
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic",
     feature = "windows-browser-development",
     feature = "windows-browser-functional-preview"
 ))]
@@ -216,7 +212,6 @@ pub(crate) fn finish_client_identity_review(
 #[cfg(any(
     test,
     feature = "embedded-chromium-preview",
-    feature = "macos-contained-browser-diagnostic",
     feature = "windows-browser-development",
     feature = "windows-browser-functional-preview"
 ))]
