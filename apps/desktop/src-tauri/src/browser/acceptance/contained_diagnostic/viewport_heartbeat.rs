@@ -1,8 +1,12 @@
 //! A fixture observer must not stall the independent trusted viewport heartbeat.
 
-use super::{BrowserRect, present};
+use super::{BrowserRect, FixtureState, present};
 use anyhow::{Context as _, ensure};
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    sync::{Arc, Mutex as FailureMutex, atomic::AtomicBool},
+    time::Duration,
+};
 use tokio::{sync::Mutex, task::JoinHandle};
 
 const PERIOD: Duration = Duration::from_millis(100);
@@ -21,7 +25,17 @@ enum Mode {
 
 pub(super) struct ViewportHeartbeat {
     mode: Arc<Mutex<Mode>>,
+    failure: Arc<FailureMutex<Option<&'static str>>>,
     task: Option<JoinHandle<anyhow::Result<()>>>,
+}
+
+fn renewal_failure(error: &anyhow::Error) -> &'static str {
+    match error.to_string().as_str() {
+        "fixture viewport lost its exact selected native tab" => "selected_tab_changed",
+        "The selected workspace changed. Reopen the browser pane." => "workspace_changed",
+        "Desktop controller missing" => "controller_unavailable",
+        _ => "viewport_update_rejected",
+    }
 }
 
 impl ViewportHeartbeat {
@@ -38,6 +52,8 @@ impl ViewportHeartbeat {
         Fut: Future<Output = anyhow::Result<()>> + Send,
     {
         let mode = Arc::new(Mutex::new(Mode::Paused));
+        let failure = Arc::new(FailureMutex::new(None));
+        let failed = failure.clone();
         let owned = mode.clone();
         let task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(PERIOD);
@@ -51,18 +67,32 @@ impl ViewportHeartbeat {
                     Mode::Visible(pulse) => {
                         // Pause/stop wait for this complete native acknowledgement.
                         // Holding an async mutex also fences queued main-thread show.
-                        renew(pulse.clone()).await?;
+                        if let Err(error) = renew(pulse.clone()).await {
+                            let category = renewal_failure(&error);
+                            if let Ok(mut failure) = failed.lock() {
+                                failure.get_or_insert(category);
+                            }
+                            anyhow::bail!("trusted fixture viewport renewal failed: {category}");
+                        }
                     }
                 }
             }
         });
         Self {
             mode,
+            failure,
             task: Some(task),
         }
     }
 
     pub(super) fn check(&self) -> anyhow::Result<()> {
+        if let Some(category) = *self
+            .failure
+            .lock()
+            .map_err(|_| anyhow::anyhow!("viewport heartbeat failure state unavailable"))?
+        {
+            anyhow::bail!("trusted fixture viewport renewal failed: {category}");
+        }
         ensure!(
             self.task.as_ref().is_some_and(|task| !task.is_finished()),
             "trusted fixture viewport heartbeat ended before shutdown"
@@ -91,6 +121,18 @@ impl ViewportHeartbeat {
         // after this returns. Subsequent ticks observe Paused and cannot show.
         *self.mode.lock().await = Mode::Paused;
         self.check()
+    }
+
+    pub(super) async fn pause_before_signal(
+        &self,
+        fixture: &FixtureState,
+        signal: &AtomicBool,
+    ) -> anyhow::Result<()> {
+        // Releasing the next model response may immediately close/replace the
+        // old view. Settle its final pulse before granting that fixture progress.
+        self.pause().await?;
+        fixture.signal(signal);
+        Ok(())
     }
 
     pub(super) async fn stop(&mut self) -> anyhow::Result<()> {
@@ -214,5 +256,123 @@ mod tests {
         let stopped = count.load(Ordering::Acquire);
         tokio::time::sleep(PERIOD * 2).await;
         assert_eq!(count.load(Ordering::Acquire), stopped);
+    }
+
+    #[tokio::test]
+    async fn close_release_waits_for_ack_then_replacement_never_renews_the_old_tab() {
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let old_count = Arc::new(AtomicUsize::new(0));
+        let new_count = Arc::new(AtomicUsize::new(0));
+        let fixture = Arc::new(FixtureState::default());
+        let observed_fixture = fixture.clone();
+        let did_enter = entered.clone();
+        let did_release = release.clone();
+        let old = old_count.clone();
+        let new = new_count.clone();
+        let heartbeat = Arc::new(ViewportHeartbeat::start_with(move |pulse| {
+            let fixture = observed_fixture.clone();
+            let entered = did_enter.clone();
+            let release = did_release.clone();
+            let old = old.clone();
+            let new = new.clone();
+            async move {
+                if pulse.tab == "first" {
+                    old.fetch_add(1, Ordering::AcqRel);
+                    entered.notify_one();
+                    release.notified().await;
+                    ensure!(
+                        !fixture.viewer_detached.load(Ordering::Acquire),
+                        "old native view closed before its pulse acknowledged"
+                    );
+                } else {
+                    ensure!(pulse.tab == "second", "foreign replacement pulse");
+                    ensure!(fixture.viewer_detached.load(Ordering::Acquire));
+                    new.fetch_add(1, Ordering::AcqRel);
+                }
+                Ok(())
+            }
+        }));
+        heartbeat.resume("first", rect(400.0)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), entered.notified())
+            .await
+            .unwrap();
+        let pausing = heartbeat.clone();
+        let signal = fixture.clone();
+        let releasing = tokio::spawn(async move {
+            pausing
+                .pause_before_signal(&signal, &signal.viewer_detached)
+                .await
+        });
+        tokio::time::sleep(PERIOD).await;
+        assert!(!releasing.is_finished());
+        assert!(!fixture.viewer_detached.load(Ordering::Acquire));
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), releasing)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(fixture.viewer_detached.load(Ordering::Acquire));
+        tokio::time::sleep(PERIOD * 2).await;
+        assert_eq!(old_count.load(Ordering::Acquire), 1);
+        heartbeat.check().unwrap();
+        heartbeat.resume("second", rect(500.0)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while new_count.load(Ordering::Acquire) == 0 {
+                heartbeat.check().unwrap();
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(old_count.load(Ordering::Acquire), 1);
+        let mut heartbeat = Arc::try_unwrap(heartbeat).ok().unwrap();
+        heartbeat.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_renewal_preserves_its_first_category_and_never_releases_close_or_retries() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = count.clone();
+        let mut heartbeat = ViewportHeartbeat::start_with(move |_| {
+            observed.fetch_add(1, Ordering::AcqRel);
+            std::future::ready(Err(anyhow::anyhow!(
+                "fixture viewport lost its exact selected native tab"
+            )))
+        });
+        heartbeat.resume("first", rect(400.0)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while heartbeat.check().is_ok() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let error = heartbeat.check().unwrap_err().to_string();
+        assert!(error.contains("selected_tab_changed"));
+        let fixture = FixtureState::default();
+        assert!(
+            heartbeat
+                .pause_before_signal(&fixture, &fixture.viewer_detached)
+                .await
+                .is_err()
+        );
+        assert!(!fixture.viewer_detached.load(Ordering::Acquire));
+        assert!(heartbeat.resume("second", rect(500.0)).await.is_err());
+        assert!(
+            heartbeat
+                .stop()
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("selected_tab_changed")
+        );
+        assert_eq!(heartbeat.check().unwrap_err().to_string(), error);
+        assert_eq!(count.load(Ordering::Acquire), 1);
+        assert_eq!(
+            renewal_failure(&anyhow::anyhow!("private page, URL or error text")),
+            "viewport_update_rejected"
+        );
     }
 }

@@ -208,9 +208,9 @@ pub(super) async fn checkpoint(
             && !view.human_control_available(),
         "new frame retained an old writer or human input authority"
     );
-    fixture
-        .state
-        .signal(&fixture.state.turn_continuity.presented);
+    heartbeat
+        .pause_before_signal(&fixture.state, &fixture.state.turn_continuity.presented)
+        .await?;
     run_complete(client, &run.run_id).await?;
     state
         .browser

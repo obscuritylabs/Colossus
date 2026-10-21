@@ -163,7 +163,9 @@ pub(super) async fn checkpoint(
     rect: BrowserRect,
     heartbeat: &ViewportHeartbeat,
 ) -> anyhow::Result<String> {
-    fixture.state.signal(&fixture.state.viewer_detached);
+    heartbeat
+        .pause_before_signal(&fixture.state, &fixture.state.viewer_detached)
+        .await?;
     fixture
         .state
         .wait(
@@ -243,10 +245,9 @@ pub(super) async fn checkpoint(
     )
     .await?;
     windows::selected_tab(app, &tab, &view, rect, [204, 232, 255, 255]).await?;
-    heartbeat.pause().await?;
-    fixture
-        .state
-        .signal(&fixture.state.session_reopen.presented);
+    heartbeat
+        .pause_before_signal(&fixture.state, &fixture.state.session_reopen.presented)
+        .await?;
     println!(
         "PASS same Core run polled the closed-A gap three times, freshly attached distinct B, and displayed B's exact authenticated frame"
     );
@@ -258,8 +259,9 @@ async fn poll_closed_gap(
     run: &RunIdentity<'_>,
     heartbeat: &ViewportHeartbeat,
 ) -> anyhow::Result<()> {
-    // The renderer keeps pulsing A while the next model turn has no replacement.
-    // First observe its closed channel, then poll beyond the recovery budget.
+    // A's final trusted pulse was acknowledged before Core could close it.
+    // The paused owner stays alive while ordinary context polling observes the
+    // closed channel and exceeds the recovery budget without a replacement.
     let deadline = tokio::time::Instant::now() + PAGE_TIMEOUT;
     loop {
         heartbeat.check()?;
