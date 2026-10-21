@@ -260,6 +260,7 @@ for (const appearance of appearanceCases) {
       page.getByText("Retained personal chat question", { exact: true }),
     ).toBeVisible();
     await page.goBack();
+    await expect(load).toBeEnabled();
     await page.reload();
     await expect(
       page.getByRole("heading", { name: "Colossus Hosted", exact: true }),

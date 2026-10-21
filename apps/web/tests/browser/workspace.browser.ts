@@ -122,6 +122,9 @@ test("personal hosted chats use the chat workspace from Home, host history, and 
 
   // A bookmarked/copied Fleet URL is canonicalized only after its authorized read.
   await page.goto("/fleet?project=browser-project");
+  await expect(
+    page.getByRole("heading", { name: "Fleet", exact: true }),
+  ).toBeVisible();
   await page.goto("/projects/browser-project/threads/browser-thread");
   await expect(page).toHaveURL(destination);
   await expect(page.locator(".chat-workspace")).toBeVisible();

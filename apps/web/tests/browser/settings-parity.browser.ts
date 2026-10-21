@@ -208,11 +208,7 @@ for (const appearance of appearanceCases) {
       .click();
     // Password inputs have no implicit textbox role.
     const projectInput = page.locator("input[aria-label='API key or token']");
-    if (!(await projectInput.isVisible())) {
-      await page
-        .getByRole("button", { name: "Add credential", exact: true })
-        .click();
-    }
+    // The selected connection reopens its editor after the credential catalog loads.
     await expect(page.locator(".shared-credential-editor")).toBeVisible();
     await page.screenshot({
       path: `output/playwright/credentials-project-editor-${appearance.id}.png`,
