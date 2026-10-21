@@ -880,6 +880,33 @@ describe("ManagedSettingsPane", () => {
     ).toBe(true);
   });
 
+  it("previews the runtime effect timeout without creating overrides and preserves explicit limits", () => {
+    const snapshot = buildManagedSettingsFixture(desktop());
+    const workspace = snapshot.spaces[0]!;
+    const descriptor = snapshot.fieldDescriptors.find(
+      ({ id }) => id === "sandbox.timeoutMs",
+    )!;
+    const render = (values: Record<string, unknown>) =>
+      renderToStaticMarkup(
+        createElement(FieldGrid, {
+          descriptors: [descriptor],
+          values,
+          effective: inheritedFieldValues(snapshot, workspace),
+          scope: "space",
+          onChange: vi.fn(),
+          onInherit: vi.fn(),
+        }),
+      );
+
+    expect(render(spaceDraft(workspace).fields)).toContain('value="900000"');
+    expect(workspace.configuration.fieldOverrides).toEqual([]);
+    snapshot.globalConfiguration.defaults.revisions[0]!.value.fieldOverrides = [
+      { fieldId: descriptor.id, value: 120_000 },
+    ];
+    expect(render({})).toContain('value="120000"');
+    expect(render({ [descriptor.id]: 30_000 })).toContain('value="30000"');
+  });
+
   it("previews redirect inheritance from the accepted global revision and preserves a zero draft", () => {
     const snapshot = buildManagedSettingsFixture(desktop());
     const workspace = snapshot.spaces[0]!;

@@ -377,9 +377,10 @@ impl BrowserDriver for BrowserBridgeDriver {
         }
         let session_id = command.session_id.clone();
         let generation = command.control_generation;
-        let deadline = Duration::from_millis(u64::from(
-            self.enrollment.capabilities.limits.action_timeout_ms,
-        ));
+        let deadline = Duration::from_millis(u64::from(crate::deadline::execute_timeout_ms(
+            &self.enrollment.capabilities.limits,
+            &command.action,
+        )));
         match self
             .call(
                 Request::Execute {

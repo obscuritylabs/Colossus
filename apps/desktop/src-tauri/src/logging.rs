@@ -6,7 +6,10 @@ use serde::Deserialize;
 
 use crate::desktop_settings::SettingsStore;
 
-pub(crate) fn initialize(store: &SettingsStore) -> std::io::Result<LocalLogSink> {
+pub(crate) fn initialize(
+    store: &SettingsStore,
+    package_info: &tauri::PackageInfo,
+) -> std::io::Result<LocalLogSink> {
     let root = ConfinedRoot::bind(store.application_root())
         .map_err(|_| std::io::Error::other("Desktop log storage is unavailable"))?;
     let logs =
@@ -16,14 +19,18 @@ pub(crate) fn initialize(store: &SettingsStore) -> std::io::Result<LocalLogSink>
         tracing::error!(target: "colossus.desktop", event_name = "desktop.panicked", error_type = "panic");
         previous(panic);
     }));
+    started(package_info);
+    Ok(logs)
+}
+
+fn started(package_info: &tauri::PackageInfo) {
     tracing::info!(
         target: "colossus.desktop",
         event_name = "desktop.started",
-        application_version = env!("CARGO_PKG_VERSION"),
+        application_version = %package_info.version,
         platform = std::env::consts::OS,
         process_id = std::process::id(),
     );
-    Ok(logs)
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -71,3 +78,6 @@ pub(crate) fn failure(code: &str, retryable: bool, outcome_unknown: bool) {
         outcome_unknown,
     );
 }
+
+#[cfg(test)]
+mod tests;

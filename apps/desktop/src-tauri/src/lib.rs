@@ -214,7 +214,7 @@ pub fn run() {
             std::process::exit(1);
         }
     };
-    let local_logs = if let Ok(logs) = logging::initialize(&store) {
+    let local_logs = if let Ok(logs) = logging::initialize(&store, context.package_info()) {
         Some(logs)
     } else {
         eprintln!("Colossus Desktop operational log storage is unavailable.");

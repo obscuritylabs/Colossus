@@ -823,7 +823,7 @@ impl SettingsStore {
         }
         #[cfg(windows)]
         {
-            let binding = colossus_windows_native::BoundPath::open_file(&path)
+            let binding = colossus_windows_native::BoundPath::open_file_read_write(&path)
                 .map_err(|_| storage_error())?;
             binding
                 .validate_private_owner_dacl()
@@ -2536,6 +2536,50 @@ mod tests {
             assert_eq!(canonical_root, root);
             (parent, canonical_root, store)
         }
+    }
+
+    #[test]
+    fn thread_search_file_supports_redb_commit_and_reopen() {
+        use redb::{ReadableDatabase as _, TableDefinition};
+
+        const RECORDS: TableDefinition<&str, &[u8]> =
+            TableDefinition::new("thread_search_file_fixture");
+        const VALUE: &[u8] = b"synthetic persisted search summary";
+        let (_root_guard, _root, store) = test_store();
+        let file = store
+            .open_thread_search_file()
+            .expect("private search file");
+        let database = redb::Database::builder()
+            .create_file(file)
+            .expect("initialize writable private search database");
+        let write = database.begin_write().expect("begin search write");
+        {
+            let mut table = write.open_table(RECORDS).expect("search table");
+            table
+                .insert("summary", VALUE)
+                .expect("write search summary");
+        }
+        write.commit().expect("commit search summary");
+        drop(database);
+
+        let reopened = SettingsStore::open(store.application_root().to_owned())
+            .expect("reopen private settings root");
+        let file = reopened
+            .open_thread_search_file()
+            .expect("reopen existing search file");
+        let database = redb::Database::builder()
+            .create_file(file)
+            .expect("reopen persisted search database");
+        let read = database.begin_read().expect("begin search read");
+        let table = read.open_table(RECORDS).expect("persisted search table");
+        assert_eq!(
+            table
+                .get("summary")
+                .expect("read search summary")
+                .expect("committed search summary")
+                .value(),
+            VALUE
+        );
     }
 
     #[cfg(windows)]

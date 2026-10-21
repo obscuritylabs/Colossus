@@ -4,6 +4,7 @@
 //! containment. Trusted composition supplies verified installation evidence and owns
 //! process-tree cleanup. Page observations remain quarantined in the runtime gateway.
 
+mod deadline;
 mod driver;
 mod enrollment;
 mod factory;
