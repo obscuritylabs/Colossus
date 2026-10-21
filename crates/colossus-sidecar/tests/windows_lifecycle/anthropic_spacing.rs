@@ -1,6 +1,6 @@
 //! Real SSE -> sidecar -> pinned gRPC projection across two executed tool turns.
 use super::*;
-use colossus_sdk::{RunUpdateKind, WatchRunRequest};
+use colossus_sdk::{RunUpdateKind, ToolActivityState, WatchRunRequest};
 use colossus_sidecar_protocol::ManagedProviderKind;
 use serde_json::{Value, json};
 use tokio::{
@@ -140,12 +140,31 @@ async fn check_stream(client: &Colossus) -> Result<String, String> {
         .map_err(|error| format!("watch: {error:?}"))?;
     let mut output = String::new();
     let mut completed = false;
+    let mut completed_tools = std::collections::BTreeSet::new();
     while let Some(update) = updates.next_update().await {
         match update.map_err(|error| format!("update: {error:?}"))?.update {
             RunUpdateKind::OutputDelta(text) => output.push_str(&text),
             RunUpdateKind::Result(_) => completed = true,
             RunUpdateKind::Failure { failure, .. } => {
                 return Err(format!("run: {}", failure.reason));
+            }
+            RunUpdateKind::ToolActivity(activity) => {
+                if activity.tool_name != "filesystem.read"
+                    || !matches!(activity.call_id.as_str(), "read-0" | "read-1")
+                {
+                    return Err("unexpected public tool activity".into());
+                }
+                match activity.state {
+                    ToolActivityState::Completed => {
+                        completed_tools.insert(activity.call_id);
+                    }
+                    ToolActivityState::Failed
+                    | ToolActivityState::Cancelled
+                    | ToolActivityState::OutcomeUnknown => {
+                        return Err("filesystem fixture tool did not complete successfully".into());
+                    }
+                    _ => {}
+                }
             }
             _ => {}
         }
@@ -154,6 +173,9 @@ async fn check_stream(client: &Colossus) -> Result<String, String> {
         return Err(format!(
             "public output did not preserve tool-turn paragraphs: {output:?}; completed={completed}"
         ));
+    }
+    if completed_tools != std::collections::BTreeSet::from(["read-0".into(), "read-1".into()]) {
+        return Err("both filesystem calls require a successful public completion".into());
     }
     Ok(run_id)
 }
@@ -170,8 +192,8 @@ async fn serve(listener: TcpListener) -> Result<(), String> {
         if request["stream"] != true || !request["messages"].is_array() {
             return Err("real Anthropic streaming request required".into());
         }
-        if step > 0 && !request.to_string().contains("disposable file evidence") {
-            return Err("the actual filesystem tool did not contribute its result".into());
+        if step > 0 {
+            check_tool_result(&request, &format!("read-{}", step - 1))?;
         }
         let body = response(step);
         let headers = format!(
@@ -186,6 +208,37 @@ async fn serve(listener: TcpListener) -> Result<(), String> {
             .write_all(body.as_bytes())
             .await
             .map_err(|_| "SSE response")?;
+    }
+    Ok(())
+}
+
+fn check_tool_result(request: &Value, expected_call: &str) -> Result<(), String> {
+    let results = request["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .filter(|content| {
+            content["type"] == "tool_result" && content["tool_use_id"] == expected_call
+        })
+        .collect::<Vec<_>>();
+    if results.len() != 1 || results[0]["is_error"] == true {
+        return Err("exact successful filesystem tool result required".into());
+    }
+    let output: Value = results[0]["content"]
+        .as_str()
+        .ok_or("text filesystem result required")
+        .and_then(|text| serde_json::from_str(text).map_err(|_| "bounded tool receipt required"))?;
+    let metadata = &output["_colossusToolObservation"];
+    if metadata["toolName"] != "filesystem.read"
+        || metadata["callId"] != expected_call
+        || metadata["exitCode"] != 0
+        || metadata["truncated"] != false
+        || metadata["format"] != "text"
+        || output["preview"] != "disposable file evidence"
+    {
+        return Err("matching completed filesystem call and exact released output required".into());
     }
     Ok(())
 }

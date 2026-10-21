@@ -113,8 +113,25 @@ async fn check_profiles(state: &AppState, store: &SettingsStore) {
             .managed_worker_for(&space_id)
             .await
             .expect("authenticated worker");
+        let tools = worker
+            .tools()
+            .await
+            .expect("authenticated live tool catalog");
+        let tools = tools.as_array().expect("live tool inventory array");
+        let expected_profile = serde_json::to_value(profile).expect("known access profile");
+        assert!(!tools.is_empty(), "live runtime must expose support tools");
+        assert!(
+            tools
+                .iter()
+                .all(|tool| tool.get("profile") == Some(&expected_profile)),
+            "every live tool must report the requested effective access profile"
+        );
+        assert_eq!(
+            tools.iter().any(|tool| tool["name"] == "filesystem.read"),
+            profile != AccessProfileSetting::Minimal,
+            "restored profiles must actually regain workspace reads"
+        );
         for (source, result) in [
-            ("tools", worker.tools().await),
             ("mcp", worker.mcp_servers().await),
             ("search", worker.search_profiles().await),
             ("plugins", worker.plugins().await),
