@@ -56,8 +56,12 @@ use windows_frames::{accepted_frame, focus};
 
 mod native_input;
 mod owned_tabs;
+mod tool_evidence;
+use tool_evidence::tool_result;
 #[cfg(windows)]
 mod session_reopen;
+#[cfg(windows)]
+mod turn_continuity;
 mod viewport_heartbeat;
 #[cfg(windows)]
 mod wait_continuity;
@@ -127,11 +131,19 @@ struct FixtureState {
     wait_continuity: wait_continuity::State,
     #[cfg(windows)]
     session_reopen: session_reopen::State,
+    #[cfg(windows)]
+    turn_continuity: turn_continuity::State,
 }
 
 fn close_after_completion() -> bool {
     cfg!(windows)
         && std::env::var("COLOSSUS_BROWSER_ACCEPTANCE_CLOSE_AFTER_COMPLETION").as_deref() == Ok("1")
+}
+
+fn cross_turn_continuity() -> bool {
+    cfg!(windows)
+        && close_after_completion()
+        && std::env::var("COLOSSUS_BROWSER_ACCEPTANCE_CROSS_TURN").as_deref() == Ok("1")
 }
 
 fn begin_model_turn(body: &Value, state: &FixtureState) -> anyhow::Result<usize> {
@@ -140,7 +152,9 @@ fn begin_model_turn(body: &Value, state: &FixtureState) -> anyhow::Result<usize>
         "fixture requires non-streaming model"
     );
     let turn = state.phase.fetch_add(1, Ordering::AcqRel);
-    let final_phase = if state.native_tabs {
+    let final_phase = if cross_turn_continuity() {
+        13
+    } else if state.native_tabs {
         11
     } else if close_after_completion() {
         9
@@ -423,7 +437,9 @@ async fn serve(
                     .await?;
             }
             #[cfg(windows)]
-            let response = if turn == 4 {
+            let response = if cross_turn_continuity() && phase >= 10 {
+                turn_continuity::response(phase, &body, origin, state).await?
+            } else if turn == 4 {
                 wait_continuity::model_wait(&body, state)?
             } else {
                 if turn == 5 {
@@ -441,29 +457,6 @@ async fn serve(
         }
     }
     Ok(())
-}
-
-fn tool_result(body: &Value, call_id: &str) -> anyhow::Result<Value> {
-    let messages = body["messages"]
-        .as_array()
-        .context("model messages missing")?;
-    let message = messages
-        .iter()
-        .rev()
-        .find(|message| message["role"] == "tool" && message["tool_call_id"] == call_id)
-        .with_context(|| format!("Core did not return {call_id} tool evidence"))?;
-    let content = message["content"]
-        .as_str()
-        .context("tool evidence is not scalar text")?;
-    let result: Value = serde_json::from_str(content).context("tool evidence is not JSON")?;
-    if result.get("error").is_some() {
-        let code = categorical_tool_failure(&result);
-        eprintln!(
-            "EVIDENCE core-tool-failure code={code} browser_error={}",
-            categorical_browser_failure(&result)
-        );
-    }
-    Ok(result)
 }
 
 fn categorical_tool_failure(result: &Value) -> &'static str {
@@ -944,6 +937,27 @@ async fn title(view: &RemoteSurface, expected: &str) -> anyhow::Result<()> {
             "native RemoteSurface did not show title {expected:?}; last title {last:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn active_title(
+    view: &RemoteSurface,
+    expected: &str,
+    fixture: &FixtureState,
+) -> anyhow::Result<()> {
+    // Keep the original title deadline while surfacing the first provider-fixture
+    // error instead of masking it as a later native-page timeout.
+    let mut observed = Box::pin(title(view, expected));
+    loop {
+        let changed = fixture.changed.notified();
+        fixture.check()?;
+        tokio::select! {
+            result = &mut observed => {
+                fixture.check()?;
+                return result;
+            }
+            () = changed => {}
+        }
     }
 }
 
@@ -1639,7 +1653,7 @@ async fn exercise_owned(
     fixture.state.signal(&fixture.state.handoff_done);
     println!("PASS authenticated native human-to-agent handoff");
 
-    title(&view, "Agent click received").await?;
+    active_title(&view, "Agent click received", &fixture.state).await?;
     fixture
         .state
         .wait(
@@ -1653,7 +1667,7 @@ async fn exercise_owned(
     println!("PASS Core browser.snapshot and browser.click changed the visible page");
     #[cfg(windows)]
     wait_continuity::checkpoint(client, &run.run_id, &view, fixture, heartbeat).await?;
-    title(&view, "Agent controlled page").await?;
+    active_title(&view, "Agent controlled page", &fixture.state).await?;
     #[cfg(windows)]
     println!("EVIDENCE Core navigation title acknowledged; awaiting matching native frame");
     // Core may begin its next finite observation after the title receipt. The
@@ -1773,7 +1787,7 @@ async fn exercise_owned(
         heartbeat.pause().await?;
     }
     #[cfg(windows)]
-    let tab = if close_after_completion() {
+    let mut tab = if close_after_completion() {
         session_reopen::checkpoint(
             app,
             fixture,
@@ -1879,6 +1893,18 @@ async fn exercise_owned(
             println!(
                 "PASS same-run explicit close and fresh reopen retained the second session's read-only page snapshot across completion and context reconciliation"
             );
+            if cross_turn_continuity() {
+                tab = turn_continuity::checkpoint(
+                    app,
+                    client,
+                    fixture,
+                    &conversation,
+                    &tab,
+                    rect,
+                    heartbeat,
+                )
+                .await?;
+            }
             action(
                 app,
                 BrowserAction::Close {
@@ -2172,10 +2198,12 @@ mod tests {
             json!({"session_id":"session-owned", "control_generation":7, "tab_id":"tab-old", "document_id":"doc-old"}),
         );
         let body = |call_id: &str, observation: Value| {
-            json!({
-                "tools":[{"function":{"name":"browser_snapshot"}}, {"function":{"name":"browser_navigate"}}],
-                "messages":[{"role":"tool", "tool_call_id":call_id, "content":observation.to_string()}]
-            })
+            let name = if call_id == "fixture-2" {
+                "browser.click"
+            } else {
+                "browser.snapshot"
+            };
+            super::tool_evidence::test_body(name, call_id, &observation)
         };
         let clicked = body(
             "fixture-2",

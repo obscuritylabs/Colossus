@@ -16,9 +16,12 @@ fn state() -> FixtureState {
 }
 
 fn body(call: &str, result: &Value) -> Value {
-    let tools = ["browser.close", "browser.open", "browser.snapshot"]
-        .map(|name| json!({"function":{"name":name.replace('.', "_")}}));
-    json!({"tools":tools,"messages":[{"role":"tool","tool_call_id":call,"content":result.to_string()}]})
+    let name = match call {
+        "fixture-7" => "browser.open",
+        "fixture-8" => "browser.snapshot",
+        _ => "browser.close",
+    };
+    super::super::tool_evidence::test_body(name, call, result)
 }
 
 fn opened(session: char) -> Value {

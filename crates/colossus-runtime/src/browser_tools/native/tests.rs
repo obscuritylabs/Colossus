@@ -7,6 +7,9 @@ use colossus_contracts::*;
 use colossus_ports::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+#[path = "tests/renewed_writer.rs"]
+mod renewed_writer;
+
 #[derive(Default)]
 struct NativeData {
     original: Option<BrowserDriverOpenRequest>,
@@ -15,6 +18,7 @@ struct NativeData {
     fenced: bool,
     controller: u64,
     docgen: u64,
+    native_tab: u64,
 }
 #[derive(Default)]
 struct Fixture {
@@ -84,7 +88,7 @@ impl PresentationHost for Host {
                     return Err(PresentationError::Stale);
                 }
                 let lease = Lease {
-                    tab: 1,
+                    tab: data.native_tab.max(1),
                     session_generation: 1,
                     control_generation: config.control_generation,
                     viewport_generation: config.viewport_generation,

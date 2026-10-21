@@ -87,6 +87,10 @@ impl Host {
         }
     }
     pub(super) fn begin_agent_action(&mut self, control_generation: u64) {
+        #[cfg(windows)]
+        if let Ok(mut review) = self.callbacks.identity_review.lock() {
+            review.generation_changed(control_generation);
+        }
         if self.presentation.human || self.presentation.control_generation != control_generation {
             self.revoke_human_presentation();
         }
@@ -103,7 +107,7 @@ impl Host {
             Some(observe::Rejection::Disabled)
         } else if !self.initialized {
             Some(observe::Rejection::Uninitialized)
-        } else if self.cancelled.load(super::Ordering::Acquire) {
+        } else if self.suspended || self.cancelled.load(super::Ordering::Acquire) {
             Some(observe::Rejection::Cancelled)
         } else if guard.lease() != lease {
             Some(observe::Rejection::Lease)
@@ -158,6 +162,7 @@ impl Host {
         configuration.validate()?;
         if !self.presentation.enabled
             || !self.initialized
+            || self.suspended
             || self.cancelled.load(super::Ordering::Acquire)
             || self.session.as_ref() != Some(&configuration.session)
             || configuration.control_generation != self.presentation.control_generation

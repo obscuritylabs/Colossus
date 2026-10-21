@@ -5,6 +5,7 @@
   "local": true,
   "webviews": ["main"],
   "permissions": [
+    "allow-report-renderer-failure",
     "allow-workflow-context",
     "allow-list-registered-workflows",
     "allow-get-registered-workflow",
@@ -39,6 +40,7 @@
     "allow-browser-viewport",
     "allow-browser-certificates",
     "allow-get-plugin-inventory",
+    "allow-get-capability-inventory",
     "allow-resolve-plugin-selection",
     "allow-read-plugin-preview",
     "allow-manage-plugin",

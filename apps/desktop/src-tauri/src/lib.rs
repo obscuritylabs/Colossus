@@ -49,6 +49,7 @@ mod application_lifecycle;
 mod approval_adapter;
 mod browser;
 mod bundle;
+mod capability_inventory;
 mod codex_auth;
 mod command_review;
 mod command_review_protocol;
@@ -74,6 +75,7 @@ mod desktop_settings;
 mod diagnostics;
 mod dictation;
 mod dto;
+mod logging;
 mod managed_configuration;
 mod managed_configuration_commands;
 mod managed_diagnostics;
@@ -205,10 +207,19 @@ pub fn run() {
     let launch_guard =
         colossus_windows_native::DesktopLaunchGuard::acquire(&context.config().identifier)
             .expect("another Colossus launch did not finish");
-    if let Err(error) = desktop_settings::SettingsStore::open_application() {
-        eprintln!("Colossus Desktop could not start: {}", error.message);
-        std::process::exit(1);
-    }
+    let store = match desktop_settings::SettingsStore::open_application() {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Colossus Desktop could not start: {}", error.message);
+            std::process::exit(1);
+        }
+    };
+    let local_logs = if let Ok(logs) = logging::initialize(&store) {
+        Some(logs)
+    } else {
+        eprintln!("Colossus Desktop operational log storage is unavailable.");
+        None
+    };
     let application = tauri::Builder::default();
     #[cfg(windows)]
     let application = application.plugin(desktop_instance::plugin());
@@ -270,6 +281,7 @@ pub fn run() {
             status_bar::handle_window_event(window, event);
         })
         .invoke_handler(tauri::generate_handler![
+            logging::report_renderer_failure,
             dictation_status,
             get_dictation_settings,
             download_dictation_model,
@@ -290,6 +302,7 @@ pub fn run() {
             remembered_command_count,
             clear_remembered_commands,
             get_plugin_inventory,
+            capability_inventory::get_capability_inventory,
             resolve_plugin_selection,
             read_plugin_preview,
             manage_plugin,
@@ -441,11 +454,15 @@ pub fn run() {
         let code = application.run_return(callback);
         if native_shutdown.load(std::sync::atomic::Ordering::Acquire) {
             drop(browser_cache);
+            tracing::info!(target: "colossus.desktop", event_name = "desktop.stopped", exit_code = code);
+            drop(local_logs);
             std::process::exit(code);
         }
         // Preserve native ownership evidence when shutdown was not acknowledged.
         // Process exit does not authorize deleting a possibly live CEF cache.
         std::mem::forget(browser_cache);
+        logging::failure("native_shutdown_unacknowledged", false, true);
+        drop(local_logs);
         std::process::exit(if code == 0 { 1 } else { code });
     }
     #[cfg(mobile)]

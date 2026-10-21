@@ -952,8 +952,8 @@ export function ModelConfigurationEditor({
       <div className="provider-security-note">
         <p>
           Use HTTPS for remote providers. HTTP is allowed only for local servers
-          on this computer. You’ll be asked to approve new or changed
-          connections. Finish or cancel active tasks before saving.
+          on this computer. Reusing a saved key for a different endpoint
+          requires approval. Finish or cancel active tasks before saving.
         </p>
       </div>
       <button

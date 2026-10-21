@@ -846,6 +846,51 @@ and removal of positively owned native keys. Signed installed components must
 bind that acceptance to their exact browser/helper builds and OS policy. Never
 substitute a certificate-error continuation or ignored TLS errors for CA trust.
 
+The Windows ordinary-user host uses Chromium's server verifier, which reads the
+current user's and machine's trusted roots, intermediate CAs and explicit distrust
+stores, including enterprise policy roots. A temporary browser profile does not
+replace this OS trust. The CONNECT proxy preserves end-to-end TLS; Colossus network
+CA bundles do not configure Chromium. Trusting a server CA does not authorize a
+private key. The ordinary-user functional edition handles Chromium client-identity
+requests with a separate native dialog showing the exact canonical HTTPS origin
+and eligible public certificate fingerprint. Its origin and fingerprint controls
+are read-only; Cancel is the default. The 45-second review runs outside the CEF
+thread and consumes only the current native request, tab and writer generation.
+Navigation, request cancellation, a changed writer or shutdown invalidates it.
+Chromium accesses the existing Windows key itself; no private key, certificate
+path or identity-selection grant enters renderer IPC, tool input or runtime YAML.
+Chromium may cache the selected identity for this exact origin in its temporary
+session. Close the session to end that choice. This is OS-user store access, not
+private per-profile key custody or automatic certificate import.
+
+`browser.client_identity_review` records only the fixed selected, declined,
+revoked or stale outcome in the standard operational log. It excludes origins,
+certificate subjects, fingerprints and keys.
+
+A rejected Windows server certificate emits `browser.tls_verification_failed` to
+the local operational log. The record contains numeric Chromium certificate/error
+status and a categorical Windows SSL-chain diagnostic. The Windows check uses
+existing OS trust with cached revocation data and performs no AIA, CRL, OCSP or root
+downloads. `verified_cached` means that this separate Windows check succeeded;
+Chromium still rejected the connection. `revocation_unknown` means no conclusive
+cached revocation result was available. Neither outcome changes Chromium's decision.
+URLs, hostnames, certificate subjects, fingerprints and keys are excluded.
+
+After configuring the native Windows build, the diagnostic contract has a separate
+automated fixture. Use Python 3.11+ with `cryptography` 50.x and a fresh directory:
+
+```powershell
+cmake --build .local/cef-build-windows64 --config Release --target colossus-browser-system-trust-test
+python -B native/browser/scripts/test_system_trust_win.py --executable .local/cef-build-windows64/Release/colossus-browser-system-trust-test.exe --directory .local/system-trust-fixture
+```
+
+The native fixture uses exclusive in-memory trust anchors and CRLs to check valid,
+untrusted, wrong-hostname, expired, revoked, wrong-usage, corrupted-signature and
+uncached-revocation cases. A loopback trap requires zero certificate-network
+retrievals. It opens OS stores read-only without installing certificates or keys.
+This validates diagnostics, not an installed custom-CA Chromium handshake or
+certificate custody; retain the operator-driven native acceptance tier for those.
+
 The dedicated macOS host's HOME also uses retained parent/directory ownership and
 exclusive retirement before descriptor-relative cleanup. A reused basename or
 replaced directory remains untouched or quarantined with an unknown outcome;
@@ -1121,8 +1166,10 @@ interactive input acceptance are still required before that publication. The
 NetworkIsolation API replaces an OS-global configuration list: a named gate
 serializes cooperating Colossus supervisors and verifies unrelated entries, but
 cannot prevent a foreign administrator tool from racing its replacement.
-Standalone Windows private CA and client-identity support remains unavailable
+Contained Windows private CA and client-identity support remains unavailable
 until owned-store discovery, isolation and server-observed key use are accepted.
+The ordinary-user edition's separately reviewed Windows store access does not
+promote contained support or private certificate custody.
 
 The portable offscreen presentation path connects the contained CEF host's real
 BGRA frames to a native HWND or NSView in Desktop. Authenticated envelopes bind the

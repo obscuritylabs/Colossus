@@ -28,8 +28,12 @@ fn snapshot() -> Value {
 }
 
 fn body(call: &str, result: &Value) -> Value {
-    json!({"tools":[{"function":{"name":"browser_wait"}}],
-        "messages":[{"role":"tool","tool_call_id":call,"content":result.to_string()}]})
+    let name = if call == "fixture-3" {
+        "browser.snapshot"
+    } else {
+        "browser.wait"
+    };
+    super::super::tool_evidence::test_body(name, call, result)
 }
 
 #[test]

@@ -68,6 +68,32 @@ colossus -w /absolute/path/to/repository \
 event was durable. Investigate the external system and use only an operation-specific
 recovery path. Never blindly rerun a non-idempotent request.
 
+## Desktop operational logs
+
+Desktop and each Managed Local sidecar write structured JSON Lines logs automatically.
+Info records describe startup, shutdown, provider requests, retries, and categorical
+failures. Set `COLOSSUS_LOG_LEVEL=debug` before launching Desktop and restart the app
+to include provider connection status, first-chunk timing, and native control progress.
+The fixed verbosity selector also reaches sidecars started by that app; arbitrary
+dependency or HTTP wire tracing filters are not accepted.
+
+Desktop files are `desktop/logs/desktop-0.jsonl` through `desktop-3.jsonl` beneath the
+resolved Colossus home. On Windows the default home is
+`%LOCALAPPDATA%\ColossusDesktopHome`; an explicit `COLOSSUS_HOME` takes precedence.
+Each Workspace's Managed Local runtime directory has its own
+`logs/sidecar-0.jsonl` through `sidecar-3.jsonl`. Debug builds use the existing separate
+`development-plaintext` runtime directory. Each process retains at most four 4 MiB
+files and rotates through their numbered slots; sort records by timestamp when
+combining files. A full bounded logging queue can drop records without blocking work.
+
+Records include the component, severity, stable event/error category, provider kind
+and profile, run ID when available, HTTP status, and elapsed time as applicable.
+Prompts, model output, tool content, HTTP bodies/headers, credentials, certificate
+material, private paths, and journal payloads are excluded. Remote OpenTelemetry and
+full journal payload logging remain separately configured; they are not enabled by
+local logs or the debug selector. Keep the run ID and timestamp when reporting a
+failure so provider and Desktop records can be matched.
+
 ## Diagnose a provider failure during a TUI run
 
 Doctor probes send a fresh request, so they cannot reproduce every failure that occurs

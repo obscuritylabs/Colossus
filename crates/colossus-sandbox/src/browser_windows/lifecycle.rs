@@ -40,6 +40,7 @@ pub(super) struct Resources {
     pub drains: Vec<tokio::task::JoinHandle<std::io::Result<u64>>>,
     pub fenced: Arc<AtomicBool>,
     pub closed: bool,
+    pub suspended: bool,
     pub cef_acknowledged: bool,
     pub receipt: Option<WindowsBrowserShutdownReceipt>,
 }
@@ -180,6 +181,75 @@ pub(super) struct Driver {
 }
 #[async_trait]
 impl BrowserDriver for Driver {
+    fn supports_suspension(&self) -> bool {
+        true
+    }
+    async fn suspend_session(
+        &self,
+        session: &BrowserSessionId,
+        generation: u64,
+    ) -> Result<(), BrowserDriverError> {
+        if session != &self.request.session_id || self.fenced.load(Ordering::Acquire) {
+            return Err(BrowserDriverError::Denied);
+        }
+        let mut resources = self.resources.lock().await;
+        if resources.closed {
+            return Err(BrowserDriverError::Stale);
+        }
+        if resources.suspended {
+            return Ok(());
+        }
+        resources
+            .egress
+            .as_mut()
+            .ok_or(BrowserDriverError::Unavailable)?
+            .pause()
+            .await
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        self.bridge.suspend_session(session, generation).await?;
+        resources.suspended = true;
+        Ok(())
+    }
+    async fn resume_session(
+        &self,
+        session: &BrowserSessionId,
+        run_id: &str,
+        generation: u64,
+        control: &BrowserDriverControl,
+    ) -> Result<(), BrowserDriverError> {
+        if session != &self.request.session_id || control.is_cancelled() {
+            return Err(BrowserDriverError::Denied);
+        }
+        let mut resources = self.resources.lock().await;
+        if resources.closed || !resources.suspended {
+            return Err(BrowserDriverError::Stale);
+        }
+        let egress = resources
+            .egress
+            .as_ref()
+            .ok_or(BrowserDriverError::Unavailable)?;
+        if std::time::Instant::now() >= egress.expires_at() {
+            return Err(BrowserDriverError::Stale);
+        }
+        if self.fenced.load(Ordering::Acquire) {
+            return Err(BrowserDriverError::Denied);
+        }
+        self.bridge
+            .resume_session(session, run_id, generation, control)
+            .await?;
+        if control.is_cancelled() {
+            return Err(BrowserDriverError::OutcomeUnknown);
+        }
+        resources
+            .egress
+            .as_mut()
+            .ok_or(BrowserDriverError::Unavailable)?
+            .resume()
+            .await
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        resources.suspended = false;
+        Ok(())
+    }
     fn capabilities(&self) -> BrowserCapabilities {
         if self.fenced.load(Ordering::Acquire) {
             BrowserCapabilities::unavailable()

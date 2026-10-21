@@ -140,6 +140,42 @@ test("TUI and shell tabs keep independent sessions and route typed commands", as
       (entry: { sessionId: string }) => entry.sessionId === "shell-2",
     ),
   ).toBe(true);
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          document.querySelector<HTMLElement>(
+            '[data-testid="shell-harness"]',
+          )!.dataset.copied = text;
+        },
+      },
+    });
+  });
+  const screen = page.locator(".terminal-pane:not([hidden]) .xterm-screen");
+  const bounds = (await screen.boundingBox())!;
+  const firstRow = bounds.y + 8;
+  await page.mouse.move(bounds.x + 1, firstRow);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 180, firstRow, { steps: 10 });
+  await page.mouse.up();
+  await page.screenshot({
+    path: test.info().outputPath("terminal-selection.png"),
+  });
+  await input.press("Control+Shift+C");
+  await expect(fixture).toHaveAttribute("data-copied", /^Local Shell/);
+  expect(JSON.parse((await fixture.getAttribute("data-writes"))!)).toHaveLength(
+    writes.length,
+  );
+  // Clearing native selection restores the ordinary Ctrl+C interrupt input.
+  await screen.click({ position: { x: 220, y: 8 } });
+  await input.press("Control+c");
+  await expect
+    .poll(async () => {
+      const current = JSON.parse((await fixture.getAttribute("data-writes"))!);
+      return current.at(-1).text;
+    })
+    .toBe("\u0003");
   await tabs
     .getByRole("button", { name: "Colossus TUI 1", exact: true })
     .click();
@@ -147,6 +183,15 @@ test("TUI and shell tabs keep independent sessions and route typed commands", as
     2,
   );
   expect(await fixture.getAttribute("data-closes")).toBeNull();
+  await page
+    .locator(".terminal-pane:not([hidden]) .xterm-helper-textarea")
+    .press("F6");
+  await expect
+    .poll(async () => {
+      const current = JSON.parse((await fixture.getAttribute("data-writes"))!);
+      return current.at(-1);
+    })
+    .toEqual({ sessionId: "colossus_tui-1", text: "\u001b[17~" });
   await tabs
     .getByRole("button", { name: "Close Shell 1", exact: true })
     .click();

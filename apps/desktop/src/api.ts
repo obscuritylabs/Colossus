@@ -1,5 +1,11 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+
+export function getCapabilityInventory(
+  targetId: string,
+): Promise<import("./capabilities").CapabilityInventory> {
+  return call("get_capability_inventory", { targetId });
+}
 import type {
   StartWorkflowRunRequest,
   CreateScheduleRequest,
@@ -805,6 +811,7 @@ export function createManagedCredential(request: {
   expectedRevision: number;
   label: string;
   kind: ManagedCredentialKind;
+  providerOrigin?: { kind: import("./types").ProviderKind; baseUrl: string };
 }): Promise<ManagedSettingsSnapshot> {
   return call("create_managed_credential", {
     request,

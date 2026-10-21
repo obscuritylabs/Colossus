@@ -240,6 +240,8 @@ pub(crate) struct CreateManagedCredentialInput {
     expected_revision: u64,
     label: String,
     kind: CredentialKindSetting,
+    #[serde(default)]
+    provider_origin: Option<crate::provider_catalog::CredentialProviderOriginInput>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -313,7 +315,8 @@ pub(crate) async fn upsert_global_provider(
     let store = settings_store()?;
     let mut settings = store.load()?;
     let confirm_credential = request.provider.credential_id.as_deref().is_some_and(|id| {
-        !crate::provider_catalog::saved_catalog_credential_matches(
+        !crate::provider_catalog::confirmed_credential_destination(
+            &state,
             &settings,
             request.provider.kind,
             &request.provider.base_url,
@@ -322,7 +325,8 @@ pub(crate) async fn upsert_global_provider(
     });
     let origin = format!(
         "{}: {}",
-        request.provider.profile, request.provider.base_url
+        request.provider.profile,
+        provider_enrollment::canonical_provider_endpoint(&request.provider.base_url)?,
     );
     apply_provider_upsert(&mut settings, request)?;
     // Saving a new credential destination establishes authority; catalog reads cannot.
@@ -433,16 +437,42 @@ pub(crate) async fn create_managed_credential(
     let mut settings = store.load()?;
     ensure_global_revision(&settings, request.expected_revision)?;
     validate_label(&request.label)?;
-    enroll_credential(
+    let destination = request
+        .provider_origin
+        .as_ref()
+        .map(|origin| {
+            if request.kind != CredentialKindSetting::ApiKey {
+                return Err(CommandErrorDto::invalid(
+                    "kind",
+                    "Provider credentials must be API keys.",
+                ));
+            }
+            provider_enrollment::ProviderCredentialDestination::new(origin.kind, &origin.base_url)
+        })
+        .transpose()?;
+    let enrollment = destination.clone().map_or(
+        provider_enrollment::CredentialEnrollment::Unbound(request.kind),
+        provider_enrollment::CredentialEnrollment::Provider,
+    );
+    let enrolled = enroll_credential(
         window,
         &state,
         &store,
         &mut settings,
         &request.label,
-        request.kind,
+        enrollment,
         appearance,
     )
     .await?;
+    if let Some(destination) = destination {
+        let accepted = enrolled.provider_destination(&destination)?;
+        crate::provider_catalog::remember_credential_destination(
+            &state,
+            &settings,
+            accepted,
+            &enrolled.id,
+        )?;
+    }
     snapshot(state.inner(), &settings).await
 }
 
@@ -452,12 +482,12 @@ pub(crate) async fn enroll_credential(
     store: &SettingsStore,
     settings: &mut DesktopSettings,
     label: &str,
-    kind: CredentialKindSetting,
+    enrollment: provider_enrollment::CredentialEnrollment,
     appearance: provider_enrollment::DialogAppearanceInput,
-) -> Result<String, CommandErrorDto> {
+) -> Result<provider_enrollment::EnrolledCredential, CommandErrorDto> {
     let credential_id = Uuid::now_v7().to_string();
-    let secret =
-        provider_enrollment::request_managed_credential_secret(window, appearance.into()).await?;
+    let kind = enrollment.kind();
+    let (secret, destination) = enrollment.request(window, appearance.into()).await?;
     let credentials = DesktopCredentials::for_settings(state, store)?;
     stage_credential_write(store, settings, &credential_id)?;
     credentials.write(&credential_id, secret).await?;
@@ -481,7 +511,10 @@ pub(crate) async fn enroll_credential(
         credentials.delete(&credential_id).await?;
         return Err(error);
     }
-    Ok(credential_id)
+    Ok(provider_enrollment::EnrolledCredential {
+        id: credential_id,
+        destination,
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]

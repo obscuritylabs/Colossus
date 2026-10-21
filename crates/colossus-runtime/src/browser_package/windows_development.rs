@@ -114,7 +114,7 @@ pub(super) async fn install(
                     BrowserActionKind::Download,
                 ],
                 private_ca_trust: false,
-                client_identities: false,
+                client_identities: true,
                 restrictive_egress: false,
                 limits: limits.clone(),
             },

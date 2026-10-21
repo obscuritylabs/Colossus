@@ -70,6 +70,8 @@ mod provider_continuation;
 #[cfg(test)]
 mod provider_continuation_tests;
 mod provider_gateway;
+#[cfg(test)]
+mod provider_observation_tests;
 mod provider_setup;
 mod repository_tools;
 mod research_gateway;

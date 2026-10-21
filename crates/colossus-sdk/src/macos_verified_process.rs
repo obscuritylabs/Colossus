@@ -72,6 +72,9 @@ pub(super) async fn spawn_verified(
     expected: CodeDirectoryHash,
 ) -> SdkResult<(MacosChild, BootstrapPipes)> {
     let mut environment = Vec::new();
+    if crate::logging_options::debug_enabled() {
+        environment.push(OsString::from("COLOSSUS_LOG_LEVEL=debug"));
+    }
     if let Some(path) = crate::development_selector::selector()? {
         let mut selector = OsString::from(crate::development_selector::VARIABLE);
         selector.push("=");

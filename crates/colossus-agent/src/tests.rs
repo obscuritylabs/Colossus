@@ -65,6 +65,7 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
 
 mod communication;
 mod image_continuation;
+mod observation_projection;
 
 struct ScriptedProvider {
     turns: Mutex<VecDeque<Result<ProviderTurn, ModelProviderError>>>,
@@ -3072,6 +3073,24 @@ async fn resumed_session_restores_prior_messages_and_persists_new_turn() {
 
 #[tokio::test]
 async fn resumed_legacy_session_projects_oversized_tool_history_without_a_context_service() {
+    assert_legacy_tool_history_projection("echo", false).await;
+}
+
+#[tokio::test]
+async fn resumed_native_history_archives_before_provider_dispatch_without_a_context_service() {
+    for tool_name in ["computer.windows", "browser.snapshot"] {
+        assert_legacy_tool_history_projection(tool_name, true).await;
+    }
+}
+
+#[tokio::test]
+async fn resumed_legacy_native_history_keeps_unknown_outcomes_without_a_context_service() {
+    for tool_name in ["computer.windows", "browser.snapshot"] {
+        assert_legacy_tool_history_projection(tool_name, false).await;
+    }
+}
+
+async fn assert_legacy_tool_history_projection(tool_name: &str, archived: bool) {
     let provider = Arc::new(ScriptedProvider::new(vec![turn(vec![
         ProviderEvent::FinalOutput {
             text: "continued".into(),
@@ -3082,7 +3101,7 @@ async fn resumed_legacy_session_projects_oversized_tool_history_without_a_contex
     sessions
         .create_session("legacy-large", Some("legacy"), test_actor())
         .expect("session");
-    let legacy_messages = [
+    let mut legacy_messages = [
         ModelMessage {
             agent_message_origin: None,
             role: ModelMessageRole::User,
@@ -3097,7 +3116,7 @@ async fn resumed_legacy_session_projects_oversized_tool_history_without_a_contex
             tool_call_id: None,
             tool_calls: vec![ModelToolCall {
                 call_id: "legacy-large-call".into(),
-                name: "echo".into(),
+                name: tool_name.into(),
                 arguments: json!({"text": "old"}),
             }],
         },
@@ -3109,6 +3128,17 @@ async fn resumed_legacy_session_projects_oversized_tool_history_without_a_contex
             tool_calls: Vec::new(),
         },
     ];
+    if archived {
+        legacy_messages[2] = tool_result_observation_messages(&[ToolResult {
+            call_id: "legacy-large-call".into(),
+            name: tool_name.into(),
+            output: "x".repeat(900_000),
+            exit_code: 0,
+            images: Vec::new(),
+        }])
+        .remove(0);
+    }
+    let canonical_result = legacy_messages[2].clone();
     for message in legacy_messages {
         sessions
             .append_message("legacy-large", "legacy-run", message, test_actor())
@@ -3134,11 +3164,20 @@ async fn resumed_legacy_session_projects_oversized_tool_history_without_a_contex
         .find(|message| message.role == ModelMessageRole::Tool)
         .expect("projected legacy tool result");
     assert!(serde_json::to_vec(projected).expect("message").len() <= MAX_MODEL_TOOL_MESSAGE_BYTES);
+    let output: Value = serde_json::from_str(projected.content.plain_text().as_ref()).unwrap();
+    assert_eq!(
+        output
+            .pointer("/data/_colossusArchived")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        archived
+    );
+    colossus_contracts::validate_model_transcript(&requests[0].messages).unwrap();
     drop(requests);
     let canonical = sessions
         .list_messages("legacy-large")
         .expect("canonical messages");
-    assert_eq!(canonical[2].message.content.len(), 900_000);
+    assert_eq!(canonical[2].message, canonical_result);
 }
 
 #[tokio::test]

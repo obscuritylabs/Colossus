@@ -6,6 +6,57 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 #[async_trait]
 impl AgentRunLifecycle for RuntimeBrowserTools {
+    async fn complete_run(&self, run_id: &str) {
+        let run = self
+            .runs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(run_id)
+            .cloned();
+        let Some(run) = run else {
+            return;
+        };
+        if run.control.is_cancelled() {
+            self.finish_run(run_id).await;
+            return;
+        }
+        let guard = run.cleanup.lock().await;
+        if run.control.is_cancelled() {
+            drop(guard);
+            self.finish_run(run_id).await;
+            return;
+        }
+        if self.coordinator.complete_run(&run.actor).await.is_ok() && !run.control.is_cancelled() {
+            for session_id in run.sessions.keys() {
+                if let Ok(summary) = self.coordinator.get(&run.actor.binding, session_id)
+                    && summary.control == colossus_contracts::BrowserControlState::Paused
+                {
+                    tracing::info!(target: "colossus.browser", event = "session_suspended", run_id, session_id = %session_id, control_generation = summary.control_generation, "Browser session suspended after completed run");
+                }
+            }
+            super::native::lifecycle::suspend_run(&self.native, &run);
+            let removed = {
+                let mut runs = self.runs.lock().unwrap_or_else(|error| error.into_inner());
+                if run.control.is_cancelled() {
+                    false
+                } else {
+                    runs.remove(run_id);
+                    true
+                }
+            };
+            if removed {
+                return;
+            }
+        }
+        let category = if run.control.is_cancelled() {
+            "cancelled"
+        } else {
+            "cleanup_required"
+        };
+        tracing::warn!(target: "colossus.browser", event = "session_suspend_failed", run_id, category, "Browser completed-run retention stopped; closing owned sessions");
+        drop(guard);
+        self.finish_run(run_id).await;
+    }
     fn tools_offered(&self, context: &ExecutionContext) -> Result<(), ToolError> {
         self.identity.revalidate().map_err(|_| denied())?;
         let id = context.run_id.as_deref().ok_or_else(denied)?;
@@ -99,8 +150,8 @@ impl AgentRunLifecycle for RuntimeBrowserTools {
             .get(run_id)
             .cloned();
         if let Some(run) = run {
-            // Ephemeral run-owned contexts have no implicit background grant. Close
-            // after normal completion as well as cancellation; driver cleanup is bounded.
+            // Failed, cancelled and unsupported runs retain terminal cleanup.
+            // Successful supported conversations use complete_run's suspension fence.
             let _guard = run.cleanup.lock().await;
             if self.coordinator.finish_run(&run.actor).await.is_ok() {
                 super::native::lifecycle::retire_run(&self.native, &run);

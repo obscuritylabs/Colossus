@@ -118,6 +118,8 @@ struct Native {
     executions: AtomicUsize,
     closes: AtomicUsize,
     cancellations: AtomicUsize,
+    suspensions: AtomicUsize,
+    resumptions: AtomicUsize,
     blocking: AtomicBool,
     fail_close: AtomicBool,
     block_cancel: AtomicBool,
@@ -132,6 +134,24 @@ struct Native {
 
 #[async_trait]
 impl BrowserDriver for Native {
+    async fn suspend_session(
+        &self,
+        _: &BrowserSessionId,
+        _: u64,
+    ) -> Result<(), BrowserDriverError> {
+        self.suspensions.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    async fn resume_session(
+        &self,
+        _: &BrowserSessionId,
+        _: &str,
+        _: u64,
+        _: &BrowserDriverControl,
+    ) -> Result<(), BrowserDriverError> {
+        self.resumptions.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
     fn cancellation_disposition(&self) -> colossus_ports::BrowserCancelDisposition {
         if self.closes_context.load(Ordering::SeqCst) {
             colossus_ports::BrowserCancelDisposition::ClosesContext
@@ -522,6 +542,51 @@ async fn human_allocation_binds_current_writer_run_for_each_quiesced_generation(
         Err(BrowserDriverError::Denied)
     );
     assert_eq!(fixture.native.executions.load(Ordering::SeqCst), 2);
+    finish(fixture).await;
+}
+
+#[tokio::test]
+async fn authenticated_suspension_preserves_the_page_but_never_the_old_writer() {
+    let fixture = fixture().await;
+    let session = open_request().session_id;
+    fixture
+        .bridge
+        .open_session(open_request(), &control())
+        .await
+        .unwrap();
+    fixture
+        .bridge
+        .execute(command(1), &control())
+        .await
+        .unwrap();
+    fixture.bridge.suspend_session(&session, 1).await.unwrap();
+    assert_eq!(
+        fixture.bridge.execute(command(1), &control()).await,
+        Err(BrowserDriverError::Stale)
+    );
+    assert_eq!(
+        fixture
+            .bridge
+            .resume_session(&session, "next-run", 1, &control())
+            .await,
+        Err(BrowserDriverError::Stale)
+    );
+    fixture
+        .bridge
+        .resume_session(&session, "next-run", 2, &control())
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.bridge.execute(command(2), &control()).await,
+        Err(BrowserDriverError::Stale)
+    );
+    let mut next = command(2);
+    next.run_id = "next-run".into();
+    fixture.bridge.execute(next, &control()).await.unwrap();
+    assert_eq!(fixture.native.opens.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.native.executions.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.native.suspensions.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.native.resumptions.load(Ordering::SeqCst), 1);
     finish(fixture).await;
 }
 

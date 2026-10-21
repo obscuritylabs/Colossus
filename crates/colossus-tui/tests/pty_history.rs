@@ -307,6 +307,9 @@ impl InteractiveHost for FixtureHost {
             }))
             .await
             .map_err(|_| "stream receiver closed")?;
+        if std::env::var_os("COLOSSUS_TUI_SELECTION_FIXTURE").is_some() {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+        }
         events
             .send(HostEvent::Run(RunEventEnvelope {
                 schema_version: 1,
@@ -494,13 +497,8 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
         .expect("answer cursor-position query");
     writer.flush().expect("flush cursor-position answer");
 
-    let welcome_ready = screen_contains_within(
-        &output,
-        32,
-        120,
-        "What do you want to work on?",
-        Duration::from_secs(10),
-    );
+    let welcome_ready =
+        screen_contains_within(&output, 32, 120, "⚠ Security: 2", Duration::from_secs(10));
     let welcome = screen_contents(&output, 32, 120);
 
     writer.write_all(b"go\r").expect("submit first turn");
@@ -634,6 +632,78 @@ fn fixture_process() {
 #[test]
 fn enhanced_shift_enter_composes_a_multiline_turn_and_restores_keyboard_mode() {
     multiline_turn_and_keyboard_restoration(b"\x1b[13;2u");
+}
+
+#[test]
+fn text_selection_freezes_stream_redraw_and_restores_captured_input() {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("selection PTY");
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    command.args(["--exact", "fixture_process", "--nocapture"]);
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_STREAM_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_SELECTION_FIXTURE", "1");
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .expect("spawn selection fixture");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("selection reader");
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let reader_output = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        while let Ok(read) = reader.read(&mut buffer) {
+            if read == 0 {
+                break;
+            }
+            reader_output
+                .lock()
+                .expect("output")
+                .extend_from_slice(&buffer[..read]);
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("selection writer");
+    #[cfg(windows)]
+    answer_cursor_position_query(&output, &mut writer);
+    wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    writer
+        .write_all(b"inspect\r")
+        .expect("submit streaming turn");
+    writer.flush().expect("flush streaming turn");
+    wait_for_screen(&output, 24, 80, "commentary-before-tool");
+    writer
+        .write_all(b"\x1b[17~")
+        .expect("F6 selects native text");
+    writer.flush().expect("flush F6");
+    wait_for_screen(&output, 24, 80, "Select text");
+    wait_for_mouse_capture_count(&output, false, 1);
+    let frozen = output.lock().expect("output").clone();
+    thread::sleep(Duration::from_millis(1200));
+    assert_eq!(
+        *output.lock().expect("output"),
+        frozen,
+        "streaming/spinner redraw cleared native selection"
+    );
+    writer
+        .write_all(b"\x1b")
+        .expect("Escape returns to live output");
+    writer.flush().expect("flush Escape");
+    wait_for_screen(&output, 24, 80, "stream-final-row-30");
+    wait_for_mouse_capture_count(&output, true, 2);
+    writer.write_all(&[3, 3]).expect("ordinary Ctrl+C exits");
+    writer.flush().expect("flush exit");
+    let status = child.wait().expect("selection fixture status");
+    drop(writer);
+    drop(pair.master);
+    reader_thread.join().expect("selection reader thread");
+    assert!(status.success());
 }
 
 #[test]
@@ -1940,6 +2010,34 @@ fn wait_for_raw(output: &Arc<Mutex<Vec<u8>>>, needle: &[u8]) {
     wait_for_raw_count(output, needle, 1);
 }
 
+fn wait_for_mouse_capture_count(output: &Arc<Mutex<Vec<u8>>>, enabled: bool, expected: usize) {
+    // ConPTY projects native console-mode changes into a combined sequence;
+    // POSIX emulators receive Crossterm's individual mode commands.
+    let needles = if enabled {
+        [b"\x1b[?1000h".as_slice(), b"\x1b[?1003;1006h".as_slice()]
+    } else {
+        [b"\x1b[?1000l".as_slice(), b"\x1b[?1003;1006l".as_slice()]
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        let raw = output.lock().expect("output");
+        let count = needles
+            .iter()
+            .map(|needle| {
+                raw.windows(needle.len())
+                    .filter(|bytes| bytes == needle)
+                    .count()
+            })
+            .sum::<usize>();
+        if count >= expected {
+            return;
+        }
+        drop(raw);
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("PTY did not change mouse capture to {enabled} {expected} times");
+}
+
 fn raw_contains(raw: &[u8], needle: &[u8]) -> bool {
     raw.windows(needle.len()).any(|window| window == needle)
 }
@@ -2055,35 +2153,76 @@ fn scrollback_contains(output: &Arc<Mutex<Vec<u8>>>, rows: u16, cols: u16, needl
     })
 }
 
-fn native_scrollback_rows(output: &Arc<Mutex<Vec<u8>>>, rows: u16, cols: u16) -> Vec<String> {
-    let bytes = output.lock().expect("output").clone();
-    let mut parser = vt100::Parser::new(rows, cols, 512);
-    parser.process(&bytes);
-    parser.screen_mut().set_scrollback(usize::MAX);
-    let scrollback_len = parser.screen().scrollback();
-    (1..=scrollback_len)
-        .rev()
-        .filter_map(|offset| {
-            parser.screen_mut().set_scrollback(offset);
-            parser.screen().rows(0, cols).next()
-        })
-        .collect()
-}
-
 fn native_history_rows(
     output: &Arc<Mutex<Vec<u8>>>,
     rows: u16,
     cols: u16,
     live_marker: &str,
 ) -> Vec<String> {
-    let mut history = native_scrollback_rows(output, rows, cols);
-    let visible = screen_rows(output, rows, cols);
+    // Scrollback and the main screen must come from the same captured PTY frame.
+    let bytes = output.lock().expect("output").clone();
+    let mut parser = vt100::Parser::new(rows, cols, 512);
+    parser.process(&bytes);
+    parser.screen_mut().set_scrollback(usize::MAX);
+    let scrollback_len = parser.screen().scrollback();
+    let mut history = (1..=scrollback_len)
+        .rev()
+        .filter_map(|offset| {
+            parser.screen_mut().set_scrollback(offset);
+            parser.screen().rows(0, cols).next()
+        })
+        .collect::<Vec<_>>();
+    parser.screen_mut().set_scrollback(0);
+    let visible = parser.screen().rows(0, cols).collect::<Vec<_>>();
     let live_viewport = visible
         .iter()
         .rposition(|row| row.contains(live_marker))
         .expect("live viewport marker");
     history.extend_from_slice(&visible[..live_viewport]);
+    // ConPTY may restore an explicitly space-painted blank row with Erase Line.
+    // vt100 distinguishes those encodings; preserve every row and all nonblank
+    // bytes, including leading/trailing spaces and non-ASCII whitespace.
+    for row in &mut history {
+        if row.bytes().all(|byte| byte == b' ') {
+            row.clear();
+        }
+    }
     history
+}
+
+#[test]
+fn native_history_compares_blank_repaints_without_hiding_transcript_changes() {
+    let before = b"\x1b[1;1H left \x1b[2;1H                \x1b[3;1Hright \x1b[4;1HMessage";
+    let captured = |bytes: Vec<u8>| Arc::new(Mutex::new(bytes));
+    let baseline = captured(before.to_vec());
+    let expected = native_history_rows(&baseline, 6, 16, "Message");
+    assert_eq!(expected, [" left ", "", "right "]);
+
+    // This is the relevant ConPTY main-screen repaint after a real 1049 restore:
+    // an explicitly painted separator is re-encoded as an erased, empty row.
+    let mut restored = before.to_vec();
+    restored.extend_from_slice(b"\x1b[?1049htransient chrome\x1b[?1049l\x1b[2;1H\x1b[K");
+    let restored = captured(restored);
+    assert_eq!(screen_rows(&baseline, 6, 16)[1], "                ");
+    assert_eq!(screen_rows(&restored, 6, 16)[1], "");
+    assert_eq!(native_history_rows(&restored, 6, 16, "Message"), expected);
+
+    for (name, mutation) in [
+        ("missing row", b"\x1b[2;1H\x1b[M".as_slice()),
+        ("duplicated row", b"\x1b[2;1H\x1b[L".as_slice()),
+        ("nonblank change", b"\x1b[2;1Hchanged".as_slice()),
+        ("leading space lost", b"\x1b[1;1H\x1b[Kleft ".as_slice()),
+        ("trailing space lost", b"\x1b[1;1H\x1b[K left".as_slice()),
+        ("non-ASCII whitespace", "\x1b[2;1H\u{a0}".as_bytes()),
+    ] {
+        let mut changed = before.to_vec();
+        changed.extend_from_slice(mutation);
+        assert_ne!(
+            native_history_rows(&captured(changed), 6, 16, "Message"),
+            expected,
+            "history comparison hid {name}"
+        );
+    }
 }
 
 fn resized_native_history_rows(

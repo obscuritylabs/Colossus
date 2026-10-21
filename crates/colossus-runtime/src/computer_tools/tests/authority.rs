@@ -72,6 +72,10 @@ async fn paused_native_epoch_cannot_be_bypassed_with_close_open_or_stale_input()
         .await,
         Err(ToolError::Failed(message)) if message.contains(&ComputerDriverError::Stale.to_string())
     ));
+    assert!(matches!(
+        call(&executor, &context, "computer.snapshot", session(&status)).await,
+        Err(ToolError::Failed(message)) if message.contains(&ComputerDriverError::Paused.to_string())
+    ));
     call(&executor, &context, "computer.close", session(&status))
         .await
         .unwrap();

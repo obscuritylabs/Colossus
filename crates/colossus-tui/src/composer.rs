@@ -172,6 +172,12 @@ fn composer_hint(
     visible_rows: usize,
     width: usize,
 ) -> String {
+    if state.selecting_text {
+        return truncate_width_with_ellipsis(
+            " Select text · F6/Esc return · drag + Copy · view frozen; run continues ",
+            width,
+        );
+    }
     if state.docked_decision_active() {
         return truncate_width_with_ellipsis(" Draft preserved · respond above ", width);
     }
@@ -192,6 +198,7 @@ fn composer_hint(
         );
     }
     let draft_rows = layout.cursor_stops.last().map_or(1, |stop| stop.row + 1);
+    hints.push("F6 select text".to_owned());
     if draft_rows > visible_rows {
         hints.insert(0, format!("row {}/{}", layout.cursor_row + 1, draft_rows));
     }

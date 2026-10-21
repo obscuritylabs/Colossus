@@ -24,16 +24,14 @@ fn result(state: &FixtureState, target: &BrowserTarget) -> Value {
     json!({"session_id":state.target.lock().unwrap().as_ref().unwrap()["session_id"],"tab":target})
 }
 fn body(call: &str, result: &Value) -> Value {
-    let tools = [
-        "browser.tab.open",
-        "browser.tab.select",
-        "browser.tab.close",
-        "browser.tabs",
-        "browser.close",
-    ]
-    .map(|name| json!({"function":{"name":name.replace('.',"_")}}));
-    json!({"tools":tools,
-        "messages":[{"role":"tool","tool_call_id":call,"content":result.to_string()}]})
+    let name = match call {
+        "fixture-6" => "browser.tab.open",
+        "fixture-7" => "browser.tab.select",
+        "fixture-8" => "browser.tab.close",
+        "fixture-9" => "browser.tabs",
+        _ => "browser.close",
+    };
+    super::super::tool_evidence::test_body(name, call, result)
 }
 #[tokio::test]
 async fn native_tab_transcript_preserves_exact_owned_session_and_selected_targets() {

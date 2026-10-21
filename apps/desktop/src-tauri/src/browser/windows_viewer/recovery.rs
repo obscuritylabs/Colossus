@@ -36,6 +36,25 @@ impl BrowserManager {
     ) -> Result<Option<T>, CommandErrorDto> {
         let (view, _) = self.tab(id, scope)?;
         let _ = view.hide();
+        // Recovery can race the final canonical update. Preserve the already
+        // authenticated pixels privately before detach clears the live cache.
+        // Only terminal reconciliation may make this hidden copy inspectable.
+        let pending = self
+            .lock()?
+            .tabs
+            .iter()
+            .find(|tab| tab.scope == scope && tab.dto.id == id)
+            .and_then(|tab| tab.pending_completed_view.clone());
+        if pending.is_none()
+            && let Some(snapshot) = view.completed_snapshot().await.ok().flatten()
+            && let Some(tab) = self
+                .lock()?
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.scope == scope && tab.dto.id == id)
+        {
+            tab.pending_completed_view = Some(snapshot);
+        }
         view.close()
             .await
             .map_err(|_| error("The agent browser presentation is still closing."))?;

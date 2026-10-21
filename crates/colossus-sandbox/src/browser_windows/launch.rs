@@ -101,6 +101,7 @@ pub(super) async fn owned(
         drains: Vec::new(),
         fenced: Arc::clone(&fenced),
         closed: false,
+        suspended: false,
         cef_acknowledged: false,
         receipt: None,
     }));
@@ -110,6 +111,30 @@ pub(super) async fn owned(
     let result = start(&installation, &resources, &enrollment, &request, nonce).await;
     match result {
         Ok(bridge) if !control.is_cancelled() && !stopped.load(Ordering::Acquire) => {
+            // Retaining a completed page must not keep an idle host alive after
+            // the original network authority expires, even without a viewer.
+            let deadline = resources
+                .lock()
+                .await
+                .egress
+                .as_ref()
+                .ok_or(BrowserDriverError::OutcomeUnknown)?
+                .expires_at();
+            let expiry = Arc::downgrade(&resources);
+            let expiry_session = request.session_id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep_until(deadline.into()).await;
+                if let Some(resources) = expiry.upgrade() {
+                    let mut resources = resources.lock().await;
+                    if !resources.closed {
+                        if resources.cleanup().await.is_ok() {
+                            tracing::info!(target: "colossus.browser", event = "session_expired", session_id = %expiry_session, "Browser session closed at its original network deadline");
+                        } else {
+                            tracing::warn!(target: "colossus.browser", event = "session_expiry_cleanup_failed", session_id = %expiry_session, category = "cleanup_required", "Expired browser session cleanup was not acknowledged");
+                        }
+                    }
+                }
+            });
             Ok(Arc::new(Driver {
                 bridge,
                 resources,

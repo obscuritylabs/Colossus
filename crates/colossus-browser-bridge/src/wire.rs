@@ -46,6 +46,15 @@ pub(crate) enum Request {
         session_id: BrowserSessionId,
         through_generation: u64,
     },
+    Suspend {
+        session_id: BrowserSessionId,
+        through_generation: u64,
+    },
+    Resume {
+        session_id: BrowserSessionId,
+        run_id: String,
+        generation: u64,
+    },
     Close {
         session_id: BrowserSessionId,
     },
@@ -65,7 +74,10 @@ impl Request {
             Self::BeginUpload { request } => Some(&request.command.session_id),
             Self::WriteUpload { request } => Some(&request.transfer.session_id),
             Self::ConfirmNativeHandoff { request } => Some(&request.session_id),
-            Self::Cancel { session_id, .. } | Self::Close { session_id } => Some(session_id),
+            Self::Cancel { session_id, .. }
+            | Self::Close { session_id }
+            | Self::Suspend { session_id, .. }
+            | Self::Resume { session_id, .. } => Some(session_id),
         }
     }
 }

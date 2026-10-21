@@ -100,6 +100,22 @@ async fn verify_continuation(image_inputs: bool, name: &'static str, size_bytes:
     {
         let requests = provider.inner.requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].messages.len(),
+            4,
+            "derived native image omission retains canonical sequence slots"
+        );
+        if !image_inputs {
+            assert!(requests[1].messages.iter().any(|message| {
+                message.role == ModelMessageRole::System
+                    && serde_json::from_str::<Value>(&message.content.plain_text()).is_ok_and(
+                        |value| {
+                            value["_colossusArchivedToolImage"] == true
+                                && value["reason"] == "image_inputs_unavailable"
+                        },
+                    )
+            }));
+        }
         let observation = requests[1]
             .messages
             .iter()
@@ -131,7 +147,7 @@ async fn verify_continuation(image_inputs: bool, name: &'static str, size_bytes:
     let next = Arc::new(ImageProvider {
         images: true,
         inner: ScriptedProvider::new(vec![turn(vec![ProviderEvent::FinalOutput {
-            text: "I can review the earlier capture.".into(),
+            text: "I will obtain a fresh capture.".into(),
         }])]),
     });
     let restarted = AgentService::new(
@@ -139,7 +155,7 @@ async fn verify_continuation(image_inputs: bool, name: &'static str, size_bytes:
         Arc::clone(&next) as Arc<dyn ModelProvider>,
         Arc::new(StaticToolRegistry::builtins(&[name.into()]).unwrap()),
         Arc::new(executor),
-        restored,
+        Arc::clone(&restored) as Arc<dyn SessionRepository>,
     );
     restarted
         .run_in_session(
@@ -152,23 +168,51 @@ async fn verify_continuation(image_inputs: bool, name: &'static str, size_bytes:
         .await
         .unwrap();
     let requests = next.inner.requests.lock().unwrap();
-    assert!(requests[0].messages.iter().any(|message| {
-        message.role == ModelMessageRole::ToolObservation
-            && message
-                .content
-                .images()
-                .any(|reference| reference == &expected_image)
+    let messages = &requests[0].messages;
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.content.images().next().is_none())
+    );
+    assert!(messages.iter().any(|message| {
+        message.role == ModelMessageRole::Tool
+            && message.tool_call_id.as_deref() == Some("capture-current-page")
+            && serde_json::from_str::<Value>(&message.content.plain_text())
+                .is_ok_and(|value| value["data"]["_colossusArchived"] == true)
     }));
+    let archived_image = messages
+        .iter()
+        .filter(|message| message.role == ModelMessageRole::System)
+        .filter_map(|message| serde_json::from_str::<Value>(&message.content.plain_text()).ok())
+        .find(|value| value["images"].is_array())
+        .expect("prior native pixels become a fixed provenance marker");
+    assert_eq!(archived_image["images"][0]["sha256"], expected_image.sha256);
+    // Derived compaction must never rewrite the durable evidence, even after a
+    // text-only turn or reconstruction under an image-capable model.
+    assert!(
+        restored
+            .list_messages(session_id)
+            .unwrap()
+            .iter()
+            .any(|record| {
+                record.message.role == ModelMessageRole::ToolObservation
+                    && record
+                        .message
+                        .content
+                        .images()
+                        .any(|reference| reference == &expected_image)
+            })
+    );
 }
 
 #[tokio::test]
-async fn released_screenshot_reaches_the_next_turn_and_survives_restart() {
+async fn released_screenshot_reaches_active_turn_then_archives_after_restart() {
     verify_continuation(true, "browser.screenshot", 1024).await;
     verify_continuation(true, "computer.screenshot", 16 * 1_048_576).await;
 }
 
 #[tokio::test]
-async fn text_only_continuation_preserves_capture_for_later_image_models() {
+async fn text_only_turn_preserves_canonical_capture_without_resending_old_pixels() {
     verify_continuation(false, "browser.screenshot", 1024).await;
     verify_continuation(false, "computer.screenshot", 16 * 1_048_576).await;
 }

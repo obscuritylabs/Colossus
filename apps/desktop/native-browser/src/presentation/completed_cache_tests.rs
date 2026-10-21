@@ -1,5 +1,13 @@
 use super::*;
 
+static BUDGET_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+pub(super) fn exclusive_budget() -> std::sync::MutexGuard<'static, ()> {
+    let guard = BUDGET_TEST_LOCK.lock().unwrap();
+    assert_eq!(RETAINED_BYTES.load(Ordering::Acquire), 0);
+    guard
+}
+
 fn frame(viewport: u64) -> Frame {
     Frame {
         lease: Lease {
@@ -19,6 +27,7 @@ fn frame(viewport: u64) -> Frame {
 
 #[test]
 fn budget_is_atomic_bounded_and_rejects_overflow() {
+    let _exclusive = exclusive_budget();
     let bytes = AtomicUsize::new(0);
     assert!(!reserve(&bytes, 0, 32));
     assert!(reserve(&bytes, 16, 32));
@@ -34,10 +43,20 @@ fn accept(cache: &CompletedCache, viewport: u64) {
 }
 
 #[test]
-fn completion_rejects_a_previous_document_or_viewport_and_seals_cache() {
+fn completion_keeps_last_same_document_pixels_after_resize_and_seals_cache() {
+    let _exclusive = exclusive_budget();
     let cache = CompletedCache::default();
     accept(&cache, 1);
-    assert!(cache.take(frame(2).lease).is_none());
+    cache.observed(frame(2).lease, PageState::default());
+    assert_eq!(
+        cache
+            .take(frame(2).lease)
+            .unwrap()
+            .frame
+            .lease
+            .viewport_generation,
+        1
+    );
     accept(&cache, 2);
     assert!(cache.take(frame(2).lease).is_none());
 
@@ -50,6 +69,7 @@ fn completion_rejects_a_previous_document_or_viewport_and_seals_cache() {
 
 #[test]
 fn extraction_moves_only_latest_accepted_frame_and_close_clears_it() {
+    let _exclusive = exclusive_budget();
     let cache = CompletedCache::default();
     accept(&cache, 1);
     accept(&cache, 2);
@@ -64,6 +84,7 @@ fn extraction_moves_only_latest_accepted_frame_and_close_clears_it() {
 
 #[test]
 fn frame_without_matching_authenticated_metadata_is_not_retained() {
+    let _exclusive = exclusive_budget();
     let cache = CompletedCache::default();
     cache.activate(frame(1).lease);
     cache.observed(frame(1).lease, PageState::default());
@@ -73,6 +94,7 @@ fn frame_without_matching_authenticated_metadata_is_not_retained() {
 
 #[test]
 fn old_observations_and_paints_cannot_readmit_a_known_invalid_document() {
+    let _exclusive = exclusive_budget();
     let cache = CompletedCache::default();
     accept(&cache, 1);
     cache.invalidate(frame(1).lease);
@@ -82,6 +104,7 @@ fn old_observations_and_paints_cannot_readmit_a_known_invalid_document() {
 
 #[test]
 fn late_old_results_cannot_clear_or_relabel_a_new_document() {
+    let _exclusive = exclusive_budget();
     let cache = CompletedCache::default();
     accept(&cache, 1);
     cache.invalidate(frame(1).lease);
@@ -108,6 +131,7 @@ fn late_old_results_cannot_clear_or_relabel_a_new_document() {
 
 #[test]
 fn same_document_metadata_belongs_to_the_frame_that_was_actually_accepted() {
+    let _exclusive = exclusive_budget();
     let cache = CompletedCache::default();
     let lease = frame(1).lease;
     cache.activate(lease);
@@ -146,6 +170,7 @@ fn same_document_metadata_belongs_to_the_frame_that_was_actually_accepted() {
 
 #[test]
 fn new_authority_resets_epoch_fence_and_rejects_old_authority_results() {
+    let _exclusive = exclusive_budget();
     let cache = CompletedCache::default();
     let old = frame(90);
     cache.activate(old.lease);

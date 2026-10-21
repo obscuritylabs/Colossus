@@ -13,6 +13,9 @@
 #include <vector>
 #include <limits>
 #include <cstdio>
+#if defined(OS_WIN)
+#include "system_trust_win.h"
+#endif
 #if defined(COLOSSUS_CEF_TEST_CUSTODY)
 #include "custody_linux.h"
 #endif
@@ -276,6 +279,36 @@ class Client final : public CefClient, public CefLifeSpanHandler,
       callback->Continue();
       return true;
     }
+#if defined(OS_WIN)
+    SystemTrustDiagnostic diagnostic;
+    CefURLParts parts;
+    if (info && CefParseURL(url, parts)) {
+      const auto certificate = info->GetX509Certificate();
+      if (certificate && certificate->GetIssuerChainSize() < 64) {
+        CefX509Certificate::IssuerChainBinaryList encoded;
+        certificate->GetDEREncodedIssuerChain(encoded);
+        encoded.insert(encoded.begin(), certificate->GetDEREncoded());
+        std::vector<std::vector<uint8_t>> chain;
+        size_t total = 0;
+        for (const auto& der : encoded) {
+          if (!der || !der->GetSize() || der->GetSize() > 65536 ||
+              (total += der->GetSize()) > 512 * 1024) { chain.clear(); break; }
+          chain.emplace_back(der->GetSize());
+          if (der->GetData(chain.back().data(), chain.back().size(), 0) != chain.back().size()) {
+            chain.clear(); break;
+          }
+        }
+        diagnostic = DiagnoseSystemServerTrust(CefString(&parts.host).ToWString(), chain);
+      }
+    }
+    // Only fixed categories and native numeric status cross the diagnostic pipe.
+    // No host, URL, certificate subject, fingerprint or private key is logged.
+    // Windows agreement is diagnostic and never overrides Chromium's decision.
+    std::fprintf(stderr, "EVIDENCE native-host-tls cef_error=%d cert_status=%u os_chain=%lu os_policy=%lu verification=%s\n",
+        static_cast<int>(error), info ? static_cast<unsigned>(info->GetCertStatus()) : 0,
+        diagnostic.chain_errors, diagnostic.policy_error, SystemTrustName(diagnostic.category));
+    std::fflush(stderr);
+#endif
     Emit(tab_, generation_, COLOSSUS_CEF_TLS_FAILED); return false;
   }
   bool OnSelectClientCertificate(CefRefPtr<CefBrowser>, bool proxy,

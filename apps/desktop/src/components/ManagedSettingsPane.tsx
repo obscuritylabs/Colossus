@@ -2933,6 +2933,14 @@ export function ManagedSettingsPane({
       expectedRevision: snapshot.globalConfiguration.revision,
       label,
       kind: forProvider ? ("api_key" as const) : credentialKind,
+      ...(forProvider
+        ? {
+            providerOrigin: {
+              kind: forProvider.kind,
+              baseUrl: forProvider.baseUrl.trim(),
+            },
+          }
+        : {}),
     };
     const previousIds = new Set(
       snapshot.globalConfiguration.credentials.map(({ id }) => id),

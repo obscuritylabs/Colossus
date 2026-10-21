@@ -98,9 +98,54 @@ pub(crate) fn run() {
     cancellation(mtm, true);
     shutdown(mtm);
     keyboard_tests::run(mtm);
+    provider_destination(mtm);
     println!(
         "AppKit native acceptance passed: exact input boundaries, rejected overflow, cleared controls, parent close, cancellation, keyboard actions and accessible state."
     );
+}
+
+fn provider_destination(mtm: MainThreadMarker) {
+    let parent = parent(mtm);
+    let (completion, mut result) = Completion::acquire().unwrap();
+    let endpoint = "https://models.example.test:8443/custom/v1";
+    let context = crate::ProviderCredentialContext::new(
+        crate::CredentialProvider::AnthropicMessages,
+        endpoint,
+    )
+    .unwrap();
+    super::open_sheet_for(
+        &parent,
+        mtm,
+        Arc::new(AtomicBool::new(false)),
+        completion,
+        DialogAppearance::default(),
+        crate::purpose::Purpose::Token,
+        Some(context),
+    );
+    let controller = controller();
+    let (panel, input) = {
+        let borrowed = controller.ivars().session.borrow();
+        let session = borrowed.as_ref().unwrap();
+        (session.panel.clone(), session.input.clone())
+    };
+    let container = panel.contentView().unwrap();
+    let fields = container
+        .subviews()
+        .iter()
+        .filter_map(|view| {
+            view.downcast_ref::<objc2_app_kit::NSTextField>()
+                .map(|field| field.stringValue().to_string())
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        fields
+            .iter()
+            .any(|value| value == "Use this token for Anthropic Messages at:")
+    );
+    assert!(fields.iter().any(|value| value == endpoint));
+    assert_eq!(input.stringValue().length(), 0);
+    parent.close();
+    assert!(matches!(result.try_recv(), Ok(Err(PromptError::Cancelled))));
 }
 
 fn parent(mtm: MainThreadMarker) -> Retained<NSWindow> {

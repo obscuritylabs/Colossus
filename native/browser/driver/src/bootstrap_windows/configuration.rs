@@ -100,7 +100,7 @@ impl Configuration {
             || self.presentation.is_some() != presentation
             || !presentation
             || self.enrollment.capabilities.private_ca_trust
-            || self.enrollment.capabilities.client_identities
+            || (self.enrollment.capabilities.client_identities && !self.user_development())
             || self.pki.is_some()
             || self.enrollment.capabilities.restrictive_egress == self.user_development()
         {

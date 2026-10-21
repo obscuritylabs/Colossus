@@ -134,7 +134,11 @@ impl AgentService {
         if owns_run.load(Ordering::Acquire)
             && let Some(lifecycle) = &self.lifecycle
         {
-            lifecycle.finish_run(&owned_run_id).await;
+            if result.is_ok() && inbox_closed.is_ok() {
+                lifecycle.complete_run(&owned_run_id).await;
+            } else {
+                lifecycle.finish_run(&owned_run_id).await;
+            }
         }
         drop(guard);
         inbox_closed?;
@@ -341,10 +345,6 @@ impl AgentService {
                 "{error}; start a new session or repair this legacy session from durable effect evidence"
             ),
         })?;
-        messages = project_model_tool_observations(&messages);
-        if !route.capabilities.image_inputs {
-            messages.retain(|message| message.role != ModelMessageRole::ToolObservation);
-        }
         if !route.capabilities.tool_calls
             && messages.iter().any(|message| {
                 matches!(
@@ -521,17 +521,48 @@ impl AgentService {
                 if let Some(batch) = &inbox_batch {
                     messages.extend(colossus_ports::agent_input_messages(batch));
                 }
+                // Keep canonical evidence for persistence and provider-state checks.
+                // Select required signed replay before shedding current-turn state.
+                let mut observation_source = messages.clone();
+                if !route.capabilities.image_inputs {
+                    colossus_tools::omit_unsupported_model_tool_images(&mut observation_source);
+                }
+                let mut projected =
+                    colossus_tools::project_model_tool_observations_preserving_current_turn(
+                        &observation_source,
+                    );
                 let mut continuation_plan = self.provider.continuation_plan_with_options(
                     role,
                     &ModelRequest {
                         instructions: instructions.clone(),
-                        messages: messages.clone(),
+                        messages: projected.clone(),
                         tools: turn_definitions.clone(),
                         max_output_tokens: None,
                     },
                     &context,
                     &scope.agent_options,
                 )?;
+                if !continuation_plan
+                    .as_ref()
+                    .and_then(|plan| plan.selected.as_ref())
+                    .is_some_and(|selected| selected.replay)
+                {
+                    let compacted = project_model_tool_observations(&observation_source);
+                    if compacted != projected {
+                        projected = compacted;
+                        continuation_plan = self.provider.continuation_plan_with_options(
+                            role,
+                            &ModelRequest {
+                                instructions: instructions.clone(),
+                                messages: projected.clone(),
+                                tools: turn_definitions.clone(),
+                                max_output_tokens: None,
+                            },
+                            &context,
+                            &scope.agent_options,
+                        )?;
+                    }
+                }
                 let prepared = if let Some(preparer) = &self.context_preparer {
                     let prepared = preparer
                         .prepare(ContextPreparationRequest {
@@ -540,7 +571,7 @@ impl AgentService {
                                 .and_then(|plan| plan.selected.clone()),
                             session_id: session_id.clone(),
                             instructions: instructions.clone(),
-                            messages: messages.clone(),
+                            messages: projected.clone(),
                             tools: turn_definitions.clone(),
                             route: route.clone(),
                             context: context.clone(),
@@ -618,10 +649,15 @@ impl AgentService {
                     }
                     prepared.messages
                 } else {
-                    if let Some(plan) = &mut continuation_plan {
+                    if let Some(plan) = &mut continuation_plan
+                        && !plan
+                            .selected
+                            .as_ref()
+                            .is_some_and(|selected| selected.replay)
+                    {
                         plan.selected = None;
                     }
-                    messages.clone()
+                    projected
                 };
                 if control.is_some_and(RunControl::is_cancelled) {
                     return self
@@ -1715,15 +1751,7 @@ impl AgentService {
             }
 
             let tool_messages = tool_result_observation_messages(&tool_results);
-            next_messages.extend(
-                tool_messages
-                    .iter()
-                    .filter(|message| {
-                        route.capabilities.image_inputs
-                            || message.role != ModelMessageRole::ToolObservation
-                    })
-                    .cloned(),
-            );
+            next_messages.extend(tool_messages.iter().cloned());
             validate_model_transcript(&next_messages).map_err(|error| {
                 AgentError::Configuration(format!(
                     "provider returned an invalid tool transcript: {error}"

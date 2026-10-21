@@ -328,6 +328,9 @@ async fn launch(
     if let Some(path) = crate::development_selector::selector()? {
         command.env(crate::development_selector::VARIABLE, path);
     }
+    if crate::logging_options::debug_enabled() {
+        command.env("COLOSSUS_LOG_LEVEL", "debug");
+    }
     colossus_windows_native::configure_suspended_process(command.as_std_mut());
     let mut child = command.spawn().map_err(|_| SdkError::SidecarFailed)?;
     let (job, process_id) =

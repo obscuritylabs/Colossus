@@ -66,7 +66,7 @@ pub(crate) fn revalidate_admission(
     if target != root {
         target.revalidate(context)?;
         if !owned_modal(root, target) {
-            return Err(Error::Denied);
+            return Err(Error::TargetRestricted);
         }
     }
     Ok(())
@@ -150,7 +150,7 @@ fn allowed_process(
     context: &TrustedComputerContext,
 ) -> Result<(), Error> {
     if identity.pid == std::process::id() || context.protected.contains(identity) {
-        return Err(Error::Denied);
+        return Err(Error::TargetRestricted);
     }
     let mut target_session = 0;
     let mut own_session = 0;
@@ -159,7 +159,7 @@ fn allowed_process(
     // SAFETY: own process identifier and valid stack output.
     let own_ok = unsafe { ProcessIdToSessionId(std::process::id(), &mut own_session) };
     if target_ok == 0 || own_ok == 0 || target_session == 0 || target_session != own_session {
-        return Err(Error::Denied);
+        return Err(Error::TargetRestricted);
     }
     ordinary_process(identity.pid)?;
     for parent in ancestors(identity.pid)? {
@@ -168,7 +168,7 @@ fn allowed_process(
             .iter()
             .any(|p| p.pid == parent && process(parent).ok().as_ref() == Some(p))
         {
-            return Err(Error::Denied);
+            return Err(Error::TargetRestricted);
         }
     }
     Ok(())
@@ -183,7 +183,7 @@ fn ordinary_process(pid: u32) -> Result<(), Error> {
     // SAFETY: query process token to reject elevated targets and hosts.
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if handle.is_null() {
-        return Err(Error::Denied);
+        return Err(Error::TargetRestricted);
     }
     let mut token = null_mut();
     // SAFETY: valid query process and token output.
@@ -191,7 +191,7 @@ fn ordinary_process(pid: u32) -> Result<(), Error> {
     // SAFETY: own process handle.
     unsafe { CloseHandle(handle) };
     if opened == 0 {
-        return Err(Error::Denied);
+        return Err(Error::TargetRestricted);
     }
     let mut elevation = TOKEN_ELEVATION::default();
     let mut bytes = 0;
@@ -208,7 +208,7 @@ fn ordinary_process(pid: u32) -> Result<(), Error> {
     // SAFETY: own token.
     unsafe { CloseHandle(token) };
     if ok == 0 || elevation.TokenIsElevated != 0 {
-        return Err(Error::Denied);
+        return Err(Error::TargetRestricted);
     }
     Ok(())
 }
@@ -259,7 +259,7 @@ pub(crate) fn inspect(hwnd: HWND, context: &TrustedComputerContext) -> Result<Wi
             || GetAncestor(hwnd, GA_ROOT) != hwnd
     };
     if unavailable {
-        return Err(Error::Denied);
+        return Err(Error::Stale);
     }
     let mut cloaked = 0u32;
     // SAFETY: fixed DWM attribute output, no fallback to occluding desktop pixels.

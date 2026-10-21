@@ -8,6 +8,129 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.11.9] - 2026-10-21
+
+### Highlights
+
+- Browser sessions retain their page between agent turns, resume with fresh control
+  authority, and keep the last accepted view available for inspection.
+- Agent context retires superseded browser and computer observations during a task
+  and removes exact duplicate read results. Provider continuation respects protected
+  thinking and retires saved Responses state when its observations become obsolete.
+- Windows browser previews use system certificate trust and offer native, exact-origin
+  approval for Windows client certificates. Private keys stay in the Windows store.
+- Desktop and provider operations emit bounded, rotating local INFO logs; DEBUG is
+  available through `COLOSSUS_LOG_LEVEL=debug`. Request bodies and credentials are excluded.
+- Desktop access-profile recovery, capabilities inventory, provider enrollment,
+  Anthropic response spacing, and terminal text selection are improved. The redundant
+  Desktop Library destination is removed while session resources remain available.
+
+<!-- colossus:release-notes base=v0.11.8 -->
+
+### Merged changes
+
+#### Added
+
+- **http:** add bounded redirects and Desktop settings ([#289](https://github.com/obscuritylabs/Colossus/pull/289))
+- **ui:** unify web workspace management and standalone Goal mode ([#287](https://github.com/obscuritylabs/Colossus/pull/287))
+- **agents:** add durable inboxes and A2A application edge ([#288](https://github.com/obscuritylabs/Colossus/pull/288))
+- **models:** switch models and reasoning in Desktop, VS Code and TUI ([#295](https://github.com/obscuritylabs/Colossus/pull/295))
+- **provider:** add native Anthropic Messages support ([#297](https://github.com/obscuritylabs/Colossus/pull/297))
+- **vscode:** bundle and manage local runtimes in the sidebar ([#296](https://github.com/obscuritylabs/Colossus/pull/296))
+- **images:** add local image viewing and activity previews ([#298](https://github.com/obscuritylabs/Colossus/pull/298))
+- **browser:** connect owned Chromium hosts to Core and Desktop ([#290](https://github.com/obscuritylabs/Colossus/pull/290))
+- **browser:** add runtime settings and bundled browser guidance ([637e25c](https://github.com/obscuritylabs/Colossus/commit/637e25ce8e326fb1c9b8e25d0c8ea3f7bd00cd71))
+- **computer:** add opt-in Windows desktop control ([c229164](https://github.com/obscuritylabs/Colossus/commit/c229164951faf8203c309dada2f1b6249935908b))
+- **windows:** expose read-only process job accounting ([c3e4a41](https://github.com/obscuritylabs/Colossus/commit/c3e4a4194b3729a3554b3a83a5989443d2273692))
+- **windows:** expose read-only process job accounting ([8c3d266](https://github.com/obscuritylabs/Colossus/commit/8c3d266f84c8967a29c800430f5e6985b795ef20))
+- **browser:** package Windows preview and preserve agent views ([c8d82a8](https://github.com/obscuritylabs/Colossus/commit/c8d82a825f4a2dd29bcbf99b30e7604f8b23a97a))
+- **browser:** package Windows preview and preserve agent views ([004ea37](https://github.com/obscuritylabs/Colossus/commit/004ea37e916574ebe19438d5777e0289dd87e959))
+
+#### Fixed
+
+- **plugins:** avoid OCI packaging for local snapshots ([#293](https://github.com/obscuritylabs/Colossus/pull/293))
+- **desktop:** apply access settings without redundant prompts ([#294](https://github.com/obscuritylabs/Colossus/pull/294))
+- **browser:** preserve input gestures and agent viewer continuity ([b6c57f2](https://github.com/obscuritylabs/Colossus/commit/b6c57f23ddb3438253066e65bac75e4be0f33dd1))
+- **browser:** polish capability settings presentation ([492935a](https://github.com/obscuritylabs/Colossus/commit/492935a47ae59728e106512a82858f6b57bd3b8e))
+- **browser:** retain focus after inheriting settings ([5b39d62](https://github.com/obscuritylabs/Colossus/commit/5b39d62ff8597d71ffd4d9b963cc0a6e248c5904))
+- **browser:** load public pages and reveal agent tabs ([9989d72](https://github.com/obscuritylabs/Colossus/commit/9989d72d8e93150cd8b807b538c5c0d17f2508c0))
+- **desktop:** preserve browser views and clarify agent settings ([88cc3d1](https://github.com/obscuritylabs/Colossus/commit/88cc3d1847d27e08972b005a5bf1a4a250239dbe))
+- **desktop:** harden credential labels and native acceptance fixtures ([b3cc106](https://github.com/obscuritylabs/Colossus/commit/b3cc106fcce290adbc229e014117a772e3a2f584))
+- **desktop:** upgrade Tao to prevent Windows keyboard deadlocks ([e9a2b80](https://github.com/obscuritylabs/Colossus/commit/e9a2b8061f0e82cde8cb9fccdc15767fedb424bc))
+- **browser:** retain completed views and show agent control ([7111d76](https://github.com/obscuritylabs/Colossus/commit/7111d768d954309054ea7afef776571291d2f464))
+- **browser:** retain acknowledged leases during viewport recovery ([54ab8f3](https://github.com/obscuritylabs/Colossus/commit/54ab8f3759a7d7c5094c7620a1c4e0afa7e0607f))
+- **browser:** retire expired network sessions with clear recovery ([46444f4](https://github.com/obscuritylabs/Colossus/commit/46444f44c298c9bf575d747c69606e3516e68492))
+- **codex:** update protocol and retain stream error diagnostics ([4e63bed](https://github.com/obscuritylabs/Colossus/commit/4e63bed240ec22a8ab1a3cb4f10b930cb48524c9))
+- **computer:** retain verified Windows root for capture helpers ([6a5a730](https://github.com/obscuritylabs/Colossus/commit/6a5a7307fb05cc790ae41aa46521dfa040b05eb5))
+- **desktop:** include computer tools in managed application grants ([1dab1a4](https://github.com/obscuritylabs/Colossus/commit/1dab1a4d316e4ccbf5fcf17911d9a7ca8a1de128))
+- **tools:** accept attached search term prefixes ([3337a92](https://github.com/obscuritylabs/Colossus/commit/3337a924de5a408b6816837c1f726b7b28c5bc87))
+- **computer:** settle foreground activation and preserve input markers ([fcd03c5](https://github.com/obscuritylabs/Colossus/commit/fcd03c5f67e4be4ed8c9da77d52f261055400b6b))
+- **browser:** allow bounded slow metadata reads without disconnecting ([2a4c18a](https://github.com/obscuritylabs/Colossus/commit/2a4c18a1a1400410c7179a356df9892ab682261b))
+- **browser:** allow bounded slow metadata reads without disconnecting ([055a7c8](https://github.com/obscuritylabs/Colossus/commit/055a7c815807307272ae011e3726e59342e45c3d))
+- **desktop:** restore new-thread composer from inbox views ([2c824b4](https://github.com/obscuritylabs/Colossus/commit/2c824b49ce8c800d41c8ac6db4a2e4de6390f99a))
+- **desktop:** restore new-thread composer from inbox views ([ca16256](https://github.com/obscuritylabs/Colossus/commit/ca162568c9c8b784b907c9590b526a6e45e817d9))
+- **release:** recognize the Windows browser preview packager ([8e07db6](https://github.com/obscuritylabs/Colossus/commit/8e07db6a12eeca366e3af34799b3ac9e0198b01c))
+- **release:** recognize the Windows browser preview packager ([164d178](https://github.com/obscuritylabs/Colossus/commit/164d17807d6911317d18568821b436011c934a8f))
+- **build:** inline ARM64 musl C atomics for static linking ([26f13b9](https://github.com/obscuritylabs/Colossus/commit/26f13b9301180e1693fd1d668fbaa3f20337344b))
+- **desktop:** keep native browser behind image previews ([523f54c](https://github.com/obscuritylabs/Colossus/commit/523f54cc0c33aad8bf366238b58c9c6c2b7da337))
+- **computer:** enforce explicit operator control and explain failures ([a81071d](https://github.com/obscuritylabs/Colossus/commit/a81071d5503b4f89da5f37b37ed92b27c75ed923))
+- **computer:** narrow requested read counts to configured limits ([15a6ee7](https://github.com/obscuritylabs/Colossus/commit/15a6ee7ffe529ff6556ea99a52840f8b1a07d05d))
+- **provider:** project Anthropic-compatible tool schemas ([#301](https://github.com/obscuritylabs/Colossus/pull/301))
+- **windows:** repair browser startup and computer focus guidance ([d714d59](https://github.com/obscuritylabs/Colossus/commit/d714d59f7d5c784b21ff9cdc5212a1e5adfb5ea8))
+- **ci:** scope long browser paths to the runtime fixture ([9e94ffe](https://github.com/obscuritylabs/Colossus/commit/9e94ffe4d8fd5e6cd2c2f6398287ad5b77fde301))
+- **browser:** apply terminal viewer revocation once ([02076cf](https://github.com/obscuritylabs/Colossus/commit/02076cfd6ef9ada866525b14f118a072f3b6390e))
+- **browser:** retire viewers after explicit session cleanup ([41473f9](https://github.com/obscuritylabs/Colossus/commit/41473f92e690a439beb1efbce53d30eca35983a5))
+- **browser:** preserve viewer recovery between sessions ([cd0a8d5](https://github.com/obscuritylabs/Colossus/commit/cd0a8d5dfa03233526a96aa2489ac03f29686138))
+- **browser:** preserve visible views across superseded hides ([dbfeee0](https://github.com/obscuritylabs/Colossus/commit/dbfeee026554eebfffd910da7e119bd3fe759792))
+- **grpc:** offload bounded artifact reads ([6a9c4f8](https://github.com/obscuritylabs/Colossus/commit/6a9c4f89b6bc5d40ac3689d0400cbefb142f9e45))
+- **browser:** coalesce acknowledged hidden leases ([4df6676](https://github.com/obscuritylabs/Colossus/commit/4df6676ea8ff9960e5067d4f862bb015034e778f))
+- resolve desktop testing regressions and add native logs ([dee9362](https://github.com/obscuritylabs/Colossus/commit/dee93622a2a8c1fe7518d3fb9112c859f3f514ec))
+- propagate native navigation failures before observations ([0c1d39f](https://github.com/obscuritylabs/Colossus/commit/0c1d39f1e7c9ed314321cbdec924e12fabf01c83))
+- reuse retained browser frame budgets on replacement ([a67388e](https://github.com/obscuritylabs/Colossus/commit/a67388e36c685c529cc5c6cc38c388ad6f807f37))
+- bound tool context and add Windows client identity review ([40a8923](https://github.com/obscuritylabs/Colossus/commit/40a8923e5f1c0c28d2a2a3e8ddf637d0bd8552ec))
+
+#### Security
+
+- **dependencies:** replace vulnerable desktop and credential backends ([3cea322](https://github.com/obscuritylabs/Colossus/commit/3cea3224e398e78848c2315a039f44b1f0201a46))
+- **dependencies:** replace vulnerable desktop and credential backends ([dd3525a](https://github.com/obscuritylabs/Colossus/commit/dd3525ab58d1a17a6f74fb3db35cafb4455fa861))
+- patch bundled trust certificates and document native acceptance ([dfb02de](https://github.com/obscuritylabs/Colossus/commit/dfb02de134b6e488e5ea26b0e5e43ab596fe8c7f))
+- patch frontend dev server and retain enrollment contract ([f8075a4](https://github.com/obscuritylabs/Colossus/commit/f8075a45e75e2c7043396a961c92a63c09fa0c6c))
+
+#### Changed
+
+- **storage:** seek Redb cursors and batch projection catch-up ([#286](https://github.com/obscuritylabs/Colossus/pull/286))
+
+#### Documentation
+
+- **release:** prepare 0.11.8 preview 2 history ([6994da7](https://github.com/obscuritylabs/Colossus/commit/6994da76d12820007d973a56f2d83a04f3f08d47))
+
+#### Maintenance
+
+- **deps-dev:** update desktop and web Vitest to 4.1.11 ([#292](https://github.com/obscuritylabs/Colossus/pull/292))
+- **browser:** import expiry test clock for native builds ([afa8a99](https://github.com/obscuritylabs/Colossus/commit/afa8a99e60f689e84e6dbc77c3088c143fc9be72))
+- **computer:** trace native foreground eligibility ([e84d921](https://github.com/obscuritylabs/Colossus/commit/e84d9218cc411be051ebbab1daa8fea432147cb6))
+- **computer:** trace native input terminal receipts ([83e1f6f](https://github.com/obscuritylabs/Colossus/commit/83e1f6f67605ad0044bbfaca4ceb4aa3e82b42c8))
+- **computer:** trace native control admission refusals ([8572c0c](https://github.com/obscuritylabs/Colossus/commit/8572c0c30e379bcbe9fbc9406ca8f19e1acb169b))
+- **desktop:** verify authenticated computer tool discovery ([0bb3b9e](https://github.com/obscuritylabs/Colossus/commit/0bb3b9e0d6fd86e5ec6ff7806af24f1bf02afeb0))
+- **desktop:** align provider inventory credential copy ([7561476](https://github.com/obscuritylabs/Colossus/commit/7561476968911908b75a90e5f7e501724dccf581))
+- **release:** allow cold Intel macOS packaging to finish ([54bf5d6](https://github.com/obscuritylabs/Colossus/commit/54bf5d61ce2f9fd3807791bb5b3dd970201930cb))
+- **ci:** validate bounded matrix timeout branches ([23761f9](https://github.com/obscuritylabs/Colossus/commit/23761f9a4d88a9c0924c29e740d4b7c99293cdd3))
+- allow cold Windows Desktop acceptance to finish ([0299cac](https://github.com/obscuritylabs/Colossus/commit/0299cac53c5dd19c0322cda04eeb3e6034761060))
+- refresh Windows release signing credentials ([024f166](https://github.com/obscuritylabs/Colossus/commit/024f16604f24de71bbf75c890a2e57d969e1127a))
+- **browser:** report Windows SDK close evidence accurately ([9f1a395](https://github.com/obscuritylabs/Colossus/commit/9f1a3954e2c4d39af7b4200a1780866196341040))
+- **browser:** trace hidden viewport polling failures ([0517afa](https://github.com/obscuritylabs/Colossus/commit/0517afa1bff8dca6d7f1f470fe42c83f78072be9))
+- **browser:** reproduce modal visibility traffic ([d943cc1](https://github.com/obscuritylabs/Colossus/commit/d943cc1b6e891ba8719a9b50e6082e9741f78527))
+- **browser:** distinguish wire and read delays ([f6cff19](https://github.com/obscuritylabs/Colossus/commit/f6cff197ce8428172eaae063f969801e5a0b08d0))
+- **grpc:** trace slow history list polls ([ddbd3ef](https://github.com/obscuritylabs/Colossus/commit/ddbd3ef994847fe1b7e5ec0fdd52693c2386971f))
+- **release:** prepare 0.11.9 changelog ([61d3d68](https://github.com/obscuritylabs/Colossus/commit/61d3d68747a2019edc16d67f621ac790a9b15576))
+- assert live profile restoration and completed tool calls ([09a1d1d](https://github.com/obscuritylabs/Colossus/commit/09a1d1d26fb652df058577cda4e9c9e2528dd226))
+
+**Source:** [09a1d1d](https://github.com/obscuritylabs/Colossus/commit/09a1d1d26fb652df058577cda4e9c9e2528dd226)
+
+**Full changelog:** [v0.11.8...v0.11.9](https://github.com/obscuritylabs/Colossus/compare/v0.11.8...v0.11.9)
+
+<!-- /colossus:release-notes -->
+
 ## [0.11.8-preview.2] - 2026-10-19
 
 ### Preview highlights

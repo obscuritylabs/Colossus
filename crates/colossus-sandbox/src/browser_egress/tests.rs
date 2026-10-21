@@ -276,6 +276,74 @@ async fn revoke_drains_stalled_handshakes_and_is_idempotent() {
 }
 
 #[tokio::test]
+async fn suspension_drains_live_tunnels_and_resumes_only_the_original_envelope() {
+    let mut proxy = lease(
+        vec![BrowserOrigin::parse("https://allowed.example").unwrap()],
+        limits(),
+    )
+    .await;
+    let address = proxy.address();
+    let credential = proxy.credential().expose().to_owned();
+    let deadline = proxy.expires_at();
+    let mut tunnel = TcpStream::connect(address).await.unwrap();
+    tunnel
+        .write_all(
+            format!(
+                "CONNECT allowed.example:443 HTTP/1.1\r\nHost: allowed.example\r\n{}\r\n",
+                auth(&proxy)
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut ready = vec![0; b"HTTP/1.1 200 Connection Established\r\n\r\n".len()];
+    tunnel.read_exact(&mut ready).await.unwrap();
+    // No ClientHello is sent, so this test never contacts an external host.
+    proxy.pause().await.unwrap();
+    assert_eq!(proxy.state(), BrowserEgressState::Paused);
+    assert_eq!(tunnel.read(&mut [0]).await.unwrap(), 0);
+    let mut paused = TcpStream::connect(address).await.unwrap();
+    let mut bytes = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(1), paused.read_to_end(&mut bytes))
+        .await
+        .unwrap();
+    assert!(bytes.is_empty());
+    proxy.resume().await.unwrap();
+    assert_eq!(proxy.address(), address);
+    assert_eq!(proxy.credential().expose(), credential);
+    assert_eq!(proxy.expires_at(), deadline);
+    let denied = exchange(
+        &proxy,
+        &format!(
+            "CONNECT foreign.example:443 HTTP/1.1\r\nHost: foreign.example\r\n{}\r\n",
+            auth(&proxy)
+        ),
+    )
+    .await;
+    assert!(denied.starts_with(b"HTTP/1.1 403"));
+    proxy.revoke().await.unwrap();
+}
+
+#[tokio::test]
+async fn suspended_time_never_renews_the_original_deadline() {
+    let mut bounded = limits();
+    bounded.lifetime = Duration::from_millis(100);
+    bounded.connection_timeout = bounded.lifetime;
+    let mut proxy = lease(
+        vec![BrowserOrigin::parse("https://allowed.example").unwrap()],
+        bounded,
+    )
+    .await;
+    let deadline = proxy.expires_at();
+    proxy.pause().await.unwrap();
+    tokio::time::sleep_until(deadline.into()).await;
+    assert!(proxy.resume().await.is_err());
+    assert_eq!(proxy.expires_at(), deadline);
+    proxy.revoke().await.unwrap();
+    assert_eq!(proxy.state(), BrowserEgressState::Revoked);
+}
+
+#[tokio::test]
 async fn deadline_reaps_background_connections_without_renewal() {
     let mut bounded = limits();
     bounded.lifetime = Duration::from_millis(80);

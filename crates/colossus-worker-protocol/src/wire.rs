@@ -66,6 +66,8 @@ impl From<std::io::Error> for WorkerControlError {
 pub(crate) enum ControlOperation {
     Ping,
     ObservabilityDoctor,
+    ToolsList,
+    SearchProfiles,
     SetApprovalMode {
         approval_mode: WorkerApprovalMode,
     },

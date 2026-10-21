@@ -3,6 +3,9 @@ use colossus_windows_native::{create_private_directory, create_private_file};
 use fs4::fs_std::FileExt as _;
 use std::os::windows::fs::OpenOptionsExt as _;
 
+#[path = "log_tests.rs"]
+mod logs;
+
 // Windows Credential Manager can retain a deleted entry while another native
 // fixture writes to the store. Model uninstall's stopped-consumer precondition
 // and keep the exact deletion assertions by isolating the live store fixtures.

@@ -11,6 +11,7 @@ const SIDECAR_FILE_STEM: &str = "colossus-sidecar";
 const CLI_FILE_STEM: &str = "colossus";
 
 const COMMANDS: &[&str] = &[
+    "report_renderer_failure",
     "dictation_status",
     "get_dictation_settings",
     "download_dictation_model",
@@ -29,6 +30,7 @@ const COMMANDS: &[&str] = &[
     "remembered_command_count",
     "clear_remembered_commands",
     "get_plugin_inventory",
+    "get_capability_inventory",
     "resolve_plugin_selection",
     "read_plugin_preview",
     "manage_plugin",

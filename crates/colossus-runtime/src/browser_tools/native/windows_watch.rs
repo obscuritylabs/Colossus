@@ -92,11 +92,13 @@ pub(super) async fn resume(
         digest,
         session_id,
     };
-    let observed = session.client.observe(prior).await?;
-    if observed.target != configure.target {
-        return Err(RuntimeNativeBrowserError::Stale);
+    if prior.control_generation == generation {
+        let observed = session.client.observe(prior).await?;
+        if observed.target != configure.target {
+            return Err(RuntimeNativeBrowserError::Stale);
+        }
+        session.confirm_presentation_state(prior, &observed)?;
     }
-    session.confirm_presentation_state(prior, &observed)?;
     let lease = session.client.configure(configure.clone()).await?;
     browser
         .coordinator

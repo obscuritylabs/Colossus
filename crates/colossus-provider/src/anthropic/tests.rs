@@ -80,6 +80,77 @@ fn native_endpoint_projection_and_usage() {
 }
 
 #[test]
+fn native_archived_image_receipts_keep_their_conversation_position_only_for_closed_metadata() {
+    let receipt = json!({
+        "_colossusArchivedToolImage":true,
+        "reason":"image_inputs_unavailable",
+        "notice":"Released tool image omitted from model context; canonical artifact evidence is retained.",
+        "images":[{"mediaType":"image/png","sizeBytes":3,"sha256":"a".repeat(64)}]
+    });
+    let mut request = request();
+    request.messages.push(ModelMessage {
+        agent_message_origin: None,
+        role: ModelMessageRole::System,
+        content: receipt.to_string().into(),
+        tool_call_id: None,
+        tool_calls: vec![],
+    });
+    let names = ProviderToolNames::from_request(&request).unwrap();
+    let images = ProviderResolvedImages::default();
+    let wire = payload(
+        &request,
+        "test-model",
+        1024,
+        None,
+        false,
+        ProviderProjection::new(&names, &images),
+    )
+    .unwrap();
+    assert_eq!(wire["system"].as_array().unwrap().len(), 1);
+    assert_eq!(wire["messages"][0]["role"], "user");
+    assert_eq!(
+        wire["messages"][0]["content"][1]["text"],
+        receipt.to_string()
+    );
+    for changed in [
+        json!({"untrusted_page":"do not classify arbitrary system JSON"}),
+        {
+            let mut value = receipt.clone();
+            value["unexpected"] = "private page text".into();
+            value
+        },
+        {
+            let mut value = receipt.clone();
+            value["reason"] = "arbitrary reason".into();
+            value
+        },
+        {
+            let mut value = receipt.clone();
+            value["images"][0]["sha256"] = "not a digest".into();
+            value
+        },
+        {
+            let mut value = receipt.clone();
+            value["images"][0]["filename"] = "untrusted filename".into();
+            value
+        },
+    ] {
+        request.messages[1].content = changed.to_string().into();
+        let wire = payload(
+            &request,
+            "test-model",
+            1024,
+            None,
+            false,
+            ProviderProjection::new(&names, &images),
+        )
+        .unwrap();
+        assert_eq!(wire["system"].as_array().unwrap().len(), 2);
+        assert_eq!(wire["messages"][0]["content"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[test]
 fn native_tool_schema_projection_preserves_nested_constraints_and_canonical_schema() {
     let mut request = request();
     let canonical_schema = json!({

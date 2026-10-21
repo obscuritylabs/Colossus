@@ -88,7 +88,7 @@ fn bind_inner(
         || !config.capabilities.available
         || config.capabilities.restrictive_egress == user_development
         || config.capabilities.private_ca_trust
-        || config.capabilities.client_identities
+        || (config.capabilities.client_identities && !user_development)
         || config.capabilities.modes != [BrowserMode::Embedded]
         || !(256 * 1024 * 1024..=4 * 1024 * 1024 * 1024).contains(&config.memory_bytes)
         || !(32..=512).contains(&config.max_processes)

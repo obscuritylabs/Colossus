@@ -72,6 +72,15 @@ pub enum Data {
     ),
 }
 pub enum Control {
+    Suspend(
+        BrowserSessionId,
+        oneshot::Sender<Result<(), BrowserDriverError>>,
+    ),
+    Resume(
+        BrowserSessionId,
+        u64,
+        oneshot::Sender<Result<(), BrowserDriverError>>,
+    ),
     Close(
         BrowserSessionId,
         oneshot::Sender<Result<(), BrowserDriverError>>,
@@ -87,6 +96,42 @@ pub struct Driver {
 
 #[async_trait]
 impl BrowserDriver for Driver {
+    async fn suspend_session(
+        &self,
+        session: &BrowserSessionId,
+        _: u64,
+    ) -> Result<(), BrowserDriverError> {
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err(BrowserDriverError::Cancelled);
+        }
+        let (sender, receiver) = oneshot::channel();
+        self.control
+            .send(Control::Suspend(session.clone(), sender))
+            .await
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        receiver
+            .await
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+    }
+    async fn resume_session(
+        &self,
+        session: &BrowserSessionId,
+        _: &str,
+        generation: u64,
+        control: &BrowserDriverControl,
+    ) -> Result<(), BrowserDriverError> {
+        if self.cancelled.load(Ordering::Acquire) || control.is_cancelled() {
+            return Err(BrowserDriverError::Cancelled);
+        }
+        let (sender, receiver) = oneshot::channel();
+        self.control
+            .send(Control::Resume(session.clone(), generation, sender))
+            .await
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?;
+        receiver
+            .await
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+    }
     async fn prepare_upload(
         &self,
         r: BrowserUploadPrepareRequest,

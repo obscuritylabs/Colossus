@@ -67,6 +67,11 @@ variables are treated as complete URLs. Plaintext loopback is allowed for local 
 Plaintext export anywhere else fails configuration validation unless
 `acknowledgeInsecureTransport: true` is present.
 
+Native Desktop and managed-sidecar hosts reserve stdout for their transport. In those
+hosts, `logs.stdoutJson` writes console JSON to stderr. The bounded private operational
+files described in [Troubleshooting](../../admin/troubleshooting.md#desktop-operational-logs)
+remain independent of this opt-in console sink.
+
 ## Standard environment overrides
 
 Standard OpenTelemetry variables override matching exporter values after YAML has
@@ -111,7 +116,11 @@ to spans or metrics.
 
 ## Host ownership
 
-Only the long-running `worker` installs the process-global subscriber. An embedded
+The long-running `worker` installs its process-global subscriber. Desktop and its
+Managed Local sidecars also install native-owned local operational logging, composed
+with enabled remote exporters in each sidecar. See
+[Desktop operational logs](../../admin/troubleshooting.md#desktop-operational-logs)
+for locations and info/debug verbosity. An embedded
 `Runtime` never installs global telemetry and may be used under a subscriber selected
 by its host. The worker drains public work before bounded provider flush and process
 exit.

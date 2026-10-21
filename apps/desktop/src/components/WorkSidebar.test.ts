@@ -220,7 +220,7 @@ describe("WorkSidebar", () => {
 
     expect(markup).toContain("Capabilities");
     expect(markup).toContain('aria-label="Plugins"');
-    expect(markup).toContain("Library");
+    expect(markup).not.toContain('aria-label="Library"');
   });
 
   it("marks the Plugins destination as the current page", () => {

@@ -35,7 +35,8 @@ pub struct WindowsBrowserConfig {
     pub manifest_sha256: [u8; 32],
     /// Existing owner-private state root, unrelated to engine installation.
     pub state_root: PathBuf,
-    /// Publisher/platform accepted ceiling; private OS certificate stores unsupported.
+    /// Publisher/platform accepted ceiling. Ordinary-user client keys require
+    /// exact native handshake consent; isolated private stores remain unsupported.
     pub capabilities: BrowserCapabilities,
     /// Aggregate Job memory ceiling (256 MiB..=4 GiB).
     pub memory_bytes: u64,
@@ -158,7 +159,9 @@ impl WindowsBrowserSupervisor {
     /// Explicit Windows x64 functional preview under an ordinary user token.
     /// The caller must verify the installed component and retain this owner through
     /// acknowledged shutdown. This edition keeps Chromium's sandbox and owned Job
-    /// but requires false production modes, no PKI and `restrictive_egress: false`.
+    /// but requires false production modes and `restrictive_egress: false`.
+    /// OS-owned client keys require expiring native consent for the exact request;
+    /// this does not provide private per-profile certificate import or custody.
     /// Ordinary contained installation never falls back to this constructor.
     #[cfg(all(target_arch = "x86_64", feature = "windows-browser-functional-preview"))]
     pub async fn install_for_functional_preview(
@@ -247,6 +250,9 @@ impl WindowsBrowserSupervisor {
 }
 #[async_trait]
 impl BrowserHostFactory for WindowsBrowserSupervisor {
+    fn supports_suspension(&self) -> bool {
+        self.installation.user_development
+    }
     fn capabilities(&self) -> BrowserCapabilities {
         if self.stopped.load(Ordering::Acquire) {
             BrowserCapabilities::unavailable()

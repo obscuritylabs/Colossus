@@ -1082,7 +1082,7 @@ test("provider enrollment and external trust stay behind native UI", () => {
   assert.match(commands, /fn confirm_provider_origins/u);
   assert.match(commands, /fn rollback_staged_provider_credentials/u);
   assert.match(commands, /fn reject_active_managed_runs/u);
-  assert.match(commands, /request_provider_secret\(credential_parent/u);
+  assert.match(commands, /request_provider_secret\(\s*credential_parent/u);
   assert.match(commands, /DesktopCredentials::for_settings/u);
   for (const action of ["Import", "Connect", "Select", "Remove"]) {
     assert.match(commands, new RegExp(`ExternalConsentAction::${action}`, "u"));

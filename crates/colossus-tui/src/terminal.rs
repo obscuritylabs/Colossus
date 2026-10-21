@@ -10,6 +10,7 @@ pub(super) struct OwnedTerminal {
     committed_epoch: u64,
     has_native_history: bool,
     finished: bool,
+    selection_frame_frozen: bool,
     _guard: TerminalGuard,
 }
 
@@ -42,11 +43,22 @@ impl OwnedTerminal {
             committed_epoch: u64::MAX,
             has_native_history: false,
             finished: false,
+            selection_frame_frozen: false,
             _guard: guard,
         })
     }
 
     pub(super) fn draw(&mut self, state: &mut TuiState) -> Result<(), io::Error> {
+        if state.selecting_text && self.selection_frame_frozen {
+            return Ok(());
+        }
+        self.draw_current_frame(state)?;
+        self._guard.select_text(state.selecting_text)?;
+        self.selection_frame_frozen = state.selecting_text;
+        Ok(())
+    }
+
+    fn draw_current_frame(&mut self, state: &mut TuiState) -> Result<(), io::Error> {
         if self.mode == ScreenMode::Alternate {
             self.terminal
                 .draw(|frame| render(frame, state, 0, ScreenMode::Alternate))?;
@@ -396,6 +408,7 @@ pub(super) fn committable_transcript_end(
 struct TerminalGuard {
     mode: ScreenMode,
     transient_alternate_screen: bool,
+    mouse_capture: bool,
 }
 
 impl TerminalGuard {
@@ -436,7 +449,22 @@ impl TerminalGuard {
         Ok(Self {
             mode,
             transient_alternate_screen: false,
+            mouse_capture: mode == ScreenMode::Alternate,
         })
+    }
+
+    fn select_text(&mut self, selecting: bool) -> Result<(), io::Error> {
+        let capture =
+            !selecting && (self.mode == ScreenMode::Alternate || self.transient_alternate_screen);
+        if self.mouse_capture != capture {
+            if capture {
+                execute!(io::stdout(), EnableMouseCapture)?;
+            } else {
+                execute!(io::stdout(), DisableMouseCapture)?;
+            }
+            self.mouse_capture = capture;
+        }
+        Ok(())
     }
 
     fn enter_transient_alternate_screen(&mut self) -> Result<(), io::Error> {
@@ -458,6 +486,7 @@ impl TerminalGuard {
             return Err(error);
         }
         self.transient_alternate_screen = true;
+        self.mouse_capture = true;
         Ok(())
     }
 
@@ -470,6 +499,7 @@ impl TerminalGuard {
         execute!(stdout, PopKeyboardEnhancementFlags)?;
         execute!(stdout, DisableMouseCapture, LeaveAlternateScreen)?;
         self.transient_alternate_screen = false;
+        self.mouse_capture = false;
         Ok(())
     }
 

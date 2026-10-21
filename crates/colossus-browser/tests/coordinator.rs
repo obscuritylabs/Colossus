@@ -3,6 +3,8 @@
 #[path = "coordinator/interactions.rs"]
 mod interactions;
 mod support;
+#[path = "coordinator/suspension.rs"]
+mod suspension;
 
 use colossus_browser::{BrowserCoordinator, BrowserError};
 use colossus_contracts::*;

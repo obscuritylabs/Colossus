@@ -1,7 +1,6 @@
 import {
   IconBriefcase2,
   IconCalendarTime,
-  IconLibrary,
   IconPlugConnected,
   IconSettings,
   IconTerminal2,
@@ -35,8 +34,7 @@ interface ProductRailProps {
 
 const MAIN_ITEMS = [
   { id: "work", label: "Work", Icon: IconBriefcase2 },
-  { id: "fleet", label: "Agents", Icon: IconTopologyStar3 },
-  { id: "library", label: "Library", Icon: IconLibrary },
+  { id: "fleet", label: "Capabilities", Icon: IconTopologyStar3 },
   { id: "plugins", label: "Plugins", Icon: IconPlugConnected },
   { id: "workflows", label: "Workflows", Icon: IconTopologyStar3 },
   { id: "schedules", label: "Schedules", Icon: IconCalendarTime },
@@ -60,19 +58,7 @@ export function ProductRail({
       </div>
 
       <nav className="product-nav" aria-label="Workspace areas">
-        {MAIN_ITEMS.filter(({ id }) => {
-          if (id === "fleet") {
-            return (
-              capabilities.delegation ||
-              capabilities.agentWorkflows ||
-              capabilities.plugins
-            );
-          }
-          if (id === "library") {
-            return capabilities.artifacts;
-          }
-          return true;
-        }).map(({ id, label, Icon }) => (
+        {MAIN_ITEMS.map(({ id, label, Icon }) => (
           <button
             className="product-nav-item"
             type="button"

@@ -3,7 +3,15 @@ use colossus_contracts::{
     ComputerControlState as State, ComputerSessionSummary, ComputerStopReason as Reason,
 };
 use colossus_ports::{ComputerCommand, ComputerDriverError};
-use std::sync::atomic::{AtomicU8, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU64, Ordering};
+
+/// Pointer motion shares the desktop with the agent without revoking its lease.
+/// Foreign button/wheel actions retain the explicit human takeover fence.
+pub(crate) fn foreign_pointer(human: &AtomicU64, movement: bool) {
+    if !movement {
+        human.fetch_add(1, Ordering::AcqRel);
+    }
+}
 
 /// Higher values dominate pending requests until the broker drains them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,6 +102,8 @@ pub(crate) fn input_failure(error: ComputerDriverError, started: bool) -> Comput
 pub(crate) fn undispatched_failure(error: ComputerDriverError, pending: u8) -> ComputerDriverError {
     if pending == Action::Stop as u8 {
         ComputerDriverError::UserStopped
+    } else if pending == Action::Pause as u8 {
+        ComputerDriverError::Paused
     } else {
         error
     }

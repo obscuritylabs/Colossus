@@ -68,6 +68,21 @@ impl Host {
                 .close(&session_id)
                 .await
                 .map(|()| Response::Acknowledged {}),
+            Request::Suspend {
+                session_id,
+                through_generation,
+            } => self
+                .suspend(&session_id, through_generation)
+                .await
+                .map(|()| Response::Acknowledged {}),
+            Request::Resume {
+                session_id,
+                run_id,
+                generation,
+            } => self
+                .resume(&session_id, &run_id, generation)
+                .await
+                .map(|()| Response::Acknowledged {}),
         };
         result.unwrap_or_else(Response::rejected)
     }

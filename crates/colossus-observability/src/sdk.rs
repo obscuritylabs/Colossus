@@ -30,6 +30,7 @@ pub struct ObservabilityGuard {
     meter_provider: Option<SdkMeterProvider>,
     logger_provider: Option<SdkLoggerProvider>,
     stdout_guard: Option<WorkerGuard>,
+    local_logs: Option<crate::LocalLogSink>,
     shutdown_timeout: Duration,
 }
 
@@ -66,25 +67,38 @@ impl ObservabilityGuard {
     ///
     /// A disabled configuration returns `Ok(None)` and does not claim global state.
     pub fn install(config: &ObservabilityConfig) -> Result<Option<Self>, ObservabilityError> {
+        Self::install_inner(config, None, false)
+    }
+
+    /// Install exporters and native-owned local operational logs in one subscriber.
+    /// Local logs remain available when remote observability is disabled.
+    /// Native hosts reserve stdout for IPC, so optional console JSON goes to stderr.
+    pub fn install_native(
+        config: &ObservabilityConfig,
+        logs: Option<crate::LocalLogSink>,
+    ) -> Result<Option<Self>, ObservabilityError> {
+        Self::install_inner(config, logs, true)
+    }
+
+    fn install_inner(
+        config: &ObservabilityConfig,
+        local_logs: Option<crate::LocalLogSink>,
+        reserve_stdout: bool,
+    ) -> Result<Option<Self>, ObservabilityError> {
         config.validate()?;
-        if config.sdk_disabled() {
+        let exporters_enabled = !config.sdk_disabled();
+        if !exporters_enabled && local_logs.is_none() {
             return Ok(None);
         }
 
         let resource = resource(config);
-        let tracer_provider = config
-            .traces
-            .enabled
+        let tracer_provider = (exporters_enabled && config.traces.enabled)
             .then(|| build_tracer_provider(config, resource.clone()))
             .transpose()?;
-        let meter_provider = config
-            .metrics
-            .enabled
+        let meter_provider = (exporters_enabled && config.metrics.enabled)
             .then(|| build_meter_provider(config, resource.clone()))
             .transpose()?;
-        let logger_provider = config
-            .logs
-            .otlp
+        let logger_provider = (exporters_enabled && config.logs.otlp)
             .then(|| build_logger_provider(config, resource))
             .transpose()?;
 
@@ -108,8 +122,12 @@ impl ObservabilityGuard {
             .as_ref()
             .map(OpenTelemetryTracingBridge::new)
             .map(|layer| layer.with_filter(filter_fn(is_colossus_log_metadata)));
-        let (stdout_writer, stdout_guard) = if config.logs.stdout_json {
-            let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
+        let (stdout_writer, stdout_guard) = if exporters_enabled && config.logs.stdout_json {
+            let (writer, guard) = if reserve_stdout {
+                tracing_appender::non_blocking(std::io::stderr())
+            } else {
+                tracing_appender::non_blocking(std::io::stdout())
+            };
             (Some(writer), Some(guard))
         } else {
             (None, None)
@@ -123,11 +141,22 @@ impl ObservabilityGuard {
                 .with_writer(writer)
                 .with_filter(filter_fn(is_colossus_log_metadata))
         });
+        let local_layer = local_logs.as_ref().map(|logs| {
+            let level = logs.level;
+            tracing_subscriber::fmt::layer()
+                .json()
+                .flatten_event(true)
+                .with_current_span(false)
+                .with_span_list(false)
+                .with_writer(logs.writer.clone())
+                .with_filter(filter_fn(move |metadata| level.accepts(metadata)))
+        });
 
         tracing_subscriber::registry()
             .with(trace_layer)
             .with(log_layer)
             .with(stdout_layer)
+            .with(local_layer)
             .try_init()
             .map_err(|error| ObservabilityError::Initialization(error.to_string()))?;
 
@@ -136,6 +165,7 @@ impl ObservabilityGuard {
             meter_provider,
             logger_provider,
             stdout_guard,
+            local_logs,
             shutdown_timeout: Duration::from_millis(config.otlp.timeout_ms),
         }))
     }
@@ -165,6 +195,7 @@ impl ObservabilityGuard {
             let _ = provider.shutdown_with_timeout(self.shutdown_timeout);
         }
         drop(self.stdout_guard.take());
+        drop(self.local_logs.take());
     }
 }
 
@@ -249,6 +280,14 @@ fn is_colossus_log_metadata(metadata: &tracing::Metadata<'_>) -> bool {
         is_colossus_trace_target(metadata.target())
     } else {
         is_colossus_journal_target(metadata.target())
+            || matches!(
+                metadata.target(),
+                "colossus.desktop"
+                    | "colossus.provider"
+                    | "colossus.computer"
+                    | "colossus.browser"
+                    | "colossus.lifecycle"
+            )
     }
 }
 

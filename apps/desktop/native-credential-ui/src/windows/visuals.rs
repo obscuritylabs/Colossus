@@ -97,12 +97,12 @@ impl Visuals {
         i32::try_from((scaled + 768) / 1536).unwrap_or(i32::MAX)
     }
 
-    pub(super) fn outer_size(&self) -> (i32, i32) {
+    pub(super) fn outer_size_with_context(&self, context: bool) -> (i32, i32) {
         let mut rect = RECT {
             left: 0,
             top: 0,
             right: self.px(WIDTH),
-            bottom: self.px(HEIGHT),
+            bottom: self.px(HEIGHT + if context { 88 } else { 0 }),
         };
         unsafe {
             AdjustWindowRectExForDpi(

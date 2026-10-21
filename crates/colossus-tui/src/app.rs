@@ -102,9 +102,10 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
                     if !state.dictation.active
                         || (state.dictation.paused && !state.dictation.pending) =>
                 {
+                    state.selecting_text = false;
                     insert_active_text(&mut state, &text)
                 }
-                Event::Resize(_, _) => {}
+                Event::Resize(_, _) => state.selecting_text = false,
                 _ => {}
             }
             observe_lifecycle(&state, lifecycle.as_deref());
@@ -369,7 +370,7 @@ fn native_history_limit_entry() -> TranscriptEntry {
 
 /// Apply one captured mouse event and report whether an older transcript page is needed.
 pub(super) fn handle_mouse(state: &mut TuiState, mouse: MouseEvent) -> bool {
-    if state.overlay.is_some() {
+    if state.overlay.is_some() || state.selecting_text {
         return false;
     }
     match mouse.kind {
@@ -385,6 +386,21 @@ pub(super) fn handle_mouse(state: &mut TuiState, mouse: MouseEvent) -> bool {
     }
 }
 
+pub(super) fn handle_text_selection_key(state: &mut TuiState, key: KeyEvent) -> bool {
+    if key.code == KeyCode::F(6) && (state.overlay.is_none() || state.selecting_text) {
+        state.selecting_text = !state.selecting_text;
+        state.hide_completion();
+        return true;
+    }
+    if state.selecting_text {
+        state.selecting_text = false;
+        // Leave any newly arrived approval untouched when dismissing the frozen
+        // selection view; the operator has not seen that decision surface yet.
+        return key.code == KeyCode::Esc;
+    }
+    false
+}
+
 fn handle_key(
     state: &mut TuiState,
     key: KeyEvent,
@@ -392,6 +408,9 @@ fn handle_key(
     event_tx: mpsc::Sender<HostEvent>,
     screen_mode: ScreenMode,
 ) {
+    if handle_text_selection_key(state, key) {
+        return;
+    }
     if crate::dictation::key(state, key, event_tx.clone()) {
         return;
     }

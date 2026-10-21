@@ -19,9 +19,10 @@ pub(super) const TITLE: &str = "Reopened agent page";
 pub(super) const PAGE: &[u8] = br#"<!doctype html><html><head><title>Reopened agent page</title></head><body style="background:#ffe8cc"><h1>Reopened agent page</h1><p>Fresh session B after exact session A close.</p></body></html>"#;
 
 #[derive(Clone)]
-struct Reopened {
-    session_id: String,
-    target: BrowserTarget,
+pub(super) struct Reopened {
+    pub(super) session_id: String,
+    pub(super) target: BrowserTarget,
+    pub(super) control_generation: u64,
 }
 
 #[derive(Default)]
@@ -34,7 +35,7 @@ pub(super) struct State {
 }
 
 impl State {
-    fn scope(&self) -> anyhow::Result<Reopened> {
+    pub(super) fn scope(&self) -> anyhow::Result<Reopened> {
         self.scope
             .lock()
             .unwrap()
@@ -109,6 +110,7 @@ pub(super) async fn response(
                 .context("reopened selected tab is absent")?;
             *state.session_reopen.scope.lock().unwrap() = Some(Reopened {
                 session_id: opened.session_id.to_string(),
+                control_generation: opened.control_generation,
                 target: BrowserTarget {
                     tab_id: tab.tab_id.clone(),
                     document_id: tab.document_id.clone(),
@@ -133,6 +135,7 @@ pub(super) async fn response(
             );
             *state.session_reopen.scope.lock().unwrap() = Some(Reopened {
                 session_id: scope.session_id,
+                control_generation: scope.control_generation,
                 target: BrowserTarget {
                     tab_id: observed.tab.tab_id,
                     document_id: observed.tab.document_id,
@@ -160,7 +163,9 @@ pub(super) async fn checkpoint(
     rect: BrowserRect,
     heartbeat: &ViewportHeartbeat,
 ) -> anyhow::Result<String> {
-    fixture.state.signal(&fixture.state.viewer_detached);
+    heartbeat
+        .pause_before_signal(&fixture.state, &fixture.state.viewer_detached)
+        .await?;
     fixture
         .state
         .wait(
@@ -240,10 +245,9 @@ pub(super) async fn checkpoint(
     )
     .await?;
     windows::selected_tab(app, &tab, &view, rect, [204, 232, 255, 255]).await?;
-    heartbeat.pause().await?;
-    fixture
-        .state
-        .signal(&fixture.state.session_reopen.presented);
+    heartbeat
+        .pause_before_signal(&fixture.state, &fixture.state.session_reopen.presented)
+        .await?;
     println!(
         "PASS same Core run polled the closed-A gap three times, freshly attached distinct B, and displayed B's exact authenticated frame"
     );
@@ -255,8 +259,9 @@ async fn poll_closed_gap(
     run: &RunIdentity<'_>,
     heartbeat: &ViewportHeartbeat,
 ) -> anyhow::Result<()> {
-    // The renderer keeps pulsing A while the next model turn has no replacement.
-    // First observe its closed channel, then poll beyond the recovery budget.
+    // A's final trusted pulse was acknowledged before Core could close it.
+    // The paused owner stays alive while ordinary context polling observes the
+    // closed channel and exceeds the recovery budget without a replacement.
     let deadline = tokio::time::Instant::now() + PAGE_TIMEOUT;
     loop {
         heartbeat.check()?;

@@ -18,6 +18,7 @@ mod execute;
 mod execute_accept;
 mod lifecycle;
 mod native_handoff;
+mod suspension;
 mod transfer;
 
 pub use capture::CapturedBrowserScreenshot;

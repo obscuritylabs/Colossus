@@ -1972,6 +1972,9 @@ async fn spawn_verified_sidecar(
     if let Some(address) = credential_session {
         command.env("DBUS_SESSION_BUS_ADDRESS", address);
     }
+    if crate::logging_options::debug_enabled() {
+        command.env("COLOSSUS_LOG_LEVEL", "debug");
+    }
     if let Some(path) = development_selector {
         command.env(crate::development_selector::VARIABLE, path);
     }

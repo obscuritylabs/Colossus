@@ -87,4 +87,16 @@ impl AgentRunLifecycle for RuntimeRunLifecycle {
         }
         self.processes.finish_run(run_id).await;
     }
+
+    async fn complete_run(&self, run_id: &str) {
+        // Browser suspension must precede cleanup owners that cancel the shared
+        // run signal; cancelled work must always take the terminal browser path.
+        if let Some(browser) = &self.browser {
+            browser.complete_run(run_id).await;
+        }
+        if let Some(computer) = &self.computer {
+            computer.finish_run(run_id).await;
+        }
+        self.processes.finish_run(run_id).await;
+    }
 }

@@ -184,6 +184,29 @@ pub enum ComputerDriverError {
     /// Native authority, protected target, or human control rejected the action.
     #[error("computer native boundary denied operation")]
     Denied,
+    /// A native Pause or human click/key takeover revoked active input authority.
+    #[error(
+        "computer control is paused; check computer.status and wait for the user to resume control"
+    )]
+    Paused,
+    /// Native target admission rejected protected, elevated, or inaccessible app identity.
+    #[error(
+        "computer target is restricted; choose an accessible ordinary-user app outside Colossus and its protected processes"
+    )]
+    TargetRestricted,
+    /// Windows refused the one attempted foreground activation before input was dispatched.
+    #[error(
+        "Windows denied foreground activation; ask the user to bring the selected app forward, then take a fresh snapshot"
+    )]
+    FocusDenied,
+    /// A protected input field cannot receive automated text or keyboard input.
+    #[error("computer input is protected; the user must enter this value")]
+    ProtectedInput,
+    /// A physical button or modifier is held; automation cannot release the user's input.
+    #[error(
+        "computer input is held by the user; release mouse buttons and modifier keys, then take a fresh snapshot"
+    )]
+    InputHeld,
     /// The native operator stopped this exact owned run before dispatch.
     /// This is never inferred from a stale observation, pause, or generic denial.
     #[error("computer control stopped by user")]

@@ -57,7 +57,6 @@ impl Runtime {
                         .get(id)
                         .filter(|request| {
                             request.binding == run.actor.binding
-                                && request.run_id.as_deref() == Some(run_id)
                                 && request.options.mode == BrowserMode::Embedded
                         })
                         .cloned()

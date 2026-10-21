@@ -113,6 +113,6 @@ describe("ProductRail terminal availability", () => {
       attachments: false,
     });
 
-    expect(markup).toContain(">Agents</span>");
+    expect(markup).toContain(">Capabilities</span>");
   });
 });

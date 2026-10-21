@@ -334,9 +334,22 @@ pub(crate) async fn configure_setup_credential(
     let label = package.manifest.providers[&request.profile]
         .display_name
         .clone();
+    let destination = crate::provider_enrollment::ProviderCredentialDestination::new(
+        provider.connection.kind,
+        &provider.connection.base_url,
+    )?;
     let previous = package.clone();
     let credential_id = if let Some(id) = request.credential_id {
-        crate::provider_catalog::validate_provider_credential(&settings, &id)?;
+        if let Some(origin) =
+            reused_setup_credential_origin(&state, &settings, &provider.connection, &id)?
+            && !crate::desktop_commands::confirm_provider_origins(&app, &[origin]).await?
+        {
+            return Err(CommandErrorDto::local_sanitized(
+                "provider_origin_confirmation",
+                "The model provider credential destination was not approved.",
+                false,
+            ));
+        }
         id
     } else {
         crate::managed_configuration_commands::enroll_credential(
@@ -345,10 +358,11 @@ pub(crate) async fn configure_setup_credential(
             &store,
             &mut settings,
             &label,
-            crate::managed_configuration::CredentialKindSetting::ApiKey,
+            crate::provider_enrollment::CredentialEnrollment::Provider(destination),
             appearance,
         )
         .await?
+        .id
     };
     let package = settings
         .setup_packages
@@ -370,6 +384,29 @@ pub(crate) async fn configure_setup_credential(
         .ok_or_else(|| invalid("The setup package changed."))?;
     *saved = updated;
     store.save(&settings)
+}
+
+/// Import review predates the user's choice of a saved credential. Only an
+/// already-confirmed exact binding can skip that later destination review.
+pub(super) fn reused_setup_credential_origin(
+    state: &AppState,
+    settings: &DesktopSettings,
+    provider: &crate::desktop_settings::ProviderSetting,
+    id: &str,
+) -> Result<Option<String>, CommandErrorDto> {
+    crate::provider_catalog::validate_setup_endpoint(provider.kind, &provider.base_url)?;
+    crate::provider_catalog::validate_provider_credential(settings, id)?;
+    if crate::provider_catalog::confirmed_credential_destination(
+        state,
+        settings,
+        provider.kind,
+        &provider.base_url,
+        id,
+    ) {
+        return Ok(None);
+    }
+    let endpoint = crate::provider_enrollment::canonical_provider_endpoint(&provider.base_url)?;
+    Ok(Some(format!("{}: {}", provider.profile, endpoint)))
 }
 
 #[derive(Deserialize)]

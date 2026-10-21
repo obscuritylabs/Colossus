@@ -6,6 +6,27 @@ use tokio::{
     net::TcpListener,
 };
 
+#[test]
+fn changed_projection_or_unmappable_prefix_retires_opaque_state_without_slicing_panics() {
+    let message = ModelMessage {
+        agent_message_origin: None,
+        role: ModelMessageRole::User,
+        content: "source".into(),
+        tool_call_id: None,
+        tool_calls: vec![],
+    };
+    let canonical = vec![message.clone(), message];
+    let changed = super::provider_continuation::projection_prefix_changed;
+    assert!(!changed(1, &canonical, &canonical, true));
+    assert!(changed(usize::MAX, &canonical, &canonical, true));
+    // Defensive handling also covers image-budget projections from older
+    // runtimes that removed observation slots rather than retaining markers.
+    assert!(changed(2, &canonical, &canonical[..1], true));
+    let mut projected = canonical.clone();
+    projected[0].content = "archived source".into();
+    assert!(changed(1, &canonical, &projected, true));
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FirstResponse {
     Completed,

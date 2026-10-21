@@ -839,7 +839,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "colossus-api"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -859,7 +859,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-api-proto"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "prost",
  "prost-types",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-browser-presentation"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-cloud-protocol"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "colossus-sdk",
  "prost",
@@ -901,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-codex-auth"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "base64 0.22.1",
  "colossus-home",
@@ -920,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-connector"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "async-trait",
  "clap",
@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-contracts"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "colossus-domain",
  "serde",
@@ -961,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-credentials"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "apple-native-keyring-store",
  "base64 0.22.1",
@@ -985,7 +985,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-darwin-process"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "core-foundation",
  "libc",
@@ -1011,10 +1011,12 @@ dependencies = [
  "colossus-native-credential-ui",
  "colossus-native-dictation",
  "colossus-network",
+ "colossus-observability",
  "colossus-plugins",
  "colossus-ports",
  "colossus-sdk",
  "colossus-sidecar-protocol",
+ "colossus-tools",
  "colossus-windows-native",
  "colossus-worker-protocol",
  "directories",
@@ -1045,6 +1047,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "tracing",
  "url",
  "uuid",
  "windows-native-keyring-store",
@@ -1054,11 +1057,11 @@ dependencies = [
 
 [[package]]
 name = "colossus-domain"
-version = "0.11.8"
+version = "0.11.9"
 
 [[package]]
 name = "colossus-grpc"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "base64 0.22.1",
  "colossus-api",
@@ -1096,7 +1099,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-home"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "colossus-linux-native",
  "colossus-windows-native",
@@ -1109,7 +1112,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-journal-redb"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
@@ -1132,7 +1135,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-linux-native"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "libc",
  "rustix",
@@ -1140,7 +1143,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-media"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1226,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-network"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "hex",
  "reqwest 0.12.28",
@@ -1240,9 +1243,10 @@ dependencies = [
 
 [[package]]
 name = "colossus-observability"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "colossus-contracts",
+ "colossus-home",
  "colossus-ports",
  "opentelemetry",
  "opentelemetry_sdk",
@@ -1250,13 +1254,15 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "tracing",
+ "tracing-appender",
  "tracing-opentelemetry",
+ "tracing-subscriber",
  "url",
 ]
 
 [[package]]
 name = "colossus-plugins"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "base64 0.22.1",
  "colossus-contracts",
@@ -1289,7 +1295,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-ports"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -1301,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-sdk"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1338,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-sidecar-protocol"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "colossus-contracts",
  "serde",
@@ -1351,8 +1357,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-tools"
+version = "0.11.9"
+dependencies = [
+ "colossus-contracts",
+ "colossus-ports",
+ "jsonschema",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "colossus-windows-native"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "thiserror 2.0.19",
  "tokio",
@@ -1361,7 +1379,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-worker-protocol"
-version = "0.11.8"
+version = "0.11.9"
 dependencies = [
  "base64 0.22.1",
  "colossus-contracts",
@@ -3604,6 +3622,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "matchers"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
+dependencies = [
+ "regex-automata",
+]
+
+[[package]]
 name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3795,6 +3822,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3b335231dfd352ffb0f8017f3b6027a4917f7df785ea2143d8af2adc66980ae"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "nu-ansi-term"
+version = "0.50.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
+dependencies = [
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5474,9 +5510,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -6288,6 +6324,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "symlink"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7973cce6668464ea31f176d85b13c7ab3bba2cb3b77a2ed26abd7801688010a"
+
+[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6757,7 +6799,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -7185,6 +7227,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-appender"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "050686193eb999b4bb3bc2acfa891a13da00f79734704c4b8b4ef1a10b368a3c"
+dependencies = [
+ "crossbeam-channel",
+ "symlink",
+ "thiserror 2.0.19",
+ "time",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tracing-attributes"
 version = "0.1.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7233,14 +7288,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
 dependencies = [
+ "matchers",
+ "nu-ansi-term",
+ "once_cell",
+ "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
+ "smallvec",
  "thread_local",
+ "tracing",
  "tracing-core",
+ "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
@@ -7648,18 +7723,18 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.8"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d46a5a140e6f7afeccd8eae97eff335163939eac8b929834875168b29b3d267"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
 dependencies = [
  "rustls-pki-types",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]

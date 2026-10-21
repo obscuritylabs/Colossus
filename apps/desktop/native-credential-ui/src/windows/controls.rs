@@ -10,8 +10,8 @@ use windows_sys::Win32::{
         Input::KeyboardAndMouse::EnableWindow,
         Shell::SetWindowSubclass,
         WindowsAndMessaging::{
-            BS_OWNERDRAW, CreateWindowExW, ES_AUTOHSCROLL, ES_PASSWORD, GetClientRect, MoveWindow,
-            SendMessageW, WM_SETFONT, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+            BS_OWNERDRAW, CreateWindowExW, ES_AUTOHSCROLL, ES_PASSWORD, ES_READONLY, GetClientRect,
+            MoveWindow, SendMessageW, WM_SETFONT, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
         },
     },
 };
@@ -24,6 +24,19 @@ pub(super) unsafe fn create(window: HWND, pointer: *mut Session) -> bool {
         let purpose = (*pointer).purpose;
         (*pointer).heading = control(window, "STATIC", purpose.heading(), 0, 0);
         (*pointer).description = control(window, "STATIC", purpose.description(), 0, 0);
+        if let Some(context) = &(*pointer).context {
+            (*pointer).destination_label = control(window, "STATIC", &context.heading(), 0, 0);
+            (*pointer).destination = control(
+                window,
+                "EDIT",
+                context.endpoint(),
+                WS_TABSTOP | ES_READONLY as u32 | ES_AUTOHSCROLL as u32,
+                0,
+            );
+            if (*pointer).destination_label.is_null() || (*pointer).destination.is_null() {
+                return false;
+            }
+        }
         (*pointer).label = control(window, "STATIC", &format!("&{}", purpose.label()), 0, 0);
         (*pointer).input = control(
             window,
@@ -80,7 +93,15 @@ pub(super) unsafe fn create(window: HWND, pointer: *mut Session) -> bool {
             wide(session.purpose.placeholder()).as_ptr() as isize,
         );
     }
-    for handle in [session.input, session.save, session.cancel] {
+    for handle in [
+        session.input,
+        session.save,
+        session.cancel,
+        session.destination,
+    ] {
+        if handle.is_null() {
+            continue;
+        }
         if unsafe { SetWindowSubclass(handle, Some(input::control_proc), 1, pointer as usize) } == 0
         {
             return false;
@@ -107,6 +128,7 @@ pub(super) unsafe fn layout(window: HWND, pointer: *const Session) {
     // vertically as requested, but lay out horizontally in the actual client area.
     let left = visual.px(28);
     let content_width = (client.right - visual.px(56)).max(1);
+    let offset = if session.context.is_some() { 88 } else { 0 };
     for (handle, bounds, font) in [
         (
             session.heading,
@@ -119,15 +141,25 @@ pub(super) unsafe fn layout(window: HWND, pointer: *const Session) {
             visual.body_font,
         ),
         (
-            session.label,
+            session.destination_label,
             [left, visual.px(110), content_width, visual.px(20)],
+            visual.body_font,
+        ),
+        (
+            session.destination,
+            [left, visual.px(138), content_width, visual.px(28)],
+            visual.body_font,
+        ),
+        (
+            session.label,
+            [left, visual.px(110 + offset), content_width, visual.px(20)],
             visual.body_font,
         ),
         (
             session.input,
             [
                 visual.px(40),
-                visual.px(148),
+                visual.px(148 + offset),
                 (client.right - visual.px(80)).max(1),
                 visual.px(20),
             ],
@@ -135,19 +167,19 @@ pub(super) unsafe fn layout(window: HWND, pointer: *const Session) {
         ),
         (
             session.status,
-            [left, visual.px(188), content_width, visual.px(18)],
+            [left, visual.px(188 + offset), content_width, visual.px(18)],
             visual.caption_font,
         ),
         (
             session.error,
-            [left, visual.px(208), content_width, visual.px(28)],
+            [left, visual.px(208 + offset), content_width, visual.px(28)],
             visual.caption_font,
         ),
         (
             session.save,
             [
                 client.right - visual.px(260),
-                visual.px(256),
+                visual.px(256 + offset),
                 visual.px(108),
                 visual.px(40),
             ],
@@ -157,7 +189,7 @@ pub(super) unsafe fn layout(window: HWND, pointer: *const Session) {
             session.cancel,
             [
                 client.right - visual.px(140),
-                visual.px(256),
+                visual.px(256 + offset),
                 visual.px(112),
                 visual.px(40),
             ],

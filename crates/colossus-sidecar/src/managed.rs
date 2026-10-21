@@ -49,6 +49,7 @@ use zeroize::Zeroizing;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
 
+mod logging;
 #[cfg(all(
     target_os = "macos",
     debug_assertions,
@@ -382,6 +383,24 @@ async fn run_with_browser_owner(
     let config = source_config
         .resolve_storage_paths(&workspace.canonical_path, instance_root.path())
         .map_err(|_| FailureCode::InvalidConfiguration)?;
+    let local_logs = match colossus_observability::LocalLogSink::open(
+        &instance_root,
+        "sidecar",
+        colossus_observability::LocalLogLevel::from_environment(),
+    ) {
+        Ok(logs) => Some(logs),
+        Err(_) => {
+            eprintln!("Colossus sidecar operational log storage is unavailable.");
+            None
+        }
+    };
+    let observability = colossus_observability::ObservabilityGuard::install_native(
+        &config.observability,
+        local_logs,
+    )
+    .map_err(|_| FailureCode::RuntimeFailed)?;
+    let mut startup_log = logging::StartupLog::default();
+    tracing::info!(target: "colossus.lifecycle", event_name = "sidecar.starting", process_id = std::process::id());
     persist_managed_config(&instance_dir, &config)?;
     if config.browser.enabled {
         // Independent executable seal and fixed adjacent inventory; inherited app
@@ -728,14 +747,6 @@ async fn run_with_browser_owner(
             return Err(FailureCode::CredentialActivation);
         }
     }
-    let observability =
-        match colossus_observability::ObservabilityGuard::install(&config.observability) {
-            Ok(observability) => observability,
-            Err(_) => {
-                let _ = credentials.revoke_batch(&credential_ids);
-                return Err(FailureCode::RuntimeFailed);
-            }
-        };
     let observability_diagnostics = observability
         .as_ref()
         .map(colossus_observability::ObservabilityGuard::diagnostics)
@@ -786,6 +797,7 @@ async fn run_with_browser_owner(
     }
     let shutdown_credentials = Arc::clone(&credentials);
     let guardian_credential_ids = credential_ids.clone();
+    startup_log.ready();
     let serve_result = server
         .serve_until(async move {
             let _ = guardian_rx.await;
@@ -796,6 +808,11 @@ async fn run_with_browser_owner(
     // runtime failure). Revoke idempotently on every exit path so neither active
     // bootstrap credential survives the supervised sidecar process.
     let _ = credentials.revoke_batch(&credential_ids);
+    if serve_result.is_ok() {
+        tracing::info!(target: "colossus.lifecycle", event_name = "sidecar.stopped");
+    } else {
+        tracing::error!(target: "colossus.lifecycle", event_name = "sidecar.failed", error_type = "runtime_failed");
+    }
     if let Some(observability) = observability {
         observability.shutdown();
     }

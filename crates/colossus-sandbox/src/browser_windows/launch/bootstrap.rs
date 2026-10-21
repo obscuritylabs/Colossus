@@ -5,14 +5,15 @@ use colossus_windows_process::PrivateReader;
 use serde::Serialize;
 use tokio::io::AsyncReadExt as _;
 
+mod identity_diagnostics;
+mod tls_diagnostics;
+
 pub(super) async fn drain(mut reader: PrivateReader) -> std::io::Result<u64> {
-    #[cfg(not(debug_assertions))]
-    return tokio::io::copy(&mut reader, &mut tokio::io::sink()).await;
-    #[cfg(debug_assertions)]
     {
         let mut total = 0u64;
         let mut bytes = [0u8; 1024];
         let mut line = Vec::new();
+        let mut overflow = false;
         loop {
             let count = reader.read(&mut bytes).await?;
             if count == 0 {
@@ -21,14 +22,26 @@ pub(super) async fn drain(mut reader: PrivateReader) -> std::io::Result<u64> {
             total = total.saturating_add(count as u64);
             for byte in &bytes[..count] {
                 if *byte == b'\n' {
-                    if let Ok(text) = std::str::from_utf8(&line)
-                        && debug_line_allowed(text)
-                    {
-                        eprintln!("{text}");
+                    if !overflow && let Ok(text) = std::str::from_utf8(&line) {
+                        if let Some(diagnostic) = tls_diagnostics::TlsDiagnostic::parse(text) {
+                            diagnostic.record();
+                        } else if let Some(diagnostic) =
+                            identity_diagnostics::IdentityDiagnostic::parse(text)
+                        {
+                            diagnostic.record();
+                        } else {
+                            #[cfg(debug_assertions)]
+                            if debug_line_allowed(text) {
+                                eprintln!("{text}");
+                            }
+                        }
                     }
                     line.clear();
+                    overflow = false;
                 } else if line.len() < 4096 {
                     line.push(*byte);
+                } else {
+                    overflow = true;
                 }
             }
         }

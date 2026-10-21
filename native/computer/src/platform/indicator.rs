@@ -1,8 +1,8 @@
-//! Real native operator controls and a passive human-input takeover fence.
+//! Real native operator controls and a click/keyboard takeover fence.
 use super::{Error, wide};
 use crate::{
     input_marker::InputMarker,
-    operator_control::{Action, Key, Keyboard},
+    operator_control::{Action, Key, Keyboard, foreign_pointer},
 };
 use std::{
     ptr::{null, null_mut},
@@ -368,7 +368,10 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
                             .fetch_add(1, Ordering::Relaxed);
                     }
                 }
-                signals.human.fetch_add(1, Ordering::AcqRel);
+                // Pointer movement alone is not a request to revoke control.
+                // Keep observing foreign clicks/wheels, and retain the physical
+                // Escape/Pause keyboard path while the agent moves the pointer.
+                foreign_pointer(&signals.human, wparam as u32 == WM_MOUSEMOVE);
             }
         }
     }

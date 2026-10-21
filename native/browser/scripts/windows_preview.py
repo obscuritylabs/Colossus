@@ -36,7 +36,7 @@ def seal(root: Path, output: Path) -> None:
         "cef_version": CEF_VERSION, "source_archive_sha256": ARCHIVE_SHA256,
         "production_acceptance": False,
         "capabilities": {"embedded": True, "headless": False, "restrictive_egress": False,
-                         "private_ca_trust": False, "client_identities": False},
+                         "private_ca_trust": False, "client_identities": True},
     }
     encoded = json.dumps(descriptor, separators=(",", ":")).encode("ascii")
     # No overwrite: a signing mutation requires a fresh stage and seal.

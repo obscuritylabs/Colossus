@@ -30,8 +30,13 @@ mod capture;
 mod developer_windows;
 mod devtools;
 #[cfg(windows)]
+mod identity_windows;
+#[cfg(windows)]
 mod interaction_windows;
+#[cfg(test)]
+mod navigation_tests;
 mod presentation;
+mod suspension;
 mod transfer;
 
 #[derive(Default)]
@@ -51,6 +56,17 @@ struct State {
     #[cfg(windows)]
     inspection_paused: HashSet<u64>,
 }
+impl State {
+    fn tab_outcome(&self, tab: u64) -> Result<(), BrowserDriverError> {
+        if self.failed.contains(&tab) || self.closed.contains(&tab) {
+            // The native failure may follow earlier network or input effects.
+            // Never report success or make a safe-to-retry no-effect claim.
+            Err(BrowserDriverError::OutcomeUnknown)
+        } else {
+            Ok(())
+        }
+    }
+}
 pub struct Callbacks {
     state: Mutex<State>,
     origins: Mutex<Vec<BrowserOrigin>>,
@@ -58,6 +74,8 @@ pub struct Callbacks {
     identity: Mutex<identity::Policy>,
     identity_revoked: AtomicBool,
     identity_cancellation: Mutex<Option<Arc<AtomicBool>>>,
+    #[cfg(windows)]
+    identity_review: Mutex<crate::identity_windows::Review>,
 }
 impl Default for Callbacks {
     fn default() -> Self {
@@ -68,6 +86,8 @@ impl Default for Callbacks {
             identity: Mutex::new(identity::Policy::default()),
             identity_revoked: AtomicBool::new(false),
             identity_cancellation: Mutex::new(None),
+            #[cfg(windows)]
+            identity_review: Mutex::new(crate::identity_windows::Review::default()),
         }
     }
 }
@@ -138,6 +158,15 @@ unsafe extern "C" fn event(
         // SAFETY: C ABI borrows valid bytes for exactly this callback, copied/parsed here.
         unsafe { std::slice::from_raw_parts(bytes, len) }
     };
+    #[cfg(windows)]
+    if kind == 18
+        && payload.len() == 8
+        && state.generations.get(&tab) == Some(&generation)
+        && let Ok(mut review) = callbacks.identity_review.lock()
+        && let Ok(bytes) = payload.try_into()
+    {
+        review.cancel(Some(u64::from_ne_bytes(bytes)));
+    }
     match kind {
         1 => {
             state.created.insert(tab);
@@ -322,6 +351,12 @@ unsafe extern "C" fn select_identity(
         // SAFETY: validated native public DER pointer/length, never retained after callback.
         public.push(unsafe { std::slice::from_raw_parts(certificate.der, certificate.der_len) });
     }
+    #[cfg(windows)]
+    if let Ok(mut review) = callbacks.identity_review.lock()
+        && review.start(tab, generation, request_id, origin.clone(), &public)
+    {
+        return -2;
+    }
     let selected = callbacks
         .identity
         .lock()
@@ -352,6 +387,7 @@ pub struct Host {
     next_tab: u64,
     next_command: i32,
     initialized: bool,
+    suspended: bool,
     expected_revision: Option<(u64, u64, u64)>,
     presentation: presentation::State,
     screenshot: Option<capture::Transfer>,
@@ -369,6 +405,7 @@ impl Host {
             next_tab: 1,
             next_command: 1,
             initialized: true,
+            suspended: false,
             expected_revision: None,
             presentation: presentation::State::default(),
             screenshot: None,
@@ -385,6 +422,8 @@ impl Host {
         }
         // SAFETY: Host is owned and called only on the main thread that bootstrapped CEF.
         if unsafe { ffi::colossus_cef_pump() } == 0 {
+            #[cfg(windows)]
+            self.service_identity_review();
             Ok(())
         } else {
             Err(BrowserDriverError::OutcomeUnknown)
@@ -547,6 +586,12 @@ impl Host {
             return Err(BrowserDriverError::Denied);
         }
         self.presentation.human = self.presentation.input_admitted && request.run_id.is_none();
+        #[cfg(windows)]
+        self.callbacks
+            .identity_review
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .operation(self.presentation.control_generation, control.clone());
         if self.presentation.human {
             self.presentation.handoff.admit(
                 request.binding.clone(),
@@ -954,6 +999,12 @@ impl Host {
             return Err(BrowserDriverError::Cancelled);
         }
         self.begin_agent_action(command.control_generation);
+        #[cfg(windows)]
+        self.callbacks
+            .identity_review
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .operation(command.control_generation, control.clone());
         let identity = command.target.tab_id.clone();
         let (native, revision, native_document, document) = self
             .tabs
@@ -967,9 +1018,7 @@ impl Host {
                 )
             })
             .ok_or(BrowserDriverError::Stale)?;
-        if self.state(|state| state.failed.contains(&native))? {
-            return Err(BrowserDriverError::OutcomeUnknown);
-        }
+        self.state(|state| state.tab_outcome(native))??;
         let actual_native_document = self.native_document(native)?;
         let actual_revision = self.metadata(native)?.2;
         if document != command.target.document_id {
@@ -1059,8 +1108,10 @@ impl Host {
                 // SAFETY: main-thread exact owned native tab; native URL policy also checks.
                 status_result(unsafe { ffi::colossus_cef_navigate(native, 1, url.as_ptr()) })?;
                 self.until(Some(control), Duration::from_secs(60), |state| {
-                    !state.loading.contains(&native)
-                        && state.completed.get(&native).copied().unwrap_or_default() > completed
+                    state.tab_outcome(native).is_err()
+                        || (!state.loading.contains(&native)
+                            && state.completed.get(&native).copied().unwrap_or_default()
+                                > completed)
                 })?;
             }
             BrowserAction::Back {}
@@ -1298,6 +1349,7 @@ impl Host {
             .get(&selected)
             .ok_or(BrowserDriverError::Stale)?
             .native;
+        self.state(|state| state.tab_outcome(selected_native))??;
         let (origin, title, new_revision) = self.metadata(selected_native)?;
         let new_native_document = self.native_document(selected_native)?;
         let tab = self
@@ -1359,6 +1411,12 @@ impl Host {
         self.shutdown()
     }
     pub fn close_all(&mut self) -> Result<(), BrowserDriverError> {
+        #[cfg(windows)]
+        self.callbacks
+            .identity_review
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .finish();
         #[cfg(windows)]
         {
             self.presentation.annotations = None;

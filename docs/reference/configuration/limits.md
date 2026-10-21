@@ -104,7 +104,8 @@ Physical **Escape** stops computer control; **Ctrl+Alt+P** pauses it. The pause
 shortcut never resumes control: use the card's **Resume** button. Pause blocks
 native computer input without suspending the whole model run. Stop immediately
 revokes computer input; the owning run is cancelled when the runtime receives
-the native stop result. Human input also pauses automation. These shortcuts are
+the native stop result. Moving the mouse alone leaves automation active. Human
+clicks, scrolling, or typing pause automation. These shortcuts are
 active only while a computer-control session owns its native card.
 Protected input, elevated apps, UAC, and locked or
 secure desktops require the human. Colossus's own controls are excluded targets.

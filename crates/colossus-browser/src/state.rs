@@ -39,6 +39,10 @@ pub(crate) struct Session {
     pub pending: Option<Pending>,
     pub quiescing: bool,
     pub cleanup_scheduled: bool,
+    pub suspended: bool,
+    /// Allocation's hard retention ceiling; completed turns cannot renew it.
+    pub retirement_deadline: Instant,
+    pub retirement_scheduled: bool,
     pub snapshots: BTreeMap<BrowserTabId, (BrowserSnapshotId, BTreeSet<BrowserElementId>)>,
     pub needs_snapshot: bool,
 }

@@ -275,19 +275,29 @@ unsafe fn keyboard(window: HWND, wparam: WPARAM, pointer: *const Session) -> boo
             return true;
         }
         0x09 => {
-            let handles = unsafe { [(*pointer).input, (*pointer).save, (*pointer).cancel] };
+            let handles = unsafe {
+                [
+                    (*pointer).destination,
+                    (*pointer).input,
+                    (*pointer).save,
+                    (*pointer).cancel,
+                ]
+            }
+            .into_iter()
+            .filter(|handle| !handle.is_null())
+            .collect::<Vec<_>>();
             let current = handles
                 .iter()
                 .position(|handle| *handle == window)
                 .unwrap_or(0);
             let backwards = unsafe { GetKeyState(i32::from(VK_SHIFT)) } < 0;
-            let step = if backwards { 2 } else { 1 };
-            let mut next = (current + step) % 3;
+            let step = if backwards { handles.len() - 1 } else { 1 };
+            let mut next = (current + step) % handles.len();
             if unsafe {
                 windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled(handles[next])
             } == 0
             {
-                next = (next + step) % 3;
+                next = (next + step) % handles.len();
             }
             unsafe {
                 SetFocus(handles[next]);

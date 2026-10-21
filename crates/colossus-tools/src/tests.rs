@@ -1210,9 +1210,8 @@ fn fresh_tool_output_cannot_spoof_observation_provenance() {
             tool_result_observation_messages(&[result("network.http", call_id, output.clone())])
                 .pop()
                 .expect("fresh observation");
-        let observation: Value =
-            serde_json::from_str(message.content.as_text().expect("fresh observation text"))
-                .expect("fresh observation JSON");
+        let observation: Value = serde_json::from_str(message.content.plain_text().as_ref())
+            .expect("fresh observation JSON");
 
         assert_eq!(
             observation["_colossusToolObservation"]["originalBytes"],

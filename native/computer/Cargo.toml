@@ -22,8 +22,8 @@ required-features = ["native-test-driver"]
 
 [dependencies]
 async-trait = "0.1.89"
-colossus-contracts = { version = "=0.11.8", path = "../../crates/colossus-contracts" }
-colossus-ports = { version = "=0.11.8", path = "../../crates/colossus-ports" }
+colossus-contracts = { version = "=0.11.9", path = "../../crates/colossus-contracts" }
+colossus-ports = { version = "=0.11.9", path = "../../crates/colossus-ports" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 sha2 = "0.10.9"
@@ -32,7 +32,7 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 tokio = { version = "1.49.0", features = ["process", "io-util", "rt", "sync", "time", "macros"] }
 
 [target.'cfg(windows)'.dependencies]
-colossus-windows-native = { version = "=0.11.8", path = "../../crates/colossus-windows-native" }
+colossus-windows-native = { version = "=0.11.9", path = "../../crates/colossus-windows-native" }
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_System_LibraryLoader", "Win32_System_StationsAndDesktops", "Win32_System_SystemInformation", "Win32_System_RemoteDesktop", "Win32_UI_Accessibility", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 windows = { version = "=0.62.2", features = [
   "Foundation", "Graphics_Capture", "Graphics_DirectX_Direct3D11",

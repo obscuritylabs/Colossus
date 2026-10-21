@@ -1,7 +1,7 @@
 //! `AppKit` presentation only; credential input and completion stay in the controller.
 
 use crate::purpose::Purpose;
-use crate::{ColorScheme, DialogAppearance, appearance::Palette};
+use crate::{ColorScheme, DialogAppearance, ProviderCredentialContext, appearance::Palette};
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameAccessibilityHighContrastAqua,
@@ -76,23 +76,46 @@ impl Style {
         &self,
         mtm: MainThreadMarker,
         purpose: Purpose,
+        context: bool,
     ) -> [Retained<NSTextField>; 3] {
+        let offset = if context { 88.0 } else { 0.0 };
         let heading = NSTextField::labelWithString(&NSString::from_str(purpose.heading()), mtm);
-        heading.setFrame(self.rect(28.0, 263.0, 504.0, 33.0));
+        heading.setFrame(self.rect(28.0, 263.0 + offset, 504.0, 33.0));
         heading.setFont(Some(&NSFont::boldSystemFontOfSize(20.0 * self.scale)));
         heading.setTextColor(Some(&self.color(self.palette.strong, NSColor::labelColor)));
         let description =
             NSTextField::wrappingLabelWithString(&NSString::from_str(purpose.description()), mtm);
         description.setFrame(if purpose == Purpose::Token {
-            self.rect(28.0, 227.0, 504.0, 30.0)
+            self.rect(28.0, 227.0 + offset, 504.0, 30.0)
         } else {
-            self.rect(28.0, 223.0, 504.0, 40.0)
+            self.rect(28.0, 223.0 + offset, 504.0, 40.0)
         });
         self.label(&description, 14.0, LabelTone::Muted);
         let label = NSTextField::labelWithString(&NSString::from_str(purpose.label()), mtm);
         label.setFrame(self.rect(28.0, 197.0, 504.0, 22.0));
         self.label(&label, 14.0, LabelTone::Normal);
         [heading, description, label]
+    }
+
+    pub(super) fn destination(
+        &self,
+        mtm: MainThreadMarker,
+        context: &ProviderCredentialContext,
+    ) -> [Retained<NSTextField>; 2] {
+        let label = NSTextField::labelWithString(&NSString::from_str(&context.heading()), mtm);
+        label.setFrame(self.rect(28.0, 280.0, 504.0, 22.0));
+        self.label(&label, 14.0, LabelTone::Normal);
+        let endpoint =
+            NSTextField::textFieldWithString(&NSString::from_str(context.endpoint()), mtm);
+        endpoint.setFrame(self.rect(28.0, 240.0, 504.0, 30.0));
+        endpoint.setEditable(false);
+        endpoint.setSelectable(true);
+        if let Some(cell) = endpoint.cell() {
+            cell.setScrollable(true);
+        }
+        self.label(&endpoint, 14.0, LabelTone::Normal);
+        super::accessibility::label(&endpoint, ns_string!("Provider endpoint"));
+        [label, endpoint]
     }
 
     pub(super) fn feedback(&self, mtm: MainThreadMarker) -> [Retained<NSTextField>; 2] {

@@ -16,6 +16,12 @@ pub struct TestDriver {
     pub executions: AtomicUsize,
     pub cancellations: AtomicUsize,
     pub closes: AtomicUsize,
+    pub retain_completed: AtomicBool,
+    pub suspended: AtomicUsize,
+    pub resumed: AtomicUsize,
+    pub fail_suspend: AtomicBool,
+    pub fail_resume: AtomicBool,
+    pub expired_resume: AtomicBool,
     pub block_open: AtomicBool,
     pub block_action: AtomicBool,
     pub block_cancel: AtomicBool,
@@ -45,6 +51,37 @@ impl TestDriver {
 
 #[async_trait]
 impl BrowserDriver for TestDriver {
+    fn supports_suspension(&self) -> bool {
+        self.retain_completed.load(Ordering::SeqCst)
+    }
+    async fn suspend_session(
+        &self,
+        _: &BrowserSessionId,
+        _: u64,
+    ) -> Result<(), BrowserDriverError> {
+        self.suspended.fetch_add(1, Ordering::SeqCst);
+        if self.fail_suspend.load(Ordering::SeqCst) {
+            Err(BrowserDriverError::OutcomeUnknown)
+        } else {
+            Ok(())
+        }
+    }
+    async fn resume_session(
+        &self,
+        _: &BrowserSessionId,
+        _: &str,
+        _: u64,
+        _: &BrowserDriverControl,
+    ) -> Result<(), BrowserDriverError> {
+        self.resumed.fetch_add(1, Ordering::SeqCst);
+        if self.expired_resume.load(Ordering::SeqCst) {
+            Err(BrowserDriverError::Stale)
+        } else if self.fail_resume.load(Ordering::SeqCst) {
+            Err(BrowserDriverError::OutcomeUnknown)
+        } else {
+            Ok(())
+        }
+    }
     fn cancellation_disposition(&self) -> BrowserCancelDisposition {
         if self.terminal_cancel.load(Ordering::SeqCst) {
             BrowserCancelDisposition::ClosesContext

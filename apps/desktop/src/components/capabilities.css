@@ -1,0 +1,83 @@
+.capability-inventory-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.capability-inventory-section {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.capability-table {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
+.capability-table > input {
+  max-width: 360px;
+}
+
+.capability-table table {
+  table-layout: fixed;
+  border-spacing: 0;
+  font-size: var(--font-size-body-sm);
+}
+
+.capability-table [data-slot="table-container"] {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+}
+
+.capability-table th,
+.capability-table td {
+  padding: var(--settings-row-padding, 10px 12px);
+  vertical-align: middle;
+}
+
+.capability-table thead th {
+  color: var(--muted);
+  background: var(--surface-panel);
+}
+
+.capability-table tbody > tr > * {
+  border-top: 1px solid var(--border);
+}
+
+.capability-table th:first-child {
+  width: 50%;
+}
+
+.capability-inventory-section .section-heading p {
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+  margin: 8px 0 0;
+}
+
+.capability-entry-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.capability-entry-copy span {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.capability-entry-copy,
+.capability-entry-detail {
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 481px) and (max-width: 980px) {
+  .operations-surface:has(.capabilities-scroll) .overview-header {
+    padding-left: calc(8em + 24px);
+  }
+}

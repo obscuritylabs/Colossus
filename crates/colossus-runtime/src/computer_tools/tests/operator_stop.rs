@@ -92,8 +92,16 @@ async fn released_user_stopped_status_is_committed_before_run_cancellation() {
 }
 
 #[tokio::test]
-async fn stale_or_denied_input_does_not_cancel_the_agent_run() {
-    for error in [ComputerDriverError::Stale, ComputerDriverError::Denied] {
+async fn known_native_rejections_do_not_cancel_the_agent_run() {
+    for error in [
+        ComputerDriverError::Stale,
+        ComputerDriverError::Denied,
+        ComputerDriverError::Paused,
+        ComputerDriverError::TargetRestricted,
+        ComputerDriverError::FocusDenied,
+        ComputerDriverError::ProtectedInput,
+        ComputerDriverError::InputHeld,
+    ] {
         let driver = Arc::new(Driver::default());
         let (runtime, _workspace) = runtime(driver.clone());
         let context = begin(&runtime, "recoverable-input");

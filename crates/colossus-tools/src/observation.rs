@@ -6,6 +6,9 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 
+#[path = "observation_history.rs"]
+mod history;
+
 /// Maximum serialized size of one model-visible tool-result message.
 pub const MAX_MODEL_TOOL_MESSAGE_BYTES: usize = 64 * 1024;
 /// Maximum combined serialized size of model-visible tool results in one user logical turn.
@@ -17,6 +20,17 @@ pub(crate) const MAX_OBSERVATION_METADATA_TEXT_BYTES: usize = 128;
 const MAX_JSON_DEPTH: usize = 16;
 const MAX_BINARY_SANITIZE_DEPTH: usize = 128;
 const IMPORTANT_KEYS: &[&str] = &[
+    "session_id",
+    "control_generation",
+    "observation_id",
+    "window_id",
+    "tab",
+    "tab_id",
+    "document_id",
+    "snapshot",
+    "snapshot_id",
+    "element",
+    "element_id",
     "id",
     "key",
     "name",
@@ -44,6 +58,7 @@ struct ObservationMetadata<'a> {
     tool_name: Option<&'a str>,
     call_id: Option<&'a str>,
     exit_code: Option<i32>,
+    identity: Option<&'a Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -62,6 +77,7 @@ enum ExistingObservationHandling {
 
 #[derive(Clone, Copy)]
 struct ExistingObservation<'a> {
+    truncated: bool,
     format: &'a str,
     original_bytes: u64,
     digest: &'a str,
@@ -93,18 +109,40 @@ pub fn tool_result_observation_messages(results: &[ToolResult]) -> Vec<ModelMess
                     )
                     .collect(),
                 ),
+                None if result.exit_code != 0
+                    || history::records_outcome(&result.name)
+                    || serde_json::from_str::<Value>(&result.output)
+                        .ok()
+                        .as_ref()
+                        .and_then(existing_observation)
+                        .is_some() =>
+                {
+                    // Scalar tool text could contain a false envelope in legacy
+                    // sessions. The released-result constructor alone issues this
+                    // exact text-only Parts shape for these builtins/outcomes;
+                    // earlier Parts results were image.view with actual images.
+                    ModelContent::Parts(vec![ModelContentPart::Text {
+                        text: result.output.clone(),
+                    }])
+                }
                 None => result.output.clone().into(),
             },
             tool_call_id: Some(result.call_id.clone()),
             tool_calls: Vec::new(),
         })
         .collect::<Vec<_>>();
+    let identities = results
+        .iter()
+        .map(history::released_identity)
+        .collect::<Vec<_>>();
     let metadata = results
         .iter()
-        .map(|result| ObservationMetadata {
+        .zip(&identities)
+        .map(|(result, identity)| ObservationMetadata {
             tool_name: Some(result.name.as_str()),
             call_id: Some(result.call_id.as_str()),
             exit_code: Some(result.exit_code),
+            identity: identity.as_ref(),
         })
         .collect::<Vec<_>>();
     let mut projected = project_tool_messages(
@@ -167,11 +205,48 @@ fn released_tool_image_message(result: &ToolResult) -> Option<ModelMessage> {
 /// Return a provider-visible copy whose user logical turns obey model observation bounds.
 ///
 /// This is also the compatibility path for sessions written before observations were
-/// bounded. Non-tool messages remain byte-for-byte equivalent, tool messages remain
-/// unchanged when their complete logical turn fits, and the canonical input slice is
-/// never mutated.
+/// bounded. Settled successful native observations may be superseded within a human
+/// turn or expire after it; exact duplicate builtin reads may also shed old content.
+/// Assistant calls and arguments remain exact, and image eviction preserves sequence
+/// slots using fixed metadata markers. The canonical input slice is never mutated.
 pub fn project_model_tool_observations(messages: &[ModelMessage]) -> Vec<ModelMessage> {
+    project_history(messages, true)
+}
+
+/// Bound observations while preserving the current human turn for exact provider replay.
+///
+/// Signed provider exchanges may require the original current-turn tool results.
+/// Prior-turn expiry and existing aggregate/image bounds still apply; adapters must
+/// reject replay if those bounds change their protected prefix.
+pub fn project_model_tool_observations_preserving_current_turn(
+    messages: &[ModelMessage],
+) -> Vec<ModelMessage> {
+    project_history(messages, false)
+}
+
+/// Omit released native screenshot pixels from a derived text-only route context.
+///
+/// Apply this before either history projection, so later canonical image-budget
+/// rollover cannot change an already-sent receipt. Sequence slots remain stable;
+/// user inputs, image-view tool results and canonical artifact evidence are untouched.
+/// Unsettled or malformed transcripts remain unchanged for normal integrity rejection.
+pub fn omit_unsupported_model_tool_images(messages: &mut [ModelMessage]) {
+    if colossus_contracts::validate_model_transcript(messages).is_err() {
+        return;
+    }
+    for message in messages {
+        if message.role == ModelMessageRole::ToolObservation {
+            history::archive_image(message, "image_inputs_unavailable");
+        }
+    }
+}
+
+fn project_history(messages: &[ModelMessage], supersede_current: bool) -> Vec<ModelMessage> {
     let mut projected = messages.to_vec();
+    history::archive_previous_observations(&mut projected);
+    if supersede_current {
+        history::supersede_current_observations(&mut projected);
+    }
     let mut logical_start = 0;
     for index in 1..=projected.len() {
         let logical_end = index == projected.len() || projected[index].begins_user_turn();
@@ -187,7 +262,7 @@ pub fn project_model_tool_observations(messages: &[ModelMessage]) -> Vec<ModelMe
 
 // Preserve user inputs and the newest released tool images within the existing
 // provider image envelope. Canonical artifact and completion records are unchanged.
-fn bound_tool_images(messages: &mut Vec<ModelMessage>) {
+fn bound_tool_images(messages: &mut [ModelMessage]) {
     let (mut count, mut bytes) = messages
         .iter()
         .filter(|message| message.role != ModelMessageRole::ToolObservation)
@@ -198,8 +273,7 @@ fn bound_tool_images(messages: &mut Vec<ModelMessage>) {
                 bytes.saturating_add(image.size_bytes),
             )
         });
-    let mut remove = std::collections::BTreeSet::new();
-    for (index, message) in messages.iter().enumerate().rev() {
+    for message in messages.iter_mut().rev() {
         if message.role != ModelMessageRole::ToolObservation {
             continue;
         }
@@ -208,18 +282,12 @@ fn bound_tool_images(messages: &mut Vec<ModelMessage>) {
             .images()
             .fold(0_u64, |size, image| size.saturating_add(image.size_bytes));
         if count >= 16 || bytes.saturating_add(size) > 32 * 1_048_576 {
-            remove.insert(index);
+            history::archive_image(message, "image_budget");
         } else {
             count += 1;
             bytes += size;
         }
     }
-    let mut index = 0;
-    messages.retain(|_| {
-        let retain = !remove.contains(&index);
-        index += 1;
-        retain
-    });
 }
 
 fn project_logical_turn(messages: &mut [ModelMessage]) {
@@ -246,6 +314,7 @@ fn project_logical_turn(messages: &mut [ModelMessage]) {
                 .and_then(|call_id| tool_names.get(call_id).copied()),
             call_id: message.tool_call_id.as_deref(),
             exit_code: None,
+            identity: None,
         })
         .collect::<Vec<_>>();
     let projected = project_tool_messages(
@@ -271,7 +340,8 @@ fn project_tool_messages(
     let desired = messages
         .iter()
         .zip(&serialized)
-        .map(|(message, size)| {
+        .zip(metadata)
+        .map(|((message, size), metadata)| {
             let collision = existing_observation_handling
                 == ExistingObservationHandling::TreatAsFreshOutput
                 && serde_json::from_str::<Value>(&message.content.plain_text())
@@ -279,7 +349,12 @@ fn project_tool_messages(
                     .as_ref()
                     .and_then(existing_observation)
                     .is_some();
-            size.saturating_add(if collision {
+            let records_outcome = existing_observation_handling
+                == ExistingObservationHandling::TreatAsFreshOutput
+                && metadata.exit_code.is_some_and(|code| {
+                    code != 0 || metadata.tool_name.is_some_and(history::records_outcome)
+                });
+            size.saturating_add(if collision || records_outcome {
                 OBSERVATION_ENVELOPE_BUDGET_BYTES
             } else {
                 0
@@ -393,11 +468,22 @@ fn project_tool_message(
     let output = output.as_ref();
 
     let parsed = serde_json::from_str::<Value>(output).ok();
-    let existing = parsed.as_ref().and_then(existing_observation);
+    let raw_existing = parsed.as_ref().and_then(existing_observation);
     let fresh_observation_collision = existing_observation_handling
         == ExistingObservationHandling::TreatAsFreshOutput
-        && existing.is_some();
-    if serialized_message_bytes(message) <= message_budget && !fresh_observation_collision {
+        && raw_existing.is_some();
+    let existing = parsed
+        .as_ref()
+        .and_then(|value| existing_message_observation(message, value));
+    let record_outcome = existing_observation_handling
+        == ExistingObservationHandling::TreatAsFreshOutput
+        && metadata.exit_code.is_some_and(|code| {
+            code != 0 || metadata.tool_name.is_some_and(history::records_outcome)
+        });
+    if serialized_message_bytes(message) <= message_budget
+        && !fresh_observation_collision
+        && !record_outcome
+    {
         return message.clone();
     }
     if existing_observation_handling == ExistingObservationHandling::PreserveProvenance
@@ -407,6 +493,26 @@ fn project_tool_message(
     }
     let normalized = parsed.as_ref().map(normalize_oversized_json);
     let digest = sha256_hex(output.as_bytes());
+    if record_outcome || fresh_observation_collision {
+        let (format, key, content) = parsed.as_ref().map_or_else(
+            || ("text", "preview", Value::String(output.to_owned())),
+            |value| ("json", "data", value.clone()),
+        );
+        let mut observation = observation_envelope(
+            u64::try_from(output.len()).unwrap_or(u64::MAX),
+            format,
+            metadata,
+            &digest,
+            key,
+            content,
+        );
+        observation["_colossusToolObservation"]["truncated"] = false.into();
+        let mut candidate = message.clone();
+        candidate.content = projected_text_content(message, observation.to_string());
+        if serialized_message_bytes(&candidate) <= message_budget {
+            return candidate;
+        }
+    }
     let mut output_budget = message_budget.saturating_sub(96).max(256);
 
     for _ in 0..16 {
@@ -418,7 +524,7 @@ fn project_tool_message(
             output_budget,
         );
         let mut candidate = message.clone();
-        candidate.content = observation.into();
+        candidate.content = projected_text_content(message, observation);
         let candidate_bytes = serialized_message_bytes(&candidate);
         if candidate_bytes <= message_budget {
             return candidate;
@@ -432,14 +538,16 @@ fn project_tool_message(
     }
 
     let mut candidate = message.clone();
-    candidate.content = metadata_only_observation(
-        u64::try_from(output.len()).unwrap_or(u64::MAX),
-        normalized.is_some(),
-        metadata,
-        &digest,
-    )
-    .to_string()
-    .into();
+    candidate.content = projected_text_content(
+        message,
+        metadata_only_observation(
+            u64::try_from(output.len()).unwrap_or(u64::MAX),
+            normalized.is_some(),
+            metadata,
+            &digest,
+        )
+        .to_string(),
+    );
     if serialized_message_bytes(&candidate) <= message_budget {
         return candidate;
     }
@@ -466,9 +574,7 @@ fn image_metadata_bytes(message: &ModelMessage) -> usize {
 
 fn existing_observation(value: &Value) -> Option<ExistingObservation<'_>> {
     let details = value.get("_colossusToolObservation")?.as_object()?;
-    if !details.get("truncated")?.as_bool()? {
-        return None;
-    }
+    let truncated = details.get("truncated")?.as_bool()?;
     let format = details.get("format")?.as_str()?;
     if !matches!(format, "json" | "text") {
         return None;
@@ -484,6 +590,7 @@ fn existing_observation(value: &Value) -> Option<ExistingObservation<'_>> {
         ("data", value.get("data")?)
     };
     Some(ExistingObservation {
+        truncated,
         format,
         original_bytes,
         digest,
@@ -496,8 +603,35 @@ fn existing_observation(value: &Value) -> Option<ExistingObservation<'_>> {
                 .get("exitCode")
                 .and_then(Value::as_i64)
                 .and_then(|value| i32::try_from(value).ok()),
+            identity: details.get("identity"),
         },
     })
+}
+
+fn released_text_form(message: &ModelMessage) -> bool {
+    message.role == ModelMessageRole::Tool
+        && message.agent_message_origin.is_none()
+        && message.tool_calls.is_empty()
+        && matches!(&message.content,ModelContent::Parts(parts) if matches!(parts.as_slice(),[ModelContentPart::Text {..}]))
+}
+
+fn existing_message_observation<'a>(
+    message: &ModelMessage,
+    value: &'a Value,
+) -> Option<ExistingObservation<'a>> {
+    let observation = existing_observation(value)?;
+    // Previous releases reserved valid truncated=true envelopes, but treated raw
+    // false envelopes as ordinary scalar output. Never adopt their claimed status,
+    // digest or identity, even when later rebounding that legacy scalar content.
+    (observation.truncated || released_text_form(message)).then_some(observation)
+}
+
+fn projected_text_content(message: &ModelMessage, text: String) -> ModelContent {
+    if released_text_form(message) {
+        ModelContent::Parts(vec![ModelContentPart::Text { text }])
+    } else {
+        text.into()
+    }
 }
 
 fn project_existing_tool_message(
@@ -510,12 +644,13 @@ fn project_existing_tool_message(
         tool_name: metadata.tool_name.or(existing.metadata.tool_name),
         call_id: metadata.call_id.or(existing.metadata.call_id),
         exit_code: metadata.exit_code.or(existing.metadata.exit_code),
+        identity: metadata.identity.or(existing.metadata.identity),
     };
     let mut output_budget = message_budget.saturating_sub(96).max(256);
     for _ in 0..16 {
         let observation = render_existing_observation(existing, metadata, output_budget);
         let mut candidate = message.clone();
-        candidate.content = observation.into();
+        candidate.content = projected_text_content(message, observation);
         let candidate_bytes = serialized_message_bytes(&candidate);
         if candidate_bytes <= message_budget {
             return candidate;
@@ -529,14 +664,16 @@ fn project_existing_tool_message(
     }
 
     let mut candidate = message.clone();
-    candidate.content = metadata_only_observation(
-        existing.original_bytes,
-        existing.format == "json",
-        metadata,
-        existing.digest,
-    )
-    .to_string()
-    .into();
+    candidate.content = projected_text_content(
+        message,
+        metadata_only_observation(
+            existing.original_bytes,
+            existing.format == "json",
+            metadata,
+            existing.digest,
+        )
+        .to_string(),
+    );
     if serialized_message_bytes(&candidate) <= message_budget {
         return candidate;
     }
@@ -729,6 +866,9 @@ fn observation_envelope(
     }
     if let Some(exit_code) = metadata.exit_code {
         details.insert("exitCode".into(), Value::from(exit_code));
+    }
+    if let Some(identity) = metadata.identity {
+        details.insert("identity".into(), identity.clone());
     }
     details.insert("originalBytes".into(), Value::from(original_bytes));
     details.insert("sha256".into(), Value::String(digest.into()));
