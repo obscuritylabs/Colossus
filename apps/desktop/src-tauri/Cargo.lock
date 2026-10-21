@@ -885,6 +885,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-cloud-executor"
+version = "0.11.9"
+dependencies = [
+ "colossus-cloud-protocol",
+ "colossus-sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "colossus-cloud-protocol"
 version = "0.11.9"
 dependencies = [
@@ -924,6 +935,7 @@ version = "0.11.9"
 dependencies = [
  "async-trait",
  "clap",
+ "colossus-cloud-executor",
  "colossus-cloud-protocol",
  "colossus-contracts",
  "colossus-credentials",
