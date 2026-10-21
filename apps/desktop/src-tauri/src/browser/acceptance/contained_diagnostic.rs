@@ -56,6 +56,8 @@ use windows_frames::{accepted_frame, focus};
 
 mod native_input;
 mod owned_tabs;
+mod tool_evidence;
+use tool_evidence::tool_result;
 #[cfg(windows)]
 mod session_reopen;
 #[cfg(windows)]
@@ -455,29 +457,6 @@ async fn serve(
         }
     }
     Ok(())
-}
-
-fn tool_result(body: &Value, call_id: &str) -> anyhow::Result<Value> {
-    let messages = body["messages"]
-        .as_array()
-        .context("model messages missing")?;
-    let message = messages
-        .iter()
-        .rev()
-        .find(|message| message["role"] == "tool" && message["tool_call_id"] == call_id)
-        .with_context(|| format!("Core did not return {call_id} tool evidence"))?;
-    let content = message["content"]
-        .as_str()
-        .context("tool evidence is not scalar text")?;
-    let result: Value = serde_json::from_str(content).context("tool evidence is not JSON")?;
-    if result.get("error").is_some() {
-        let code = categorical_tool_failure(&result);
-        eprintln!(
-            "EVIDENCE core-tool-failure code={code} browser_error={}",
-            categorical_browser_failure(&result)
-        );
-    }
-    Ok(result)
 }
 
 fn categorical_tool_failure(result: &Value) -> &'static str {
@@ -958,6 +937,27 @@ async fn title(view: &RemoteSurface, expected: &str) -> anyhow::Result<()> {
             "native RemoteSurface did not show title {expected:?}; last title {last:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn active_title(
+    view: &RemoteSurface,
+    expected: &str,
+    fixture: &FixtureState,
+) -> anyhow::Result<()> {
+    // Keep the original title deadline while surfacing the first provider-fixture
+    // error instead of masking it as a later native-page timeout.
+    let mut observed = Box::pin(title(view, expected));
+    loop {
+        let changed = fixture.changed.notified();
+        fixture.check()?;
+        tokio::select! {
+            result = &mut observed => {
+                fixture.check()?;
+                return result;
+            }
+            () = changed => {}
+        }
     }
 }
 
@@ -1653,7 +1653,7 @@ async fn exercise_owned(
     fixture.state.signal(&fixture.state.handoff_done);
     println!("PASS authenticated native human-to-agent handoff");
 
-    title(&view, "Agent click received").await?;
+    active_title(&view, "Agent click received", &fixture.state).await?;
     fixture
         .state
         .wait(
@@ -1667,7 +1667,7 @@ async fn exercise_owned(
     println!("PASS Core browser.snapshot and browser.click changed the visible page");
     #[cfg(windows)]
     wait_continuity::checkpoint(client, &run.run_id, &view, fixture, heartbeat).await?;
-    title(&view, "Agent controlled page").await?;
+    active_title(&view, "Agent controlled page", &fixture.state).await?;
     #[cfg(windows)]
     println!("EVIDENCE Core navigation title acknowledged; awaiting matching native frame");
     // Core may begin its next finite observation after the title receipt. The
@@ -2198,10 +2198,12 @@ mod tests {
             json!({"session_id":"session-owned", "control_generation":7, "tab_id":"tab-old", "document_id":"doc-old"}),
         );
         let body = |call_id: &str, observation: Value| {
-            json!({
-                "tools":[{"function":{"name":"browser_snapshot"}}, {"function":{"name":"browser_navigate"}}],
-                "messages":[{"role":"tool", "tool_call_id":call_id, "content":observation.to_string()}]
-            })
+            let name = if call_id == "fixture-2" {
+                "browser.click"
+            } else {
+                "browser.snapshot"
+            };
+            super::tool_evidence::test_body(name, call_id, &observation)
         };
         let clicked = body(
             "fixture-2",

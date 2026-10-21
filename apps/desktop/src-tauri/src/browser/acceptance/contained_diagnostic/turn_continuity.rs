@@ -105,6 +105,8 @@ pub(super) async fn response(
     }
 }
 
+// Keep this ordered two-run native conformance scenario in one reviewable sequence.
+#[allow(clippy::too_many_lines)]
 pub(super) async fn checkpoint(
     app: &tauri::AppHandle,
     client: &Colossus,

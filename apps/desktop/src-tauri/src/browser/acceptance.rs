@@ -103,7 +103,7 @@ pub(crate) fn run() -> i32 {
                         feature = "windows-browser-development"
                     ))]
                     {
-                        contained_diagnostic::exercise(&app, &address, &home).await
+                        Box::pin(contained_diagnostic::exercise(&app, &address, &home)).await
                     }
                     #[cfg(not(any(
                         feature = "embedded-chromium-preview",
