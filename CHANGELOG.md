@@ -122,8 +122,10 @@ include breaking changes while the public API is still settling.
 - **browser:** reproduce modal visibility traffic ([d943cc1](https://github.com/obscuritylabs/Colossus/commit/d943cc1b6e891ba8719a9b50e6082e9741f78527))
 - **browser:** distinguish wire and read delays ([f6cff19](https://github.com/obscuritylabs/Colossus/commit/f6cff197ce8428172eaae063f969801e5a0b08d0))
 - **grpc:** trace slow history list polls ([ddbd3ef](https://github.com/obscuritylabs/Colossus/commit/ddbd3ef994847fe1b7e5ec0fdd52693c2386971f))
+- **release:** prepare 0.11.9 changelog ([61d3d68](https://github.com/obscuritylabs/Colossus/commit/61d3d68747a2019edc16d67f621ac790a9b15576))
+- assert live profile restoration and completed tool calls ([09a1d1d](https://github.com/obscuritylabs/Colossus/commit/09a1d1d26fb652df058577cda4e9c9e2528dd226))
 
-**Source:** [40a8923](https://github.com/obscuritylabs/Colossus/commit/40a8923e5f1c0c28d2a2a3e8ddf637d0bd8552ec)
+**Source:** [09a1d1d](https://github.com/obscuritylabs/Colossus/commit/09a1d1d26fb652df058577cda4e9c9e2528dd226)
 
 **Full changelog:** [v0.11.8...v0.11.9](https://github.com/obscuritylabs/Colossus/compare/v0.11.8...v0.11.9)
 
