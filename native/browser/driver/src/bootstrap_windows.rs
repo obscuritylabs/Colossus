@@ -65,6 +65,9 @@ pub fn run() -> Result<(), BrowserDriverError> {
     let callbacks = Box::<cef::Callbacks>::default();
     let cancelled = Arc::new(AtomicBool::new(false));
     callbacks.configure_identity(identity::Policy::new(Vec::new())?, Arc::clone(&cancelled))?;
+    callbacks.enable_windows_identity_review(
+        configuration.user_development() && configuration.enrollment.capabilities.client_identities,
+    )?;
     receipt(&mut bootstrap.writer, 4)?;
     configuration.proxy()?;
     receipt(&mut bootstrap.writer, 5)?;

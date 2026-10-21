@@ -398,9 +398,7 @@ pub(super) fn extract_files(messages: &[ModelMessage]) -> Vec<String> {
         .iter()
         .filter(|message| message.role == ModelMessageRole::Tool)
     {
-        if let Some(text) = message.content.as_text()
-            && let Ok(value) = serde_json::from_str::<Value>(text)
-        {
+        if let Ok(value) = serde_json::from_str::<Value>(&message.content.plain_text()) {
             paths_from_json(&value, &mut paths);
         }
     }

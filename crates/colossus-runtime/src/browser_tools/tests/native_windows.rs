@@ -14,6 +14,7 @@ use sha2::Digest as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+mod pki;
 mod rich_interactions;
 
 const PAGE: &str = r#"<!doctype html><html><head><title>Core Windows fixture</title></head>

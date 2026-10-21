@@ -5,6 +5,7 @@ use colossus_windows_process::PrivateReader;
 use serde::Serialize;
 use tokio::io::AsyncReadExt as _;
 
+mod identity_diagnostics;
 mod tls_diagnostics;
 
 pub(super) async fn drain(mut reader: PrivateReader) -> std::io::Result<u64> {
@@ -23,6 +24,10 @@ pub(super) async fn drain(mut reader: PrivateReader) -> std::io::Result<u64> {
                 if *byte == b'\n' {
                     if !overflow && let Ok(text) = std::str::from_utf8(&line) {
                         if let Some(diagnostic) = tls_diagnostics::TlsDiagnostic::parse(text) {
+                            diagnostic.record();
+                        } else if let Some(diagnostic) =
+                            identity_diagnostics::IdentityDiagnostic::parse(text)
+                        {
                             diagnostic.record();
                         } else {
                             #[cfg(debug_assertions)]

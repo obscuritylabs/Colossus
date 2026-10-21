@@ -166,7 +166,16 @@ impl ProviderExecutor {
             tool_call_id: None,
         };
         if replay {
-            items.push(json!({"message":assistant, "content":output}));
+            let prefix_hash = crate::anthropic::request_prefix_hash(
+                payload,
+                payload["messages"]
+                    .as_array()
+                    .ok_or_else(|| {
+                        ProviderError::Malformed("invalid Messages replay prefix".into())
+                    })?
+                    .len(),
+            )?;
+            items.push(json!({"message":assistant, "content":output, "prefix_hash":prefix_hash}));
         }
         let bytes = serde_json::to_vec(&items)
             .map_err(|_| ProviderError::Malformed("invalid provider state".into()))?

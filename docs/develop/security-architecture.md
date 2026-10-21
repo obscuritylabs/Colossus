@@ -126,6 +126,28 @@ before the next share a 256 KiB aggregate budget. Assistant continuation message
 reset that aggregate budget, so a long sequence of individually bounded MCP results
 cannot accumulate into an unbounded protected turn.
 
+Complete outcome envelopes additionally require the released-result constructor's
+typed single-text-part form. Legacy scalar JSON claiming a complete observation never
+establishes a trusted exit status, digest, or native identity; later byte reduction
+recomputes its provenance from the actual legacy bytes.
+
+Every provider request derives observation context from the retained session evidence.
+Successful native window lists and semantic trees keep the newest matching target and
+request bounds; screenshots keep the newest two matching views for comparison, under
+the shared image budget. Older screenshot pixels become fixed metadata markers in the
+same sequence slots. Completed human turns expire these native observations. Explicit
+filesystem, Git, repository, and tool-catalog reads shed only exact duplicate arguments
+and complete output digests. Errors, uncertain outcomes, actions, unknown legacy status,
+MCP, network responses, and streaming or paginated tools are not eligible. Provenance
+markers replace a text result only when smaller, and never copy page or file content
+into privileged instructions. Canonical messages, exact assistant arguments, call/result
+pairing, artifacts, and complete run evidence remain intact.
+
+Required signed provider replay defers current-turn supersession. Its exact wire prefix
+is verified before dispatch, and aggregate bounds that would change that prefix fail
+closed. Opaque provider compaction is retired if the current derived prefix changes, so
+it cannot restore observations already omitted from the model context.
+
 A complete, bounded JSON-RPC error frame from an MCP server is a confirmed server
 response. Colossus normalizes it into a quarantined `CallToolResult` with `isError: true`,
 then applies credential redaction and the ordinary post-effect release decision before
@@ -892,7 +914,18 @@ modes or establish whole-host network and parent-death containment.
 The explicitly selected Windows Debug development composition admits functional
 automation without AppContainer/WFP containment. It retains Chromium's built-in
 sandbox, an owned Job and the authenticated boundaries above, while reporting
-`restrictive_egress: false` and no owned CA/client-identity capability. It never
+`restrictive_egress: false` and no private per-profile CA/key custody. An existing
+Windows client identity can be selected only by a separate native review of the
+exact pending HTTPS origin and public certificate fingerprint. Its controls are
+read-only, Cancel is the default and the review expires after 45 seconds. One
+session-local native gate limits concurrent dialogs. CEF keeps pumping while the
+dialog runs; dispatch rechecks request, tab, writer generation, admission and run
+cancellation before consuming the native one-use request. Navigation and shutdown
+cancel outstanding reviews, and shutdown joins the dialog worker before DLL
+unload. Chromium retains OS private-key custody and can cache the selection for
+the exact origin in its temporary session. No model, renderer or runtime-YAML
+field can select a certificate or key. The contained edition still rejects this
+capability. The ordinary-user edition never
 retries a failed contained launch in this mode. Standard installation and app use
 remain non-admin; the executable requests `asInvoker`. Source acceptance cannot
 enable publisher release modes or substitute for installed signed-package and

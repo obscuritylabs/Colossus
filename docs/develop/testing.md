@@ -236,6 +236,18 @@ generated runtime keys and homes, leaves the operator's profile untouched, and
 performs no computer operation or window activation. It can run in the
 background, but does not replace the capture and input acceptance below.
 
+To verify that a persisted Minimal profile can return to Development and Allow All,
+use the prepared debug Desktop binaries and run:
+
+```powershell
+cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --lib native_reused_provider_profiles_restart_and_expose_authenticated_inventory -- --ignored
+```
+
+This check reopens disposable Desktop settings, restarts the real Managed Local
+sidecar for each profile, and reads its authenticated tool, MCP, search and plugin
+inventories. It makes no external provider request and removes its generated runtime
+keys and home after closing the sidecar.
+
 Real Windows acceptance requires an unlocked interactive desktop under the
 ordinary user's token. Its disposable target must be a sibling process of the
 verified host: the adapter deliberately denies its host, controller and their
@@ -540,6 +552,42 @@ store controls after the run. The evidence distinguishes operator-reported remov
 from verified key custody and does not claim signed installed PKI acceptance.
 Linux unattended provisioning uses a separate owned NSS store; real CEF acceptance
 of that path is independent of this operator-driven OS-store tier.
+
+Windows ordinary-user source preview also has an automated native-dialog tier.
+Build the local TLS server and the explicit native test executable:
+
+```powershell
+cargo build --locked -p colossus-sandbox --example windows_pki_server
+cargo test --locked -p colossus-sandbox --test browser_windows_pki --no-run
+python -B native/browser/scripts/run_windows_pki_probe.py `
+  --confirm-fixture-store-changes `
+  --directory <new-private-fixture-directory> `
+  --component <verified-windows-component> `
+  --state-parent <existing-owner-private-directory> `
+  --test-executable <browser_windows_pki-executable-printed-by-cargo> `
+  --server-executable target/debug/examples/windows_pki_server.exe
+```
+
+Run this explicitly as the ordinary user with OpenSSL and Python's `cryptography`
+package available. The runner creates an owner-private fixture directory, unique
+nonexportable user CNG signing keys, and fixture-only CurrentUser ROOT/MY entries.
+It records exact certificate and public-key digests before changing the stores.
+The local server advertises only the fixture CA, and the dialog driver accepts
+only that component process, exact fixture origin and generated public identity.
+It verifies actual server-observed mTLS login, alternate identity rejection,
+default cancellation, changed-origin denial, run cancellation and TLS failures.
+Finally it removes and verifies absence of its exact certificates and key
+containers, and deletes generated private fixture files. Retain the immutable
+`store-ledger-*.json` checkpoints and `windows-pki-acceptance.json` receipt. An
+unverified cleanup is a failed run and must be resolved against that ledger.
+
+For the same matrix through Core policy and browser tools, first build the runtime
+lib test with `cargo test --locked -p colossus-runtime --lib --no-run`, then pass its
+printed executable to the runner with
+`--test browser_tools::tests::native_windows::pki::core_authenticates_system_ca_and_reviewed_client_identity_after_policy`.
+This source-preview acceptance establishes native selection of OS-owned keys;
+private per-profile certificate custody, contained Windows execution and signed
+installed acceptance remain separate gates.
 
 ### Owned browser control conformance
 

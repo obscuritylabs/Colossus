@@ -321,6 +321,13 @@ unsafe extern "C" {
     pub fn colossus_cef_navigate(tab: u64, generation: u64, url: *const c_char) -> i32;
     pub fn colossus_cef_control(tab: u64, generation: u64, action: u32) -> i32;
     pub fn colossus_cef_close(tab: u64, generation: u64) -> i32;
+    #[cfg(windows)]
+    pub fn colossus_cef_select_identity(
+        tab: u64,
+        generation: u64,
+        request_id: u64,
+        candidate_index: i32,
+    ) -> i32;
     pub fn colossus_cef_devtools(
         tab: u64,
         generation: u64,

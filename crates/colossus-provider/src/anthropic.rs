@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod replay;
+pub(super) use replay::request_prefix_hash;
 mod stream;
 pub(super) use stream::AnthropicStream;
 
@@ -18,20 +20,25 @@ pub(super) fn payload(
     let mut system = vec![json!({"type":"text", "text":request.instructions})];
     let mut messages: Vec<Value> = Vec::new();
     let replay = projection.continuation.map(|s| &s.hidden_reasoning);
-    if request
+    if let Some(assistant) = request
         .messages
         .iter()
         .rev()
         .find(|m| m.role == ModelMessageRole::Assistant)
-        .is_some_and(|m| !m.tool_calls.is_empty())
-        && replay.is_none()
+        .filter(|m| !m.tool_calls.is_empty())
+        && replay.is_none_or(|items| {
+            !items.iter().any(|entry| {
+                serde_json::from_value::<ModelMessage>(entry["message"].clone())
+                    .is_ok_and(|original| original == *assistant)
+            })
+        })
     {
         return Err(invalid(
             "Messages tool continuation requires its private replay state",
         ));
     }
     for message in &request.messages {
-        if message.role == ModelMessageRole::System {
+        if message.role == ModelMessageRole::System && !archived_tool_image_receipt(message) {
             if message.content.images().next().is_some() {
                 return Err(invalid("Messages system content cannot contain images"));
             }
@@ -153,7 +160,66 @@ pub(super) fn payload(
         }
         None => {}
     }
+    if let Some(replay) = replay {
+        replay::validate_prefixes(&payload, replay)?;
+    }
     Ok(payload)
+}
+
+fn archived_tool_image_receipt(message: &ModelMessage) -> bool {
+    if message.role != ModelMessageRole::System
+        || message.agent_message_origin.is_some()
+        || message.tool_call_id.is_some()
+        || !message.tool_calls.is_empty()
+    {
+        return false;
+    }
+    let Some(text) = message.content.as_text().filter(|text| text.len() <= 8192) else {
+        return false;
+    };
+    let Ok(Value::Object(receipt)) = serde_json::from_str::<Value>(text) else {
+        return false;
+    };
+    // Derived image receipts contain fixed host copy and bounded public metadata.
+    // Keep their original conversation position: hoisting each new receipt into
+    // system would rewrite every earlier signed tool response's protected prefix.
+    receipt.len() == 4
+        && receipt.get("_colossusArchivedToolImage") == Some(&Value::Bool(true))
+        && receipt.get("notice").and_then(Value::as_str)
+            == Some(
+                "Released tool image omitted from model context; canonical artifact evidence is retained.",
+            )
+        && matches!(
+            receipt.get("reason").and_then(Value::as_str),
+            Some(
+                "completed_user_turn" | "superseded" | "image_budget" | "image_inputs_unavailable"
+            )
+        )
+        && receipt
+            .get("images")
+            .and_then(Value::as_array)
+            .is_some_and(|images| {
+                images.len() <= 16
+                    && images.iter().all(|image| {
+                        image.as_object().is_some_and(|image| {
+                            image.len() == 3
+                                && matches!(
+                                    image.get("mediaType").and_then(Value::as_str),
+                                    Some("image/png" | "image/jpeg" | "image/webp")
+                                )
+                                && image
+                                    .get("sizeBytes")
+                                    .and_then(Value::as_u64)
+                                    .is_some_and(|bytes| (1..=16 * 1_048_576).contains(&bytes))
+                                && image.get("sha256").and_then(Value::as_str).is_some_and(
+                                    |digest| {
+                                        digest.len() == 64
+                                            && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                                    },
+                                )
+                        })
+                    })
+            })
 }
 
 pub(super) fn normalize(

@@ -30,6 +30,8 @@ mod capture;
 mod developer_windows;
 mod devtools;
 #[cfg(windows)]
+mod identity_windows;
+#[cfg(windows)]
 mod interaction_windows;
 #[cfg(test)]
 mod navigation_tests;
@@ -72,6 +74,8 @@ pub struct Callbacks {
     identity: Mutex<identity::Policy>,
     identity_revoked: AtomicBool,
     identity_cancellation: Mutex<Option<Arc<AtomicBool>>>,
+    #[cfg(windows)]
+    identity_review: Mutex<crate::identity_windows::Review>,
 }
 impl Default for Callbacks {
     fn default() -> Self {
@@ -82,6 +86,8 @@ impl Default for Callbacks {
             identity: Mutex::new(identity::Policy::default()),
             identity_revoked: AtomicBool::new(false),
             identity_cancellation: Mutex::new(None),
+            #[cfg(windows)]
+            identity_review: Mutex::new(crate::identity_windows::Review::default()),
         }
     }
 }
@@ -152,6 +158,15 @@ unsafe extern "C" fn event(
         // SAFETY: C ABI borrows valid bytes for exactly this callback, copied/parsed here.
         unsafe { std::slice::from_raw_parts(bytes, len) }
     };
+    #[cfg(windows)]
+    if kind == 18
+        && payload.len() == 8
+        && state.generations.get(&tab) == Some(&generation)
+        && let Ok(mut review) = callbacks.identity_review.lock()
+        && let Ok(bytes) = payload.try_into()
+    {
+        review.cancel(Some(u64::from_ne_bytes(bytes)));
+    }
     match kind {
         1 => {
             state.created.insert(tab);
@@ -336,6 +351,12 @@ unsafe extern "C" fn select_identity(
         // SAFETY: validated native public DER pointer/length, never retained after callback.
         public.push(unsafe { std::slice::from_raw_parts(certificate.der, certificate.der_len) });
     }
+    #[cfg(windows)]
+    if let Ok(mut review) = callbacks.identity_review.lock()
+        && review.start(tab, generation, request_id, origin.clone(), &public)
+    {
+        return -2;
+    }
     let selected = callbacks
         .identity
         .lock()
@@ -401,6 +422,8 @@ impl Host {
         }
         // SAFETY: Host is owned and called only on the main thread that bootstrapped CEF.
         if unsafe { ffi::colossus_cef_pump() } == 0 {
+            #[cfg(windows)]
+            self.service_identity_review();
             Ok(())
         } else {
             Err(BrowserDriverError::OutcomeUnknown)
@@ -563,6 +586,12 @@ impl Host {
             return Err(BrowserDriverError::Denied);
         }
         self.presentation.human = self.presentation.input_admitted && request.run_id.is_none();
+        #[cfg(windows)]
+        self.callbacks
+            .identity_review
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .operation(self.presentation.control_generation, control.clone());
         if self.presentation.human {
             self.presentation.handoff.admit(
                 request.binding.clone(),
@@ -970,6 +999,12 @@ impl Host {
             return Err(BrowserDriverError::Cancelled);
         }
         self.begin_agent_action(command.control_generation);
+        #[cfg(windows)]
+        self.callbacks
+            .identity_review
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .operation(command.control_generation, control.clone());
         let identity = command.target.tab_id.clone();
         let (native, revision, native_document, document) = self
             .tabs
@@ -1376,6 +1411,12 @@ impl Host {
         self.shutdown()
     }
     pub fn close_all(&mut self) -> Result<(), BrowserDriverError> {
+        #[cfg(windows)]
+        self.callbacks
+            .identity_review
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .finish();
         #[cfg(windows)]
         {
             self.presentation.annotations = None;

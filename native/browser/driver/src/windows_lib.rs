@@ -19,6 +19,8 @@ mod handoff;
 #[cfg(all(windows, colossus_cef_linked))]
 mod identity;
 #[cfg(all(windows, colossus_cef_linked))]
+mod identity_windows;
+#[cfg(all(windows, colossus_cef_linked))]
 mod presentation;
 #[cfg(all(windows, colossus_cef_linked))]
 mod queue;

@@ -8,6 +8,24 @@ fn fingerprint(value: &impl Serialize) -> Result<String, ModelProviderError> {
         .map_err(|_| ModelProviderError::Configuration("unable to bind provider state".into()))
 }
 
+pub(super) fn projection_prefix_changed(
+    source_count: usize,
+    canonical: &[ModelMessage],
+    projected: &[ModelMessage],
+    image_inputs: bool,
+) -> bool {
+    projected.len() != canonical.len()
+        || canonical.get(..source_count).is_none_or(|source| {
+            projected.get(..source_count).is_none_or(|prefix| {
+                let mut source = source.to_vec();
+                if !image_inputs {
+                    colossus_tools::omit_unsupported_model_tool_images(&mut source);
+                }
+                colossus_tools::project_model_tool_observations(&source) != prefix
+            })
+        })
+}
+
 impl GatewayModelProvider {
     pub(super) fn plan(
         &self,
@@ -35,7 +53,16 @@ impl GatewayModelProvider {
             .map(|record| record.message)
             .collect::<Vec<_>>();
         // Transient recovery prompts have no durable watermark, so use local context.
-        if colossus_tools::project_model_tool_observations(&canonical) != request.messages {
+        let mut projection_source = canonical.clone();
+        if !route.capabilities.image_inputs {
+            colossus_tools::omit_unsupported_model_tool_images(&mut projection_source);
+        }
+        let projected = colossus_tools::project_model_tool_observations(&projection_source);
+        if projected != request.messages
+            && colossus_tools::project_model_tool_observations_preserving_current_turn(
+                &projection_source,
+            ) != request.messages
+        {
             return Ok(None);
         }
         let binding = fingerprint(&(
@@ -52,12 +79,26 @@ impl GatewayModelProvider {
             .snapshots
             .activation_epoch(session_id)
             .map_err(|e| ModelProviderError::Failed(e.to_string()))?;
-        let selected = self
-            .continuations
-            .load(session_id)
-            .map_err(|_| {
-                ModelProviderError::Failed("unable to load protected Responses state".into())
-            })?
+        let mut previous = self.continuations.load(session_id).map_err(|_| {
+            ModelProviderError::Failed("unable to load protected Responses state".into())
+        })?;
+        // Encrypted Responses compaction may contain observations superseded by
+        // a later read. Retire that opaque prefix rather than reintroducing it.
+        if previous.as_ref().is_some_and(|state| {
+            !state.view.replay
+                && projection_prefix_changed(
+                    state.plan.source_count,
+                    &canonical,
+                    &projected,
+                    route.capabilities.image_inputs,
+                )
+        }) {
+            self.continuations.clear(session_id, context).map_err(|_| {
+                ModelProviderError::Failed("unable to retire superseded Responses state".into())
+            })?;
+            previous = None;
+        }
+        let selected = previous
             .filter(|state| {
                 state.view.replay
                     == (resolved.provider().profile().kind
@@ -76,7 +117,9 @@ impl GatewayModelProvider {
         Ok(Some(ProviderContinuationPlan {
             session_id: session_id.clone(),
             binding,
-            context_binding_hash: String::new(),
+            // Exact no-preparer binding. A context service replaces this with
+            // the digest of its actual decision/memory binding messages.
+            context_binding_hash: fingerprint(&Vec::<ModelMessage>::new())?,
             source_count: canonical.len(),
             source_hash: fingerprint(&canonical)?,
             snapshot_epoch,
@@ -120,6 +163,33 @@ impl GatewayModelProvider {
             .map_err(|_| ModelProviderError::Failed("provider state lock poisoned".into()))?
             .remove(session);
         let Some(id) = id else {
+            // A final native response has no new replay candidate. The agent
+            // calls settlement only after its canonical assistant append.
+            if let Some(state) = self
+                .continuations
+                .load(session)
+                .map_err(|_| {
+                    ModelProviderError::Failed("unable to load protected Messages replay".into())
+                })?
+                .filter(|state| state.view.replay)
+            {
+                let canonical = self
+                    .sessions
+                    .list_messages(session)
+                    .map_err(|error| ModelProviderError::Failed(error.to_string()))?;
+                if canonical.len() > state.view.covered_count
+                    && canonical.last().is_some_and(|record| {
+                        record.message.role == ModelMessageRole::Assistant
+                            && record.message.tool_calls.is_empty()
+                    })
+                {
+                    self.continuations.clear(session, context).map_err(|_| {
+                        ModelProviderError::Failed(
+                            "unable to retire completed Messages replay".into(),
+                        )
+                    })?;
+                }
+            }
             return Ok(());
         };
         let Some(mut state) = self

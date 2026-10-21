@@ -5,6 +5,9 @@
 #[path = "windows_lifecycle/mcp.rs"]
 mod mcp;
 
+#[path = "windows_lifecycle/anthropic_spacing.rs"]
+mod anthropic_spacing;
+
 use colossus_api::{ApiScope, IdempotencyKey, scopes};
 use colossus_sdk::{
     ApiMajor, AppPrivateInstanceDir, BackendKind, Colossus, CreateRunRequest, GetRunRequest,

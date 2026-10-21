@@ -83,6 +83,9 @@ legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' \
     ':(exclude)native/browser/scripts/test_stage_windows.py' \
     ':(exclude)native/browser/scripts/windows_development.py' \
     ':(exclude)native/browser/scripts/windows_preview.py' \
+    ':(exclude)native/browser/scripts/windows_pki_store.py' \
+    ':(exclude)native/browser/scripts/run_windows_pki_probe.py' \
+    ':(exclude)native/browser/scripts/test_system_trust_win.py' \
     ':(exclude)native/browser/scripts/pki_fixture.py' \
     ':(exclude)native/browser/scripts/pki_fixture_material.py' \
     ':(exclude)native/browser/scripts/pki_fixture_private.py' \

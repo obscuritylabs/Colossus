@@ -8,6 +8,21 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Highlights
+
+- Browser sessions retain their page between agent turns, resume with fresh control
+  authority, and keep the last accepted view available for inspection.
+- Agent context retires superseded browser and computer observations during a task
+  and removes exact duplicate read results. Provider continuation respects protected
+  thinking and retires saved Responses state when its observations become obsolete.
+- Windows browser previews use system certificate trust and offer native, exact-origin
+  approval for Windows client certificates. Private keys stay in the Windows store.
+- Desktop and provider operations emit bounded, rotating local INFO logs; DEBUG is
+  available through `COLOSSUS_LOG_LEVEL=debug`. Request bodies and credentials are excluded.
+- Desktop access-profile recovery, capabilities inventory, provider enrollment,
+  Anthropic response spacing, and terminal text selection are improved. The redundant
+  Desktop Library destination is removed while session resources remain available.
+
 ## [0.11.8-preview.2] - 2026-10-19
 
 ### Preview highlights

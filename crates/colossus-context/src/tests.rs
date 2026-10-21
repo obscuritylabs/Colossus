@@ -263,6 +263,32 @@ async fn deterministic_summary_keeps_early_user_requirement() {
     );
 }
 
+#[test]
+fn deterministic_summary_keeps_files_from_released_text_observations() {
+    let results = [colossus_contracts::ToolResult {
+        call_id: "read-source".into(),
+        name: "filesystem.read".into(),
+        output: json!({"path":"src/main.rs","content":"source evidence"}).to_string(),
+        exit_code: 0,
+        images: vec![],
+    }];
+    let mut source = colossus_tools::tool_result_observation_messages(&results);
+    assert!(matches!(source[0].content, ModelContent::Parts(_)));
+    let mut legacy = message(
+        ModelMessageRole::Tool,
+        json!({"file":"src/legacy.rs"}).to_string(),
+    );
+    legacy.tool_call_id = Some("legacy-read".into());
+    source.push(legacy);
+    let snapshot = deterministic_snapshot("session-1", &source);
+    assert_eq!(
+        snapshot.files_touched,
+        ["src/legacy.rs".to_owned(), "src/main.rs".to_owned()]
+    );
+    assert!(snapshot.summary.contains("src/main.rs"));
+    assert!(snapshot.summary.contains("src/legacy.rs"));
+}
+
 fn preparation_request(messages: Vec<ModelMessage>, force: bool) -> ContextPreparationRequest {
     ContextPreparationRequest {
         continuation: None,
@@ -617,15 +643,24 @@ async fn prior_native_history_is_archived_before_budgeting_without_rewriting_evi
         name: "computer.windows".into(),
         arguments: json!({}),
     });
-    let tool = ModelMessage {
-        agent_message_origin: None,
-        role: ModelMessageRole::Tool,
-        content: json!({"windows": [{"title": "old app", "nodes": "x".repeat(200_000)}]})
-            .to_string()
-            .into(),
-        tool_call_id: Some("old-windows".into()),
-        tool_calls: vec![],
-    };
+    let windows = (0..128)
+        .map(|index| {
+            json!({
+                "window_id":format!("cu_w_{index:032x}"),"title":"x".repeat(512),
+                "application_name":"Fixture","rect":{"x":0,"y":0,"width":640,"height":480},
+                "foreground":false,"available":true,"unavailable_reason":null,
+            })
+        })
+        .collect::<Vec<_>>();
+    let tool =
+        colossus_tools::tool_result_observation_messages(&[colossus_contracts::ToolResult {
+            call_id: "old-windows".into(),
+            name: "computer.windows".into(),
+            output: json!({"windows":windows}).to_string(),
+            exit_code: 0,
+            images: vec![],
+        }])
+        .remove(0);
     let messages = vec![
         message(ModelMessageRole::User, "Inspect the app"),
         assistant,
@@ -655,8 +690,7 @@ async fn prior_native_history_is_archived_before_budgeting_without_rewriting_evi
     assert_eq!(prepared.messages.len(), messages.len());
     assert_eq!(prepared.messages.last(), messages.last());
     assert_eq!(prepared.messages[2].tool_call_id, tool.tool_call_id);
-    let archived: Value =
-        serde_json::from_str(prepared.messages[2].content.as_text().unwrap()).unwrap();
+    let archived: Value = serde_json::from_str(&prepared.messages[2].content.plain_text()).unwrap();
     assert_eq!(archived["data"]["_colossusArchived"], true);
     colossus_contracts::validate_model_transcript(&prepared.messages).unwrap();
     assert_eq!(
@@ -1433,6 +1467,69 @@ async fn anthropic_replay_reserves_budget_without_replacing_canonical_messages()
     assert!(!prepared.compacted);
     request.continuation.as_mut().unwrap().reserved_tokens = u64::MAX;
     assert!(service.prepare(request).await.is_err());
+}
+
+#[tokio::test]
+async fn explicit_compaction_cannot_mutate_an_unfinished_native_tool_exchange() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_, _, snapshots, service) = fixture(ContextConfig::default(), provider);
+    let mut assistant = message(ModelMessageRole::Assistant, "");
+    assistant.tool_calls.push(ModelToolCall {
+        call_id: "native-call".into(),
+        name: "computer.windows".into(),
+        arguments: json!({}),
+    });
+    let mut tool = message(ModelMessageRole::Tool, "exact window choices");
+    tool.tool_call_id = Some("native-call".into());
+    let mut request = preparation_request(
+        vec![message(ModelMessageRole::User, "inspect"), assistant, tool],
+        true,
+    );
+    request.route.provider = "anthropic_messages".into();
+    let error = service.prepare(request.clone()).await.unwrap_err();
+    assert!(error.to_string().contains("before the assistant finishes"));
+    assert!(snapshots.list("session-1").unwrap().is_empty());
+
+    // A peer inbox item does not create a new human turn or clear replay.
+    let mut peer = message(ModelMessageRole::User, "peer update");
+    peer.agent_message_origin = Some(colossus_contracts::AgentMessageOrigin {
+        message_id: "peer-1".into(),
+        sender: colossus_contracts::AgentMessageSender::Participant {
+            participant_id: "peer-agent".into(),
+        },
+        recipient_id: "current-agent".into(),
+    });
+    request.messages.push(peer);
+    assert!(service.prepare(request.clone()).await.is_err());
+    assert!(snapshots.list("session-1").unwrap().is_empty());
+
+    request
+        .messages
+        .push(message(ModelMessageRole::Assistant, "finished"));
+    assert!(service.prepare(request).await.unwrap().snapshot_created);
+}
+
+#[tokio::test]
+async fn force_with_native_replay_reference_rejects_before_snapshot_creation() {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_, _, snapshots, service) = fixture(ContextConfig::default(), provider);
+    let mut request = preparation_request(vec![message(ModelMessageRole::User, "inspect")], true);
+    request.continuation = Some(ProviderContinuationView {
+        replay: true,
+        id: "native-replay".into(),
+        covered_count: 1,
+        context_binding_hash: "0".repeat(64),
+        reserved_tokens: 100,
+        bytes: 300,
+    });
+    assert!(service.prepare(request).await.is_err());
+    assert!(snapshots.list("session-1").unwrap().is_empty());
 }
 
 struct QueryMemories;

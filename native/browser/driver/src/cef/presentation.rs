@@ -87,6 +87,10 @@ impl Host {
         }
     }
     pub(super) fn begin_agent_action(&mut self, control_generation: u64) {
+        #[cfg(windows)]
+        if let Ok(mut review) = self.callbacks.identity_review.lock() {
+            review.generation_changed(control_generation);
+        }
         if self.presentation.human || self.presentation.control_generation != control_generation {
             self.revoke_human_presentation();
         }

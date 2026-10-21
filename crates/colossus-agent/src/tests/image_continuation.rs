@@ -100,6 +100,22 @@ async fn verify_continuation(image_inputs: bool, name: &'static str, size_bytes:
     {
         let requests = provider.inner.requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].messages.len(),
+            4,
+            "derived native image omission retains canonical sequence slots"
+        );
+        if !image_inputs {
+            assert!(requests[1].messages.iter().any(|message| {
+                message.role == ModelMessageRole::System
+                    && serde_json::from_str::<Value>(&message.content.plain_text()).is_ok_and(
+                        |value| {
+                            value["_colossusArchivedToolImage"] == true
+                                && value["reason"] == "image_inputs_unavailable"
+                        },
+                    )
+            }));
+        }
         let observation = requests[1]
             .messages
             .iter()
@@ -168,12 +184,9 @@ async fn verify_continuation(image_inputs: bool, name: &'static str, size_bytes:
         .iter()
         .filter(|message| message.role == ModelMessageRole::System)
         .filter_map(|message| serde_json::from_str::<Value>(&message.content.plain_text()).ok())
-        .find(|value| value["data"]["images"].is_array())
+        .find(|value| value["images"].is_array())
         .expect("prior native pixels become a fixed provenance marker");
-    assert_eq!(
-        archived_image["data"]["images"][0]["sha256"],
-        expected_image.sha256
-    );
+    assert_eq!(archived_image["images"][0]["sha256"], expected_image.sha256);
     // Derived compaction must never rewrite the durable evidence, even after a
     // text-only turn or reconstruction under an image-capable model.
     assert!(

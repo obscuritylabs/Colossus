@@ -11,21 +11,25 @@ pub(super) fn owned_path(relative: &Path, directory: bool) -> bool {
         return false;
     };
     match parts.as_slice() {
+        ["desktop", "logs", entries @ ..] => operational_log_path(entries, directory, "desktop"),
         ["desktop" | "workspaces" | "plugins"] | ["desktop", "self-test" | "managed-local"] => {
             directory
         }
         ["workspaces", partition] | ["workspaces", partition, "cli" | "workspace-plugins"] => {
             directory && is_partition(partition)
         }
-        ["workspaces", partition, "workspace-plugins", _, ..]
-        | ["workspaces", partition, "desktop", ..]
-        | ["desktop", "managed-local", partition, ..] => is_partition(partition),
+        ["workspaces", partition, "workspace-plugins", _, ..] => is_partition(partition),
+        ["workspaces", partition, "desktop", entries @ ..]
+        | ["desktop", "managed-local", partition, entries @ ..] => {
+            is_partition(partition) && runtime_state_path(entries, directory)
+        }
         [
             "desktop",
             "self-test",
-            "runtime" | "runtime-v2" | "runtime-v3" | "workspace",
-            ..,
-        ]
+            "runtime" | "runtime-v2" | "runtime-v3",
+            entries @ ..,
+        ] => runtime_state_path(entries, directory),
+        ["desktop", "self-test", "workspace", ..]
         | ["desktop", "trust" | "codex-auth", ..]
         | ["plugins", _, ..] => true,
         ["desktop", session, ..]
@@ -55,6 +59,42 @@ pub(super) fn owned_path(relative: &Path, directory: bool) -> bool {
         {
             !directory
         }
+        _ => false,
+    }
+}
+
+fn runtime_state_path(entries: &[&str], directory: bool) -> bool {
+    match entries {
+        ["logs", logs @ ..] | ["development-plaintext", "logs", logs @ ..] => {
+            operational_log_path(logs, directory, "sidecar")
+        }
+        _ => true,
+    }
+}
+
+// These host-owned files are the complete LocalLogSink namespace. Unknown files
+// or child directories must preserve the home rather than becoming uninstall data.
+fn operational_log_path(entries: &[&str], directory: bool, component: &str) -> bool {
+    match entries {
+        [] => directory,
+        [name] if !directory => matches!(
+            (component, *name),
+            (
+                "desktop",
+                "desktop.lock"
+                    | "desktop-0.jsonl"
+                    | "desktop-1.jsonl"
+                    | "desktop-2.jsonl"
+                    | "desktop-3.jsonl"
+            ) | (
+                "sidecar",
+                "sidecar.lock"
+                    | "sidecar-0.jsonl"
+                    | "sidecar-1.jsonl"
+                    | "sidecar-2.jsonl"
+                    | "sidecar-3.jsonl"
+            )
+        ),
         _ => false,
     }
 }

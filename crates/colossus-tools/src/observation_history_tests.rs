@@ -44,7 +44,7 @@ fn completed_native_observations_archive_without_changing_pairing_or_other_tools
         ToolResult {
             call_id: "page".into(),
             name: "browser.snapshot".into(),
-            output: "OLD PAGE TREE".into(),
+            output: "OLD PAGE TREE".repeat(1000),
             exit_code: 0,
             images: vec![],
         },
@@ -85,15 +85,19 @@ fn completed_native_observations_archive_without_changing_pairing_or_other_tools
     assert_eq!(projected[1], calls);
     assert_eq!(projected[4], canonical[4]);
     assert_eq!(&projected[5..], &canonical[5..]);
-    for (index, name) in [(2, "computer.windows"), (3, "browser.snapshot")] {
+    for index in [2, 3] {
         let archived: Value =
-            serde_json::from_str(projected[index].content.as_text().unwrap()).unwrap();
+            serde_json::from_str(projected[index].content.plain_text().as_ref()).unwrap();
         assert_eq!(archived["data"]["_colossusArchived"], true);
-        assert_eq!(archived["_colossusToolObservation"]["toolName"], name);
+        assert!(
+            archived["_colossusToolObservation"]
+                .get("toolName")
+                .is_none()
+        );
         assert_eq!(projected[index].tool_call_id, canonical[index].tool_call_id);
         assert!(projected[index].content.text_bytes() < 1024);
     }
-    let windows: Value = serde_json::from_str(projected[2].content.as_text().unwrap()).unwrap();
+    let windows: Value = serde_json::from_str(projected[2].content.plain_text().as_ref()).unwrap();
     assert_eq!(
         windows["_colossusToolObservation"]["originalBytes"],
         output.len()
@@ -143,8 +147,8 @@ fn prior_screenshot_keeps_a_canonical_slot_without_consuming_current_image_budge
             .iter()
             .all(|message| message.content.images().next().is_none())
     );
-    let archived: Value = serde_json::from_str(projected[3].content.as_text().unwrap()).unwrap();
-    assert_eq!(archived["data"]["images"][0]["sha256"], "a".repeat(64));
+    let archived: Value = serde_json::from_str(projected[3].content.plain_text().as_ref()).unwrap();
+    assert_eq!(archived["images"][0]["sha256"], "a".repeat(64));
     validate_model_transcript(&projected).unwrap();
     assert_eq!(project_model_tool_observations(&projected), projected);
 }

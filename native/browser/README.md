@@ -850,8 +850,22 @@ The Windows ordinary-user host uses Chromium's server verifier, which reads the
 current user's and machine's trusted roots, intermediate CAs and explicit distrust
 stores, including enterprise policy roots. A temporary browser profile does not
 replace this OS trust. The CONNECT proxy preserves end-to-end TLS; Colossus network
-CA bundles do not configure Chromium. Client identities require separate exact-origin
-native review and enrollment; trusting a server CA does not authorize a private key.
+CA bundles do not configure Chromium. Trusting a server CA does not authorize a
+private key. The ordinary-user functional edition handles Chromium client-identity
+requests with a separate native dialog showing the exact canonical HTTPS origin
+and eligible public certificate fingerprint. Its origin and fingerprint controls
+are read-only; Cancel is the default. The 45-second review runs outside the CEF
+thread and consumes only the current native request, tab and writer generation.
+Navigation, request cancellation, a changed writer or shutdown invalidates it.
+Chromium accesses the existing Windows key itself; no private key, certificate
+path or identity-selection grant enters renderer IPC, tool input or runtime YAML.
+Chromium may cache the selected identity for this exact origin in its temporary
+session. Close the session to end that choice. This is OS-user store access, not
+private per-profile key custody or automatic certificate import.
+
+`browser.client_identity_review` records only the fixed selected, declined,
+revoked or stale outcome in the standard operational log. It excludes origins,
+certificate subjects, fingerprints and keys.
 
 A rejected Windows server certificate emits `browser.tls_verification_failed` to
 the local operational log. The record contains numeric Chromium certificate/error
@@ -1152,8 +1166,10 @@ interactive input acceptance are still required before that publication. The
 NetworkIsolation API replaces an OS-global configuration list: a named gate
 serializes cooperating Colossus supervisors and verifies unrelated entries, but
 cannot prevent a foreign administrator tool from racing its replacement.
-Standalone Windows private CA and client-identity support remains unavailable
+Contained Windows private CA and client-identity support remains unavailable
 until owned-store discovery, isolation and server-observed key use are accepted.
+The ordinary-user edition's separately reviewed Windows store access does not
+promote contained support or private certificate custody.
 
 The portable offscreen presentation path connects the contained CEF host's real
 BGRA frames to a native HWND or NSView in Desktop. Authenticated envelopes bind the

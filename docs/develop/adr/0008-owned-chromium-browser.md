@@ -177,8 +177,9 @@ preparation, so native handoff checks the current offered tools without changing
 the registered run's identity or bypassing effect policy. The reproducible
 [Windows automation acceptance](../testing.md#non-admin-owned-windows-browser-automation)
 uses the existing SDK/sidecar/worker channels. This exception does not enable
-publisher release modes, private CA/client identity capabilities or installed
-signed-package acceptance.
+publisher release modes, private per-profile certificate custody or installed
+signed-package acceptance. Ordinary-user client-key requests use the exact native
+handshake approval described below.
 
 The separate `windows-browser-functional-preview` edition packages this same
 ordinary-user boundary for Windows x64 Developer Previews. It is explicitly
@@ -193,8 +194,12 @@ is a fresh private allocation beneath the authenticated worker instance.
 
 This edition retains Chromium's sandbox, whole-Job supervision, authenticated
 native channels, typed authority and temporary sessions. It reports
-`restrictive_egress: false` and offers no private CA, client identity or persistent
-profile capability. It does not promote production component modes or claim
+`restrictive_egress: false` and offers no private CA import or persistent profile
+capability. Existing Windows client identities require a separate native approval
+of the pending HTTPS origin and public certificate fingerprint. Cancel is the
+default, and the bounded review is invalidated by navigation, run cancellation,
+writer changes and shutdown. The native key stays in Windows; this grants no
+per-profile private-store custody. It does not promote production component modes or claim
 AppContainer/WFP containment. Missing, changed or untrusted installed bytes fail
 closed. An unavailable ordinary-user desktop prerequisite leaves the capability
 unavailable without selecting a contained or personal-browser fallback. Signed

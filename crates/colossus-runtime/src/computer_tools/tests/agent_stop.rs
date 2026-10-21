@@ -49,7 +49,13 @@ impl ModelProvider for StopProvider {
                 .rev()
                 .find(|message| message.role == ModelMessageRole::Tool)
                 .unwrap();
-            serde_json::from_str::<Value>(&message.content.plain_text()).unwrap()
+            let value = serde_json::from_str::<Value>(&message.content.plain_text()).unwrap();
+            if value.get("_colossusToolObservation").is_some() {
+                assert_eq!(value["_colossusToolObservation"]["truncated"], false);
+                value["data"].clone()
+            } else {
+                value
+            }
         };
         let (name, arguments) = match turn {
             0 => ("computer.windows", json!({})),

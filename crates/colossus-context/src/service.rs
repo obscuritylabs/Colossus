@@ -57,10 +57,13 @@ impl ContextService {
             .route(role)
             .map_err(|error| ContextError::Configuration(error.to_string()))?;
         let records = self.sessions.list_messages(session_id)?;
-        let messages = records
+        let mut messages = records
             .iter()
             .map(|record| record.message.clone())
             .collect::<Vec<_>>();
+        if !budget.capabilities.image_inputs {
+            colossus_tools::omit_unsupported_model_tool_images(&mut messages);
+        }
         let messages = project_model_tool_observations(&messages);
         let binding = self.decision_message()?;
         let original_messages =
@@ -387,8 +390,25 @@ impl ContextPreparer for ContextService {
             context,
             force,
         } = request;
+        if force
+            && (continuation.as_ref().is_some_and(|view| view.replay)
+                || (budget.provider == "anthropic_messages" && unfinished_tool_exchange(&messages)))
+        {
+            return Err(ContextError::Configuration(
+                "Messages tool replay cannot be compacted before the assistant finishes; finish or restart the turn first".into(),
+            ));
+        }
+        let mut messages = messages;
+        if !budget.capabilities.image_inputs {
+            colossus_tools::omit_unsupported_model_tool_images(&mut messages);
+        }
         validate_newest_image_turn(&messages)?;
-        let messages = project_model_tool_observations(&compact_excess_images(&messages));
+        let messages = compact_excess_images(&messages);
+        let messages = if continuation.as_ref().is_some_and(|view| view.replay) {
+            colossus_tools::project_model_tool_observations_preserving_current_turn(&messages)
+        } else {
+            project_model_tool_observations(&messages)
+        };
         let bindings = self
             .binding_messages(&session_id, &messages, context.clone())
             .await?;
@@ -689,4 +709,16 @@ impl ContextPreparer for ContextService {
             strategy: Some(snapshot.strategy),
         })
     }
+}
+
+fn unfinished_tool_exchange(messages: &[ModelMessage]) -> bool {
+    let start = messages
+        .iter()
+        .rposition(ModelMessage::begins_user_turn)
+        .unwrap_or(0);
+    messages[start..]
+        .iter()
+        .rev()
+        .find(|message| message.role == ModelMessageRole::Assistant)
+        .is_some_and(|message| !message.tool_calls.is_empty())
 }

@@ -64,7 +64,7 @@ impl Seal {
             || cap.headless
             || cap.restrictive_egress
             || cap.private_ca_trust
-            || cap.client_identities
+            || !cap.client_identities
             || digest.len() != 64
             || !digest
                 .bytes()
@@ -88,7 +88,7 @@ mod tests {
             "cef_version": CEF_VERSION, "source_archive_sha256": ARCHIVE_SHA256,
             "production_acceptance": false,
             "capabilities": { "embedded": true, "headless": false,
-                "restrictive_egress": false, "private_ca_trust": false, "client_identities": false }
+                "restrictive_egress": false, "private_ca_trust": false, "client_identities": true }
         })
     }
 
@@ -112,16 +112,14 @@ mod tests {
 
     #[test]
     fn false_production_network_or_certificate_claims_cannot_be_promoted() {
-        for key in [
-            "headless",
-            "restrictive_egress",
-            "private_ca_trust",
-            "client_identities",
-        ] {
+        for key in ["headless", "restrictive_egress", "private_ca_trust"] {
             let mut value = valid();
             value["capabilities"][key] = true.into();
             assert!(Seal::parse(&serde_json::to_vec(&value).unwrap()).is_err());
         }
+        let mut value = valid();
+        value["capabilities"]["client_identities"] = false.into();
+        assert!(Seal::parse(&serde_json::to_vec(&value).unwrap()).is_err());
         for (key, replacement) in [
             ("production_acceptance", serde_json::json!(true)),
             ("target", serde_json::json!("x86_64-unknown-linux-gnu")),

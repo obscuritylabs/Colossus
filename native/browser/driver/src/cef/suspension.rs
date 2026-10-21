@@ -9,6 +9,12 @@ impl Host {
         if self.suspended {
             return Ok(());
         }
+        #[cfg(windows)]
+        self.callbacks
+            .identity_review
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .cancel(None);
         self.revoke_human_presentation();
         self.expected_revision = None;
         let native: Vec<_> = self.tabs.values().map(|tab| tab.native).collect();

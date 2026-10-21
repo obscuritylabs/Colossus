@@ -167,7 +167,7 @@ class WindowsStageTests(unittest.TestCase):
         self.assertFalse(seal["production_acceptance"])
         self.assertEqual(seal["capabilities"], {
             "embedded": True, "headless": False, "restrictive_egress": False,
-            "private_ca_trust": False, "client_identities": False})
+            "private_ca_trust": False, "client_identities": True})
         with self.assertRaises(FileExistsError):
             windows_preview.seal(self.destination, output)
         host.write_bytes(host.read_bytes() + b"late-change")

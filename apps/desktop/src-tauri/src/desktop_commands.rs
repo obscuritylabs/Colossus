@@ -41,6 +41,10 @@ const SPACE_SUMMARY_REFRESH_TIMEOUT: Duration = Duration::from_secs(2);
 const SPACE_SEARCH_INDEX_PAGE_SIZE: u32 = 100;
 const MAX_SPACE_SEARCH_INDEX_RUNS: usize = 4_096;
 
+#[cfg(all(test, windows))]
+#[path = "desktop_commands/native_configuration_acceptance.rs"]
+mod native_configuration_acceptance;
+
 fn emit_space_events(app: &AppHandle, status: &DesktopStatusDto) {
     for summary in &status.spaces {
         let _ = app.emit_to(

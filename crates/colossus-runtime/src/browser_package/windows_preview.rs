@@ -288,7 +288,7 @@ fn capabilities(limits: BrowserLimits) -> BrowserCapabilities {
             Download,
         ],
         private_ca_trust: false,
-        client_identities: false,
+        client_identities: true,
         restrictive_egress: false,
         limits,
     }

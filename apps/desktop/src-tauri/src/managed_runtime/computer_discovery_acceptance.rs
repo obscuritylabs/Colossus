@@ -384,7 +384,14 @@ fn completion(body: &Value, turn: usize) -> Value {
             "only the requested discovery call may run"
         );
         assert_eq!(results[0]["tool_call_id"], "discovery-only");
-        let result: Value = serde_json::from_str(results[0]["content"].as_str().unwrap()).unwrap();
+        let observation: Value =
+            serde_json::from_str(results[0]["content"].as_str().unwrap()).unwrap();
+        let metadata = &observation["_colossusToolObservation"];
+        assert_eq!(metadata["toolName"], "tool.search");
+        assert_eq!(metadata["callId"], "discovery-only");
+        assert_eq!(metadata["exitCode"], 0);
+        assert_eq!(metadata["truncated"], false);
+        let result = &observation["data"];
         assert_eq!(result["query"], "+computer");
         assert_eq!(result["truncated"], false);
         let actual = result["tools"]

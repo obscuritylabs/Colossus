@@ -384,10 +384,15 @@ fn responses_messages_with_images(
             let call_id = message.tool_call_id.as_ref().ok_or_else(|| {
                 ProviderError::Configuration("tool result message has no call id".into())
             })?;
+            let output = if message.content.images().next().is_some() {
+                responses_user_content(&message.content, images)?
+            } else {
+                Value::String(message.content.plain_text().into_owned())
+            };
             Ok(vec![json!({
                 "type": "function_call_output",
                 "call_id": call_id,
-                "output": responses_user_content(&message.content, images)?,
+                "output": output,
             })])
         }
     }
