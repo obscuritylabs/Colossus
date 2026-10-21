@@ -167,6 +167,7 @@ fn domain_records() -> Vec<EntityMutation> {
         mutation(
             key(EntityKind::Invitation, "invitation-hash"),
             Enrollment {
+                owner_user_id: None,
                 token_hash: "invitation-hash".into(),
                 project_id: "acceptance-project".into(),
                 node_id: "new-runtime".into(),
@@ -278,6 +279,8 @@ async fn postgres_normalized_domain_roundtrips_queries_and_constraints() {
         ("oidc_flows", "record"),
         ("released_events", "record"),
         ("runtime_agents", "policy"),
+        ("runtime_resource_requests", "operation"),
+        ("runtime_resource_requests", "reply"),
         ("tasks", "dispatch_error"),
         ("tasks", "request"),
         ("tasks", "snapshot"),

@@ -26,6 +26,7 @@ export function ModelPicker({
   onReasoningChange,
   onOpenSettings,
   disabled = false,
+  portalContainer,
 }: {
   model: string;
   models: ModelPickerOption[];
@@ -39,6 +40,7 @@ export function ModelPicker({
   onReasoningChange: (value: string) => void;
   onOpenSettings?: (() => void) | undefined;
   disabled?: boolean;
+  portalContainer?: HTMLElement | null | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -96,6 +98,8 @@ export function ModelPicker({
         </Button>
       </PopoverTrigger>
       <PopoverContent
+        portalContainer={portalContainer}
+        onEscapeKeyDown={() => setOpen(false)}
         className="ui-model-picker"
         aria-label="Model and reasoning"
         side="top"

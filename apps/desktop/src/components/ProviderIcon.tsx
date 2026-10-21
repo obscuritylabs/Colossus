@@ -1,107 +1,20 @@
-import { IconCloud } from "@tabler/icons-react";
-import { useState } from "react";
-import deepseek from "../assets/providers/deepseek.svg?no-inline";
-import groq from "../assets/providers/groq.svg?no-inline";
-import lmstudio from "../assets/providers/lmstudio.svg?no-inline";
-import mistral from "../assets/providers/mistral.png?no-inline";
-import ollama from "../assets/providers/ollama.png?no-inline";
-import openai from "../assets/providers/openai.png?no-inline";
-import openrouterDark from "../assets/providers/openrouter-dark.svg?no-inline";
-import openrouterLight from "../assets/providers/openrouter-light.svg?no-inline";
-import together from "../assets/providers/together.svg?no-inline";
-import {
-  providerConnectionBrand,
-  providerPresetBrand,
-  type ProviderBrand,
-  type ProviderConnectionIdentity,
-} from "../providerBrand";
-import "./provider-icon.css";
+import { ProviderIcon as SharedProviderIcon } from "@colossus/ui/components/ProviderIcon";
+import type { ComponentProps } from "react";
 import { safeSetupIcon } from "../setupPackages";
 import { useSetupPresentation } from "../SetupPresentation";
-
-const assets: Record<ProviderBrand, { light: string; dark?: string }> = {
-  openai: { light: openai },
-  openrouter: { light: openrouterLight, dark: openrouterDark },
-  groq: { light: groq },
-  together: { light: together },
-  deepseek: { light: deepseek },
-  mistral: { light: mistral },
-  ollama: { light: ollama },
-  lmstudio: { light: lmstudio },
-};
-
-/** Decorative: keep the provider's visible name beside this icon. */
-export function ProviderIcon({
-  presetId,
-  provider,
-  size = 20,
-  customIcon,
-  customDarkIcon,
-}: {
-  presetId?: string;
-  provider?: ProviderConnectionIdentity | null;
-  size?: number;
-  customIcon?: string | null | undefined;
-  customDarkIcon?: string | null | undefined;
-}) {
-  const presentation = useSetupPresentation(provider);
-  const icon = safeSetupIcon(
-    customIcon === undefined ? presentation?.icon : customIcon,
-  );
-  const darkIcon = safeSetupIcon(
-    customDarkIcon === undefined ? presentation?.darkIcon : customDarkIcon,
-  );
-  const [failedIcon, setFailedIcon] = useState<string | null>(null);
-  const brand =
-    presetId === undefined
-      ? providerConnectionBrand(provider)
-      : providerPresetBrand(presetId);
-  const [failedBrand, setFailedBrand] = useState<ProviderBrand | null>(null);
-  const asset =
-    (icon || darkIcon) && (icon ?? darkIcon) !== failedIcon
-      ? { light: icon ?? darkIcon!, dark: darkIcon }
-      : brand && brand !== failedBrand
-        ? assets[brand]
-        : null;
+export function ProviderIcon(props: ComponentProps<typeof SharedProviderIcon>) {
+  const presentation = useSetupPresentation(props.provider);
   return (
-    <span
-      className="provider-icon"
-      data-provider-brand={asset ? brand : "custom"}
-      aria-hidden="true"
-      style={{ width: size, height: size }}
-    >
-      {asset ? (
-        <>
-          <img
-            className={asset.dark ? "provider-icon-light" : undefined}
-            src={asset.light}
-            width={size}
-            height={size}
-            alt=""
-            draggable={false}
-            onError={() => {
-              setFailedBrand(brand);
-              setFailedIcon(icon ?? darkIcon ?? null);
-            }}
-          />
-          {asset.dark ? (
-            <img
-              className="provider-icon-dark"
-              src={asset.dark}
-              width={size}
-              height={size}
-              alt=""
-              draggable={false}
-              onError={() => {
-                setFailedBrand(brand);
-                setFailedIcon(icon ?? darkIcon ?? null);
-              }}
-            />
-          ) : null}
-        </>
-      ) : (
-        <IconCloud size={size} />
+    <SharedProviderIcon
+      {...props}
+      customIcon={safeSetupIcon(
+        props.customIcon === undefined ? presentation?.icon : props.customIcon,
       )}
-    </span>
+      customDarkIcon={safeSetupIcon(
+        props.customDarkIcon === undefined
+          ? presentation?.darkIcon
+          : props.customDarkIcon,
+      )}
+    />
   );
 }

@@ -1,5 +1,15 @@
 use super::*;
 
+/// Trusted distributed ownership boundary for one effect-capable runtime.
+///
+/// Implementations must validate the exact immutable runtime namespace, owner,
+/// monotonic fencing generation and expiry against their shared authority. A
+/// cached local heartbeat alone is not sufficient. Failure is fail-closed.
+pub trait RuntimeExecutionFence: Send + Sync {
+    /// Verify ownership immediately before admission, recovery or external effects.
+    fn verify(&self) -> Result<(), StoreError>;
+}
+
 /// Durable payload-protection mode selected for a canonical journal.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum JournalPayloadProtection {

@@ -57,4 +57,5 @@ export type { WorkspaceDestinationId } from "./components/WorkspaceNavigation.js
 export { WorkspaceSurfaceHeader } from "./components/WorkspaceSurfaceHeader.js";
 
 export { ArtifactLibrary } from "./components/ArtifactLibrary.js";
+export { HostPlatformIcon } from "./components/HostPlatformIcon.js";
 export type { LibraryArtifact } from "./components/ArtifactLibrary.js";

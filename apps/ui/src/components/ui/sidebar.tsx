@@ -108,19 +108,31 @@ export function Sidebar({
   collapsible = "offcanvas",
   className,
   children,
+  mobileTitle = "Workspaces",
+  mobileDescription = "Workspace navigation",
+  onMobileCloseAutoFocus,
   ...props
 }: React.ComponentProps<"div"> & {
   side?: "left" | "right";
   collapsible?: "offcanvas" | "icon" | "none";
+  mobileTitle?: string;
+  mobileDescription?: string;
+  onMobileCloseAutoFocus?: React.ComponentProps<
+    typeof SheetContent
+  >["onCloseAutoFocus"];
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
   if (collapsible !== "none" && isMobile)
     return (
       <Sheet open={openMobile} onOpenChange={setOpenMobile}>
-        <SheetContent side={side} className={cn("ui-sidebar-sheet", className)}>
+        <SheetContent
+          side={side}
+          className={cn("ui-sidebar-sheet", className)}
+          onCloseAutoFocus={onMobileCloseAutoFocus}
+        >
           <SheetHeader className="shared-sr-only">
-            <SheetTitle>Workspaces</SheetTitle>
-            <SheetDescription>Workspace navigation</SheetDescription>
+            <SheetTitle>{mobileTitle}</SheetTitle>
+            <SheetDescription>{mobileDescription}</SheetDescription>
           </SheetHeader>
           <div {...props}>{children}</div>
         </SheetContent>

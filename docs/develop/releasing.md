@@ -340,6 +340,10 @@ The native Linux release jobs build the pinned `deploy/control-plane/Dockerfile`
 smoke its actual non-root image with a read-only filesystem and no network, and package
 matching server/web bytes plus an offline `docker load` archive. Both architectures
 are retained in the successful tag run's Actions artifacts and attached to the release.
+The server image and native bundle include both `colossus-control-plane` and
+`colossus-chat-anchor`; release smoke checks execute each binary's help and version.
+An independent Hosted anchor deployment reuses the Control Plane image with its
+entrypoint overridden, separate credentials, and its own configuration.
 
 Publishing the reviewed release starts `Publish Control Plane image`. It uses the
 protected-main publisher, verifies the annotated tag's ancestry and successful tag

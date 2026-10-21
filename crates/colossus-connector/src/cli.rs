@@ -285,6 +285,7 @@ pub async fn run_cli(command: ConnectorCommand) -> Result<(), Box<dyn std::error
                     workflows: client.workflows(),
                     plugins: client.plugins(),
                     capabilities: client.capabilities().iter().map(str::to_owned).collect(),
+                    model_profiles: client.model_profiles(),
                 })
                 .with_enrollment_store(enrollment);
             control.heartbeat(&mut report, ConnectorStatus::Connecting)?;

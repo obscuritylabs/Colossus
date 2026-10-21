@@ -42,6 +42,8 @@ impl DomainRow for HostRow {
 }
 
 row!(NodeRow {
+    execution_kind: String => Text,
+    owner_user_id: Option<String> => Nullable<Text>,
     instance_id: String => Text,
     label: String => Text,
     certificate_sha256: String => Text,
@@ -61,6 +63,8 @@ impl DomainRow for NodeRow {
         };
         Ok(Self {
             metadata,
+            execution_kind: value.execution_kind.as_str().into(),
+            owner_user_id: value.owner_user_id.clone(),
             instance_id: value.instance_id.clone(),
             label: value.label.clone(),
             certificate_sha256: value.certificate_sha256.clone(),
@@ -76,6 +80,12 @@ impl DomainRow for NodeRow {
     }
     fn into_value(self) -> CloudResult<EntityValue> {
         Ok(CloudNode {
+            execution_kind: match self.execution_kind.as_str() {
+                "connected" => colossus_cloud::ExecutionKind::Connected,
+                "hosted" => colossus_cloud::ExecutionKind::Hosted,
+                _ => return Err(colossus_cloud::CloudError::Storage),
+            },
+            owner_user_id: self.owner_user_id,
             revision: self.metadata.revision()?,
             node_id: self.metadata.id,
             project_id: self.metadata.project_id,

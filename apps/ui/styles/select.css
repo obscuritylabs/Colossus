@@ -130,3 +130,14 @@
   color: var(--blue-strong);
   place-items: center;
 }
+
+/* Explicit touch density follows the control into its portalled menu. */
+.app-select--touch .app-select-trigger,
+.app-select-popover--touch .app-select-option {
+  min-height: var(--control-height-touch);
+  font-size: var(--font-size-touch-body);
+  line-height: var(--line-height-body);
+}
+.app-select-popover--touch .app-select-option {
+  overflow-wrap: anywhere;
+}

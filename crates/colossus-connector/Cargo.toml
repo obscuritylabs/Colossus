@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 clap.workspace = true
 colossus-cloud-protocol.workspace = true
+colossus-cloud-executor.workspace = true
 colossus-credentials.workspace = true
 colossus-contracts.workspace = true
 colossus-home.workspace = true

@@ -19,6 +19,10 @@ use thiserror::Error;
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 use zeroize::{Zeroize as _, Zeroizing};
 
+#[path = "shared.rs"]
+mod shared;
+pub use shared::*;
+
 const MAX_AUTH_FILE_BYTES: u64 = 256 * 1024;
 const REFRESH_WINDOW: Duration = Duration::minutes(5);
 
@@ -43,6 +47,8 @@ pub struct CodexAuthorization {
     account_id: Zeroizing<String>,
     expires_at: Option<OffsetDateTime>,
     fedramp: bool,
+    shared_revision: Option<u64>,
+    shared_binding: Option<Arc<str>>,
 }
 
 impl CodexAuthorization {
@@ -98,6 +104,7 @@ pub struct CodexAuthStore {
     path: PathBuf,
     update_lock: Arc<Mutex<()>>,
     confined: Option<crate::confined_store::ConfinedAuthStore>,
+    shared: Option<shared::SharedCodexStore>,
 }
 
 impl CodexAuthStore {
@@ -125,6 +132,7 @@ impl CodexAuthStore {
             path: path.into(),
             update_lock: Arc::new(Mutex::new(())),
             confined: None,
+            shared: None,
         }
     }
 
@@ -141,17 +149,80 @@ impl CodexAuthStore {
             path: binding.path(),
             update_lock: Arc::new(Mutex::new(())),
             confined: Some(binding),
+            shared: None,
         })
     }
 
-    /// Credential file path without reading it.
+    /// Bind an explicitly scoped shared CAS adapter without selecting a local file.
+    pub fn shared(
+        storage: Arc<dyn CodexAuthStorage>,
+        binding: String,
+    ) -> Result<Self, CodexAuthError> {
+        Ok(Self {
+            path: PathBuf::new(),
+            update_lock: Arc::new(Mutex::new(())),
+            confined: None,
+            shared: Some(shared::SharedCodexStore::new(storage, binding)?),
+        })
+    }
+
+    /// Export an explicitly selected, validated sign-in for a trusted shared-store import.
+    /// The caller must protect these zeroizing bytes and bind its CAS write to the
+    /// intended project/account. No secret is suitable for browser or log output.
+    pub fn export_shared_record(
+        &self,
+        binding: &str,
+    ) -> Result<Zeroizing<Vec<u8>>, CodexAuthError> {
+        if let Some(shared) = &self.shared {
+            shared.export(binding)
+        } else {
+            shared::export_document(self.read_selected_auth()?, binding)
+        }
+    }
+
+    /// Reserve refresh authority before attempting the rotating-token HTTP exchange.
+    /// Shared storage persists this claim; a dropped/ambiguous attempt stays blocked
+    /// until an operator explicitly imports a new authorization.
+    pub fn begin_refresh(
+        &self,
+        expected: &CodexAuthorization,
+    ) -> Result<CodexRefreshClaim, CodexAuthError> {
+        Ok(CodexRefreshClaim {
+            shared: self
+                .shared
+                .as_ref()
+                .map(|store| store.begin(expected))
+                .transpose()?,
+        })
+    }
+
+    /// Commit a successful response under the exact pre-exchange refresh claim.
+    pub fn apply_claimed_refresh(
+        &self,
+        expected: &CodexAuthorization,
+        claim: CodexRefreshClaim,
+        response: &[u8],
+    ) -> Result<CodexAuthorization, CodexAuthError> {
+        match (&self.shared, claim.shared) {
+            (Some(shared), Some(claim)) => shared.finish(expected, claim, response),
+            (None, None) => self.apply_refresh(expected, response),
+            _ => Err(credentials_changed()),
+        }
+    }
+
+    /// Credential file path without reading it. Shared stores return an empty path;
+    /// shared credentials never have a local-file fallback.
     pub fn path(&self) -> &Path {
         &self.path
     }
 
     /// Load and validate the current ChatGPT authorization without logging secrets.
     pub fn load(&self) -> Result<CodexAuthorization, CodexAuthError> {
-        authorization_from_file(&self.read_selected_auth()?)
+        if let Some(shared) = &self.shared {
+            shared.load()
+        } else {
+            authorization_from_file(&self.read_selected_auth()?)
+        }
     }
 
     fn read_selected_auth(&self) -> Result<StoredAuth, CodexAuthError> {
@@ -176,6 +247,11 @@ impl CodexAuthStore {
         expected: &CodexAuthorization,
         response: &[u8],
     ) -> Result<CodexAuthorization, CodexAuthError> {
+        if self.shared.is_some() {
+            return Err(CodexAuthError::Storage(
+                "shared Codex refresh requires a pre-exchange claim".into(),
+            ));
+        }
         let _guard = self
             .update_lock
             .lock()
@@ -192,48 +268,7 @@ impl CodexAuthStore {
         };
         let mut stored = self.read_selected_auth()?;
         let witness = AuthWitness::capture(&stored)?;
-        let tokens = stored.tokens.as_mut().ok_or_else(missing_tokens)?;
-        if tokens.refresh_token != expected.refresh_token() {
-            return Err(credentials_changed());
-        }
-        let refresh: RefreshResponse = serde_json::from_slice(response).map_err(|_| {
-            CodexAuthError::Unavailable(
-                "OpenAI returned an invalid token refresh response; run `colossus codex login`"
-                    .into(),
-            )
-        })?;
-        if refresh.access_token.is_empty() {
-            return Err(CodexAuthError::Unavailable(
-                "OpenAI returned an empty access token; run `colossus codex login`".into(),
-            ));
-        }
-        let candidate_id_token = refresh.id_token.as_deref().unwrap_or(&tokens.id_token);
-        let candidate_account = token_metadata(candidate_id_token)?.account_id;
-        if candidate_account.as_deref() != Some(expected.account_id()) {
-            return Err(CodexAuthError::Unavailable(
-                "refreshed Codex credentials changed ChatGPT accounts; run `colossus codex login`"
-                    .into(),
-            ));
-        }
-        tokens.access_token.clone_from(&refresh.access_token);
-        if let Some(refresh_token) = refresh.refresh_token.as_deref() {
-            if refresh_token.is_empty() {
-                return Err(CodexAuthError::Unavailable(
-                    "OpenAI returned an empty refresh token".into(),
-                ));
-            }
-            tokens.refresh_token.clear();
-            tokens.refresh_token.push_str(refresh_token);
-        }
-        if let Some(id_token) = refresh.id_token.as_deref() {
-            tokens.id_token.clear();
-            tokens.id_token.push_str(id_token);
-        }
-        stored.last_refresh = Some(
-            OffsetDateTime::now_utc()
-                .format(&Rfc3339)
-                .map_err(|error| CodexAuthError::Storage(error.to_string()))?,
-        );
+        merge_refresh(&mut stored, expected, response)?;
         if !witness.matches(&self.read_selected_auth()?) {
             return Err(credentials_changed());
         }
@@ -251,6 +286,66 @@ impl CodexAuthStore {
         }
         authorization_from_file(&stored)
     }
+}
+
+/// An opaque single-use refresh claim; dropping it never clears durable pending state.
+pub struct CodexRefreshClaim {
+    shared: Option<shared::SharedRefreshClaim>,
+}
+
+fn merge_refresh(
+    stored: &mut StoredAuth,
+    expected: &CodexAuthorization,
+    response: &[u8],
+) -> Result<(), CodexAuthError> {
+    if response.len() > usize::try_from(MAX_AUTH_FILE_BYTES).unwrap_or(usize::MAX) {
+        return Err(CodexAuthError::Unavailable(
+            "Codex refresh response exceeds the safety bound".into(),
+        ));
+    }
+    let tokens = stored.tokens.as_mut().ok_or_else(missing_tokens)?;
+    if tokens.refresh_token != expected.refresh_token() {
+        return Err(credentials_changed());
+    }
+    let refresh: RefreshResponse = serde_json::from_slice(response).map_err(|_| {
+        CodexAuthError::Unavailable(
+            "OpenAI returned an invalid token refresh response; run `colossus codex login`".into(),
+        )
+    })?;
+    if refresh.access_token.is_empty() {
+        return Err(CodexAuthError::Unavailable(
+            "OpenAI returned an empty access token; run `colossus codex login`".into(),
+        ));
+    }
+    let candidate_id_token = refresh.id_token.as_deref().unwrap_or(&tokens.id_token);
+    let candidate_account = token_metadata(candidate_id_token)?.account_id;
+    if candidate_account.as_deref() != Some(expected.account_id()) {
+        return Err(CodexAuthError::Unavailable(
+            "refreshed Codex credentials changed ChatGPT accounts; run `colossus codex login`"
+                .into(),
+        ));
+    }
+    tokens.access_token.clone_from(&refresh.access_token);
+    if let Some(refresh_token) = refresh.refresh_token.as_deref() {
+        if refresh_token.is_empty() {
+            return Err(CodexAuthError::Unavailable(
+                "OpenAI returned an empty refresh token".into(),
+            ));
+        }
+        tokens.refresh_token.clear();
+        tokens.refresh_token.push_str(refresh_token);
+    }
+    if let Some(id_token) = refresh.id_token.as_deref() {
+        tokens.id_token.clear();
+        tokens.id_token.push_str(id_token);
+    }
+    stored.last_refresh = Some(
+        OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .map_err(|error| CodexAuthError::Storage(error.to_string()))?,
+    );
+    authorization_from_file(stored)?;
+    Ok(())
 }
 
 /// Credential fields that must stay untouched between the refresh check and the write.
@@ -688,6 +783,8 @@ fn authorization_from_file(stored: &StoredAuth) -> Result<CodexAuthorization, Co
         account_id: Zeroizing::new(account_id.to_owned()),
         expires_at: access_metadata.expires_at,
         fedramp: metadata.fedramp,
+        shared_revision: None,
+        shared_binding: None,
     })
 }
 

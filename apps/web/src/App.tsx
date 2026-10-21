@@ -27,9 +27,13 @@ export function App() {
     [auth, setAuth] = useState<"loading" | "signed_out" | "ready">("loading"),
     [authConfig, setAuthConfig] = useState<AuthConfig | null>(null),
     [settings, setSettings] = useState<PublicSettings | null>(null),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [signOutError, setSignOutError] = useState(""),
+    [signOutPending, setSignOutPending] = useState(false);
   const epoch = useRef(0);
+  const signingOut = useRef(false);
   const loadMe = useCallback(async (signal?: AbortSignal) => {
+    if (signingOut.current) return;
     const generation = ++epoch.current;
     try {
       const response = await request<Me>("/api/me", undefined, signal);
@@ -84,13 +88,25 @@ export function App() {
     return () => abort.abort();
   }, [loadMe]);
   async function signOut() {
+    if (signingOut.current) return;
+    signingOut.current = true;
+    epoch.current++;
+    setSignOutPending(true);
+    setSignOutError("");
     try {
       await request("/auth/logout", {});
-      epoch.current++;
       setMe(null);
       setAuth("signed_out");
+      setError("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Sign-out failed.");
+      setSignOutError(
+        e instanceof ApiFailure && (e.status === 401 || e.status === 403)
+          ? "Could not sign out because your session could not be verified. Reload this page, then try again."
+          : "Could not sign out. Reload this page to refresh your connection, then try again.",
+      );
+    } finally {
+      signingOut.current = false;
+      setSignOutPending(false);
     }
   }
   if (auth === "loading")
@@ -128,6 +144,8 @@ export function App() {
           onSettings={setSettings}
           loadMe={() => void loadMe()}
           onSignOut={() => void signOut()}
+          signOutError={signOutError}
+          signingOut={signOutPending}
         />
       </Suspense>
     </NavigationProvider>

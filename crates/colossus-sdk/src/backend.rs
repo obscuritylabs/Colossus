@@ -596,12 +596,22 @@ pub trait Backend: Send + Sync {
     fn connector_capabilities(&self) -> ServerCapabilities {
         ServerCapabilities::default()
     }
+    /// Configured choices authenticated with the independent cloud application grant.
+    /// Absence never falls back to the primary application's catalog.
+    fn connector_model_profiles(&self) -> Vec<crate::ConfiguredModelProfile> {
+        Vec::new()
+    }
 
     /// Cached authenticated server capabilities.
     ///
     /// Custom and preview-era embedded backends default to no optional behaviors.
     fn capabilities(&self) -> ServerCapabilities {
         ServerCapabilities::default()
+    }
+    /// Configured choices released by this application's authenticated server info.
+    /// Older or unsupported backends expose no choices.
+    fn model_profiles(&self) -> Vec<crate::ConfiguredModelProfile> {
+        Vec::new()
     }
 
     /// Caller-bound artifact service when advertised.

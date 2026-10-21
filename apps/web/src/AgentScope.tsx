@@ -45,7 +45,8 @@ import { AnalyticsPanel, LoadState, Metrics } from "./Home";
 import { SectionTabs } from "./Projects";
 import { RunComposer, type RunRequest } from "./RunComposer";
 import { RouteLink } from "./navigation";
-import { agentHref, globalHref, threadHref, type AgentView } from "./routes";
+import { agentHref, globalHref, type AgentView } from "./routes";
+import { conversationHref } from "./conversation-route";
 export function AgentSidebar({
   project,
   nodes,
@@ -407,7 +408,7 @@ export function AgentSidebar({
               <RouteLink
                 className="shared-workspace-thread-link"
                 key={thread.thread_id}
-                href={threadHref(project, thread.thread_id)}
+                href={conversationHref(thread)}
                 onNavigate={() => onOpen(thread)}
                 aria-current={
                   selected === thread.thread_id ? "page" : undefined
@@ -753,7 +754,7 @@ function AgentConversations({
           {resource.data.threads.map((thread) => (
             <li key={thread.thread_id}>
               <RouteLink
-                href={threadHref(project, thread.thread_id)}
+                href={conversationHref(thread)}
                 onNavigate={() => onOpen?.(thread)}
               >
                 <span>

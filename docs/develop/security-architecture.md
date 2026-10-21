@@ -443,6 +443,25 @@ initialization error is observed in bounded JSONL stdout. Malformed or truncated
 child exit, and the normal effect deadline terminate that hold; stdin is then closed and
 the same resource supervision and process-tree cleanup continue.
 
+### Hosted credential stores
+
+Hosted manual credentials use the existing encrypted owner/project vaults. Saving a
+named credential creates no execution authority. Only a host-composed attachment to
+the reviewed provider or MCP endpoint, purpose and generation can resolve its value.
+Personal and explicitly shared project stores remain separate; moving an identifier
+between scopes grants no access. The bounded credential catalog, values and attachment
+changes commit in one encrypted record. Mutation requires the current catalog revision
+under the existing local lifecycle lock or shared SQL edit gate. Adding an unused
+credential does not retire execution; attachment changes and rotation require idle
+execution before the host retires affected runtimes.
+
+Retained connection secrets remain compatible until their owner edits or reuses them.
+Adoption removes superseded legacy records after the named record becomes durable.
+Explicit disconnect markers prevent old values from reappearing after an interrupted
+cleanup, and corrupt named custody never falls back to a legacy value. Browser reads
+return names, types and usage only. Account OAuth flows remain separate from manual
+secret entry. See [Hosted development](cloud-control-plane.md#develop-hosted-personal-chat).
+
 ### Native credential vault
 
 Manual Desktop tokens and platform-backed MCP OAuth use separate instances of

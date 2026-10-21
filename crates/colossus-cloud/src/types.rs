@@ -3,19 +3,51 @@ use colossus_sdk::{CreateRunRequest, GetRunResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// One enrolled node bound to a project, local instance, and TLS client certificate.
+/// Placement boundary. Hosted targets have no Fleet enrollment or client certificate.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionKind {
+    /// An independently enrolled runtime connected through authenticated transport.
+    #[default]
+    Connected,
+    /// A tenant runtime supervised by the Hosted execution service.
+    Hosted,
+}
+
+impl ExecutionKind {
+    /// Stable storage and discovery value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Connected => "connected",
+            Self::Hosted => "hosted",
+        }
+    }
+
+    /// Preserve canonical serialization of existing connected records.
+    pub fn is_connected(&self) -> bool {
+        *self == Self::Connected
+    }
+}
+
+/// One fixed execution target. Connected targets additionally bind a TLS enrollment.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CloudNode {
-    /// Stable registered machine identity.
+    /// Immutable placement boundary, independent from presence and UI navigation.
+    #[serde(default, skip_serializing_if = "ExecutionKind::is_connected")]
+    pub execution_kind: ExecutionKind,
+    /// Personal runtime owner; absent denotes a legacy or explicitly shared project node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
+    /// Stable execution target identity.
     pub node_id: String,
     /// Owning cloud project.
     pub project_id: String,
-    /// Exact local Colossus instance independently verified by the connector SDK.
+    /// Connected runtime instance or retained Hosted namespace binding.
     pub instance_id: String,
     /// Bounded human-readable display label.
     pub label: String,
-    /// SHA-256 of the enrolled TLS client leaf, never credential material.
+    /// Connected client-leaf fingerprint; empty for Hosted targets.
     pub certificate_sha256: String,
     /// Additional cloud role ceiling, intersected with the local application grant.
     pub roles: BTreeSet<String>,
@@ -30,7 +62,7 @@ pub struct CloudNode {
     /// Sanitized display label, without a filesystem path.
     #[serde(default)]
     pub workspace_label: Option<String>,
-    /// Fresh authenticated heartbeat says the runtime is usable.
+    /// Connected heartbeat readiness, or configured availability for a Hosted target.
     #[serde(default)]
     pub runtime_ready: bool,
     /// Metadata released by this authenticated runtime, never independent attestation.
@@ -51,7 +83,7 @@ pub struct CloudTask {
     pub task_id: String,
     /// Owning project.
     pub project_id: String,
-    /// Exact enrolled execution target.
+    /// Exact execution target.
     pub node_id: String,
     /// Authenticated submitting subject.
     pub subject: String,
@@ -100,7 +132,7 @@ pub struct PendingCommand {
     pub command_id: String,
     /// Exact immutable task allocation.
     pub task_id: String,
-    /// Exact enrolled target.
+    /// Exact execution target.
     pub node_id: String,
     /// Closed typed SDK operation.
     pub command: Command,
@@ -139,7 +171,7 @@ pub struct CloudWorkspace {
     pub project_id: String,
     /// Host installation grouping.
     pub host_id: String,
-    /// Independently enrolled execution target.
+    /// Bound execution target.
     pub node_id: String,
     /// Sanitized label without local paths.
     pub label: String,
@@ -156,6 +188,9 @@ pub struct CloudThread {
     pub thread_id: String,
     /// Owning authenticated project.
     pub project_id: String,
+    /// Personal owner, derived from the authenticated account; absent preserves shared history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
     /// Immutable enrolled runtime placement.
     pub node_id: String,
     /// Native host grouping if advertised.

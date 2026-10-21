@@ -1,4 +1,5 @@
 use super::{PostgresEventJournal, PostgresJournalConfig, PostgresTlsConfig};
+mod partitions;
 use colossus_contracts::{
     Actor, ActorType, EventClassification, ExecutionContext, NewEvent, PLAINTEXT_PAYLOAD_ALGORITHM,
 };

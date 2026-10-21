@@ -846,6 +846,15 @@ adapters resolve that application's transport after a restart and never fall bac
 the primary Desktop grant. The controller intersects project Read, Execute, or Control
 permission with the runtime's independently enforced scopes and ownership.
 
+Configured model choices use the additive `runtime.model_catalog.v1` capability.
+Clients first discover the selected connection's context, then request its model
+catalog only with project Execute permission and `agent_runs.model_selection` support.
+The catalog releases configured profile labels, provider names, reasoning defaults,
+and role mappings; credentials and provider configuration remain on the host.
+Per-run model and reasoning choices apply to Execute, Plan, and Goal. Research keeps
+its configured runtime routes. Missing support retains host defaults, and a reconnect
+invalidates choices until the new connection's catalog has been checked.
+
 Management is online. The controller records a short-lived request under the exact
 connection lease; any HTTP replica can admit and read it, while only that lease's
 stream owner can claim dispatch. Claimed requests are never replayed after reconnect.

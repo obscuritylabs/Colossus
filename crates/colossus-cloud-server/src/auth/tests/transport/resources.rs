@@ -16,6 +16,7 @@ pub(super) async fn exercise(
     )
     .await;
     assert_eq!(context["kind"], "result");
+    assert!(context["value"].get("model_profiles").is_none());
     let connection = context["connection_id"].as_str().unwrap();
     let send = |operation: serde_json::Value| {
         post(
@@ -26,6 +27,34 @@ pub(super) async fn exercise(
             json!({"connection_id":connection,"operation":operation}),
         )
     };
+    let catalog = send(json!({"operation":"model_catalog"})).await;
+    assert_eq!(catalog["connection_id"], connection);
+    assert_eq!(catalog["kind"], "result");
+    assert_eq!(
+        catalog["value"]["model_profiles"][0]["profile"],
+        "primary-model"
+    );
+    assert_eq!(
+        catalog["value"]["model_profiles"][0]["default_roles"],
+        json!(["primary"])
+    );
+    assert!(
+        catalog["value"]["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "agent_runs.model_selection")
+    );
+    for expected in [json!(null), json!("stale-connection")] {
+        let mismatched = client
+            .post(format!("{origin}{path}"))
+            .headers(headers.clone())
+            .json(&json!({"connection_id":expected,"operation":{"operation":"model_catalog"}}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(mismatched.status(), 409);
+    }
     let yaml = "apiVersion: colossus.dev/v1alpha1\nkind: Workflow\nmetadata:\n  name: public-health\n  version: 1.0.0\n  description: Public workflow fixture\ninputs: {type: object, additionalProperties: false}\noutputs: {type: object}\ncapabilities: []\nmaxConcurrency: 1\nstepBudget: 2\nsteps:\n  - id: result\n    type: emit\n    value: {ok: true}\n";
     let validated = send(json!({"operation":"validate_workflow","yaml":yaml})).await;
     assert_eq!(validated["kind"], "result");

@@ -35,3 +35,5 @@ export type {
   SessionWorkspaceView,
   WorkStatusPresentation,
 } from "./components/WorkPresentation.js";
+
+export { ReleasedRunActivity } from "./components/ReleasedRunActivity.js";

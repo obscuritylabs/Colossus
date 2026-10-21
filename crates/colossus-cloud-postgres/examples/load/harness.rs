@@ -164,6 +164,8 @@ async fn placement(
         .register_node(
             &caller,
             CloudNode {
+                execution_kind: colossus_cloud::ExecutionKind::Connected,
+                owner_user_id: None,
                 node_id: format!("node-{index}"),
                 project_id: PROJECT.into(),
                 instance_id: format!("instance-{index}"),

@@ -42,6 +42,23 @@ Run the affected host's check/build and browser tests. For shared UI changes, re
 both file dependencies and validate both hosts as documented in `apps/ui/README.md`.
 Use the repository's [completion gates](setup-testing.md#verification).
 
+Web browser acceptance runs with `npm run test:browser` from `apps/web` after
+`cargo xtask check web`. Install the pinned browsers once with
+`npm exec -- playwright install chromium webkit`. The suite builds the actual
+application into `output/playwright/dist` and serves that production build on loopback
+port 5191 with isolated synthetic API responses. This leaves a locally served `dist`
+build intact. It checks model and reasoning submission, host defaults, Research
+routing, keyboard operation, and narrow Large-text layouts across supported palettes.
+Workspace cases also cover expanded/collapsed navigation, Fleet and personal chat
+destinations, composer placement, settings, and draft preservation.
+
+Run the workspace cases in WebKit with
+`PLAYWRIGHT_BROWSER_NAME=webkit npm exec -- playwright test tests/browser/workspace.browser.ts`.
+Set `PLAYWRIGHT_WEB_DEV=true` to exercise the Vite development server instead of the
+production preview. The selected Desktop PR job runs the full Chromium suite and
+targeted WebKit workspace cases, retaining failure screenshots and traces. This
+renderer acceptance does not replace native controller/runtime tests.
+
 Inspect the actual screens in light and dark palettes, including neutral and Hacker
 where supported, at compact widths and Large text. Verify that headings, forms, tables,
 status labels, and dialogs keep their hierarchy and do not clip or overlap. Check

@@ -453,7 +453,7 @@ fn disabled_browser_removes_tools_native_access_and_bundled_skill() {
         let driver = Arc::new(Driver::verified());
         let mut options = RuntimeOpenOptions::for_workspace(workspace.path())
             .unwrap()
-            .with_colossus_home(home.path())
+            .with_colossus_home(home.path().canonicalize().expect("canonical home"))
             .unwrap();
         if host_available {
             options = options.with_browser_host(RuntimeBrowserHost::new(driver.clone()));

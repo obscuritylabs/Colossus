@@ -20,6 +20,7 @@ pub(super) struct AccessPolicyInputs<'a> {
     pub(super) plugin_store: Option<Arc<PluginStore>>,
     pub(super) tls_roots: &'a AdditionalRootCertificates,
     pub(super) model_network_tools: bool,
+    pub(super) controlled_chat: bool,
     pub(super) interactive: bool,
     pub(super) browser_capabilities: Option<&'a colossus_contracts::BrowserCapabilities>,
     pub(super) computer_available: bool,
@@ -63,6 +64,7 @@ pub(super) fn compose_access_policy(
         plugin_store,
         tls_roots,
         model_network_tools,
+        controlled_chat,
         interactive,
         browser_capabilities,
         computer_available,
@@ -86,6 +88,10 @@ pub(super) fn compose_access_policy(
             Vec::new(),
         )
     }));
+    if controlled_chat {
+        candidate_tool_specs.retain(|spec| crate::controlled_chat::allows_tool(&spec.name));
+        tool_descriptors.retain(|descriptor| crate::controlled_chat::allows_tool(&descriptor.name));
+    }
     let mut action_descriptors = builtin_action_descriptors();
     let mut described_actions = action_descriptors
         .iter()
@@ -170,6 +176,9 @@ pub(super) fn compose_access_policy(
         matches!(&config.policy, PolicyConfig::Opa { .. }),
     )
     .map_err(|error| RuntimeError::Config(error.to_string()))?;
+    if controlled_chat {
+        crate::controlled_chat::constrain_access(&mut access);
+    }
     for tool in &mut access.tools {
         if tool.name.starts_with("browser.")
             && tool.availability == colossus_access::ToolAvailability::Active

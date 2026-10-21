@@ -268,6 +268,12 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
                 }
             };
             let capabilities = running.transports().primary.capabilities();
+            let model_profiles = running.transports().primary.model_profiles();
+            let connector_model_profiles = running
+                .transports()
+                .connector
+                .as_ref()
+                .map_or_else(Vec::new, |transport| transport.model_profiles());
             let connector_capabilities = running
                 .transports()
                 .connector
@@ -315,6 +321,8 @@ impl SidecarLifecycle for NativeSidecarLifecycle {
                 artifacts,
                 capabilities,
                 connector_capabilities,
+                model_profiles,
+                connector_model_profiles,
             }))
         }
     }
@@ -1011,6 +1019,8 @@ struct ManagedSidecarBackend {
     artifacts: Option<Arc<SwitchingArtifactClient>>,
     capabilities: ServerCapabilities,
     connector_capabilities: ServerCapabilities,
+    model_profiles: Vec<crate::ConfiguredModelProfile>,
+    connector_model_profiles: Vec<crate::ConfiguredModelProfile>,
 }
 
 #[path = "native_sidecar_plugins.rs"]
@@ -1053,6 +1063,12 @@ impl Backend for ManagedSidecarBackend {
     }
     fn connector_capabilities(&self) -> ServerCapabilities {
         self.connector_capabilities.clone()
+    }
+    fn model_profiles(&self) -> Vec<crate::ConfiguredModelProfile> {
+        self.model_profiles.clone()
+    }
+    fn connector_model_profiles(&self) -> Vec<crate::ConfiguredModelProfile> {
+        self.connector_model_profiles.clone()
     }
     fn connector_workflows(&self) -> Option<Arc<dyn crate::WorkflowClient>> {
         (self.connector_capabilities.contains("workflows.read")
@@ -3520,6 +3536,8 @@ mod tests {
                 artifacts: None,
                 capabilities: ServerCapabilities::default(),
                 connector_capabilities: ServerCapabilities::default(),
+                model_profiles: Vec::new(),
+                connector_model_profiles: Vec::new(),
             },
             root,
         )

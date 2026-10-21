@@ -2,9 +2,12 @@
 resolver = "3"
 exclude = ["native/browser/driver", "native/browser/pki", "native/browser/process-broker", "native/browser/tls-broker", "native/computer"]
 members = [
+    "crates/colossus-control-plane-client",
     "crates/colossus-cloud",
     "crates/colossus-cloud-postgres",
     "crates/colossus-cloud-server",
+    "crates/colossus-cloud-chat",
+    "crates/colossus-cloud-executor",
     "crates/colossus-a2a-server",
     "crates/colossus-connector",
     "crates/colossus-cloud-protocol",
@@ -90,6 +93,8 @@ openidconnect = { version = "4.0.1", default-features = false, features = ["reqw
 colossus-connector = { version = "=0.11.9", path = "crates/colossus-connector" }
 colossus-a2a-server = { version = "=0.11.9", path = "crates/colossus-a2a-server" }
 colossus-cloud-server = { version = "=0.11.9", path = "crates/colossus-cloud-server" }
+colossus-cloud-chat = { version = "=0.11.9", path = "crates/colossus-cloud-chat" }
+colossus-cloud-executor = { version = "=0.11.9", path = "crates/colossus-cloud-executor" }
 axum = { version = "0.8.9", features = ["json", "tokio", "http1", "http2"] }
 colossus-cloud-protocol = { version = "=0.11.9", path = "crates/colossus-cloud-protocol" }
 colossus-cloud = { version = "=0.11.9", path = "crates/colossus-cloud" }

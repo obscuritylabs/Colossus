@@ -331,12 +331,88 @@ it("preserves the authorized project through global settings navigation and relo
   );
   expect(settings).not.toBeNull();
   await act(() => settings!.click());
-  await contains("Personal preferences");
+  await contains("Personal preferences and connections");
+  expect(container.querySelector(".managed-settings-shell")).not.toBeNull();
+  expect(
+    container.querySelector('[aria-label="Settings sections"]')?.textContent,
+  ).toContain("Appearance");
   expect(location.search).toBe("?project=p");
   await act(() => root.unmount());
   root = createRoot(container);
   await act(() => root.render(<App />));
-  await contains("Personal preferences");
+  await contains("Personal preferences and connections");
   expect(container.querySelector('a[href="/fleet?project=p"]')).not.toBeNull();
   expect(paths.some((path) => path.startsWith("/api/projects/q/"))).toBe(false);
+});
+
+it("shows a rejected logout and lets the user retry without hiding the signed-in view", async () => {
+  const fetch = vi.mocked(globalThis.fetch);
+  const original = fetch.getMockImplementation()!;
+  let fail = true;
+  const pending: { resolve: ((value: Response) => void) | null } = {
+    resolve: null,
+  };
+  fetch.mockImplementation(async (input, options) => {
+    if (input === "/auth/logout") {
+      paths.push(input);
+      expect(options?.method).toBe("POST");
+      expect(options?.headers).toMatchObject({ "X-Colossus-CSRF": "1" });
+      if (fail) return response({ error: "permission_denied" }, 403);
+      return new Promise<Response>((resolve) => {
+        pending.resolve = resolve;
+      });
+    }
+    return original(input, options);
+  });
+  await act(() => root.render(<App />));
+  await contains("Retained exact-resource reply");
+  const signOut = () =>
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Sign out"]',
+    )!;
+  await act(() => signOut().click());
+  await contains("Could not sign out");
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    "Reload this page",
+  );
+  expect(container.textContent).toContain("Retained exact-resource reply");
+  expect(signOut().disabled).toBe(false);
+
+  fail = false;
+  const retry = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Retry sign out",
+  );
+  expect(retry).toBeDefined();
+  await act(() => retry!.click());
+  await ready();
+  expect(signOut().disabled).toBe(true);
+  await act(() => signOut().click());
+  expect(paths.filter((path) => path === "/auth/logout")).toHaveLength(2);
+  await act(() => pending.resolve!(new Response(null, { status: 204 })));
+  await contains("Sign in to your Control Plane");
+  expect(container.textContent).not.toContain("Could not sign out");
+  expect(container.textContent).not.toContain("Retained exact-resource reply");
+});
+
+it("shows an unconfirmed logout when a gateway returns a sign-in page", async () => {
+  const fetch = vi.mocked(globalThis.fetch);
+  const original = fetch.getMockImplementation()!;
+  fetch.mockImplementation(async (input, options) =>
+    input === "/auth/logout"
+      ? new Response("<html><body>Session refresh required</body></html>", {
+          headers: { "Content-Type": "text/html" },
+        })
+      : original(input, options),
+  );
+  await act(() => root.render(<App />));
+  await contains("Retained exact-resource reply");
+  await act(() =>
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Sign out"]')!
+      .click(),
+  );
+  await contains("Could not sign out");
+  expect(container.textContent).toContain("Reload this page");
+  expect(container.textContent).toContain("Retained exact-resource reply");
+  expect(container.textContent).not.toContain("Unexpected token");
 });

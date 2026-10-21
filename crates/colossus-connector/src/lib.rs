@@ -1,20 +1,16 @@
 //! Outbound, caller-bound runtime connector. Cloud traffic cannot access worker IPC.
 mod connection;
-mod resources;
+pub use colossus_cloud_executor::ExecutionResources as ConnectorResources;
 pub use connection::{ConnectionConfig, ConnectorStatus, RuntimeConnector};
-pub use resources::ConnectorResources;
 mod enrollment;
 pub use enrollment::EnrollmentStore;
 mod cli;
 mod cli_control;
 mod discovery;
 mod headless;
-mod history;
-mod inboxes;
 mod inventory;
 pub use inventory::native_host_label;
 mod outbound;
-mod released;
 pub use cli::{
     ConnectorCommand, EnrollArguments, LocalArguments, ShareWorkspaceArguments, StorageArguments,
     run_cli,

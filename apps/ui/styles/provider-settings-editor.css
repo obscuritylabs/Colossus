@@ -1,0 +1,43 @@
+.shared-provider-settings-editor {
+  margin-block: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-muted);
+  padding: 0;
+  overflow: hidden;
+  min-width: 0;
+}
+.shared-provider-settings-editor .provider-editor-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.shared-provider-settings-editor .provider-editor-heading > div {
+  flex: 1;
+  min-width: 0;
+}
+.shared-provider-settings-editor .provider-editor-heading h4 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--font-size-body);
+}
+.shared-provider-settings-editor .provider-editor-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+.shared-provider-settings-editor .provider-editor-section label > small {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+.shared-provider-settings-editor > .mcp-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 18px;
+}

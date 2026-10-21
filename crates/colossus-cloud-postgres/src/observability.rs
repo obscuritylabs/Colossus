@@ -18,6 +18,7 @@ impl CloudPostgresStore {
         &self,
         project: &str,
         node: Option<&str>,
+        visible_to: Option<&str>,
         now: u64,
         days: u16,
     ) -> CloudResult<OperationalStatistics> {
@@ -32,6 +33,7 @@ impl CloudPostgresStore {
             .bind::<Nullable<Text>, _>(node)
             .bind::<BigInt, _>(first)
             .bind::<BigInt, _>(now)
+            .bind::<Nullable<Text>, _>(visible_to)
             .get_result::<StatisticsRow>(&mut connection)
             .await
             .map_err(|_| CloudError::Storage)?;
@@ -41,11 +43,11 @@ impl CloudPostgresStore {
 
 const SQL: &str = r#"
 WITH agent_set AS (
-    SELECT id,host_id,runtime_ready FROM runtime_agents WHERE project_id=$1 AND NOT deleted AND NOT revoked AND ($2::TEXT IS NULL OR id=$2)
+    SELECT id,host_id,runtime_ready FROM runtime_agents WHERE project_id=$1 AND execution_kind='connected' AND NOT deleted AND NOT revoked AND ($2::TEXT IS NULL OR id=$2) AND ($5::TEXT IS NULL OR owner_user_id IS NULL OR owner_user_id=$5)
 ), thread_set AS (
-    SELECT id FROM conversation_threads WHERE project_id=$1 AND NOT deleted AND ($2::TEXT IS NULL OR node_id=$2)
+    SELECT id FROM conversation_threads WHERE project_id=$1 AND NOT deleted AND ($2::TEXT IS NULL OR node_id=$2) AND ($5::TEXT IS NULL OR (owner_user_id IS NULL OR owner_user_id=$5) AND NOT EXISTS(SELECT 1 FROM runtime_agents n WHERE n.project_id=$1 AND n.id=conversation_threads.node_id AND NOT n.deleted AND n.owner_user_id IS NOT NULL AND n.owner_user_id<>$5))
 ), task_set AS (
-    SELECT id,status,domain_created_at FROM tasks WHERE project_id=$1 AND NOT deleted AND ($2::TEXT IS NULL OR node_id=$2)
+    SELECT id,status,domain_created_at FROM tasks WHERE project_id=$1 AND NOT deleted AND ($2::TEXT IS NULL OR node_id=$2) AND ($5::TEXT IS NULL OR (thread_id IS NULL OR thread_id IN (SELECT id FROM thread_set)) AND NOT EXISTS(SELECT 1 FROM runtime_agents n WHERE n.project_id=$1 AND n.id=tasks.node_id AND NOT n.deleted AND n.owner_user_id IS NOT NULL AND n.owner_user_id<>$5))
 ), recent AS (
     SELECT * FROM task_set WHERE domain_created_at>=to_timestamp($3) AND domain_created_at<=to_timestamp($4)
 ), usage_events AS (
@@ -64,7 +66,7 @@ SELECT jsonb_build_object(
     'complete',TRUE,
     'counts',jsonb_build_object(
         'projects',0,
-        'hosts',CASE WHEN $2::TEXT IS NULL THEN (SELECT COUNT(*) FROM hosts WHERE project_id=$1 AND NOT deleted) ELSE (SELECT COUNT(DISTINCT host_id) FROM agent_set WHERE host_id IS NOT NULL) END,
+        'hosts',CASE WHEN $2::TEXT IS NULL THEN (SELECT COUNT(*) FROM hosts h WHERE project_id=$1 AND NOT deleted AND (NOT EXISTS(SELECT 1 FROM runtime_agents n WHERE n.project_id=$1 AND n.host_id=h.id AND NOT n.deleted) OR EXISTS(SELECT 1 FROM runtime_agents n WHERE n.project_id=$1 AND n.host_id=h.id AND NOT n.deleted AND n.execution_kind='connected' AND ($5::TEXT IS NULL OR n.owner_user_id IS NULL OR n.owner_user_id=$5)))) ELSE (SELECT COUNT(DISTINCT host_id) FROM agent_set WHERE host_id IS NOT NULL) END,
         'agents',(SELECT COUNT(*) FROM agent_set),
         'online_agents',(SELECT COUNT(*) FROM agent_set a JOIN connection_leases l ON l.project_id=$1 AND l.node_id=a.id AND l.expires_at>$4 WHERE a.runtime_ready),
         'threads',(SELECT COUNT(*) FROM thread_set),

@@ -1,6 +1,7 @@
+import { ProviderSettingsEditor } from "@colossus/ui/components/ProviderSettingsEditor";
 import { CloudConnectionPane } from "./CloudConnectionPane";
 import { ControlPlaneSettingsPane } from "./ControlPlaneSettingsPane";
-import { ModelFeatureControl } from "./ModelFeatureControl";
+import { ModelSettingsEditor } from "@colossus/ui/components/ModelSettingsEditor";
 import type { ModelFeatureMode, ManagedModelCapabilities } from "../types";
 import { RememberedCommands } from "./RememberedCommands";
 import { SetupPackagesPanel } from "./setup/SetupPackagesPanel";
@@ -22,8 +23,6 @@ import {
   IconAlertTriangle,
   IconCheck,
   IconChevronDown,
-  IconCloud,
-  IconCpu,
   IconDatabase,
   IconDownload,
   IconEdit,
@@ -133,7 +132,6 @@ import {
 import { DropdownSelect } from "./DropdownSelect";
 import { ProviderPresetSelect } from "./ProviderPresetSelect";
 import { ProviderIcon } from "./ProviderIcon";
-import { ProviderModelPicker } from "./ProviderModelPicker";
 import {
   presetProviderKind,
   providerCredentialLabel,
@@ -149,6 +147,8 @@ import {
   providerDescriptionBytes,
 } from "./ProviderPresentationEditor";
 import { setupChanged } from "../setupPackages";
+
+import { CredentialEditor } from "@colossus/ui/components/CredentialEditor";
 
 const CatalogInventory = lazy(() =>
   import("./CatalogInventory").then((module) => ({
@@ -3877,47 +3877,17 @@ function GlobalSettingsBody({
           })}
         >
           {credentialEditor ? (
-            <form
-              className="mcp-editor catalog-editor provider-editor credential-editor"
-              aria-labelledby="create-credential-heading"
-              onSubmit={async (event) => {
-                event.preventDefault();
+            <CredentialEditor
+              description="Name the credential and choose its type. Enter the value in the secure system dialog next."
+              busy={busy}
+              onCancel={closeCredentialEditor}
+              submitDisabled={!credentialLabel.trim()}
+              onSubmit={async () => {
                 if (!busy && (await onCreateCredential()))
                   closeCredentialEditor();
               }}
-              onKeyDown={(event) => {
-                if (
-                  event.key === "Escape" &&
-                  !event.defaultPrevented &&
-                  !busy
-                ) {
-                  event.preventDefault();
-                  closeCredentialEditor();
-                }
-              }}
             >
-              <div className="provider-editor-heading">
-                <span className="resource-icon">
-                  <IconKey size={18} aria-hidden="true" />
-                </span>
-                <div>
-                  <h4 id="create-credential-heading">Add credential</h4>
-                  <p>
-                    Name the credential and choose its type. Enter the value in
-                    the secure system dialog next.
-                  </p>
-                </div>
-                <button
-                  className="icon-button"
-                  type="button"
-                  aria-label="Close credential editor"
-                  disabled={busy}
-                  onClick={closeCredentialEditor}
-                >
-                  <IconX size={17} aria-hidden="true" />
-                </button>
-              </div>
-              <div className="provider-editor-section provider-editor-grid">
+              <div className="provider-editor-grid">
                 <label>
                   <span>Display label</span>
                   <input
@@ -3956,25 +3926,7 @@ function GlobalSettingsBody({
                   </small>
                 </label>
               </div>
-              <div className="mcp-editor-actions">
-                <button
-                  className="button secondary"
-                  type="button"
-                  disabled={busy}
-                  onClick={closeCredentialEditor}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="button primary"
-                  type="submit"
-                  disabled={busy || !credentialLabel.trim()}
-                >
-                  <IconLock size={16} aria-hidden="true" /> Continue to secure
-                  entry
-                </button>
-              </div>
-            </form>
+            </CredentialEditor>
           ) : null}
         </CatalogInventory>
       </Suspense>
@@ -7109,98 +7061,15 @@ function ProviderEditor({
     providerDescriptionBytes(presentation.descriptionMarkdown) >
     MAX_PROVIDER_DESCRIPTION_BYTES;
   const codex = draft.kind === "open_ai_codex";
-  const adapterDescription =
-    draft.kind === "anthropic_messages"
-      ? "Use the native Anthropic Messages API."
-      : draft.kind === "openai_responses"
-        ? "Use for providers that support the OpenAI Responses API."
-        : draft.kind === "openai_compatible"
-          ? "Use for providers with an OpenAI-compatible API."
-          : "Use your Codex subscription; the endpoint and sign-in are managed for you.";
-  const title = draft.resourceId
-    ? `Edit ${draft.label || "provider"}`
-    : "Add provider";
   return (
-    <form
-      className="mcp-editor catalog-editor provider-editor"
-      aria-labelledby="provider-editor-heading"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!busy && !descriptionTooLarge) onSave();
-      }}
-    >
-      <div className="provider-editor-heading">
-        <span className="resource-icon">
-          <IconCloud size={18} aria-hidden="true" />
-        </span>
-        <div>
-          <h4 id="provider-editor-heading">{title}</h4>
-          <p>
-            Connect Colossus to a model provider. You can reuse this connection
-            for more than one model.
-          </p>
-        </div>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Close provider editor"
-          disabled={busy}
-          onClick={onCancel}
-        >
-          <IconX size={17} />
-        </button>
-      </div>
-      <section
-        className="provider-editor-section"
-        aria-labelledby="provider-editor-identity-heading"
-      >
-        <div className="provider-editor-section-heading">
-          <h5 id="provider-editor-identity-heading">Identity</h5>
-          <p>
-            Choose a name shown in settings and an ID used in configuration.
-          </p>
-        </div>
-        <div className="provider-editor-grid">
-          <label>
-            <span>Display label</span>
-            <input
-              disabled={busy}
-              value={draft.label}
-              placeholder="For example, OpenRouter production"
-              aria-describedby="provider-label-help"
-              required
-              onChange={(event) =>
-                onChange({ ...draft, label: event.target.value })
-              }
-            />
-            <small id="provider-label-help">Shown to people in settings.</small>
-          </label>
-          <label>
-            <span>Profile ID</span>
-            <input
-              disabled={busy}
-              value={draft.profile}
-              placeholder="openrouter-production"
-              aria-describedby="provider-profile-help"
-              required
-              onChange={(event) =>
-                onChange({ ...draft, profile: event.target.value })
-              }
-            />
-            <small id="provider-profile-help">
-              Used to identify this provider in model configuration.
-            </small>
-          </label>
-        </div>
-      </section>
-      <section
-        className="provider-editor-section"
-        aria-labelledby="provider-editor-connection-heading"
-      >
-        <div className="provider-editor-section-heading">
-          <h5 id="provider-editor-connection-heading">Connection</h5>
-          <p>Choose the provider API format and endpoint.</p>
-        </div>
+    <ProviderSettingsEditor
+      draft={draft}
+      busy={busy}
+      onChange={onChange}
+      onCancel={onCancel}
+      onSave={onSave}
+      saveDisabled={descriptionTooLarge}
+      preset={
         <ProviderPresetSelect
           kind={draft.kind}
           baseUrl={draft.baseUrl}
@@ -7217,58 +7086,8 @@ function ProviderEditor({
             })
           }
         />
-        <div className="provider-editor-grid provider-connection-grid">
-          <label>
-            <span>Adapter</span>
-            <DropdownSelect
-              disabled={busy}
-              value={draft.kind}
-              aria-describedby="provider-adapter-help"
-              onChange={(event) =>
-                onChange({
-                  ...draft,
-                  kind: event.target
-                    .value as ManagedProviderCatalogValue["kind"],
-                })
-              }
-            >
-              <option value="openai_responses">OpenAI Responses</option>
-              <option value="anthropic_messages">Anthropic Messages</option>
-              <option value="openai_compatible">OpenAI compatible</option>
-              <option value="open_ai_codex">Codex subscription</option>
-            </DropdownSelect>
-            <small id="provider-adapter-help">{adapterDescription}</small>
-          </label>
-          <label>
-            <span>Endpoint URL</span>
-            <input
-              type="url"
-              value={
-                codex ? "https://chatgpt.com/backend-api/codex" : draft.baseUrl
-              }
-              disabled={busy || codex}
-              aria-describedby="provider-endpoint-help"
-              required
-              onChange={(event) =>
-                onChange({ ...draft, baseUrl: event.target.value })
-              }
-            />
-            <small id="provider-endpoint-help">
-              {codex
-                ? "This endpoint is managed by the Codex subscription connection."
-                : "Use HTTPS except when connecting to a service on this device."}
-            </small>
-          </label>
-        </div>
-      </section>
-      <section
-        className="provider-editor-section"
-        aria-labelledby="provider-editor-auth-heading"
-      >
-        <div className="provider-editor-section-heading">
-          <h5 id="provider-editor-auth-heading">Authentication</h5>
-          <p>Choose a saved credential when this provider requires one.</p>
-        </div>
+      }
+      authentication={
         <div className="provider-auth-grid">
           <div className="provider-credential-control">
             <label>
@@ -7329,70 +7148,16 @@ function ProviderEditor({
             </span>
           </div>
         </div>
-      </section>
-      <section
-        className="provider-editor-section"
-        aria-labelledby="provider-editor-runtime-heading"
-      >
-        <div className="provider-editor-section-heading">
-          <h5 id="provider-editor-runtime-heading">Runtime</h5>
-          <p>
-            Set a custom request timeout, or leave it blank to use the provider
-            default.
-          </p>
-        </div>
-        <div className="provider-runtime-control">
-          <label>
-            <span>Request timeout (ms)</span>
-            <input
-              disabled={busy}
-              type="number"
-              min={1}
-              max={3_600_000}
-              value={draft.timeoutMs ?? ""}
-              placeholder="Provider default"
-              aria-describedby="provider-timeout-help"
-              onChange={(event) =>
-                onChange({
-                  ...draft,
-                  timeoutMs:
-                    event.target.value === ""
-                      ? null
-                      : Number(event.target.value),
-                })
-              }
-            />
-            <small id="provider-timeout-help">
-              Leave empty to use the provider default, up to one hour.
-            </small>
-          </label>
-        </div>
-      </section>
-      <ProviderPresentationEditor
-        value={presentation}
-        busy={busy}
-        onReading={setReadingIcon}
-        onChange={(presentation) => onChange({ ...draft, presentation })}
-      />
-      <div className="mcp-editor-actions">
-        <button
-          className="button secondary"
-          type="button"
-          disabled={busy}
-          onClick={onCancel}
-        >
-          Cancel
-        </button>
-        <button
-          className="button primary"
-          type="submit"
-          disabled={busy || descriptionTooLarge}
-        >
-          <IconCheck size={16} />
-          {draft.resourceId ? "Save changes" : "Add provider"}
-        </button>
-      </div>
-    </form>
+      }
+      presentation={
+        <ProviderPresentationEditor
+          value={presentation}
+          busy={busy}
+          onReading={setReadingIcon}
+          onChange={(presentation) => onChange({ ...draft, presentation })}
+        />
+      }
+    />
   );
 }
 
@@ -7425,9 +7190,6 @@ function ModelEditor({
   const provider = providers
     .map(currentValue)
     .find((candidate) => candidate.profile === draft.providerProfile);
-  const title = draft.resourceId
-    ? `Edit ${draft.label || "model"}`
-    : "Add model";
   const connectionKey = JSON.stringify([
     workspaceId,
     catalogRevision,
@@ -7437,319 +7199,62 @@ function ModelEditor({
     provider?.credentialId,
   ]);
   return (
-    <form
-      className="mcp-editor catalog-editor model-editor"
-      aria-labelledby="model-editor-heading"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!busy) onSave();
-      }}
-    >
-      <div className="model-editor-heading">
-        <span className="resource-icon">
-          <IconCpu size={18} aria-hidden="true" />
-        </span>
-        <div>
-          <h4 id="model-editor-heading">{title}</h4>
-          <p>Add a model and describe the limits and features it supports.</p>
-        </div>
-        <button
-          className="icon-button"
-          type="button"
-          aria-label="Close model editor"
-          disabled={busy}
-          onClick={onCancel}
-        >
-          <IconX size={17} />
-        </button>
-      </div>
-      <section
-        className="model-editor-section"
-        aria-labelledby="model-editor-identity-heading"
-      >
-        <div className="model-editor-section-heading">
-          <h5 id="model-editor-identity-heading">Identity</h5>
-          <p>
-            Choose a name shown in settings and an ID used in configuration.
-          </p>
-        </div>
-        <div className="model-editor-grid model-identity-grid">
-          <label>
-            <span>Display label</span>
-            <input
-              disabled={busy}
-              value={draft.label}
-              placeholder="For example, Primary reasoning model"
-              aria-describedby="model-label-help"
-              required
-              onChange={(event) =>
-                onChange({ ...draft, label: event.target.value })
-              }
-            />
-            <small id="model-label-help">Shown to people in settings.</small>
-          </label>
-          <label>
-            <span>Profile ID</span>
-            <input
-              disabled={busy}
-              value={draft.profile}
-              placeholder="primary-reasoning"
-              aria-describedby="model-profile-help"
-              required
-              onChange={(event) =>
-                onChange({ ...draft, profile: event.target.value })
-              }
-            />
-            <small id="model-profile-help">
-              Used to identify this model in workspace configuration.
-            </small>
-          </label>
-        </div>
-      </section>
-      <section
-        className="model-editor-section"
-        aria-labelledby="model-editor-route-heading"
-      >
-        <div className="model-editor-section-heading">
-          <h5 id="model-editor-route-heading">Provider connection</h5>
-          <p>Choose the provider and enter its model ID.</p>
-        </div>
-        <div className="model-editor-grid model-route-grid">
-          <label>
-            <span>Provider profile</span>
-            <DropdownSelect
-              disabled={busy}
-              value={draft.providerProfile}
-              aria-describedby="model-provider-help"
-              renderOptionIcon={(option) => {
-                const entry = providers.find(
-                  (candidate) =>
-                    currentValue(candidate).profile === option.value,
-                );
-                return entry ? (
-                  <ProviderIcon provider={currentValue(entry)} />
-                ) : null;
-              }}
-              required
-              onChange={(event) =>
-                onChange({
-                  ...resetModelDraft(draft),
-                  providerProfile: event.target.value,
-                  model: "",
-                })
-              }
-            >
-              <option value="">Select provider</option>
-              {providers.map((provider) => {
-                const value = currentValue(provider);
-                return (
-                  <option key={provider.id} value={value.profile}>
-                    {provider.label}
-                  </option>
-                );
-              })}
-            </DropdownSelect>
-            <small id="model-provider-help">
-              Uses one of the provider connections configured above.
-            </small>
-          </label>
-          <label>
-            <span>Model identifier</span>
-            <input
-              disabled={busy}
-              value={draft.model}
-              placeholder="Provider-specific model name"
-              aria-describedby="model-identifier-help"
-              required
-              onChange={(event) =>
-                onChange({
-                  ...resetModelDraft(draft),
-                  model: event.target.value,
-                })
-              }
-            />
-            <small id="model-identifier-help">
-              Enter the model name expected by the selected provider.
-            </small>
-          </label>
-        </div>
-        <ProviderModelPicker
-          key={connectionKey}
-          connectionKey={connectionKey}
-          model={draft.model}
-          disabled={busy || workspaceId === null || provider === undefined}
-          onLoad={async () => {
-            if (workspaceId === null || !provider) return [];
-            const result = await onDiscoverModels({
-              workspaceId,
-              providerKind: provider.kind,
-              baseUrl: provider.baseUrl,
-              credentialAction: provider.credentialId ? "reuse" : "none",
-              ...(provider.credentialId
-                ? { credentialId: provider.credentialId }
-                : {}),
-            });
-            if (result.errorMessage) throw new Error(result.errorMessage);
-            return result.models;
-          }}
-          onSelect={(entry) => {
-            const selected = selectCatalogModel(managedModel(draft), entry);
-            onChange({
-              ...draft,
-              ...selected,
-              ...selected.capabilities,
-              label: draft.label || entry.display_name || entry.id,
-              profile:
-                draft.profile ||
-                entry.id.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 64),
-            });
-          }}
-        />
-        {workspaceId === null ? (
+    <ModelSettingsEditor
+      draft={draft}
+      providers={providers.map((entry) => ({
+        profile: currentValue(entry).profile,
+        label: entry.label,
+      }))}
+      busy={busy}
+      onChange={onChange}
+      onCancel={onCancel}
+      onSave={onSave}
+      connectionKey={connectionKey}
+      catalogDisabled={workspaceId === null || provider === undefined}
+      catalogNotice={
+        workspaceId === null ? (
           <p>Choose a Workspace to load this provider’s models.</p>
-        ) : null}
-      </section>
-      <section
-        className="model-editor-section"
-        aria-labelledby="model-editor-budget-heading"
-      >
-        <div className="model-editor-section-heading">
-          <h5 id="model-editor-budget-heading">Token limits</h5>
-          <p>
-            Set how much context the model can read and how long it can reply.
-          </p>
-        </div>
-        <div className="model-editor-grid model-budget-grid">
-          <label>
-            <span>Context window (tokens)</span>
-            <input
-              disabled={busy}
-              type="number"
-              min={1_024}
-              value={draft.contextWindowTokens}
-              aria-describedby="model-context-help"
-              onChange={(event) =>
-                onChange({
-                  ...draft,
-                  contextWindowTokens: Number(event.target.value),
-                })
-              }
-            />
-            <small id="model-context-help">
-              Minimum 1,024 tokens, including input and output.
-            </small>
-          </label>
-          <label>
-            <span>Maximum output (tokens)</span>
-            <input
-              disabled={busy}
-              type="number"
-              min={1}
-              value={draft.maxOutputTokens}
-              aria-describedby="model-output-help"
-              onChange={(event) =>
-                onChange({
-                  ...draft,
-                  maxOutputTokens: Number(event.target.value),
-                })
-              }
-            />
-            <small id="model-output-help">
-              Upper bound for one generated model response.
-            </small>
-          </label>
-        </div>
-      </section>
-      <section
-        className="model-editor-section"
-        aria-labelledby="model-editor-capabilities-heading"
-      >
-        <div className="model-editor-section-heading">
-          <h5 id="model-editor-capabilities-heading">Supported features</h5>
-          <p>
-            Auto uses advertised support and provider responses. On forces an
-            attempt; Off disables the feature.
-          </p>
-        </div>
-        <div className="model-capability-grid">
-          {(
-            [
-              ["toolCalls", "Tool calls", "Let the model request tools."],
-              ["streaming", "Streaming", "Show response text as it arrives."],
-              ["imageInputs", "Image inputs", "Receive attached images."],
-              [
-                "serverCompaction",
-                "Server compaction",
-                "Use Responses compaction with local summarization as fallback.",
-              ],
-            ] as const
-          ).map(([feature, label, description]) => (
-            <ModelFeatureControl
-              key={feature}
-              label={label}
-              declared={draft.declared?.[feature]}
-              description={description}
-              value={draft[feature] ?? "auto"}
-              disabled={busy}
-              onChange={(mode) => onChange({ ...draft, [feature]: mode })}
-            />
-          ))}
-        </div>
-        <div className="model-reasoning-control">
-          <label>
-            <span>Reasoning effort</span>
-            <DropdownSelect
-              disabled={busy}
-              value={draft.reasoningEffort ?? "inherit"}
-              aria-describedby="model-reasoning-help"
-              onChange={(event) =>
-                onChange({
-                  ...draft,
-                  reasoningEffort:
-                    event.target.value === "inherit"
-                      ? null
-                      : (event.target.value as ReasoningEffort),
-                })
-              }
-            >
-              <option value="inherit">Provider default</option>
-              {[
-                "none",
-                "minimal",
-                "low",
-                "medium",
-                "high",
-                "xhigh",
-                "max",
-                "ultra",
-              ].map((effort) => (
-                <option key={effort} value={effort}>
-                  {effort}
-                </option>
-              ))}
-            </DropdownSelect>
-            <small id="model-reasoning-help">
-              Leave at provider default unless the provider supports a specific
-              effort level.
-            </small>
-          </label>
-        </div>
-      </section>
-      <div className="mcp-editor-actions">
-        <button
-          className="button secondary"
-          type="button"
-          disabled={busy}
-          onClick={onCancel}
-        >
-          Cancel
-        </button>
-        <button className="button primary" type="submit" disabled={busy}>
-          <IconCheck size={16} />
-          {draft.resourceId ? "Save changes" : "Add model"}
-        </button>
-      </div>
-    </form>
+        ) : null
+      }
+      providerIcon={(profile) => {
+        const entry = providers.find(
+          (candidate) => currentValue(candidate).profile === profile,
+        );
+        return entry ? <ProviderIcon provider={currentValue(entry)} /> : null;
+      }}
+      onProviderChange={(providerProfile) =>
+        onChange({ ...resetModelDraft(draft), providerProfile, model: "" })
+      }
+      onModelIdentifierChange={(model) =>
+        onChange({ ...resetModelDraft(draft), model })
+      }
+      onLoadModels={async () => {
+        if (workspaceId === null || !provider) return [];
+        const result = await onDiscoverModels({
+          workspaceId,
+          providerKind: provider.kind,
+          baseUrl: provider.baseUrl,
+          credentialAction: provider.credentialId ? "reuse" : "none",
+          ...(provider.credentialId
+            ? { credentialId: provider.credentialId }
+            : {}),
+        });
+        if (result.errorMessage) throw new Error(result.errorMessage);
+        return result.models;
+      }}
+      onSelectCatalogModel={(entry) => {
+        const selected = selectCatalogModel(managedModel(draft), entry);
+        onChange({
+          ...draft,
+          ...selected,
+          ...selected.capabilities,
+          label: draft.label || entry.display_name || entry.id,
+          profile:
+            draft.profile ||
+            entry.id.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 64),
+        });
+      }}
+    />
   );
 }
 

@@ -1,0 +1,342 @@
+{
+  "http_bind": "0.0.0.0:8080",
+  "grpc_bind": "0.0.0.0:8443",
+  "public_origin": "https://colossus.example.com",
+  "grpc_endpoint": "https://runtimes.colossus.example.com",
+  "ca_certificate": "/etc/colossus/tls/ca.pem",
+  "ca_key": "/etc/colossus/tls/ca-key.pem",
+  "server_certificate": "/etc/colossus/tls/server.pem",
+  "server_key": "/etc/colossus/tls/server-key.pem",
+  "oidc": null,
+  "memberships": [],
+  "web_root": "/opt/colossus/web",
+  "database": {
+    "connectionVariable": "COLOSSUS_CONTROL_PLANE_DATABASE",
+    "schema": "colossus_control_plane",
+    "tls": {
+      "kind": "webpki_roots"
+    },
+    "maxConnections": 16,
+    "connectionTimeoutMs": 5000,
+    "statementTimeoutMs": 15000
+  },
+  "auth_key_variable": "COLOSSUS_CONTROL_PLANE_AUTH_KEY",
+  "maintenance": {
+    "batchLimit": 256,
+    "deliveredOutboxRetentionSeconds": 86400
+  },
+  "local_development": false,
+  "local_auth": {
+    "session_seconds": 28800
+  },
+  "bootstrap_admin": {
+    "display_name": "Administrator",
+    "email": null,
+    "oidc_subject": null,
+    "username": "admin",
+    "password_variable": "COLOSSUS_CONTROL_PLANE_BOOTSTRAP_PASSWORD"
+  },
+  "classification": {
+    "enabled": false,
+    "text": "",
+    "tone": "neutral",
+    "position": "top_and_bottom"
+  },
+  "chat": {
+    "home": "/var/lib/colossus-chat/private",
+    "wrapping_key_variable": "COLOSSUS_CHAT_WRAPPING_KEY",
+    "max_active_runtimes": 4,
+    "projects": {
+      "example": {
+        "runtime": {
+          "schemaVersion": 3,
+          "access": {
+            "profile": "pinned",
+            "tools": {
+              "include": [
+                "echo",
+                "user.ask*",
+                "tool.search",
+                "context.show",
+                "context.compact",
+                "context.snapshots",
+                "context.restore",
+                "trace.show",
+                "task.create",
+                "task.update",
+                "task.list",
+                "decision.create",
+                "decision.update",
+                "decision.list",
+                "decision.archive",
+                "decision.supersede",
+                "session.set_title",
+                "plan.create",
+                "plan.update",
+                "goal.show",
+                "agent.delegate",
+                "agent.participants",
+                "agent.send_message",
+                "agent.inbox",
+                "agent.await_message",
+                "agent.result",
+                "agent.list",
+                "goal.update",
+                "plan.show",
+                "plan.approve_request",
+                "memory.create",
+                "memory.update",
+                "memory.list",
+                "memory.search",
+                "memory.archive",
+                "memory.supersede",
+                "mcp.servers*",
+                "mcp.search*",
+                "mcp.tools*",
+                "mcp.call*",
+                "web.search*",
+                "workflow.definition.list",
+                "workflow.definition.get",
+                "workflow.schedule.list",
+                "workflow.schedule.get",
+                "workflow.schedule.create",
+                "workflow.schedule.set_enabled",
+                "workflow.schedule.delete",
+                "workflow.task.schedule"
+              ],
+              "exclude": []
+            },
+            "actions": {
+              "allow": [
+                "agent.message.read",
+                "agent.message.send",
+                "agent.run",
+                "context.compact",
+                "context.restore",
+                "context.show",
+                "context.snapshots",
+                "decision.archive",
+                "decision.create",
+                "decision.list",
+                "decision.supersede",
+                "decision.update",
+                "embedding.openai.create",
+                "goal.create",
+                "goal.iteration.record",
+                "goal.show",
+                "goal.update",
+                "mcp.invoke",
+                "mcp.tools",
+                "memory.archive",
+                "memory.create",
+                "memory.index.chroma.remove",
+                "memory.index.chroma.reset",
+                "memory.index.chroma.search",
+                "memory.index.chroma.status",
+                "memory.index.chroma.upsert",
+                "memory.index.rebuild",
+                "memory.index.status",
+                "memory.index.sync",
+                "memory.list",
+                "memory.read",
+                "memory.search",
+                "memory.supersede",
+                "memory.update",
+                "plan.create",
+                "plan.discard",
+                "plan.execute",
+                "plan.show",
+                "plan.update",
+                "presentation.history.append",
+                "presentation.preferences.update",
+                "provider.anthropic.messages",
+                "provider.call",
+                "provider.echo",
+                "provider.models",
+                "provider.openai.chat",
+                "provider.openai.codex",
+                "provider.openai.responses",
+                "research.run",
+                "session.set_title",
+                "subagent.cancel",
+                "subagent.complete",
+                "subagent.create",
+                "subagent.fail",
+                "subagent.interrupt",
+                "subagent.list",
+                "subagent.read",
+                "subagent.requeue",
+                "subagent.start",
+                "task.create",
+                "task.list",
+                "task.update",
+                "web.search",
+                "workflow.definition.read",
+                "workflow.definition.register",
+                "workflow.execute",
+                "workflow.run.read",
+                "workflow.run.start",
+                "workflow.schedule.get",
+                "workflow.schedule.list",
+                "workflow.start"
+              ],
+              "requireApproval": [
+                "mcp.call",
+                "plan.approve_request",
+                "workflow.schedule.create",
+                "workflow.schedule.set_enabled",
+                "workflow.schedule.delete"
+              ],
+              "deny": []
+            }
+          },
+          "storage": {
+            "location": "workspace",
+            "path": "/var/lib/colossus-chat/private/template.redb",
+            "adapter": "redb",
+            "startupVerification": "incremental",
+            "keys": {
+              "kind": "environment",
+              "journal_variable": "COLOSSUS_CHAT_JOURNAL_KEY",
+              "journal_key_id": "hosted-chat-template",
+              "signing_variable": "COLOSSUS_CHAT_SIGNING_KEY",
+              "anchor_path": "/var/lib/colossus-chat/private/template.anchor"
+            }
+          },
+          "network": {
+            "maxRedirects": 10,
+            "caBundlePath": null,
+            "clientCertificatePath": null,
+            "clientKeyPath": null
+          },
+          "policy": {
+            "kind": "built_in",
+            "require_post_effect": false
+          },
+          "providers": {
+            "profiles": {
+              "main": {
+                "kind": "open_ai_responses",
+                "baseUrl": "https://api.openai.com/v1",
+                "credentialReference": "env:COLOSSUS_CHAT_PROVIDER_KEY"
+              }
+            }
+          },
+          "models": {
+            "profiles": {
+              "main": {
+                "providerProfile": "main",
+                "model": "replace-with-approved-model",
+                "contextWindowTokens": 32768,
+                "maxOutputTokens": 4096,
+                "capabilities": {
+                  "toolCalls": "on",
+                  "streaming": "on",
+                  "imageInputs": "off",
+                  "serverCompaction": "auto",
+                  "declared": {
+                    "toolCalls": null,
+                    "streaming": null,
+                    "imageInputs": null,
+                    "serverCompaction": null
+                  }
+                }
+              }
+            },
+            "roles": {
+              "primary": "main"
+            }
+          },
+          "mcp": {
+            "oauthCredentialStore": "platform",
+            "servers": {
+              "documents": {
+                "transport": "streamable_http",
+                "url": "https://mcp.example.com/api",
+                "allowedTools": [
+                  "search"
+                ],
+                "oauth": {
+                  "clientId": "replace-with-registered-client",
+                  "callbackPort": 8787,
+                  "scopes": [
+                    "read"
+                  ]
+                }
+              }
+            }
+          },
+          "sandbox": {
+            "backend": "native",
+            "profile": "offline-default",
+            "allowBrokerFallback": false,
+            "acknowledgeExternalBoundary": false,
+            "acknowledgeDangerFullAccess": false,
+            "helperPath": null,
+            "ociRuntime": null,
+            "ociImage": null,
+            "ociProxyImage": null,
+            "filesystem": [],
+            "executables": [],
+            "environment": [],
+            "networkDestinations": [
+              "https://api.openai.com",
+              "https://mcp.example.com",
+              "https://identity.example.com"
+            ],
+            "timeoutMs": 900000,
+            "maxOutputBytes": 4194304,
+            "maxProcesses": 16,
+            "maxMemoryBytes": 1073741824,
+            "maxConcurrency": 1
+          },
+          "browser": {
+            "enabled": false
+          },
+          "computer": {
+            "enabled": false
+          },
+          "plugins": {
+            "enabled": false,
+            "workspaceDiscovery": false
+          },
+          "memory": {
+            "semantic": {
+              "kind": "disabled"
+            }
+          },
+          "agent": {
+            "maxTurns": 8
+          },
+          "subagents": {
+            "maxConcurrent": 2
+          }
+        },
+        "provider_authentication": {
+          "main": "shared"
+        },
+        "mcp_authentication": {
+          "documents": "personal"
+        },
+        "provider_generations": {
+          "main": 1
+        },
+        "mcp_generations": {
+          "documents": 1
+        },
+        "revision": 1,
+        "codex_auth_path": null
+      }
+    },
+    "shared": {
+      "keys": {
+        "journal_variable": "COLOSSUS_CHAT_JOURNAL_KEY",
+        "signing_variable": "COLOSSUS_CHAT_SIGNING_KEY",
+        "anchor_endpoint": "https://chat-anchors.example.com/v1/anchors",
+        "anchor_bearer_variable": "COLOSSUS_CHAT_ANCHOR_TOKEN",
+        "anchor_ca_pem_path": null,
+        "allow_loopback_http": false
+      }
+    }
+  }
+}

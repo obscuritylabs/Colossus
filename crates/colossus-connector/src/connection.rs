@@ -6,9 +6,10 @@ use colossus_cloud_protocol::{
         runtime_frame,
     },
 };
+#[cfg(test)]
+use colossus_sdk::CancelRunRequest;
 use colossus_sdk::{
-    AgentRunClient, ApiErrorCode, CancelRunRequest, GetRunRequest, ListRunsRequest, PageRequest,
-    WatchRunRequest,
+    AgentRunClient, ApiErrorCode, GetRunRequest, ListRunsRequest, PageRequest, WatchRunRequest,
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -270,6 +271,8 @@ impl RuntimeConnector {
                     let mut capabilities = self.config.capabilities.clone();
                     capabilities.retain(|c| c != colossus_cloud_protocol::RESOURCE_CAPABILITY);
                     capabilities.push(colossus_cloud_protocol::RESOURCE_CAPABILITY.into());
+                    capabilities.retain(|c| c != colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY);
+                    capabilities.push(colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY.into());
                     capabilities
                 },
                 project_id: self.config.project_id.clone(),
@@ -343,15 +346,15 @@ impl RuntimeConnector {
                                 let runs=self.runs.clone();let sender=sender.clone();
                                 watchers.spawn(async move{let _permit=permit;watch_task(runs,sender,command.task_id,run_id,command.after_sequence,snapshot_only).await});
                             } else {
-                                let mut reply=execute(self.runs.as_ref(),operation).await;
+                                let mut reply=colossus_cloud_executor::execute(self.runs.as_ref(),operation).await;
                                 // An unavailable reply can follow an accepted mutation. Reconnect
                                 // with its stable runtime idempotency key to reconcile it.
                                 if matches!(&reply,CloudReply::Failed{error} if error.code==ApiErrorCode::Unavailable){return Err(Status::unavailable("local runtime unavailable"));}
                                 if let CloudReply::Cancelled { response } = &mut reply {
-                                    crate::released::compact_cancellation(response).map_err(Status::resource_exhausted)?;
+                                    colossus_cloud_executor::compact_cancellation(response).map_err(Status::resource_exhausted)?;
                                 }
                                 let limited_run = if let CloudReply::Run {run} = &mut reply {
-                                    crate::released::compact_snapshot(run).map_err(Status::resource_exhausted)?.then(||run.run.run_id.clone())
+                                    colossus_cloud_executor::compact_snapshot(run).map_err(Status::resource_exhausted)?.then(||run.run.run_id.clone())
                                 } else {None};
                                 send(&sender,runtime_frame::Body::Receipt(wire::CommandReceipt{command_id:command.command_id,task_id:command.task_id.clone(),reply_json:encode(&reply).map_err(|_|Status::resource_exhausted("receipt too large"))?})).await?;
                                 if let Some(run_id) = limited_run {
@@ -447,45 +450,6 @@ fn local_read_error(error: colossus_sdk::ApiError, message: &'static str) -> Sta
         _ => Status::failed_precondition(message),
     }
 }
-async fn execute(runs: &dyn AgentRunClient, command: Command) -> CloudReply {
-    let result = match command {
-        Command::InspectInboxes {
-            root_run_id,
-            participant_id,
-            after_sequence,
-        } => crate::inboxes::read(runs, root_run_id, participant_id, after_sequence).await,
-        Command::History {
-            source_run_id,
-            page_token,
-            page_size,
-        } => crate::history::read(runs, source_run_id, page_token, page_size).await,
-        Command::Create { request } => match runs.create_run(*request).await {
-            Ok(created) => runs
-                .get_run(GetRunRequest {
-                    run_id: created.run.run_id,
-                })
-                .await
-                .map(|run| CloudReply::Run { run: Box::new(run) }),
-            Err(error) => Err(error),
-        },
-        Command::Cancel {
-            run_id,
-            idempotency_key,
-        } => runs
-            .cancel_run(CancelRunRequest {
-                run_id,
-                idempotency_key,
-            })
-            .await
-            .map(|response| CloudReply::Cancelled { response }),
-        Command::Respond { request } => runs
-            .respond_interaction(*request)
-            .await
-            .map(|response| CloudReply::Responded { response }),
-        Command::Watch { .. } => unreachable!("watch dispatch is handled separately"),
-    };
-    result.unwrap_or_else(|error| CloudReply::Failed { error })
-}
 async fn watch_task(
     runs: Arc<dyn AgentRunClient>,
     sender: crate::outbound::FrameSender,
@@ -500,8 +464,8 @@ async fn watch_task(
         })
         .await
         .map_err(|error| local_read_error(error, "local snapshot unavailable"))?;
-    let limited =
-        crate::released::compact_snapshot(&mut snapshot).map_err(Status::resource_exhausted)?;
+    let limited = colossus_cloud_executor::compact_snapshot(&mut snapshot)
+        .map_err(Status::resource_exhausted)?;
     send(
         &sender,
         runtime_frame::Body::Snapshot(wire::RuntimeSnapshot {
@@ -536,7 +500,8 @@ async fn watch_task(
                 })
                 .await
                 .map_err(|error| local_read_error(error, "local snapshot unavailable"))?;
-            crate::released::compact_snapshot(&mut snapshot).map_err(Status::resource_exhausted)?;
+            colossus_cloud_executor::compact_snapshot(&mut snapshot)
+                .map_err(Status::resource_exhausted)?;
             send(
                 &sender,
                 runtime_frame::Body::Snapshot(wire::RuntimeSnapshot {
@@ -548,6 +513,12 @@ async fn watch_task(
             .await?;
         }
     }
+    let mut released_cursor = after;
+    let mut terminal_cursor = snapshot
+        .run
+        .terminal
+        .as_ref()
+        .map(|_| snapshot.run.last_sequence);
     let mut stream = runs
         .watch_run(WatchRunRequest {
             run_id: run_id.clone(),
@@ -557,6 +528,14 @@ async fn watch_task(
         .map_err(|error| local_read_error(error, "local watch unavailable"))?;
     while let Some(update) = stream.next().await {
         let update = update.map_err(|error| local_read_error(error, "local feed unavailable"))?;
+        if matches!(
+            &update.update,
+            colossus_sdk::RunUpdateKind::Result(_)
+                | colossus_sdk::RunUpdateKind::Failure { .. }
+                | colossus_sdk::RunUpdateKind::Cancellation(_)
+        ) {
+            terminal_cursor = Some(update.sequence);
+        }
         let update_json = match encode(&update) {
             Ok(bytes) => bytes,
             Err(_) => {
@@ -584,14 +563,18 @@ async fn watch_task(
             }),
         )
         .await?;
+        released_cursor = update.sequence;
         let mut snapshot = runs
             .get_run(GetRunRequest {
                 run_id: run_id.clone(),
             })
             .await
             .map_err(|error| local_read_error(error, "local snapshot unavailable"))?;
-        let limited =
-            crate::released::compact_snapshot(&mut snapshot).map_err(Status::resource_exhausted)?;
+        let limited = colossus_cloud_executor::compact_snapshot(&mut snapshot)
+            .map_err(Status::resource_exhausted)?;
+        if snapshot.run.terminal.is_some() {
+            terminal_cursor = Some(snapshot.run.last_sequence);
+        }
         send(
             &sender,
             runtime_frame::Body::Snapshot(wire::RuntimeSnapshot {
@@ -614,7 +597,14 @@ async fn watch_task(
             return Ok(());
         }
     }
-    Ok(())
+    if terminal_cursor.is_some_and(|terminal| released_cursor >= terminal) {
+        Ok(())
+    } else {
+        // A runtime may close a feed after a storage fault without persisting a
+        // terminal update. Reconnect and replay from the cloud's committed cursor;
+        // otherwise the connection's watched set would suppress this task forever.
+        Err(Status::unavailable("local feed unavailable"))
+    }
 }
 async fn send(
     sender: &crate::outbound::FrameSender,

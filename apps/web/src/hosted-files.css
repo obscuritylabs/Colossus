@@ -1,0 +1,12 @@
+.hosted-file-chip {
+  min-width: 0;
+  max-width: 100%;
+}
+.hosted-file-name {
+  display: inline-block;
+  min-width: 0;
+  max-width: 20ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

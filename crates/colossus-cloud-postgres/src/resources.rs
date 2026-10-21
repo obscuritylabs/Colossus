@@ -68,6 +68,20 @@ struct RequestRow {
 }
 #[derive(diesel::QueryableByName)]
 struct ReplyRow {
+    #[diesel(sql_type=Text)]
+    node_id: String,
+    #[diesel(sql_type=Text)]
+    owner_id: String,
+    #[diesel(sql_type=BigInt)]
+    generation: i64,
+    #[diesel(sql_type=BigInt)]
+    created_at: i64,
+    #[diesel(sql_type=BigInt)]
+    expires_at: i64,
+    #[diesel(sql_type=Text)]
+    digest: String,
+    #[diesel(sql_type=Jsonb)]
+    operation: Value,
     #[diesel(sql_type=Nullable<Jsonb>)]
     reply: Option<Value>,
     #[diesel(sql_type=Nullable<Text>)]
@@ -143,6 +157,11 @@ impl CloudPostgresStore {
             // the normal run/event path on this quota lock.
             sql_query("SELECT pg_advisory_xact_lock(hashtext(current_schema()||':runtime-resource-admission'))").execute(conn).await?;
             operational::verify(conn,lease,None,true).await?;
+            let record = crate::entities::read(conn, &colossus_cloud::storage::EntityKey {
+                kind: colossus_cloud::storage::EntityKind::Node, project_id: lease.project_id.clone(), parent_id: None, id: lease.node_id.clone(),
+            }).await?;
+            let colossus_cloud::storage::EntityValue::Node(node) = record.value else { return Err(CloudError::Storage.into()); };
+            if node.owner_user_id.as_deref().is_some_and(|owner| owner != caller.subject()) { return Err(CloudError::NotFound.into()); }
             let capable=sql_query("SELECT EXISTS(SELECT 1 FROM resource_connections WHERE project_id=$1 AND node_id=$2 AND owner_id=$3 AND generation=$4) AS present")
                 .bind::<Text,_>(&lease.project_id).bind::<Text,_>(&lease.node_id).bind::<Text,_>(&lease.owner_id).bind::<BigInt,_>(integer(lease.generation).map_err(|_|CloudError::InvalidArgument)?).get_result::<Flag>(conn).await?;
             if !capable.present {return Err(CloudError::Conflict.into());}
@@ -213,8 +232,42 @@ impl CloudPostgresStore {
     ) -> CloudResult<Option<ResourceReply>> {
         caller.require(colossus_cloud::CloudPermission::Read)?;
         let mut conn = self.pool.get().await.map_err(|_| CloudError::Storage)?;
-        let row=sql_query("SELECT reply,reply_digest FROM runtime_resource_requests WHERE request_id=$1 AND project_id=$2 AND actor=$3")
+        let row=sql_query("SELECT node_id,owner_id,generation,created_at,expires_at,digest,operation,reply,reply_digest FROM runtime_resource_requests WHERE request_id=$1 AND project_id=$2 AND actor=$3")
             .bind::<Text,_>(id).bind::<Text,_>(caller.project_id()).bind::<Text,_>(caller.subject()).get_result::<ReplyRow>(&mut conn).await.map_err(|error|if matches!(error,diesel::result::Error::NotFound){CloudError::NotFound}else{CloudError::Storage})?;
+        // The stored operation is authorization input, so verify its request binding
+        // before using its permission to release the reply.
+        let lease = ConnectionLease {
+            project_id: caller.project_id().into(),
+            node_id: row.node_id,
+            owner_id: row.owner_id,
+            generation: u64::try_from(row.generation).map_err(|_| CloudError::Storage)?,
+            expires_at: 0,
+        };
+        if row.digest
+            != request_digest(
+                &lease,
+                id,
+                caller.subject(),
+                &row.operation,
+                u64::try_from(row.created_at).map_err(|_| CloudError::Storage)?,
+                u64::try_from(row.expires_at).map_err(|_| CloudError::Storage)?,
+            )?
+        {
+            return Err(CloudError::Storage);
+        }
+        let operation: ResourceOperation =
+            serde_json::from_value(row.operation).map_err(|_| CloudError::Storage)?;
+        caller.require(match operation.permission() {
+            colossus_cloud_protocol::ResourcePermission::Read => {
+                colossus_cloud::CloudPermission::Read
+            }
+            colossus_cloud_protocol::ResourcePermission::Execute => {
+                colossus_cloud::CloudPermission::Execute
+            }
+            colossus_cloud_protocol::ResourcePermission::Control => {
+                colossus_cloud::CloudPermission::Control
+            }
+        })?;
         row.reply
             .map(|reply| {
                 if Some(digest(&reply).map_err(|_| CloudError::Storage)?) != row.reply_digest {
