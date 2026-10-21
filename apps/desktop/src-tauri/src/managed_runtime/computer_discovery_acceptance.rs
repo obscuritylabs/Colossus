@@ -261,12 +261,7 @@ impl Server {
                     }
                     Err(error) => panic!("loopback accept failed: {}", error.kind()),
                 };
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(10)))
-                    .unwrap();
-                stream
-                    .set_write_timeout(Some(Duration::from_secs(10)))
-                    .unwrap();
+                configure_stream(&stream);
                 let body = request(&mut stream);
                 let reply = completion(&body, calls);
                 let body = serde_json::to_vec(&reply).unwrap();
@@ -300,6 +295,62 @@ impl Drop for Server {
             let _ = task.join();
         }
     }
+}
+
+fn configure_stream(stream: &TcpStream) {
+    // Winsock can inherit the listener's nonblocking mode. The request reader
+    // uses bounded blocking reads, so reset it before applying socket timeouts.
+    stream.set_nonblocking(false).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+}
+
+#[test]
+fn discovery_request_waits_for_delayed_header_and_body_fragments() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    client
+        .set_write_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let (mut stream, _) = listener.accept().unwrap();
+    // Exercise inherited nonblocking mode explicitly, independent of whether
+    // the current OS carries it from the listener onto the accepted socket.
+    stream.set_nonblocking(true).unwrap();
+    configure_stream(&stream);
+    let (sent, received) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || sent.send(request(&mut stream)).unwrap());
+    let pending = || {
+        assert!(
+            matches!(
+                received.recv_timeout(Duration::from_millis(50)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "incomplete HTTP request must wait within the existing read deadline"
+        );
+    };
+    pending();
+    let body = br#"{"fixture":"fragmented discovery request"}"#;
+    write!(
+        client,
+        "POST /v1/chat/completions HTTP/1.1\r\nContent-Length: {}\r\n",
+        body.len()
+    )
+    .unwrap();
+    pending();
+    client.write_all(b"\r\n").unwrap();
+    client.write_all(&body[..7]).unwrap();
+    pending();
+    client.write_all(&body[7..]).unwrap();
+    assert_eq!(
+        received.recv_timeout(Duration::from_secs(10)).unwrap(),
+        json!({"fixture":"fragmented discovery request"})
+    );
+    reader.join().unwrap();
 }
 
 fn request(stream: &mut TcpStream) -> Value {
