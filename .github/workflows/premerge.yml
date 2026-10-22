@@ -249,6 +249,9 @@ jobs:
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"
       CARGO_INCREMENTAL: "0"
+      # Separate runtime and bridge graphs must fit on the hosted runner together.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
       # Keep Desktop native tests isolated from the root native sandbox target.
       CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
     steps:

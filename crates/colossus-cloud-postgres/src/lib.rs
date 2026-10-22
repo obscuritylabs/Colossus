@@ -11,6 +11,7 @@ mod checkpoint;
 mod config;
 mod connection;
 mod entities;
+mod hosted_chat;
 mod identity_guard;
 mod maintenance;
 mod metrics;
@@ -25,6 +26,9 @@ pub use checkpoint::{
     CloudAuditCheckpoint, CloudAuditHead, SignedCloudAuditCheckpoint, verify_checkpoint_signature,
 };
 pub use config::{CloudDatabaseConfig, CloudDatabaseTls};
+pub use hosted_chat::{
+    ChatLease, ChatManagementRequest, ChatRecord, ChatRecordWrite, ChatSqlStore,
+};
 pub use metrics::CloudPoolStatistics;
 pub use profiling::CloudTransactionProfile;
 pub use store::CloudPostgresStore;

@@ -8,6 +8,8 @@ use std::collections::BTreeSet;
 
 use crate::storage::Admission;
 
+mod plans;
+
 pub(super) fn stream(project: &str, task: &str) -> String {
     format!("cloud.task:{project}:{task}")
 }
@@ -21,33 +23,52 @@ impl CloudRepository {
         &self,
         caller: &CloudCaller,
         node_id: &str,
-        mut request: CreateRunRequest,
+        request: CreateRunRequest,
         conversation: Option<(crate::CloudThread, u64)>,
     ) -> CloudResult<CloudTask> {
+        self.allocate_task_with_branch(caller, node_id, request, conversation, None)
+            .await
+    }
+    pub(super) async fn allocate_task_with_branch(
+        &self,
+        caller: &CloudCaller,
+        node_id: &str,
+        mut request: CreateRunRequest,
+        conversation: Option<(crate::CloudThread, u64)>,
+        branch_parent: Option<crate::CloudThread>,
+    ) -> CloudResult<CloudTask> {
         caller.require(CloudPermission::Execute)?;
-        let node = self.node(caller.project_id(), node_id).await?;
+        if let Some((thread, _)) = &conversation {
+            crate::visibility::require_thread(thread, caller)?;
+        }
+        let node = self.node_for_caller(caller, node_id).await?;
         if node.revoked || !node.roles.contains(&request.role) {
             return Err(CloudError::PermissionDenied);
         }
-        // Cross-run context and artifacts require separate cloud ownership mapping.
-        // Refuse them until that mapping exists; never forward a guessed runtime ID.
+        // Only the source-bound branch service may install runtime branch context.
         if request.session_id.as_ref().is_some_and(|session| {
             conversation
                 .as_ref()
                 .and_then(|(thread, _)| thread.session_id.as_ref())
                 != Some(session)
-        }) || request.plan_action.is_some()
-            || request.branch.is_some()
+        }) || request.branch.is_some() != branch_parent.is_some()
             || !request.plugin_skill_ids.is_empty()
             || request.input.is_empty()
             || request.input.len() > 128
             || request.max_turns > 100
-            || request
-                .input
-                .iter()
-                .any(|part| !matches!(part, InputContentPart::Text(_)))
+            || request.input.iter().any(|part| match part {
+                InputContentPart::Text(_) => false,
+                InputContentPart::Artifact(id) => {
+                    node.execution_kind != crate::ExecutionKind::Hosted
+                        || crate::validate_identifier(id).is_err()
+                }
+            })
         {
             return Err(CloudError::InvalidArgument);
+        }
+        if request.plan_action.is_some() {
+            self.require_personal_plan(caller, &node, conversation.as_ref(), &request)
+                .await?;
         }
         let input_bytes: usize = request
             .input
@@ -57,7 +78,13 @@ impl CloudRepository {
                 _ => 0,
             })
             .sum();
-        if input_bytes == 0 || input_bytes > 1024 * 1024 {
+        if (input_bytes == 0
+            && !request
+                .input
+                .iter()
+                .any(|part| matches!(part, InputContentPart::Artifact(_))))
+            || input_bytes > 1024 * 1024
+        {
             return Err(CloudError::ResourceExhausted);
         }
         let key = fingerprint(
@@ -179,6 +206,20 @@ impl CloudRepository {
                     &command,
                 )?,
             ];
+            if let Some(mut parent) = branch_parent.clone() {
+                // Fence archive/revision changes atomically with child allocation.
+                // No runtime transcript is copied into the cloud projection.
+                let revision = parent.revision;
+                parent.revision += 1;
+                parent.updated_at = super::threads::timestamp()?;
+                events.push(self.event(
+                    caller.subject(),
+                    super::threads::thread_stream(caller.project_id(), &parent.thread_id),
+                    revision,
+                    "cloud.thread.branch-created.v1",
+                    &parent,
+                )?);
+            }
             if let Some((mut thread, expected_revision)) = conversation.clone() {
                 if thread.revision != expected_revision {
                     return Err(CloudError::Conflict);
@@ -215,7 +256,7 @@ impl CloudRepository {
     /// Read the task's released state only inside the authenticated project.
     pub async fn get_task(&self, caller: &CloudCaller, task_id: &str) -> CloudResult<CloudTask> {
         caller.require(CloudPermission::Read)?;
-        self.task(caller.project_id(), task_id).await
+        self.task_for_caller(caller, task_id).await
     }
 
     /// Read a bounded page of task identities using the journal's indexed project namespace.
@@ -229,8 +270,19 @@ impl CloudRepository {
         if let Some(after) = after {
             validate_identifier(after)?;
         }
-        let prefix = format!("cloud.task:{}:", caller.project_id());
-        self.list(&prefix, after, limit).await
+        self.query_entities(
+            caller,
+            EntityQuery {
+                kind: EntityKind::Task,
+                after: after.map(str::to_owned),
+                limit: limit.min(100),
+                ..Default::default()
+            },
+        )
+        .await?
+        .into_iter()
+        .map(|record| record.value.try_into())
+        .collect()
     }
 
     /// Queue cooperative cancellation beneath explicit control permission.
@@ -241,7 +293,7 @@ impl CloudRepository {
         mutation_id: &str,
     ) -> CloudResult<PendingCommand> {
         caller.require(CloudPermission::Control)?;
-        let task = self.task(caller.project_id(), task_id).await?;
+        let task = self.task_for_caller(caller, task_id).await?;
         if task.source_read_only {
             return Err(CloudError::PermissionDenied);
         }
@@ -267,7 +319,7 @@ impl CloudRepository {
         caller: &CloudCaller,
         task_id: &str,
         mutation_id: &str,
-        mut request: RespondInteractionRequest,
+        request: RespondInteractionRequest,
     ) -> CloudResult<PendingCommand> {
         caller.require(
             if matches!(request.response, InteractionAnswer::Approval { .. }) {
@@ -276,7 +328,47 @@ impl CloudRepository {
                 CloudPermission::Control
             },
         )?;
-        let task = self.task(caller.project_id(), task_id).await?;
+        let task = self.task_for_caller(caller, task_id).await?;
+        self.queue_interaction_response(caller, &task, mutation_id, request)
+            .await
+    }
+
+    /// Answer an exact interaction in the caller's personal hosted-chat environment.
+    /// Current execution and control authority plus both immutable owner bindings are
+    /// required. This grants no approval authority for shared nodes or other tasks;
+    /// the runtime independently checks its application grant and one-use receipt.
+    pub async fn respond_personal_task(
+        &self,
+        caller: &CloudCaller,
+        task_id: &str,
+        mutation_id: &str,
+        request: RespondInteractionRequest,
+    ) -> CloudResult<PendingCommand> {
+        caller.require(CloudPermission::Execute)?;
+        caller.require(CloudPermission::Control)?;
+        let task = self.task_for_caller(caller, task_id).await?;
+        let thread_id = task
+            .thread_id
+            .as_deref()
+            .ok_or(CloudError::PermissionDenied)?;
+        let thread = self.thread_for_caller(caller, thread_id).await?;
+        let node = self.node_for_caller(caller, &task.node_id).await?;
+        if thread.owner_user_id.as_deref() != Some(caller.subject())
+            || node.owner_user_id.as_deref() != Some(caller.subject())
+        {
+            return Err(CloudError::PermissionDenied);
+        }
+        self.queue_interaction_response(caller, &task, mutation_id, request)
+            .await
+    }
+
+    async fn queue_interaction_response(
+        &self,
+        caller: &CloudCaller,
+        task: &CloudTask,
+        mutation_id: &str,
+        mut request: RespondInteractionRequest,
+    ) -> CloudResult<PendingCommand> {
         if task.source_read_only {
             return Err(CloudError::PermissionDenied);
         }
@@ -284,11 +376,11 @@ impl CloudRepository {
             return Err(CloudError::PermissionDenied);
         }
         request.idempotency_key =
-            IdempotencyKey::new(format!("cloud-respond-{task_id}-{mutation_id}"))
+            IdempotencyKey::new(format!("cloud-respond-{}-{mutation_id}", task.task_id))
                 .map_err(|_| CloudError::InvalidArgument)?;
         self.queue_mutation(
             caller,
-            &task,
+            task,
             mutation_id,
             Command::Respond {
                 request: Box::new(request),
@@ -307,7 +399,7 @@ impl CloudRepository {
         after_sequence: u64,
     ) -> CloudResult<PendingCommand> {
         caller.require(CloudPermission::Read)?;
-        let task = self.task(caller.project_id(), task_id).await?;
+        let task = self.task_for_caller(caller, task_id).await?;
         // Shared conversation visibility does not convey private collaboration ownership.
         if task.source_read_only {
             return Err(CloudError::PermissionDenied);
@@ -376,6 +468,18 @@ impl CloudRepository {
         }
     }
 
+    pub(super) async fn task_for_caller(
+        &self,
+        caller: &CloudCaller,
+        task_id: &str,
+    ) -> CloudResult<CloudTask> {
+        let task = self.task(caller.project_id(), task_id).await?;
+        self.node_for_caller(caller, &task.node_id).await?;
+        if let Some(thread) = &task.thread_id {
+            self.thread_for_caller(caller, thread).await?;
+        }
+        Ok(task)
+    }
     pub(super) async fn task(&self, project: &str, task_id: &str) -> CloudResult<CloudTask> {
         validate_identifier(project)?;
         validate_identifier(task_id)?;

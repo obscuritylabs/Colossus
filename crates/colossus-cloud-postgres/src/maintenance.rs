@@ -36,11 +36,13 @@ impl CloudPostgresStore {
                 sql_query("DELETE FROM oidc_flows WHERE project_id=$1 AND parent_id=$2 AND id=$3").bind::<Text,_>(&flow.project_id).bind::<Text,_>(&flow.parent_id).bind::<Text,_>(&flow.id).execute(conn).await?;
             }
             let resources=sql_query("WITH expired AS(SELECT request_id FROM runtime_resource_requests WHERE expires_at<$1-60 ORDER BY expires_at,request_id LIMIT $2 FOR UPDATE SKIP LOCKED) DELETE FROM runtime_resource_requests WHERE request_id IN(SELECT request_id FROM expired)").bind::<BigInt,_>(now).bind::<BigInt,_>(policy.batch_limit as i64).execute(conn).await?;
+            let hosted_requests=sql_query("WITH expired AS(SELECT id FROM hosted_chat_requests WHERE expires_at<EXTRACT(EPOCH FROM clock_timestamp())-60 ORDER BY expires_at,id LIMIT $1 FOR UPDATE SKIP LOCKED) DELETE FROM hosted_chat_requests WHERE id IN(SELECT id FROM expired)").bind::<BigInt,_>(policy.batch_limit as i64).execute(conn).await?;
+            let hosted_flows=sql_query("WITH expired AS(SELECT namespace,record_id FROM hosted_chat_records WHERE namespace='oauth-browser' AND expires_at<EXTRACT(EPOCH FROM clock_timestamp())-60 ORDER BY expires_at,record_id LIMIT $1 FOR UPDATE SKIP LOCKED) DELETE FROM hosted_chat_records WHERE (namespace,record_id) IN(SELECT namespace,record_id FROM expired)").bind::<BigInt,_>(policy.batch_limit as i64).execute(conn).await?;
             let report=CloudMaintenanceReport{expired_resource_requests:resources,published_outbox:published,removed_outbox:removed,expired_sessions:sessions,expired_auth_flows:flows.len()};
-            if published+removed+sessions+flows.len()>0 {
+            if published+removed+sessions+flows.len()+hosted_requests+hosted_flows>0 {
                 let key=EntityKey{kind:EntityKind::AuthFlow,project_id:"__maintenance".into(),parent_id:None,id:"operational".into()};
                 let revision=match entities::read(conn,&key).await{Ok(record)=>record.revision,Err(CloudError::NotFound)=>0,Err(_)=>return Err(TransactionError::Store(StoreError::Adapter("maintenance audit unavailable".into())))};
-                entities::mutate(conn,EntityMutation{key,expected_revision:revision,value:EntityValue::AuthFlow(serde_json::json!({"observed_at":now,"published_outbox":published,"removed_outbox":removed,"expired_sessions":sessions,"expired_auth_flows":flows.len()})),actor:"cloud-maintenance".into(),operation:"cloud.operational-maintenance.v1".into()}).await?;
+                entities::mutate(conn,EntityMutation{key,expected_revision:revision,value:EntityValue::AuthFlow(serde_json::json!({"observed_at":now,"published_outbox":published,"removed_outbox":removed,"expired_sessions":sessions,"expired_auth_flows":flows.len(),"expired_chat_requests":hosted_requests,"expired_chat_flows":hosted_flows})),actor:"cloud-maintenance".into(),operation:"cloud.operational-maintenance.v1".into()}).await?;
             }
             Ok::<_,TransactionError>(report)
         }).await.map_err(|error|CloudError::from(error.into_store()))

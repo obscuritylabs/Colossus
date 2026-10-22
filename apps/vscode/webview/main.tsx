@@ -313,6 +313,7 @@ function send() {
 const conversation = new Conversation(
   element("messages"),
   element("conversation"),
+  document.body.dataset.colossusMark ?? "",
 );
 let interactionSignature = "";
 function render(next: WorkView) {

@@ -1,10 +1,7 @@
-import {
-  IconArrowUp,
-  IconMessageCirclePlus,
-  IconPlus,
-  IconX,
-} from "@tabler/icons-react";
+import { IconMessageCirclePlus, IconPlus, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
+import { ComposerSendButton } from "@colossus/ui";
+import { ConversationComposerFrame } from "@colossus/ui/conversation";
 
 import { isTerminalStatus } from "../types";
 import type {
@@ -100,12 +97,14 @@ export function AsidePanel({
     <section className="aside-panel" aria-label="Aside conversation">
       <header className="aside-header">
         <div>
-          <p className="eyebrow">Side conversation</p>
           <h3>
             Aside
             {readOnly ? <span className="aside-readonly">Archived</span> : null}
           </h3>
-          <p className="aside-context-copy">
+          <p
+            className="aside-context-copy"
+            title="Thread messages included · tool traces omitted"
+          >
             Thread messages included · tool traces omitted
           </p>
         </div>
@@ -213,45 +212,60 @@ export function AsidePanel({
         ) : null}
       </div>
 
-      <div className="aside-composer">
-        <textarea
-          ref={inputRef}
-          rows={3}
-          maxLength={65_536}
-          value={prompt}
-          disabled={busy || draft === null || readOnly}
-          placeholder={
-            readOnly
-              ? "This Aside is archived. Start a new Aside to continue exploring."
-              : view === undefined
-                ? "Ask about this thread…"
-                : "Continue this Aside…"
-          }
-          aria-label="Aside message"
-          onChange={(event) => setPrompt(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              void submit();
-            }
+      <div className="aside-composer-dock">
+        <ConversationComposerFrame
+          className="aside-composer"
+          data-workspace-composer-dock
+          aria-label="Aside composer"
+          header={<span>Side chat</span>}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
           }}
-        />
-        <button
-          className="aside-send"
-          type="button"
-          aria-label="Send Aside message"
-          disabled={busy || draft === null || readOnly || prompt.trim() === ""}
-          onClick={() => void submit()}
+          footer={
+            <>
+              <p>Enter to send · Shift+Enter for a new line</p>
+              <div className="shared-composer-run-actions">
+                <ComposerSendButton
+                  type="submit"
+                  aria-label="Send Aside message"
+                  disabled={
+                    busy || draft === null || readOnly || prompt.trim() === ""
+                  }
+                />
+              </div>
+            </>
+          }
         >
-          <IconArrowUp size={17} stroke={2} aria-hidden="true" />
-        </button>
-        <p>Enter to send · Shift+Enter for a new line</p>
+          <textarea
+            ref={inputRef}
+            rows={3}
+            maxLength={65_536}
+            value={prompt}
+            disabled={busy || draft === null || readOnly}
+            placeholder={
+              readOnly
+                ? "This Aside is archived. Start a new Aside to continue exploring."
+                : view === undefined
+                  ? "Ask about this thread…"
+                  : "Continue this Aside…"
+            }
+            aria-label="Aside message"
+            onChange={(event) => setPrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void submit();
+              }
+            }}
+          />
+        </ConversationComposerFrame>
+        {error !== null ? (
+          <p className="aside-error" role="alert">
+            {error.message}
+          </p>
+        ) : null}
       </div>
-      {error !== null ? (
-        <p className="aside-error" role="alert">
-          {error.message}
-        </p>
-      ) : null}
     </section>
   );
 }

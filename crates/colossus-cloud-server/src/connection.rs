@@ -20,6 +20,7 @@ use tonic::{
     Request, Response, Status, Streaming,
     transport::server::{TcpConnectInfo, TlsConnectInfo},
 };
+mod resources;
 
 pub(crate) fn service(state: Arc<State>) -> RuntimeConnectionServer<Connection> {
     RuntimeConnectionServer::new(Connection(state))
@@ -137,6 +138,10 @@ impl RuntimeConnection for Connection {
             .capabilities
             .iter()
             .any(|cap| cap == colossus_cloud_protocol::RESOURCE_CAPABILITY);
+        let model_catalog_enabled = hello
+            .capabilities
+            .iter()
+            .any(|cap| cap == colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY);
         let connection_id = format!("{}-{}", self.0.replica_id, uuid::Uuid::now_v7().simple());
         let key = format!("{}:{}", node.project_id, node.node_id);
         let lease = self
@@ -234,6 +239,7 @@ impl RuntimeConnection for Connection {
                     lease: lease.clone(),
                     discovery_enabled,
                     resource_enabled,
+                    model_catalog_enabled,
                 },
                 inbound,
                 &sender,
@@ -271,6 +277,7 @@ struct ConnectionScope {
     lease: colossus_cloud::storage::ConnectionLease,
     discovery_enabled: bool,
     resource_enabled: bool,
+    model_catalog_enabled: bool,
 }
 async fn serve_connection(
     state: Arc<State>,
@@ -285,6 +292,7 @@ async fn serve_connection(
         mut lease,
         discovery_enabled,
         resource_enabled,
+        model_catalog_enabled,
     } = scope;
     let mut interval = tokio::time::interval(Duration::from_millis(500));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -296,6 +304,7 @@ async fn serve_connection(
     let mut shutdown = state.shutdown.subscribe();
     let mut hints = state.repo.storage().subscribe();
     let mut discovery: Option<(String, String)> = None;
+    let mut discovery_snapshot = None;
     let mut last_discovery = Instant::now() - Duration::from_secs(30);
     let mut visible_sessions = std::collections::BTreeMap::<String, bool>::new();
     let mut last_presence = Instant::now();
@@ -354,7 +363,7 @@ async fn serve_connection(
                         repo.discover_runs(&node,runs,&page.sync_id).await.map_err(status)?;
                         // ACK is emitted only after all idempotent source mappings commit.
                         send(sender,control_frame::Body::DiscoveryAcknowledgement(wire::DiscoveryAcknowledgement{sync_id:page.sync_id.clone(),page_token:page.page_token})).await?;
-                        if page.next_page_token.is_empty(){repo.finish_discovery(&node,&visible_sessions).await.map_err(status)?;discovery=None;last_discovery=Instant::now();visible_sessions.clear();}else{
+                        if page.next_page_token.is_empty(){repo.finish_discovery_snapshot(&node,&visible_sessions,discovery_snapshot.take().ok_or_else(||Status::internal("discovery snapshot absent"))?).await.map_err(status)?;discovery=None;last_discovery=Instant::now();visible_sessions.clear();}else{
                             discovery=Some((page.sync_id.clone(),page.next_page_token.clone()));
                             send(sender,control_frame::Body::Discover(wire::DiscoverRuns{sync_id:page.sync_id,page_token:page.next_page_token,page_size:colossus_cloud_protocol::MAX_DISCOVERY_PAGE_SIZE,include_archived:true})).await?;
                         }
@@ -387,6 +396,7 @@ async fn serve_connection(
             && last_discovery.elapsed() >= Duration::from_secs(15)
         {
             let sync_id = uuid::Uuid::now_v7().simple().to_string();
+            discovery_snapshot = Some(repo.begin_discovery(&node).await.map_err(status)?);
             discovery = Some((sync_id.clone(), String::new()));
             send(
                 sender,
@@ -407,13 +417,12 @@ async fn serve_connection(
                 .await
                 .map_err(status)?
             {
-                send(
+                resources::dispatch(
+                    state.repo.storage().as_ref(),
+                    &lease,
+                    request,
+                    model_catalog_enabled,
                     sender,
-                    control_frame::Body::ResourceRequest(wire::ResourceRequest {
-                        request_id: request.request_id,
-                        operation_json: encode(&request.operation)
-                            .map_err(|_| Status::invalid_argument("invalid resource operation"))?,
-                    }),
                 )
                 .await?;
             }

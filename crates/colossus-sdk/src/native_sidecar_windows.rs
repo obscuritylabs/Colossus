@@ -766,6 +766,14 @@ impl Backend for WindowsSidecarBackend {
     fn capabilities(&self) -> ServerCapabilities {
         self.primary.capabilities()
     }
+    fn model_profiles(&self) -> Vec<crate::ConfiguredModelProfile> {
+        self.primary.model_profiles()
+    }
+    fn connector_model_profiles(&self) -> Vec<crate::ConfiguredModelProfile> {
+        self.connector
+            .as_ref()
+            .map_or_else(Vec::new, |transport| transport.model_profiles())
+    }
 
     fn artifacts(&self) -> Option<Arc<dyn ArtifactClient>> {
         self.primary.artifacts()

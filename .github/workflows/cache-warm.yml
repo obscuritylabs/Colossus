@@ -61,6 +61,9 @@ jobs:
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"
       CARGO_INCREMENTAL: "0"
+      # Match the bounded debug output used by the acceptance consumer.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
       CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
     steps:
       - name: Check out repository

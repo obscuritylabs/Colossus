@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { mermaidViteCompatibility } from "../ui/build/mermaid-compatibility.mjs";
 export default defineConfig({
   plugins: [
     {
@@ -18,14 +19,15 @@ export default defineConfig({
       },
     },
     tailwindcss(),
+    mermaidViteCompatibility(),
     react(),
   ],
   optimizeDeps: {
     // Keep shared context providers and their direct component imports together.
-    exclude: ["@colossus/ui"],
+    exclude: ["@colossus/ui", "mermaid"],
     include: [
+      "streamdown",
       "@xyflow/react",
-      "react-markdown",
       "recharts",
       "react-resizable-panels",
       "use-sync-external-store/shim",

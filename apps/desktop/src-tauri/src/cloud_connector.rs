@@ -337,6 +337,7 @@ async fn start(
         .with_resources(colossus_connector::ConnectorResources {
             workflows: lease.target.client.connector_workflows(),
             plugins: lease.target.client.connector_plugins(),
+            model_profiles: lease.target.client.connector_model_profiles(),
             capabilities: lease
                 .target
                 .client

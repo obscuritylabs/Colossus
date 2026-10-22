@@ -185,6 +185,7 @@ test("browser pane expands, resizes, and has accessible controls", async ({
   }
   const report = await new AxeBuilder({ page })
     .include(".browser-pane")
+    .include(".shared-workspace-pane-header")
     .analyze();
   expect(report.violations).toEqual([]);
 });

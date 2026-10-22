@@ -39,7 +39,17 @@ Exact domain timestamp strings are also retained so reconstruction and audit ver
 preserve their original precision. Search, membership, inventory and pending-command
 filters use named columns; an absent command reply is SQL `NULL`.
 Conversation task queries filter the task's `thread_id`, while message queries use
-their thread parent. Source inventory and released events remain caller authorized.
+their thread parent. Branch queries filter normalized parent, kind and archive columns,
+with account visibility applied before pagination. Main history excludes attached Aside
+children before selecting its page; independent Fork children remain in main history.
+Source inventory and released events remain caller authorized.
+
+Conversation branch lineage is committed with the first child task, command and parent
+revision. It records the exact cloud source task and retained runtime run allocation;
+the runtime independently resolves `SourceRunConversation` context. Existing rows omit
+absent lineage in canonical encoding, preserving their audit digests. Migration 7 adds
+the nullable lineage columns and parent-page index. Child archive/reopen uses the normal
+thread metadata revision rather than a separate side-chat lifecycle store.
 
 The asynchronous pool defaults to 16 connections, plus one dedicated notification
 listener per replica. Pool acquisition, connection, SQL statements and lock waits

@@ -1,0 +1,102 @@
+.ui-item-group {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.ui-item {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: 400 var(--font-size-body-sm) / var(--line-height-body) var(--font-sans);
+  text-align: left;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.ui-item[data-size="sm"] {
+  padding-block: 10px;
+}
+.ui-item[data-variant="outline"] {
+  border-color: var(--border);
+}
+.ui-item[data-variant="muted"] {
+  background: var(--surface-muted);
+}
+.ui-item:is(button, a) {
+  cursor: pointer;
+}
+.ui-item:is(button, a):hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.ui-item:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: -2px;
+}
+.ui-item:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+.ui-item-media {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+.ui-item-media svg {
+  flex: none;
+  pointer-events: none;
+}
+.ui-item-media[data-variant="icon"] svg {
+  width: 16px;
+  height: 16px;
+}
+.ui-item-media[data-variant="image"] {
+  width: 40px;
+  height: 40px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+.ui-item-media[data-variant="image"] img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ui-item-content {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+.ui-item-title {
+  color: var(--text-strong);
+  font-size: var(--font-size-body-sm);
+  font-weight: 500;
+  line-height: var(--line-height-tight);
+}
+.ui-item-description {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+.ui-item-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+.ui-item-actions > svg {
+  flex: none;
+}

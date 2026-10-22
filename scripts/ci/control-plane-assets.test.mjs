@@ -9,6 +9,18 @@ import { serverTargets, validateRequest, verifyControlPlaneAssets, savedImageCon
   verifySavedImageConfig, verifyExecutableManifest, executableDescriptorDigest } from "./verify-control-plane-assets.mjs";
 import { readSavedImageConfig } from "./verify-control-plane-assets.mjs";
 
+test("release images and offline bundles retain both Hosted service executables", async () => {
+  const workflow = await readFile(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8");
+  const server = workflow.split("  control_plane:\n")[1]?.split("  vscode:\n")[0];
+  assert.ok(server, "Control Plane must remain a required release candidate");
+  for (const executable of ["colossus-control-plane", "colossus-chat-anchor"]) {
+    assert.ok(server.includes(`docker cp "$container:/usr/local/bin/${executable}" "$stage/bin/"`), `${executable} must ship in the matching offline bundle`);
+  }
+  for (const flag of ["--version", "--help"]) {
+    assert.ok(server.includes(`--entrypoint colossus-chat-anchor colossus-control-plane:release ${flag}`), `The actual non-root image must execute the anchor's ${flag}`);
+  }
+});
+
 test("privileged publication uses the protected publisher revision that passed contracts", async () => {
   const workflow = await readFile(new URL("../../.github/workflows/control-plane-image.yml", import.meta.url), "utf8");
   const resolver = workflow.split("  publisher-revision:\n")[1]?.split("  contracts:\n")[0];

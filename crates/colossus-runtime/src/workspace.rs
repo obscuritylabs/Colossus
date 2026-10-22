@@ -21,6 +21,11 @@ pub struct RuntimeOpenOptions {
     /// Provider, authentication, search, MCP, and integration adapters remain independently
     /// configured when this is false.
     pub(super) model_network_tools: bool,
+    /// Trusted cloud-chat composition, independent of public application grants.
+    pub(super) controlled_chat: bool,
+    pub(super) shared_storage: Option<crate::RuntimeSharedStorage>,
+    /// Credential custody injected by the trusted host, never serialized or rendered.
+    pub(super) oauth_credential_vault: Option<crate::credential_vault::SuppliedOAuthVault>,
     pub(super) expected_workspace_identity: Option<WorkspaceIdentityToken>,
     /// Native-supplied TLS identity held only in process memory.
     pub(super) client_identity: Option<colossus_network::ClientIdentity>,
@@ -58,6 +63,9 @@ impl RuntimeOpenOptions {
             colossus_home_root: None,
             automatic_agent_instructions: true,
             model_network_tools: true,
+            controlled_chat: false,
+            shared_storage: None,
+            oauth_credential_vault: None,
             expected_workspace_identity: None,
             client_identity: None,
             browser_host: None,
@@ -66,6 +74,51 @@ impl RuntimeOpenOptions {
             computer_artifacts: None,
         }
         .canonicalized()
+    }
+
+    /// Compose a controlled chat runtime without a user execution environment.
+    ///
+    /// This enforces a closed tool and effect ceiling, disables automatic host
+    /// instructions and plugin activation, and rejects process/filesystem grants,
+    /// native browser/computer hosts, and non-remote or wildcard MCP declarations.
+    /// Provider and MCP credentials remain host-owned; the host must separately bind
+    /// this runtime's state and credential resolver to the intended tenant/user.
+    pub fn for_controlled_chat(workspace: impl AsRef<Path>) -> Result<Self, RuntimeError> {
+        let mut options = Self::for_workspace(workspace)?;
+        options.controlled_chat = true;
+        options.model_network_tools = false;
+        options.automatic_agent_instructions = false;
+        Ok(options)
+    }
+
+    /// Inject shared encrypted canonical state for a controlled hosted runtime.
+    /// Its stable identity replaces filesystem-derived repository identity.
+    pub fn with_shared_storage(
+        mut self,
+        storage: crate::RuntimeSharedStorage,
+    ) -> Result<Self, RuntimeError> {
+        if !self.controlled_chat {
+            return Err(RuntimeError::Config(
+                "shared storage requires controlled hosted composition".into(),
+            ));
+        }
+        storage.fence.verify()?;
+        self.shared_storage = Some(storage);
+        Ok(self)
+    }
+
+    /// Supply OAuth credential custody from trusted host composition.
+    ///
+    /// Platform OAuth storage uses this vault instead of opening the operating-system
+    /// credential store. The host owns the vault's user/tenant binding, encryption,
+    /// persistence and lifetime. This does not grant model tools or OAuth authority.
+    #[must_use]
+    pub fn with_oauth_credential_vault(
+        mut self,
+        vault: Arc<dyn colossus_ports::CredentialVault>,
+    ) -> Self {
+        self.oauth_credential_vault = Some(crate::credential_vault::SuppliedOAuthVault(vault));
+        self
     }
 
     /// Revalidate and canonicalize the selected workspace without discarding host context.

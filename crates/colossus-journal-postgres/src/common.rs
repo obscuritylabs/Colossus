@@ -20,7 +20,7 @@ ALTER TABLE journal_metadata
 ADD COLUMN IF NOT EXISTS payload_protection TEXT NULL;
 INSERT INTO journal_metadata (singleton, last_sequence, last_hash)
 VALUES (TRUE, 0, '0000000000000000000000000000000000000000000000000000000000000000')
-ON CONFLICT (singleton) DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS journal_events (
     global_sequence BIGINT PRIMARY KEY CHECK (global_sequence > 0),

@@ -1,0 +1,95 @@
+@import "./workspace-pane.css";
+.shared-inspector-layout,
+.shared-inspector-main {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.shared-inspector-main {
+  display: flex;
+  flex-direction: column;
+}
+.shared-inspector-layout > [data-slot="resizable-panel-group"] {
+  height: 100%;
+}
+.shared-inspector {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+}
+.shared-inspector-header {
+  position: relative;
+  flex: none;
+  min-width: 0;
+  height: var(--workspace-header-height, var(--control-height-touch));
+}
+.shared-inspector-header > .shared-workspace-pane-header {
+  width: 100%;
+}
+.shared-inspector-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.shared-inspector-sheet[data-slot="sheet-content"] {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: min(100%, 440px);
+  max-width: 100%;
+  padding: 0;
+}
+.shared-inspector-sheet.is-expanded[data-slot="sheet-content"] {
+  width: 100%;
+}
+.shared-inspector-layout [data-slot="resizable-handle"][hidden] {
+  display: none;
+}
+.shared-inspector-layout [data-slot="resizable-handle"] {
+  width: 4px;
+}
+.shared-inspector-layout [data-slot="resizable-handle"]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.shared-inspector-document {
+  padding: 20px;
+  overflow-wrap: anywhere;
+}
+.shared-inspector-document h3 {
+  font-size: var(--font-size-heading);
+  line-height: var(--line-height-tight);
+}
+.shared-inspector-document .thread-plan-actions {
+  flex-wrap: wrap;
+}
+@media (pointer: coarse), (max-width: 760px) {
+  .shared-inspector-header button {
+    min-height: var(--control-height-touch);
+    min-width: var(--control-height-touch);
+  }
+}
+
+.shared-inspector-portal,
+.shared-inspector-tool {
+  height: 100%;
+  min-height: 0;
+}
+.shared-inspector-tool[hidden] {
+  display: none !important;
+}
+
+@media (pointer: coarse), (max-width: 760px) {
+  .shared-inspector-header {
+    height: max(
+      var(--workspace-header-height, var(--control-height-touch)),
+      calc(var(--control-height-touch) + 1px)
+    );
+  }
+}

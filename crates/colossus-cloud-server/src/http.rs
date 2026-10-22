@@ -15,6 +15,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, convert::Infallible, sync::Arc, time::Duration};
 
+mod branches;
+mod diagnostics;
 mod spa;
 
 pub(crate) fn router(state: Arc<State>) -> Router {
@@ -31,6 +33,7 @@ pub(crate) fn router(state: Arc<State>) -> Router {
         .route("/api/projects/{project}/threads",get(threads).post(create_thread))
         .route("/api/projects/{project}/threads/{thread}",get(thread_detail).patch(edit_thread))
         .route("/api/projects/{project}/threads/{thread}/messages",post(send_message))
+        .route("/api/projects/{project}/threads/{thread}/branches",get(branches::list).post(branches::create))
         .route("/api/projects/{project}/threads/{thread}/events",get(thread_events))
         .route("/api/projects/{project}/tasks",get(tasks).post(create))
         .route("/api/projects/{project}/tasks/{task}",get(task))
@@ -40,7 +43,7 @@ pub(crate) fn router(state: Arc<State>) -> Router {
         .route("/api/projects/{project}/tasks/{task}/cancel",post(cancel))
         .route("/api/projects/{project}/tasks/{task}/respond",post(respond))
         .route("/api/projects/{project}/tasks/{task}/inboxes",post(inspect_inboxes))
-        .merge(crate::resources::router()).merge(crate::admin::router()).merge(crate::observability::router()).merge(crate::settings::router())
+        .merge(crate::resources::router()).merge(crate::admin::router()).merge(crate::observability::router()).merge(crate::settings::router()).merge(crate::chat::router()).merge(crate::hosted::router()).merge(crate::chat_settings::router()).merge(crate::chat_credentials::router())
         .fallback_service(spa::service(&state.config.web_root))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::HeaderName::from_static("x-content-type-options"), header::HeaderValue::from_static("nosniff")))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::HeaderName::from_static("referrer-policy"),header::HeaderValue::from_static("no-referrer")))
@@ -56,11 +59,16 @@ async fn admission(
     let Ok(_permit) = state.http_permits.clone().try_acquire_owned() else {
         return Error(CloudError::ResourceExhausted).into_response();
     };
-    let mut response = match tokio::time::timeout(Duration::from_secs(30), next.run(request)).await
-    {
-        Ok(response) => response,
-        Err(_) => Error(CloudError::Storage).into_response(),
-    };
+    let failure = diagnostics::RequestFailure::capture(&request);
+    let (mut response, category) =
+        match tokio::time::timeout(Duration::from_secs(30), next.run(request)).await {
+            Ok(response) => (response, diagnostics::FailureCategory::Handler),
+            Err(_) => (
+                Error(CloudError::Storage).into_response(),
+                diagnostics::FailureCategory::AdmissionTimeout,
+            ),
+        };
+    failure.report(&response, category);
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         header::HeaderValue::from_static("no-store"),
@@ -222,7 +230,7 @@ async fn nodes(
             )
             .await
         } else {
-            repo.list_nodes(&caller, page.after.as_deref(), page.limit.unwrap_or(100))
+            repo.list_connected_nodes(&caller, page.after.as_deref(), page.limit.unwrap_or(100))
                 .await
         }
     })
@@ -291,6 +299,7 @@ async fn invite(
     let token_hash = hex::encode(Sha256::digest(token.as_bytes()));
     let node_id = uuid::Uuid::now_v7().simple().to_string();
     let invitation = Enrollment {
+        owner_user_id: None,
         token_hash,
         project_id: project,
         node_id: node_id.clone(),
@@ -392,6 +401,11 @@ async fn create(
     Json(input): Json<Create>,
 ) -> Result<Json<serde_json::Value>> {
     let caller = state.auth.caller(&headers, &project, true).await?;
+    let _hosted_admission = if let Some(hosted) = &state.hosted {
+        hosted.admission(&caller, &input.node_id).await?
+    } else {
+        None
+    };
     let task = db(state.repo.clone(), move |repo| async move {
         repo.create_task(&caller, &input.node_id, input.request)
             .await
@@ -455,8 +469,15 @@ async fn respond(
 ) -> Result<Json<serde_json::Value>> {
     let caller = state.auth.caller(&headers, &project, true).await?;
     let command = db(state.repo.clone(), move |repo| async move {
-        repo.respond_task(&caller, &task, &input.mutation_id, input.request)
-            .await
+        let owned = repo.get_task(&caller, &task).await?;
+        let node = repo.get_node(&caller, &owned.node_id).await?;
+        if node.owner_user_id.as_deref() == Some(caller.subject()) {
+            repo.respond_personal_task(&caller, &task, &input.mutation_id, input.request)
+                .await
+        } else {
+            repo.respond_task(&caller, &task, &input.mutation_id, input.request)
+                .await
+        }
     })
     .await?;
     Ok(Json(serde_json::json!({"command":command})))
@@ -758,6 +779,11 @@ async fn create_thread(
     Json(input): Json<NewThread>,
 ) -> Result<Json<serde_json::Value>> {
     let caller = state.auth.caller(&headers, &project, true).await?;
+    let _hosted_admission = if let Some(hosted) = &state.hosted {
+        hosted.admission(&caller, &input.node_id).await?
+    } else {
+        None
+    };
     let (thread, task) = state
         .repo
         .create_thread(&caller, &input.node_id, input.title, input.request)
@@ -802,6 +828,12 @@ async fn send_message(
     Json(input): Json<ThreadMessage>,
 ) -> Result<Json<serde_json::Value>> {
     let caller = state.auth.caller(&headers, &project, true).await?;
+    let _hosted_admission = if let Some(hosted) = &state.hosted {
+        let thread = state.repo.get_thread(&caller, &id).await?;
+        hosted.admission(&caller, &thread.thread.node_id).await?
+    } else {
+        None
+    };
     let (thread, task) = state
         .repo
         .send_message(&caller, &id, input.expected_revision, input.request)
@@ -842,6 +874,18 @@ async fn node_detail(
 ) -> Result<Json<serde_json::Value>> {
     let caller = state.auth.caller(&headers, &project, false).await?;
     let node = state.repo.get_node(&caller, &id).await?;
+    if node.execution_kind == colossus_cloud::ExecutionKind::Hosted
+        && let Some(hosted) = &state.hosted
+        && hosted.node_id(&caller)?.as_deref() == Some(id.as_str())
+        && hosted.project_config(&project).await?.is_some()
+    {
+        return Ok(Json(
+            hosted
+                .node(&state, &caller)
+                .await?
+                .ok_or(CloudError::NotFound)?,
+        ));
+    }
     let local = state
         .presence
         .lock()

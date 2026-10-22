@@ -48,7 +48,8 @@ import {
 } from "./api";
 import { useResource } from "./resources";
 import { RouteLink } from "./navigation";
-import { agentHref, globalHref, threadHref } from "./routes";
+import { agentHref, globalHref } from "./routes";
+import { conversationHref } from "./conversation-route";
 import { LoadState } from "./Home";
 import {
   WORKSPACE_VIEW_ROUTES,
@@ -264,7 +265,7 @@ function WorkspaceThreads({
                   aria-current={
                     selected === thread.thread_id ? "page" : undefined
                   }
-                  href={threadHref(project, thread.thread_id)}
+                  href={conversationHref(thread)}
                   onNavigate={() => onOpen(thread)}
                   title={thread.title}
                 >

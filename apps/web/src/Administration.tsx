@@ -14,6 +14,8 @@ import { errorMessage, useResource } from "./resources";
 import { LoadState } from "./Home";
 import { ProjectEditor, SectionTabs } from "./Projects";
 import { globalHref, type AdminView } from "./routes";
+import { projectCreateHref } from "./routes";
+import { RouteLink } from "./navigation";
 export function Administration({
   authConfig,
   onRefresh,
@@ -409,7 +411,7 @@ function AdminProjects({ onRefresh }: { onRefresh: () => void }) {
       projects: Project[];
       next_cursor?: string | null;
     }>("/api/admin/projects"),
-    [selected, setSelected] = useState<Project | "new" | null>(null),
+    [selected, setSelected] = useState<Project | null>(null),
     [extra, setExtra] = useState<Project[]>([]),
     [cursor, setCursor] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
@@ -426,10 +428,13 @@ function AdminProjects({ onRefresh }: { onRefresh: () => void }) {
           <h2>Project hierarchy</h2>
           <p>Organizational nesting does not grant inherited membership.</p>
         </div>
-        <Button variant="primary" onClick={() => setSelected("new")}>
+        <RouteLink
+          href={projectCreateHref()}
+          className="ui-button ui-button--primary"
+        >
           <IconPlus size={16} aria-hidden="true" />
           Create project
-        </Button>
+        </RouteLink>
       </header>
       <LoadState {...resource} retry={resource.refresh} />
       {error ? (
@@ -439,10 +444,8 @@ function AdminProjects({ onRefresh }: { onRefresh: () => void }) {
       ) : null}
       {selected ? (
         <ProjectEditor
-          key={
-            selected === "new" ? "new" : `${selected.id}:${selected.revision}`
-          }
-          {...(selected === "new" ? {} : { project: selected })}
+          key={`${selected.id}:${selected.revision}`}
+          project={selected}
           projects={projects}
           onCancel={() => setSelected(null)}
           onSaved={() => {

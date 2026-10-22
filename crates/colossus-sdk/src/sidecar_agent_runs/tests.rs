@@ -106,6 +106,7 @@ impl AgentRunClient for Client {
                 run_id: request.run_id,
                 session_id: "session".into(),
                 title: "Approval".into(),
+                title_revision: 0,
                 role: "primary".into(),
                 mode: RunMode::Execute,
                 status: RunStatus::Waiting,

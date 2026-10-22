@@ -12,10 +12,12 @@ export function DropdownMenuContent({
   align = "start",
   sideOffset = 4,
   className,
+  container = null,
   ...props
-}: ComponentProps<typeof MenuPrimitive.Content>) {
+}: ComponentProps<typeof MenuPrimitive.Content> &
+  Pick<ComponentProps<typeof MenuPrimitive.Portal>, "container">) {
   return (
-    <MenuPrimitive.Portal>
+    <MenuPrimitive.Portal container={container}>
       <MenuPrimitive.Content
         {...props}
         align={align}

@@ -18,8 +18,8 @@ Runtime journals and their recovery adapters remain runtime-owned.
 Persisted users and issuer/subject identities own project membership. Optional local
 login uses bounded Argon2id work, shared database attempt limits, and session revocation
 epochs; the explicit bootstrap configuration provisions the first administrator.
-Hierarchy membership is not inherited. Global administrator read access does not
-create a runtime grant. See [operator setup](../admin/cloud-control-plane.md) for the
+Hierarchy membership is not inherited. Global administration does not disclose another
+user's personal chat history or runtime, and creates no execution grant. See [operator setup](../admin/cloud-control-plane.md) for the
 production configuration and administration flow.
 
 `colossus-cloud-protocol` owns the closed versioned connection contract.
@@ -118,6 +118,163 @@ gate. A native Linux checkout with the builder's listed dependencies can use
 `COLOSSUS_DESKTOP_RELEASE_CHANNEL=developer_preview COLOSSUS_DESKTOP_TEAM_ID=UNSIGNED
 sh scripts/package-desktop-linux` after installing Desktop npm dependencies.
 
+## Develop hosted personal chat
+
+The optional server `chat` block enables built-in conversations without an enrolled
+workstation. `colossus-cloud-chat` composes a protected runtime for the authenticated
+project/user; the server's Hosted execution service dispatches durable Cloud commands
+directly through the caller-bound SDK and publishes released events to browser SSE.
+Hosted targets are independent from Fleet enrollment and certificates. A browser supplies neither
+a node owner nor a runtime path. The project/user identity is stable across restarts;
+accepted tasks and native sessions retain that fixed placement.
+
+`GET /api/projects/{project}/hosted` discovers the caller's managed target and explicit
+capabilities without loading a runtime. Chat's existing status endpoint remains
+compatible and returns configured availability independently from residency. New work
+is durably accepted before runtime capacity is acquired; a bounded supervisor wakes
+cold contexts and rediscovers unfinished work after restart. `chat.idle_seconds`
+defaults to 300 seconds; capacity pressure can retire a fully idle context earlier.
+
+Managed file upload uses `POST /api/projects/{project}/hosted/files` with `file_name`,
+`media_type`, `content_base64` and a caller-scoped `idempotency_key`. The initial Hosted
+surface accepts UTF-8 TXT, Markdown, CSV and JSON up to 256 KiB per file. Attach its
+returned artifact ID through the existing SDK input part. Downloads use the exact
+owner-authorized `/hosted/files/{artifact}` route and force attachment disposition.
+Shared replicas route file operations to the fenced owner through encrypted management;
+file data stays in the protected artifact journal. No file is extracted onto a worker.
+
+Use the reviewed example in `deploy/control-plane/overlays/hosted-chat-sql/control-plane.json`
+as an operator-owned seed. It contains no secret values. Select real project/model and
+MCP identities, supply the named headless keys through a protected environment, and use
+an isolated private `chat.home` for development. The example is a Linux deployment;
+local paths must name a canonical owner-private directory on the development host.
+`RuntimeConfig::controlled_chat_template` owns the allowed-tool/action baseline and
+`RuntimeOpenOptions::for_controlled_chat` independently constrains catalog and effect
+policy. Host composition always rewrites journal, anchor, lexical index and workflow
+paths into the selected user's private state. Semantic Chroma projection is currently
+rejected until its tenant and credential ownership are defined.
+
+To seed the same controlled service from an existing reviewed runtime configuration,
+use the source-only generator:
+
+```sh
+cargo run --locked -p colossus-cloud-server --example init_chat -- \
+  /private/tmp/colossus-hosted-chat example /secure/runtime.yaml
+```
+
+The new directory must be owner-private. The generated `chat.json` is the server's
+`chat` block, not a complete server configuration. It selects the source primary
+provider as an explicit shared service connection and retains only that provider's
+model profiles and roles. It copies configuration references without loading or
+exporting credentials, and creates no keys. Inspect its exact egress origins, supply
+the named independent headless keys, and merge the block into an otherwise reviewed
+server configuration. For a Codex primary provider, add the explicit protected native
+account file as the fourth argument; that account is intentionally shared. MCP
+connections are added separately through reviewed project settings.
+
+For shared SQL deployments, native account paths are rejected. Set the trusted project
+seed's `codex_auth_shared` to `true`, keep `codex_auth_path` absent, and retain the
+explicit shared provider policy. After SQL migration and before starting that project's
+runtimes, the operator can import one selected validated account into encrypted SQL:
+
+```sh
+cargo run --locked -p colossus-cloud-server --example import_chat_codex -- \
+  /secure/control-plane.json example /secure/service-account/auth.json 0
+```
+
+The final argument is the exact expected credential revision; zero creates a new
+record. The utility prints only the committed revision and refuses live project
+execution leases. Use an explicitly selected service account: the imported snapshot
+becomes the cloud authority and is no longer synchronized with the native account
+file. Provider reads use shared SQL custody; there is no file fallback. Before a
+rotating refresh exchange, a durable CAS claim blocks another executor from refreshing
+the same credential. An interrupted or ambiguous exchange remains blocked until an
+explicit account reimport/reauthentication, rather than replaying a rotating token.
+
+Project administrators manage provider profiles, model profiles/routes and remote MCP
+definitions through bounded settings DTOs. The immutable deployment origin ceiling,
+private roots, journal keys and Codex account path are not browser configuration.
+Credential references are generated by the host; settings responses contain safe
+metadata rather than environment selectors or secret bytes. Retained project revisions
+live in the protected chat state and preserve unrelated connection generations when
+only models change. Authentication/destination changes retire that connection's old
+credential/OAuth namespace.
+
+Static provider/MCP credentials default to the current user's own protected records.
+Explicit shared static keys occupy a separate project scope. MCP authorization-code
+flows are separate from named manual credentials. The credential-store HTTP surface
+returns names, types, revisions and current attachments only. Personal stores bind the
+project and caller; project stores require administration permission. One encrypted,
+bounded vault record atomically commits the catalog, secret values and attachments.
+The catalog accepts at most 256 credentials, 4096 attachment records and the existing
+1 MiB vault-record bound. Individual secrets retain the 64 KiB limit. Edits use the
+existing lifecycle lock and shared SQL project edit gate, with revision conflicts
+requiring a fresh review. Current execution is retired before attached values change.
+The runtime resolver accepts only host-composed destination bindings, never a bare
+credential ID. Existing connection secrets remain readable and are adopted when their
+owner edits or reuses them. Explicit disconnect tombstones prevent legacy values from
+reappearing after removal; malformed named custody never falls back to legacy values.
+
+MCP authorization-code
+flows use a public OAuth client, fixed HTTPS callback, S256 PKCE, one-use state and exact
+user/project/connection binding. The runtime receives an injected headless OAuth vault and never
+falls back to a graphical OS credential store. Failures retain categorical public
+errors without substituting the operator's or another user's identity.
+
+Personal history ownership is enforced in repository services and storage predicates,
+including task/command references, events, inventory and usage aggregates. An owner
+with current Execute and Control can answer an exact approval in their personal node
+and thread through `respond_personal_task`; `respond_task` retains project Approve for
+shared execution. Preserve the runtime's exact interaction ID, ETag, request hash and
+mutation identity in both paths. Private threads on shared nodes do not gain the
+personal-node approval exception.
+
+Plan refinement and combined approve-and-execute continuation are available only for
+an owned personal node and thread with current Execute and Control. Admission binds
+the draft revision to the source cloud run/task, native session and exact owner before
+calling the ordinary SDK; the runtime independently checks canonical revision and
+session ownership. Direct execution and bounded Goal continuation use the same path.
+Shared nodes retain their existing Plan admission policy.
+
+Set `chat.shared` to select the shared SQL composition. The server's cloud database
+also stores hosted journals/projections under an immutable project/user hash; stream,
+idempotency, outbox and projection keys include that namespace. `RuntimeSharedStorage`
+injects a fenced journal, projections, keys and stable identity into controlled chat
+without changing native Desktop/TUI storage composition. A database-clock lease with
+an increasing generation is acquired before writable runtime open. Runtime persistence
+and the effect gateway verify that generation; ownership loss drops an adapter future
+and keeps an unresolved durable effect start for unknown-outcome recovery.
+
+Project revisions, purpose-bound encrypted vault records, connector enrollment and
+one-use OAuth management state live in `hosted_chat_*` SQL tables. API replicas resolve
+the execution owner and use existing durable command/resource transport. Settings
+mutations coordinate with active owners through a project lifecycle gate. OAuth's
+nonserializable protocol session stays at the execution owner; callbacks route there.
+Owner loss requires restarting an interrupted login rather than replaying an ambiguous
+code exchange. Browser affinity and local API sessions are unnecessary.
+
+`shared_chat_keys` derives encryption/signing material from externally configured
+masters per namespace and purpose. Its bounded HTTPS client reads and conditionally
+advances an independent anchor authority. The separate `colossus-chat-anchor` binary
+uses encrypted SQL CAS records in its own database/administration boundary; placing
+anchors beside the runtime journal would weaken rollback detection. Local lexical
+indexes are rebuildable on takeover. Shared mode never falls back to local Redb or a
+platform credential vault. Omitting `shared` retains the earlier explicit single-host
+fixture only when the server sets `local_development`; production requires shared
+storage. The former RWO overlay path now aliases the SQL deployment.
+
+See [operator enablement](../admin/cloud-control-plane.md#scale-hosted-chat-across-replicas)
+for exact references, independent authority deployment, restore and migration limits.
+The SQL overlay demonstrates two replicas with disposable caches; it does not provision
+an execution environment or an external secret manager.
+
+This is controlled chat rather than complete Desktop/TUI parity. Provider/model choice,
+conversation streaming and policy-governed remote MCP reuse existing runtime behavior.
+Coder/Kubernetes environment provisioning, filesystem/shell tools, stdio MCP, native
+browser/computer control and plugin execution need separate environment contracts.
+Cloud attachment/artifact transfer, branch mappings, standalone Plan approve/discard
+and explicit plugin-skill selection remain unavailable at the cloud task boundary.
+
 ## Work on cloud storage and synchronization
 
 The relational tables are separated by domain: project membership, host/agent/workspace
@@ -137,7 +294,9 @@ related entity revisions, command delivery,
 released events and sync cursors with audit and outbox records in the same transaction.
 Entity compare-and-swap and per-feed ordering replace the old global journal-head lock.
 
-Lists use bounded project-scoped queries and timestamp/identifier cursors. Thread detail
+Lists use bounded project/account-scoped queries and timestamp/identifier cursors.
+Personal owner predicates are applied before pagination and operational aggregation;
+legacy rows with no owner retain shared project visibility. Thread detail
 returns the latest messages in chronological order and the latest runs, with separate
 cursors for earlier pages. Source discovery remains caller-authorized through the SDK;
 cloud membership cannot disclose an unrelated local application's history.
@@ -232,7 +391,7 @@ policy and does not prune canonical history.
 ## Acceptance and completion checks
 
 ```sh
-cargo test --locked -p colossus-cloud -p colossus-cloud-protocol -p colossus-cloud-postgres
+cargo test --locked -p colossus-cloud -p colossus-cloud-chat -p colossus-cloud-protocol -p colossus-cloud-postgres
 cargo test --locked -p colossus-cloud-server --lib
 cargo test --locked -p colossus-credentials --test headless
 cargo test --locked -p colossus-sidecar --test native_lifecycle -- --ignored
@@ -269,11 +428,39 @@ cargo test --locked -p colossus-cloud-server --lib postgres_oidc_to_runtime_and_
 
 Each invocation owns a uniquely named `cloud_e2e_` schema in the disposable fixture
 database. Never point this acceptance command at an operator's production database.
+The shared hosted Chat acceptance requires two independently disposable **local**
+PostgreSQL databases. Supply their URLs through `COLOSSUS_CLOUD_TEST_DATABASE_URL`
+for controller/journal state and `COLOSSUS_CHAT_TEST_ANCHOR_DATABASE_URL` for the
+independent authority. It creates fresh schemas, synthetic keys and an isolated
+child process; no external provider credentials or OS credential store are used.
+
+```sh
+cargo test --locked -p colossus-cloud-server --lib \
+  auth::tests::transport::hosted::shared::shared_hosted_chat_two_replicas \
+  -- --ignored --exact --test-threads=1
+```
+
+The fixture runs two real API/execution replicas with separate caches and a stable
+mutual-TLS ingress. It verifies cross-replica chat/settings and provider catalog routing, personal credential
+isolation, OAuth begin/callback routing with session ownership and replay checks,
+expired-owner fencing, connector custody retaining its captured generation,
+cache-free takeover, retained messages/session/OAuth custody and idempotent command
+replay without another execution.
+
 The lower-level database conformance uses a separate explicit reference:
 
 ```sh
 cargo test --locked -p colossus-cloud-postgres --lib \
   postgres_atomic_recovery_and_replica_conformance -- --ignored
+```
+
+The personal-history conformance additionally proves account filtering before pages,
+counts and token usage, private node/resource admission, legacy shared history,
+owner-bound invitations, retained audit decoding and cross-account cursor rejection:
+
+```sh
+cargo test --locked -p colossus-cloud-postgres --lib \
+  postgres_personal_history_filters_before_pagination_and_aggregates -- --ignored
 ```
 
 Inject `COLOSSUS_CLOUD_TEST_DATABASE_URL` with the disposable fixture connection URL.

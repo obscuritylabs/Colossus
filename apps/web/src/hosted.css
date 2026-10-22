@@ -1,0 +1,18 @@
+.hosted-page .control-card h2 {
+  margin: 0;
+  font-size: var(--font-size-heading-sm);
+  font-weight: 550;
+}
+.hosted-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.hosted-page .control-card {
+  overflow-wrap: anywhere;
+}
+.hosted-page .section-tabs {
+  flex-wrap: wrap;
+}

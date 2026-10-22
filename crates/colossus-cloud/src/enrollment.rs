@@ -5,6 +5,9 @@ use std::collections::BTreeSet;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Enrollment {
+    /// Personal runtime owner fixed by the trusted provisioning service; absent is shared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
     /// Hash of the high-entropy invitation, never its redeemable plaintext.
     pub token_hash: String,
     /// Fixed owning project.

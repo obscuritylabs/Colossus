@@ -1,0 +1,181 @@
+.plan-details-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.plan-details-panel > header {
+  display: grid;
+  min-height: auto;
+  grid-template-columns: 1fr auto;
+  gap: 11px;
+  padding: 17px 46px 15px 18px;
+}
+
+.plan-details-panel > header > button {
+  display: inline-flex;
+  width: fit-content;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+
+.plan-details-panel > header > button:hover,
+.plan-details-panel > header > button:focus-visible {
+  color: var(--blue-strong);
+}
+
+.plan-details-panel > header > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.plan-details-panel > header h2 {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-tight);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.plan-details-kicker {
+  color: var(--blue-strong);
+  font-size: var(--font-size-caption);
+  font-weight: 750;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.plan-details-panel > header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+
+.plan-details-status {
+  align-self: center;
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.plan-details-content {
+  min-height: 0;
+  padding: 17px 18px 28px;
+  overflow: auto;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.plan-details-document-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.plan-details-document-heading > span {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--icon-border);
+  border-radius: 8px;
+  background: var(--icon-surface);
+  color: var(--icon-text);
+}
+
+.plan-details-document-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.plan-details-document-heading strong {
+  color: var(--text-strong);
+  font-size: var(--font-size-body-sm);
+}
+
+.plan-details-document-heading small {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+
+.plan-details-markdown {
+  padding-top: 16px;
+  color: var(--text);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+.plan-details-markdown h1,
+.plan-details-markdown h2 {
+  color: var(--text-strong);
+  font-size: var(--font-size-body);
+}
+
+.plan-details-empty {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+}
+
+.plan-details-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-header);
+}
+
+.plan-details-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-control);
+  color: var(--blue-strong);
+  font-size: var(--font-size-caption);
+}
+
+.plan-details-actions button:last-child {
+  border-color: var(--accent-border);
+  background: var(--blue-soft);
+  color: var(--accent-text);
+}
+
+.plan-details-actions button:disabled {
+  opacity: 0.42;
+}
+
+.shared-inspector .plan-details-panel,
+.shared-inspector-sheet .plan-details-panel {
+  height: 100%;
+  min-height: 0;
+  border: 0;
+}
+.plan-details-actions {
+  flex-wrap: wrap;
+}
+@media (pointer: coarse), (max-width: 760px) {
+  .plan-details-actions button {
+    min-height: var(--control-height-touch);
+  }
+}

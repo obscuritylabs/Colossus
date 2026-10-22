@@ -142,6 +142,7 @@ pub struct GrpcBackend {
     plugins: Arc<plugins::GrpcPluginClient>,
     workflows: Arc<workflows::GrpcWorkflowClient>,
     capabilities: ServerCapabilities,
+    model_profiles: Vec<crate::ConfiguredModelProfile>,
     closed: watch::Sender<bool>,
 }
 
@@ -189,7 +190,7 @@ impl GrpcBackend {
             plugin_selection: std::sync::atomic::AtomicBool::new(false),
             model_selection: std::sync::atomic::AtomicBool::new(false),
         });
-        let capabilities = verify_server_identity(
+        let (capabilities, model_profiles) = verify_server_identity(
             agent_runs.as_ref(),
             options.expected_instance_id,
             options.api_major,
@@ -216,6 +217,7 @@ impl GrpcBackend {
             }),
             artifacts,
             capabilities,
+            model_profiles,
             closed,
         })
     }
@@ -267,6 +269,9 @@ impl Backend for GrpcBackend {
 
     fn capabilities(&self) -> ServerCapabilities {
         self.capabilities.clone()
+    }
+    fn model_profiles(&self) -> Vec<crate::ConfiguredModelProfile> {
+        self.model_profiles.clone()
     }
 
     fn artifacts(&self) -> Option<Arc<dyn ArtifactClient>> {
@@ -447,7 +452,7 @@ async fn verify_server_identity(
     expected_instance_id: crate::InstanceId,
     api_major: crate::ApiMajor,
     backend_kind: BackendKind,
-) -> SdkResult<ServerCapabilities> {
+) -> SdkResult<(ServerCapabilities, Vec<crate::ConfiguredModelProfile>)> {
     let request = client
         .request(proto::GetServerInfoRequest {})
         .await
@@ -513,7 +518,9 @@ async fn verify_server_identity(
         .filter(|capability| capability.enabled)
         .map(|capability| capability.name)
         .collect::<Vec<_>>();
-    Ok(ServerCapabilities::from_enabled(enabled))
+    let capabilities = ServerCapabilities::from_enabled(enabled);
+    let model_profiles = crate::model_catalog::decode(info.model_profiles, &capabilities)?;
+    Ok((capabilities, model_profiles))
 }
 
 fn connect_api_error(error: ApiError) -> SdkError {
@@ -1494,6 +1501,7 @@ fn run_from_proto(value: proto::Run) -> ApiResult<Run> {
         plugin_skill_ids: value.plugin_skill_ids,
         session_id: value.session_id,
         title,
+        title_revision: value.title_revision,
         role: value.role,
         mode: run_mode_from_proto(value.mode)?,
         status,
@@ -2755,6 +2763,7 @@ mod tests {
             id: run_id,
             session_id: "session-1".into(),
             title: "Test run".into(),
+            title_revision: 7,
             status: colossus_api::RunStatus::Running,
             mode: colossus_api::RunMode::Execute,
             role: "assistant".into(),
@@ -2860,6 +2869,7 @@ mod tests {
             run_id: "run-1".into(),
             session_id: "session-1".into(),
             title: "Test run".into(),
+            title_revision: 0,
             role: "assistant".into(),
             mode: proto::RunMode::Execute as i32,
             status: proto::RunStatus::Running as i32,
@@ -2891,12 +2901,13 @@ mod tests {
     }
 
     #[test]
-    fn proto_run_uses_role_when_an_older_server_omits_title() {
-        let run = proto::Run {
+    fn proto_run_preserves_title_revisions_and_legacy_title_fallback() {
+        let mut run = proto::Run {
             plugin_skill_ids: Vec::new(),
             run_id: "run-1".into(),
             session_id: "session-1".into(),
             title: String::new(),
+            title_revision: 0,
             role: "assistant".into(),
             mode: proto::RunMode::Execute as i32,
             status: proto::RunStatus::Running as i32,
@@ -2911,9 +2922,52 @@ mod tests {
             archived: false,
         };
 
+        let legacy = run_from_proto(run.clone()).expect("older server run");
+        assert_eq!(legacy.title, "assistant");
+        assert_eq!(legacy.title_revision, 0);
+        #[cfg(feature = "serialization")]
+        {
+            let encoded = serde_json::to_value(&legacy).expect("encode legacy run");
+            assert!(encoded.get("title_revision").is_none());
+            let decoded: Run = serde_json::from_value(encoded).expect("decode legacy run");
+            assert_eq!(decoded, legacy);
+        }
+        run.title = "Canonical session title".into();
+        run.title_revision = 9;
+        let revised = run_from_proto(run).expect("versioned title run");
+        assert_eq!(revised.title, "Canonical session title");
+        assert_eq!(revised.title_revision, 9);
+        assert_eq!(revised.last_sequence, legacy.last_sequence);
+    }
+
+    #[test]
+    fn proto_run_title_accepts_bounded_utf8_and_rejects_oversized_text() {
+        let mut run = proto::Run {
+            run_id: "run-1".into(),
+            session_id: "session-1".into(),
+            role: "assistant".into(),
+            mode: proto::RunMode::Execute as i32,
+            status: proto::RunStatus::Running as i32,
+            created_at: Some("2026-01-01T00:00:00Z".parse().expect("timestamp")),
+            updated_at: Some("2026-01-01T00:00:00Z".parse().expect("timestamp")),
+            last_sequence: 1,
+            etag: "etag".into(),
+            ..Default::default()
+        };
+
+        for title in [format!("{}…", "😀".repeat(63)), "😀".repeat(64)] {
+            run.title = title.clone();
+            let decoded = run_from_proto(run.clone()).expect("bounded UTF-8 title");
+            assert_eq!(decoded.title, title);
+            assert_eq!(decoded.title_revision, 0);
+        }
+
+        run.title = "😀".repeat(65);
         assert_eq!(
-            run_from_proto(run).expect("older server run").title,
-            "assistant"
+            run_from_proto(run)
+                .expect_err("title exceeds the 256-byte transport budget")
+                .reason,
+            ApiErrorReason::InternalInvariant
         );
     }
 
@@ -3166,6 +3220,22 @@ mod tests {
 
     #[tokio::test]
     async fn live_pinned_tls_and_bearer_authentication_fail_closed() {
+        struct Catalog;
+        impl colossus_grpc::ModelCatalogProvider for Catalog {
+            fn model_profiles(
+                &self,
+                _caller: &CallerContext,
+            ) -> Vec<proto::ConfiguredModelProfile> {
+                vec![proto::ConfiguredModelProfile {
+                    profile: "configured-model".into(),
+                    model: "provider-model".into(),
+                    provider: "echo".into(),
+                    provider_profile: "test".into(),
+                    reasoning_effort: Some("high".into()),
+                    default_roles: vec!["assistant".into()],
+                }]
+            }
+        }
         let tls_identity =
             TlsIdentity::from_seed(TlsKeySeed::new([0x5a; 32])).expect("TLS identity");
         let certificate_pem = tls_identity.certificate_pem().to_vec();
@@ -3205,7 +3275,8 @@ mod tests {
                 deployment_mode: proto::DeploymentMode::SharedDaemon,
             },
             Arc::new(FixedReadiness::ready()),
-        );
+        )
+        .with_model_catalog(Arc::new(Catalog));
         let server = BoundPublicGrpcServer::bind(
             "127.0.0.1:0".parse().expect("address"),
             tls_identity,
@@ -3260,6 +3331,7 @@ mod tests {
             .await
             .expect("authenticated get");
         assert_eq!(response.run.run_id, "run-1");
+        assert_eq!(response.run.title_revision, 7);
         // A separate fixture grant proves the new request and result across live TLS,
         // without widening the read-only credential used by the remaining assertions.
         let goal_grant = ApplicationGrant::new(
@@ -3295,6 +3367,13 @@ mod tests {
         .unwrap();
         assert!(goal_backend.capabilities().contains("goal.create"));
         assert!(!backend.capabilities().contains("goal.create"));
+        assert!(backend.model_profiles().is_empty());
+        let catalog = goal_backend.model_profiles();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].profile, "configured-model");
+        assert_eq!(catalog[0].reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(catalog[0].default_roles, ["assistant"]);
+        assert!(goal_backend.connector_model_profiles().is_empty());
         let goal_request = CreateRunRequest {
             model_profile: None,
             reasoning_effort: None,

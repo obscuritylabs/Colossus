@@ -6,9 +6,31 @@ use colossus_home::ConfinedRoot;
 use colossus_ports::CredentialVault;
 use sha2::{Digest as _, Sha256};
 use std::{
+    fmt,
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+/// Trusted host authority; debug output never traverses the supplied vault.
+#[derive(Clone)]
+pub(super) struct SuppliedOAuthVault(pub(super) Arc<dyn CredentialVault>);
+
+impl fmt::Debug for SuppliedOAuthVault {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SuppliedOAuthVault([REDACTED])")
+    }
+}
+
+pub(super) fn oauth_vault_for_host(
+    supplied: Option<&SuppliedOAuthVault>,
+    home: Option<&ConfinedRoot>,
+    storage_path: &Path,
+) -> Result<Arc<dyn CredentialVault>, RuntimeError> {
+    match supplied {
+        Some(vault) => Ok(Arc::clone(&vault.0)),
+        None => platform_oauth_vault(home, storage_path),
+    }
+}
 
 /// Existing native OAuth vault location and its exact nonsecret owner binding.
 #[derive(Clone, Debug)]

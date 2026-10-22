@@ -10,9 +10,13 @@ use serde::Serialize;
 use std::sync::Arc;
 
 mod accounts;
+mod branches;
 mod delivery;
+mod discovery;
+pub use discovery::DiscoverySnapshot;
 mod enrollment;
 mod history;
+mod hosted;
 mod inventory;
 mod message_authors;
 mod nodes;
@@ -58,23 +62,37 @@ impl CloudRepository {
     pub fn storage(&self) -> Arc<dyn CloudStore> {
         self.store.clone()
     }
+    /// Query released conversation resources beneath the authenticated project and account.
+    /// Visibility is enforced by storage before pagination; callers cannot nominate an owner.
+    pub async fn query_entities(
+        &self,
+        caller: &CloudCaller,
+        mut query: EntityQuery,
+    ) -> CloudResult<Vec<crate::storage::EntityRecord>> {
+        caller.require(CloudPermission::Read)?;
+        if !matches!(
+            query.kind,
+            EntityKind::Node
+                | EntityKind::Host
+                | EntityKind::Workspace
+                | EntityKind::Thread
+                | EntityKind::Task
+                | EntityKind::ThreadMessage
+                | EntityKind::Command
+                | EntityKind::Run
+                | EntityKind::NodeTask
+                | EntityKind::SessionMapping
+        ) {
+            return Err(CloudError::PermissionDenied);
+        }
+        query.project_id = caller.project_id().into();
+        query.visible_to = Some(caller.subject().into());
+        query.limit = query.limit.min(100);
+        self.store.list(&query).await
+    }
     async fn read<T: EntityData>(&self, identity: &str) -> CloudResult<(T, u64)> {
         let record = self.store.read(&key(identity)?).await?;
         Ok((T::from_entity(record.value)?, record.revision))
-    }
-    async fn list<T: EntityData>(
-        &self,
-        prefix: &str,
-        after: Option<&str>,
-        limit: usize,
-    ) -> CloudResult<Vec<T>> {
-        let query = query(prefix, after, limit.min(100))?;
-        self.store
-            .list(&query)
-            .await?
-            .into_iter()
-            .map(|record| T::from_entity(record.value))
-            .collect()
     }
     fn released_event<T: Serialize>(
         &self,
@@ -200,21 +218,5 @@ pub(super) fn key(identity: &str) -> CloudResult<EntityKey> {
         project_id: project_id.into(),
         parent_id,
         id: id.into(),
-    })
-}
-fn query(prefix: &str, after: Option<&str>, limit: usize) -> CloudResult<EntityQuery> {
-    let key = key(&format!("{prefix}__page"))?;
-    Ok(EntityQuery {
-        kind: key.kind,
-        project_id: key.project_id,
-        parent_id: key.parent_id,
-        after: after.map(str::to_owned),
-        limit,
-        node_id: None,
-        host_id: None,
-        query: None,
-        status: None,
-        archived: None,
-        order: EntityOrder::IdAsc,
     })
 }

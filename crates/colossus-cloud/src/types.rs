@@ -3,19 +3,51 @@ use colossus_sdk::{CreateRunRequest, GetRunResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// One enrolled node bound to a project, local instance, and TLS client certificate.
+/// Placement boundary. Hosted targets have no Fleet enrollment or client certificate.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionKind {
+    /// An independently enrolled runtime connected through authenticated transport.
+    #[default]
+    Connected,
+    /// A tenant runtime supervised by the Hosted execution service.
+    Hosted,
+}
+
+impl ExecutionKind {
+    /// Stable storage and discovery value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Connected => "connected",
+            Self::Hosted => "hosted",
+        }
+    }
+
+    /// Preserve canonical serialization of existing connected records.
+    pub fn is_connected(&self) -> bool {
+        *self == Self::Connected
+    }
+}
+
+/// One fixed execution target. Connected targets additionally bind a TLS enrollment.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CloudNode {
-    /// Stable registered machine identity.
+    /// Immutable placement boundary, independent from presence and UI navigation.
+    #[serde(default, skip_serializing_if = "ExecutionKind::is_connected")]
+    pub execution_kind: ExecutionKind,
+    /// Personal runtime owner; absent denotes a legacy or explicitly shared project node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
+    /// Stable execution target identity.
     pub node_id: String,
     /// Owning cloud project.
     pub project_id: String,
-    /// Exact local Colossus instance independently verified by the connector SDK.
+    /// Connected runtime instance or retained Hosted namespace binding.
     pub instance_id: String,
     /// Bounded human-readable display label.
     pub label: String,
-    /// SHA-256 of the enrolled TLS client leaf, never credential material.
+    /// Connected client-leaf fingerprint; empty for Hosted targets.
     pub certificate_sha256: String,
     /// Additional cloud role ceiling, intersected with the local application grant.
     pub roles: BTreeSet<String>,
@@ -30,7 +62,7 @@ pub struct CloudNode {
     /// Sanitized display label, without a filesystem path.
     #[serde(default)]
     pub workspace_label: Option<String>,
-    /// Fresh authenticated heartbeat says the runtime is usable.
+    /// Connected heartbeat readiness, or configured availability for a Hosted target.
     #[serde(default)]
     pub runtime_ready: bool,
     /// Metadata released by this authenticated runtime, never independent attestation.
@@ -51,7 +83,7 @@ pub struct CloudTask {
     pub task_id: String,
     /// Owning project.
     pub project_id: String,
-    /// Exact enrolled execution target.
+    /// Exact execution target.
     pub node_id: String,
     /// Authenticated submitting subject.
     pub subject: String,
@@ -100,7 +132,7 @@ pub struct PendingCommand {
     pub command_id: String,
     /// Exact immutable task allocation.
     pub task_id: String,
-    /// Exact enrolled target.
+    /// Exact execution target.
     pub node_id: String,
     /// Closed typed SDK operation.
     pub command: Command,
@@ -139,7 +171,7 @@ pub struct CloudWorkspace {
     pub project_id: String,
     /// Host installation grouping.
     pub host_id: String,
-    /// Independently enrolled execution target.
+    /// Bound execution target.
     pub node_id: String,
     /// Sanitized label without local paths.
     pub label: String,
@@ -147,6 +179,52 @@ pub struct CloudWorkspace {
     pub sharing: String,
     /// Optimistic metadata revision.
     pub revision: u64,
+}
+/// Presentation and lifecycle relation of a canonical conversation branch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudBranchKind {
+    /// Independent continuation created from a settled source turn.
+    Fork,
+    /// Side conversation attached to its source conversation.
+    Aside,
+}
+impl CloudBranchKind {
+    /// Stable wire and database discriminator.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fork => "fork",
+            Self::Aside => "aside",
+        }
+    }
+}
+/// Immutable cloud lineage; the runtime alone resolves canonical transcript context.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudThreadBranch {
+    /// Child presentation and lifecycle kind.
+    pub kind: CloudBranchKind,
+    /// Exact source cloud conversation.
+    pub parent_thread_id: String,
+    /// Exact admitted cloud source turn.
+    pub source_task_id: String,
+    /// Runtime source resolved through its durable allocation receipt.
+    pub source_run_id: String,
+}
+/// Source-bound admission request. Clients cannot nominate runtime context boundaries.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateCloudThreadBranch {
+    /// Exact released source task in the selected parent.
+    pub source_task_id: String,
+    /// Whether to create an independent fork or attached side conversation.
+    pub kind: CloudBranchKind,
+    /// Exact visible parent metadata revision on first admission.
+    pub expected_revision: u64,
+    /// Optional bounded child title.
+    pub title: Option<String>,
+    /// First child prompt and normal execution settings; branch/session must be absent.
+    pub request: CreateRunRequest,
 }
 /// Human-operated cloud conversation mapped to one exact runtime session.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -156,6 +234,12 @@ pub struct CloudThread {
     pub thread_id: String,
     /// Owning authenticated project.
     pub project_id: String,
+    /// Personal owner, derived from the authenticated account; absent preserves shared history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_user_id: Option<String>,
+    /// Immutable source lineage for cloud-created forks and side conversations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<CloudThreadBranch>,
     /// Immutable enrolled runtime placement.
     pub node_id: String,
     /// Native host grouping if advertised.
@@ -164,6 +248,12 @@ pub struct CloudThread {
     pub workspace_id: Option<String>,
     /// Human-editable bounded conversation title.
     pub title: String,
+    /// Explicit cloud title preference; absent retains unknown legacy provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_overridden: Option<bool>,
+    /// Highest observed canonical title generation within the fixed runtime session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_title_revision: Option<u64>,
     /// UTC RFC3339 creation time.
     pub created_at: String,
     /// UTC RFC3339 last conversation change.

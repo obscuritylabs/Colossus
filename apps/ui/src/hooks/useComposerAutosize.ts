@@ -32,6 +32,7 @@ export function useComposerAutosize(
     if (!textarea) return;
     let width = textarea.clientWidth;
     let availableHeight = composerAvailableHeight(textarea);
+    let resizeFrame: number | null = null;
     const observer = new ResizeObserver(() => {
       const nextAvailableHeight = composerAvailableHeight(textarea);
       // Ignore our own height changes; surrounding controls can change the cap.
@@ -42,7 +43,12 @@ export function useComposerAutosize(
         return;
       width = textarea.clientWidth;
       availableHeight = nextAvailableHeight;
-      resize();
+      // Write observed dimensions in the next frame, outside observer delivery.
+      if (resizeFrame === null)
+        resizeFrame = window.requestAnimationFrame(() => {
+          resizeFrame = null;
+          resize();
+        });
     });
     observer.observe(textarea);
     for (const selector of [".work-thread", ".work-composer-dock"]) {
@@ -58,6 +64,7 @@ export function useComposerAutosize(
     document.fonts.addEventListener("loadingdone", resize);
     return () => {
       observer.disconnect();
+      if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
       appearanceObserver.disconnect();
       window.removeEventListener("resize", resize);
       document.fonts.removeEventListener("loadingdone", resize);

@@ -6,6 +6,7 @@ import { defineConfig } from "vitest/config";
 import { d3ColorFrozenPrototypeCompatibility } from "./build/d3-color-frozen-prototype";
 import { xtermFrozenPrototypeCompatibility } from "./build/xterm-frozen-prototype";
 import { shikiGrammarLiterals } from "./build/shiki-grammar-literals";
+import { mermaidViteCompatibility } from "../ui/build/mermaid-compatibility.mjs";
 
 export default defineConfig({
   plugins: [
@@ -26,19 +27,22 @@ export default defineConfig({
     d3ColorFrozenPrototypeCompatibility(),
     xtermFrozenPrototypeCompatibility(),
     shikiGrammarLiterals(),
+    mermaidViteCompatibility(),
     react(),
   ],
   optimizeDeps: {
     include: [
-      "react-markdown",
+      "streamdown",
       "react-resizable-panels",
       "recharts",
       "use-sync-external-store/shim",
       "use-sync-external-store/shim/with-selector",
+      "use-sync-external-store/shim/with-selector.js",
     ],
     // Dependency pre-bundling bypasses the compatibility transform above.
     exclude: [
       "@colossus/ui",
+      "mermaid",
       "@xterm/xterm",
       "@xyflow/system",
       "d3-color",

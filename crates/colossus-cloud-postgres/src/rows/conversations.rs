@@ -1,8 +1,8 @@
 //! Conversation metadata and native task/command columns with SDK payloads.
 use super::{DomainRow, Metadata, decode_payload, mismatch, payload, signed, unsigned};
 use colossus_cloud::{
-    CloudError, CloudMessage, CloudResult, CloudTask, CloudThread, PendingCommand,
-    storage::EntityValue,
+    CloudBranchKind, CloudError, CloudMessage, CloudResult, CloudTask, CloudThread,
+    CloudThreadBranch, PendingCommand, storage::EntityValue,
 };
 use colossus_ports::StoreError;
 use diesel::{
@@ -12,10 +12,17 @@ use diesel::{
 use serde_json::Value;
 
 row!(ThreadRow {
+    owner_user_id: Option<String> => Nullable<Text>,
+    branch_kind: Option<String> => Nullable<Text>,
+    branch_parent_thread_id: Option<String> => Nullable<Text>,
+    branch_source_task_id: Option<String> => Nullable<Text>,
+    branch_source_run_id: Option<String> => Nullable<Text>,
     node_id: String => Text,
     host_id: Option<String> => Nullable<Text>,
     workspace_id: Option<String> => Nullable<Text>,
     title: String => Text,
+    title_overridden: Option<bool> => Nullable<Bool>,
+    runtime_title_revision: Option<i64> => Nullable<BigInt>,
     created_at_text: String => Text,
     updated_at_text: String => Text,
     archived: bool => Bool,
@@ -33,10 +40,29 @@ impl DomainRow for ThreadRow {
         };
         Ok(Self {
             metadata,
+            owner_user_id: value.owner_user_id.clone(),
+            branch_kind: value
+                .branch
+                .as_ref()
+                .map(|branch| branch.kind.as_str().into()),
+            branch_parent_thread_id: value
+                .branch
+                .as_ref()
+                .map(|branch| branch.parent_thread_id.clone()),
+            branch_source_task_id: value
+                .branch
+                .as_ref()
+                .map(|branch| branch.source_task_id.clone()),
+            branch_source_run_id: value
+                .branch
+                .as_ref()
+                .map(|branch| branch.source_run_id.clone()),
             node_id: value.node_id.clone(),
             host_id: value.host_id.clone(),
             workspace_id: value.workspace_id.clone(),
             title: value.title.clone(),
+            title_overridden: value.title_overridden,
+            runtime_title_revision: value.runtime_title_revision.map(signed).transpose()?,
             created_at_text: value.created_at.clone(),
             updated_at_text: value.updated_at.clone(),
             archived: value.archived,
@@ -49,7 +75,30 @@ impl DomainRow for ThreadRow {
         })
     }
     fn into_value(self) -> CloudResult<EntityValue> {
+        let branch = match (
+            self.branch_kind.as_deref(),
+            self.branch_parent_thread_id,
+            self.branch_source_task_id,
+            self.branch_source_run_id,
+        ) {
+            (None, None, None, None) => None,
+            (Some(kind), Some(parent_thread_id), Some(source_task_id), Some(source_run_id)) => {
+                Some(CloudThreadBranch {
+                    kind: match kind {
+                        "fork" => CloudBranchKind::Fork,
+                        "aside" => CloudBranchKind::Aside,
+                        _ => return Err(CloudError::Storage),
+                    },
+                    parent_thread_id,
+                    source_task_id,
+                    source_run_id,
+                })
+            }
+            _ => return Err(CloudError::Storage),
+        };
         Ok(CloudThread {
+            owner_user_id: self.owner_user_id,
+            branch,
             revision: self.metadata.revision()?,
             thread_id: self.metadata.id,
             project_id: self.metadata.project_id,
@@ -57,6 +106,8 @@ impl DomainRow for ThreadRow {
             host_id: self.host_id,
             workspace_id: self.workspace_id,
             title: self.title,
+            title_overridden: self.title_overridden,
+            runtime_title_revision: self.runtime_title_revision.map(unsigned).transpose()?,
             created_at: self.created_at_text,
             updated_at: self.updated_at_text,
             archived: self.archived,

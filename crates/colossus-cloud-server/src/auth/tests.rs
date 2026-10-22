@@ -141,6 +141,7 @@ async fn fixture() -> (
             statement_timeout_ms: 5000,
         },
         local_development: true,
+        chat: None,
         auth_key_variable: None,
         maintenance: Default::default(),
     })

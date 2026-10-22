@@ -7,9 +7,13 @@ import {
   type RefObject,
   type TextareaHTMLAttributes,
 } from "react";
-import { IconLoader2, IconPlayerStop, IconSend2 } from "@tabler/icons-react";
-import { ComposerInput, isComposerSendKey } from "./Composer.js";
-import { Button } from "./Controls.js";
+import { IconLoader2, IconPlaylistAdd } from "@tabler/icons-react";
+import {
+  ComposerInput,
+  ComposerSendButton,
+  ComposerStopButton,
+  isComposerSendKey,
+} from "./Composer.js";
 
 export function ConversationComposerFrame({
   children,
@@ -47,6 +51,7 @@ export function ConversationComposer({
   onSubmit,
   disabled = false,
   busy = false,
+  running = busy,
   label = "Message Colossus",
   placeholder = "What would you like to work on?",
   action = "Send",
@@ -59,6 +64,7 @@ export function ConversationComposer({
   children,
   onStop,
   stopping = false,
+  stopDisabled = false,
   shortcut = "modEnter",
   textareaProps,
   className = "",
@@ -68,6 +74,7 @@ export function ConversationComposer({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   disabled?: boolean;
   busy?: boolean;
+  running?: boolean;
   label?: string;
   placeholder?: string;
   action?: string;
@@ -78,8 +85,9 @@ export function ConversationComposer({
   queue?: ReactNode;
   notice?: ReactNode;
   children?: ReactNode;
-  onStop?: () => void;
+  onStop?: (() => void) | undefined;
   stopping?: boolean;
+  stopDisabled?: boolean;
   shortcut?: "enter" | "modEnter";
   textareaProps?: Omit<
     TextareaHTMLAttributes<HTMLTextAreaElement>,
@@ -92,7 +100,10 @@ export function ConversationComposer({
   const targetForm = formRef ?? localForm;
   const inputId = textareaProps?.id ?? id;
   return (
-    <div className={`shared-composer-dock ${className}`}>
+    <div
+      className={`shared-composer-dock ${className}`}
+      data-workspace-composer-dock
+    >
       <ConversationComposerFrame
         ref={targetForm}
         aria-label={label}
@@ -103,35 +114,32 @@ export function ConversationComposer({
           <>
             <div className="shared-composer-controls">{controls}</div>
             <div className="shared-composer-run-actions">
-              {busy && onStop ? (
-                <Button
-                  variant="tertiary"
-                  aria-label="Stop active run"
-                  disabled={stopping}
-                  onClick={onStop}
+              {!running || value.trim() || !onStop ? (
+                <ComposerSendButton
+                  type="submit"
+                  className={`shared-composer-send${running && !busy ? " is-queue" : ""}`}
+                  disabled={disabled || busy || !value.trim()}
+                  aria-label={action}
+                  title={action}
                 >
-                  <IconPlayerStop size={16} aria-hidden="true" />
-                  {stopping ? "Stopping…" : "Stop"}
-                </Button>
+                  {busy ? (
+                    <IconLoader2
+                      size={17}
+                      className="shared-spin"
+                      aria-hidden="true"
+                    />
+                  ) : running ? (
+                    <IconPlaylistAdd size={18} aria-hidden="true" />
+                  ) : undefined}
+                </ComposerSendButton>
               ) : null}
-              <Button
-                type="submit"
-                variant="primary"
-                className="shared-composer-send"
-                disabled={disabled || busy || !value.trim()}
-                aria-label={action}
-              >
-                {busy ? (
-                  <IconLoader2
-                    size={17}
-                    className="shared-spin"
-                    aria-hidden="true"
-                  />
-                ) : (
-                  <IconSend2 size={17} aria-hidden="true" />
-                )}
-                {action}
-              </Button>
+              {running && onStop ? (
+                <ComposerStopButton
+                  stopping={stopping}
+                  disabled={stopDisabled}
+                  onClick={onStop}
+                />
+              ) : null}
             </div>
           </>
         }

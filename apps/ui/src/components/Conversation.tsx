@@ -7,16 +7,25 @@ import {
 import { IconMessageCircle } from "@tabler/icons-react";
 import colossusMark from "../../assets/colossus-mark.svg";
 import { MarkdownContent, type MarkdownLink } from "./MarkdownContent.js";
+import { MessageCopyButton } from "./MessageCopyButton.js";
+import { ConversationUsageDetails } from "./ConversationUsage.js";
+import type { ConversationUsage } from "../lib/conversation-usage.js";
 
 export interface ConversationEntryProps {
   role: "user" | "assistant" | "tool" | "system";
   author?: string;
+  assistantMarkSrc?: string | undefined;
   createdAt?: string;
   content?: string;
   markdown?: boolean;
   streaming?: boolean;
   status?: ReactNode;
   actions?: ReactNode;
+  copyText?: string | false | undefined;
+  copyLabel?: string | undefined;
+  onCopy?: ((text: string) => void | Promise<void>) | undefined;
+  usage?: ConversationUsage | null | undefined;
+  usageLabel?: string | undefined;
   children?: ReactNode;
   linkComponent?: MarkdownLink | undefined;
   className?: string;
@@ -25,12 +34,18 @@ export const ConversationEntry = /* @__PURE__ */ memo(
   function ConversationEntry({
     role,
     author,
+    assistantMarkSrc = colossusMark,
     createdAt,
     content,
     markdown = role === "assistant",
     streaming = false,
     status,
     actions,
+    copyText,
+    copyLabel,
+    onCopy,
+    usage,
+    usageLabel,
     children,
     linkComponent,
     className = "",
@@ -45,6 +60,11 @@ export const ConversationEntry = /* @__PURE__ */ memo(
             ? "Tool"
             : "System");
     const timestamp = createdAt ? new Date(createdAt) : null;
+    const copiedContent =
+      copyText === false
+        ? undefined
+        : (copyText ??
+          (role === "user" || role === "assistant" ? content : undefined));
     return (
       <article
         className={`shared-conversation-entry shared-message-${role} ${className}`}
@@ -56,7 +76,7 @@ export const ConversationEntry = /* @__PURE__ */ memo(
           aria-hidden="true"
         >
           {role === "assistant" ? (
-            <img src={colossusMark} alt="" width={17} height={17} />
+            <img src={assistantMarkSrc} alt="" width={17} height={17} />
           ) : (
             <IconMessageCircle size={17} stroke={1.7} />
           )}
@@ -82,6 +102,7 @@ export const ConversationEntry = /* @__PURE__ */ memo(
                 <MarkdownContent
                   content={content}
                   linkComponent={linkComponent}
+                  isStreaming={streaming}
                 />
               ) : (
                 <div className="shared-preserve-lines">{content}</div>
@@ -89,8 +110,25 @@ export const ConversationEntry = /* @__PURE__ */ memo(
             ) : null}
             {children}
           </div>
-          {actions ? (
-            <div className="shared-message-actions">{actions}</div>
+          {actions || usage || copiedContent ? (
+            <footer className="shared-message-footer">
+              {usage ? (
+                <ConversationUsageDetails usage={usage} label={usageLabel} />
+              ) : null}
+              <div className="shared-message-actions">
+                {actions}
+                {copiedContent ? (
+                  <MessageCopyButton
+                    text={copiedContent}
+                    label={
+                      copyLabel ??
+                      (role === "assistant" ? "Colossus response" : "message")
+                    }
+                    onCopy={onCopy}
+                  />
+                ) : null}
+              </div>
+            </footer>
           ) : null}
         </div>
       </article>

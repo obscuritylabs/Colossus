@@ -1,5 +1,6 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
+mod stream_termination;
 
 struct WatchLifetime(Arc<AtomicUsize>);
 impl Drop for WatchLifetime {

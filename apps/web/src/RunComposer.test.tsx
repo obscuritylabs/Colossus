@@ -44,8 +44,14 @@ const node = (id: string): FleetNode => ({
     capabilities: ["runtime.resources.v1"],
   },
 });
-const reply = (capabilities: string[]) =>
-  new Response(JSON.stringify({ kind: "result", value: { capabilities } }));
+const reply = (capabilities: string[], connection = "connection-one") =>
+  new Response(
+    JSON.stringify({
+      connection_id: connection,
+      kind: "result",
+      value: { capabilities },
+    }),
+  );
 async function fixture(target = node("one")) {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   Object.defineProperty(document, "fonts", {
@@ -310,7 +316,9 @@ it("starts Goal without a Plan and binds retries to the reviewed iteration budge
 it("probes a connected replica with no local advertisements and respects unsupported replies", async () => {
   const fetch = vi
     .fn()
-    .mockResolvedValueOnce(reply(["research.create", "goal.create"]))
+    .mockResolvedValueOnce(
+      reply(["research.create", "goal.create"], "connection-replica"),
+    )
     .mockResolvedValueOnce(
       new Response(JSON.stringify({ kind: "unsupported" })),
     );

@@ -31,11 +31,18 @@ export function documentationUrl(configured: unknown): string {
 
 export function DocumentationLink({
   configuredUrl = import.meta.env.VITE_COLOSSUS_DOCUMENTATION_URL,
+  showLabel = false,
 }: {
   configuredUrl?: string | undefined;
+  showLabel?: boolean;
 }) {
   return (
-    <Button asChild variant="ghost" size="icon">
+    <Button
+      asChild
+      variant="ghost"
+      size={showLabel ? "default" : "icon"}
+      className={showLabel ? "control-app-link" : undefined}
+    >
       <a
         href={documentationUrl(configuredUrl)}
         target="_blank"
@@ -44,6 +51,7 @@ export function DocumentationLink({
         title="Documentation (opens in a new tab)"
       >
         <IconBook2 size={19} aria-hidden="true" />
+        {showLabel ? <span>Documentation</span> : null}
       </a>
     </Button>
   );

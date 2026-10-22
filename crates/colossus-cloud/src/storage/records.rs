@@ -165,13 +165,35 @@ impl EntityValue {
                 root && value.host_id == key.id && value.project_id == key.project_id
             }
             Self::Node(value) => {
-                root && value.node_id == key.id && value.project_id == key.project_id
+                root && value.node_id == key.id
+                    && value.project_id == key.project_id
+                    && value.owner_user_id.as_ref().is_none_or(|owner| {
+                        !owner.is_empty()
+                            && owner.len() <= 256
+                            && !owner.chars().any(char::is_control)
+                    })
             }
             Self::Workspace(value) => {
                 root && value.workspace_id == key.id && value.project_id == key.project_id
             }
             Self::Thread(value) => {
-                root && value.thread_id == key.id && value.project_id == key.project_id
+                root && value.thread_id == key.id
+                    && value.project_id == key.project_id
+                    && value
+                        .runtime_title_revision
+                        .is_none_or(|revision| revision > 0)
+                    && value.branch.as_ref().is_none_or(|branch| {
+                        value.owner_user_id.is_some()
+                            && branch.parent_thread_id != value.thread_id
+                            && crate::validate_identifier(&branch.parent_thread_id).is_ok()
+                            && crate::validate_identifier(&branch.source_task_id).is_ok()
+                            && crate::validate_identifier(&branch.source_run_id).is_ok()
+                    })
+                    && value.owner_user_id.as_ref().is_none_or(|owner| {
+                        !owner.is_empty()
+                            && owner.len() <= 256
+                            && !owner.chars().any(char::is_control)
+                    })
             }
             Self::ThreadMessage(value) => {
                 value.message_id == key.id
@@ -190,7 +212,13 @@ impl EntityValue {
             }
             Self::Admission(_) | Self::Renewal(_) | Self::AuthFlow(_) => root,
             Self::Invitation(value) => {
-                root && value.token_hash == key.id && value.project_id == key.project_id
+                root && value.token_hash == key.id
+                    && value.project_id == key.project_id
+                    && value.owner_user_id.as_ref().is_none_or(|owner| {
+                        !owner.is_empty()
+                            && owner.len() <= 256
+                            && !owner.chars().any(char::is_control)
+                    })
             }
             Self::DisplaySettings(_) => {
                 root && key.project_id == crate::IDENTITY_NAMESPACE && key.id == "display"
@@ -295,9 +323,13 @@ impl EntityValue {
         }
     }
 
-    /// Exact conversation owning a task.
+    /// Conversation parent used by task, message and branch collection filters.
     pub fn thread_id(&self) -> Option<&str> {
         match self {
+            Self::Thread(value) => value
+                .branch
+                .as_ref()
+                .map(|branch| branch.parent_thread_id.as_str()),
             Self::Task(value) => value.thread_id.as_deref(),
             Self::ThreadMessage(value) => Some(&value.thread_id),
             _ => None,
@@ -362,9 +394,21 @@ impl EntityValue {
             || value.snapshot.as_ref().is_some_and(|snapshot| snapshot.run.last_sequence > value.last_sequence))
     }
 
+    /// Accepted work or released output still requiring an execution owner.
+    pub fn unfinished(&self) -> bool {
+        matches!(self, Self::Task(task) if task.dispatch_error.is_none()
+            && task.snapshot.as_ref().is_none_or(|snapshot| snapshot.run.terminal.is_none()
+                || (!task.output_limited && task.last_sequence < snapshot.run.last_sequence)))
+    }
+
     /// User-visible lifecycle state used by collection filters.
     pub fn status(&self) -> &str {
         match self {
+            Self::Thread(value) => value
+                .branch
+                .as_ref()
+                .map_or("", |branch| branch.kind.as_str()),
+            Self::Node(value) => value.execution_kind.as_str(),
             Self::User(value) => {
                 if value.user.active {
                     "active"

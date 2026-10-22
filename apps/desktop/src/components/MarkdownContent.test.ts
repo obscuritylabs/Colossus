@@ -144,6 +144,38 @@ After
     expect(markup).toContain("&gt; &gt; &gt;");
   });
 
+  it("repairs incomplete streaming Markdown without changing completed literal content", () => {
+    const content = "A **streaming thought";
+    const streaming = renderToStaticMarkup(
+      createElement(MarkdownContent, { content, isStreaming: true }),
+    );
+    expect(streaming).toContain("<strong>streaming thought</strong>");
+    expect(render(content)).not.toContain("<strong>");
+    expect(
+      markdownContentPropsAreEqual(
+        { content, isStreaming: true },
+        { content, isStreaming: false },
+      ),
+    ).toBe(false);
+  });
+
+  it("applies the structure budget across separate streaming blocks", () => {
+    const content = "- x\n\n".repeat(600);
+    const markup = renderToStaticMarkup(
+      createElement(MarkdownContent, { content, isStreaming: true }),
+    );
+    expect(markup).toContain("Complex response shown as plain text");
+    expect(markup).not.toContain("<li>");
+  });
+
+  it("provides shared copy and wrap controls for a code block", () => {
+    const markup = render("```python\nprint('hello')\n```");
+    expect(markup).toContain('aria-label="Copy code"');
+    expect(markup).toContain('aria-label="Wrap code"');
+    expect(markup).toContain('dir="ltr"');
+    expect(markup).not.toContain("style=");
+  });
+
   it("memoizes unchanged response content and presentation", () => {
     expect(
       markdownContentPropsAreEqual(

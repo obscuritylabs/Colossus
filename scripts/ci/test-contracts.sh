@@ -115,6 +115,11 @@ expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
 sdk_required=false
+desktop_required=true' apps/control-plane-client/src/index.ts
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
 desktop_required=true' crates/colossus-darwin-process/src/lib.rs
 
 # Check each native browser owner independently; a Desktop file in the same

@@ -20,7 +20,8 @@ test("shared UI cannot import a host, transport, or runtime authority", () => {
     )) {
       const specifier = match[2];
       assert.ok(
-        specifier.startsWith("./") ||
+        specifier.startsWith("@shikijs/langs/") ||
+          specifier.startsWith("./") ||
           specifier.startsWith("../") ||
           [
             "react",
@@ -39,7 +40,10 @@ test("shared UI cannot import a host, transport, or runtime authority", () => {
             "class-variance-authority",
             "clsx",
             "tailwind-merge",
-            "react-markdown",
+            "streamdown",
+            "mermaid",
+            "@shikijs/core",
+            "@shikijs/engine-javascript",
             "rehype-sanitize",
             "remark-gfm",
             "recharts",

@@ -143,10 +143,10 @@ pub(super) async fn list(
     query: &EntityQuery,
 ) -> CloudResult<Vec<EntityRecord>> {
     let table = table(query.kind);
-    let parent = if query.kind == EntityKind::Task {
-        "thread_id"
-    } else {
-        "parent_id"
+    let parent = match query.kind {
+        EntityKind::Task => "thread_id",
+        EntityKind::Thread => "branch_parent_thread_id",
+        _ => "parent_id",
     };
     let node = match query.kind {
         EntityKind::Node => "id",
@@ -166,6 +166,10 @@ pub(super) async fn list(
         "CASE WHEN active THEN 'active' ELSE 'disabled' END"
     } else if query.kind == EntityKind::Membership {
         "CASE WHEN cardinality(permissions)>0 THEN 'active' ELSE 'removed' END"
+    } else if query.kind == EntityKind::Node {
+        "execution_kind"
+    } else if query.kind == EntityKind::Thread {
+        "COALESCE(branch_kind,'')"
     } else if query.kind == EntityKind::Task {
         "status"
     } else if query.kind == EntityKind::Command {
@@ -186,18 +190,31 @@ pub(super) async fn list(
     } else {
         "FALSE"
     };
-    let status_filter =
-        if query.kind == EntityKind::User && query.status.as_deref() == Some("administrator") {
-            "($6::TEXT='administrator' AND active AND is_admin)".to_owned()
-        } else if query.kind == EntityKind::Command {
-            match query.status.as_deref() {
-                Some("pending") => "($6::TEXT='pending' AND reply IS NULL)".to_owned(),
-                Some("reconciled") => "($6::TEXT='reconciled' AND reply IS NOT NULL)".to_owned(),
-                _ => "$6::TEXT IS NULL".to_owned(),
-            }
-        } else {
-            format!("($6 IS NULL OR {status}=$6)")
-        };
+    let status_filter = if query.kind == EntityKind::Thread
+        && query.status.as_deref() == Some("main")
+    {
+        "($6::TEXT='main' AND branch_kind IS DISTINCT FROM 'aside')".to_owned()
+    } else if query.kind == EntityKind::User && query.status.as_deref() == Some("administrator") {
+        "($6::TEXT='administrator' AND active AND is_admin)".to_owned()
+    } else if query.kind == EntityKind::Task && query.status.as_deref() == Some("unfinished") {
+        "($6::TEXT='unfinished' AND dispatch_error IS NULL AND (snapshot IS NULL OR snapshot#>'{run,terminal}'='null'::JSONB OR snapshot#>'{run,terminal}' IS NULL OR (NOT output_limited AND last_sequence<snapshot_last_sequence)))".into()
+    } else if query.kind == EntityKind::Task && query.status.as_deref() == Some("bound") {
+        "($6::TEXT='bound' AND run_id IS NOT NULL)".into()
+    } else if query.kind == EntityKind::Host && query.status.as_deref() == Some("connected") {
+        "($6::TEXT='connected' AND (NOT EXISTS(SELECT 1 FROM runtime_agents n WHERE n.project_id=source.project_id AND n.host_id=source.id AND NOT n.deleted) OR EXISTS(SELECT 1 FROM runtime_agents n WHERE n.project_id=source.project_id AND n.host_id=source.id AND NOT n.deleted AND n.execution_kind='connected')))".into()
+    } else if query.kind == EntityKind::Workspace && query.status.as_deref() == Some("connected") {
+        "($6::TEXT='connected' AND EXISTS(SELECT 1 FROM runtime_agents n WHERE n.project_id=source.project_id AND n.id=source.node_id AND NOT n.deleted AND n.execution_kind='connected'))".into()
+    } else if query.kind == EntityKind::Node && query.status.as_deref() == Some("hosted_pending") {
+        "($6::TEXT='hosted_pending' AND source.execution_kind='hosted' AND NOT source.revoked AND (EXISTS(SELECT 1 FROM tasks pending_task WHERE pending_task.project_id=source.project_id AND pending_task.node_id=source.id AND NOT pending_task.deleted AND pending_task.dispatch_error IS NULL AND (pending_task.snapshot IS NULL OR pending_task.snapshot#>'{run,terminal}'='null'::JSONB OR pending_task.snapshot#>'{run,terminal}' IS NULL OR (NOT pending_task.output_limited AND pending_task.last_sequence<pending_task.snapshot_last_sequence))) OR EXISTS(SELECT 1 FROM commands pending_command WHERE pending_command.project_id=source.project_id AND pending_command.node_id=source.id AND NOT pending_command.deleted AND pending_command.reply IS NULL)))".into()
+    } else if query.kind == EntityKind::Command {
+        match query.status.as_deref() {
+            Some("pending") => "($6::TEXT='pending' AND reply IS NULL)".to_owned(),
+            Some("reconciled") => "($6::TEXT='reconciled' AND reply IS NOT NULL)".to_owned(),
+            _ => "$6::TEXT IS NULL".to_owned(),
+        }
+    } else {
+        format!("($6 IS NULL OR {status}=$6)")
+    };
     let position = decode_page_cursor(query)?;
     let after_id = if matches!(query.order, EntityOrder::IdAsc | EntityOrder::IdDesc) {
         query.after.as_deref()
@@ -248,8 +265,38 @@ pub(super) async fn list(
         EntityKind::Thread => "title",
         _ => "''::TEXT",
     };
+    let node_visibility = |alias: &str| {
+        format!(
+            "NOT EXISTS(SELECT 1 FROM runtime_agents visible_node WHERE visible_node.project_id={alias}.project_id AND visible_node.id={alias}.node_id AND NOT visible_node.deleted AND visible_node.owner_user_id IS NOT NULL AND visible_node.owner_user_id<>$12)"
+        )
+    };
+    let visible_thread = |id: &str| {
+        let node = node_visibility("visible_thread");
+        format!(
+            "EXISTS(SELECT 1 FROM conversation_threads visible_thread WHERE visible_thread.project_id=source.project_id AND visible_thread.id={id} AND NOT visible_thread.deleted AND (visible_thread.owner_user_id IS NULL OR visible_thread.owner_user_id=$12) AND {node})"
+        )
+    };
+    let visible_task = |id: &str| {
+        let thread = "EXISTS(SELECT 1 FROM conversation_threads visible_thread WHERE visible_thread.project_id=visible_task.project_id AND visible_thread.id=visible_task.thread_id AND NOT visible_thread.deleted AND (visible_thread.owner_user_id IS NULL OR visible_thread.owner_user_id=$12))";
+        let node = node_visibility("visible_task");
+        format!(
+            "EXISTS(SELECT 1 FROM tasks visible_task WHERE visible_task.project_id=source.project_id AND visible_task.id={id} AND NOT visible_task.deleted AND (visible_task.thread_id IS NULL OR {thread}) AND {node})"
+        )
+    };
+    let visibility = match query.kind {
+        EntityKind::Node => "(source.owner_user_id IS NULL OR source.owner_user_id=$12)".into(),
+        EntityKind::Host => "(NOT EXISTS(SELECT 1 FROM runtime_agents host_node WHERE host_node.project_id=source.project_id AND host_node.host_id=source.id AND NOT host_node.deleted) OR EXISTS(SELECT 1 FROM runtime_agents host_node WHERE host_node.project_id=source.project_id AND host_node.host_id=source.id AND NOT host_node.deleted AND host_node.execution_kind='connected' AND (host_node.owner_user_id IS NULL OR host_node.owner_user_id=$12)))".into(),
+        EntityKind::Workspace => node_visibility("source"),
+        EntityKind::Thread => format!("((source.owner_user_id IS NULL OR source.owner_user_id=$12) AND {})", node_visibility("source")),
+        EntityKind::Task => format!("((source.thread_id IS NULL OR {}) AND {})", visible_thread("source.thread_id"), node_visibility("source")),
+        EntityKind::ThreadMessage => visible_thread("source.parent_id"),
+        EntityKind::SessionMapping => format!("({} AND {})", visible_thread("source.thread_id"), node_visibility("source")),
+        EntityKind::Command | EntityKind::Run | EntityKind::NodeTask => format!("({} AND {})", visible_task("source.task_id"), node_visibility("source")),
+        EntityKind::Admission => "FALSE".into(),
+        _ => "TRUE".into(),
+    };
     let page = format!(
-        "SELECT source.*,{page_time} AS page_time,ROW_NUMBER() OVER (ORDER BY {order}) AS page_ordinal FROM {table} source WHERE project_id=$1 AND ($2::TEXT IS NULL OR {parent}=$2) AND ($3::TEXT IS NULL OR {comparison}) AND NOT deleted AND ($4::TEXT IS NULL OR {node}=$4) AND ($5::TEXT IS NULL OR strpos(lower({search}),lower($5))>0) AND {status_filter} AND ($7 IS NULL OR {archived}=$7) AND ($11::TEXT IS NULL OR {host}=$11) ORDER BY {order} LIMIT $8"
+        "SELECT source.*,{page_time} AS page_time,ROW_NUMBER() OVER (ORDER BY {order}) AS page_ordinal FROM {table} source WHERE project_id=$1 AND ($2::TEXT IS NULL OR {parent}=$2) AND ($3::TEXT IS NULL OR {comparison}) AND NOT deleted AND ($4::TEXT IS NULL OR {node}=$4) AND ($5::TEXT IS NULL OR strpos(lower({search}),lower($5))>0) AND {status_filter} AND ($7 IS NULL OR {archived}=$7) AND ($11::TEXT IS NULL OR {host}=$11) AND ($12::TEXT IS NULL OR {visibility}) ORDER BY {order} LIMIT $8"
     );
     let selection = rows::selection(query.kind, "r", "r.page_time");
     let joins = rows::joins(query.kind, "r");
@@ -266,7 +313,8 @@ pub(super) async fn list(
         .bind::<BigInt, _>(query.limit.min(100) as i64)
         .bind::<Nullable<Text>, _>(after_time.map(str::to_owned))
         .bind::<Nullable<Text>, _>(after_parent.map(str::to_owned))
-        .bind::<Nullable<Text>, _>(query.host_id.clone());
+        .bind::<Nullable<Text>, _>(query.host_id.clone())
+        .bind::<Nullable<Text>, _>(query.visible_to.clone());
     let rows = rows::load(conn, query.kind, statement, None)
         .await
         .map_err(CloudError::from)?;

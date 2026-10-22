@@ -16,7 +16,8 @@ import {
 } from "./control-api";
 import type { Thread } from "./api";
 import { RouteLink } from "./navigation";
-import { globalHref, threadHref } from "./routes";
+import { globalHref } from "./routes";
+import { conversationHref } from "./conversation-route";
 const ActivityLineChart = lazy(() =>
   import("@colossus/ui/charts").then((module) => ({
     default: module.ActivityLineChart,
@@ -245,7 +246,7 @@ export function Home({
                 {data.recent_threads.map(({ thread, project_name }) => (
                   <li key={thread.thread_id}>
                     <RouteLink
-                      href={threadHref(thread.project_id, thread.thread_id)}
+                      href={conversationHref(thread)}
                       onNavigate={() => onOpen(thread)}
                     >
                       <span>

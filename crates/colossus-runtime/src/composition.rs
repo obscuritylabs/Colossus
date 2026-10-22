@@ -244,6 +244,23 @@ impl Runtime {
         provider_credentials: Arc<dyn CredentialResolver>,
         codex_auth: Option<CodexAuthStore>,
     ) -> Result<Self, RuntimeError> {
+        if options.controlled_chat
+            && codex_auth.is_none()
+            && config
+                .providers
+                .profiles
+                .values()
+                .any(|profile| profile.kind == ProviderKind::OpenAiCodex)
+        {
+            return Err(RuntimeError::Config(
+                "controlled chat: Codex requires explicit host-bound account custody".into(),
+            ));
+        }
+        let controlled_config = options
+            .controlled_chat
+            .then(|| crate::controlled_chat::prepare_config(config, &options))
+            .transpose()?;
+        let config = controlled_config.as_ref().unwrap_or(config);
         validate_storage_config(&config.storage)?;
         config.browser.validate()?;
         config.computer.validate()?;
@@ -272,8 +289,9 @@ impl Runtime {
         let mut startup_observation = StartupObservation::new(startup_span.clone());
         let colossus_home = options.colossus_home.clone();
         let colossus_home_root = options.colossus_home_root.clone();
-        let automatic_agent_instructions = options.automatic_agent_instructions;
-        let model_network_tools = options.model_network_tools;
+        let automatic_agent_instructions =
+            options.automatic_agent_instructions && !options.controlled_chat;
+        let model_network_tools = options.model_network_tools && !options.controlled_chat;
         let browser_host = options.browser_host.clone();
         let computer_host = options.computer_host.clone();
         let computer_artifacts = options.computer_artifacts.clone();
@@ -375,9 +393,15 @@ impl Runtime {
         workspace_identity.revalidate()?;
         let development_sandbox = derive_development_sandbox(config, &workspace)?;
         let storage_path = config.resolved_storage_path_at(&workspace)?;
-        let repository_id = repository_identity(&workspace);
+        let repository_id = options.shared_storage.as_ref().map_or_else(
+            || repository_identity(&workspace),
+            |shared| shared.identity.clone(),
+        );
         let storage =
             observe_startup_phase("colossus.runtime.storage.open", "storage_open", || {
+                if let Some(shared) = &options.shared_storage {
+                    return shared.compose();
+                }
                 compose_storage(
                     config,
                     &storage_path,
@@ -598,6 +622,7 @@ impl Runtime {
             plugin_store: plugin_store.clone(),
             tls_roots: &tls_roots,
             model_network_tools,
+            controlled_chat: options.controlled_chat,
             interactive: user_prompts.is_some(),
             browser_capabilities: browser_capabilities.as_ref(),
             computer_available: computer.is_some(),
@@ -709,7 +734,8 @@ impl Runtime {
                         }
                     }
                     KeyConfig::Platform { .. } => mcp_executor.with_oauth_vault(
-                        crate::credential_vault::platform_oauth_vault(
+                        crate::credential_vault::oauth_vault_for_host(
+                            options.oauth_credential_vault.as_ref(),
                             colossus_home_root.as_ref(),
                             &storage_path,
                         )?,
@@ -732,7 +758,8 @@ impl Runtime {
                     }
                 },
                 McpOAuthCredentialStoreKind::Platform => mcp_executor.with_oauth_vault(
-                    crate::credential_vault::platform_oauth_vault(
+                    crate::credential_vault::oauth_vault_for_host(
+                        options.oauth_credential_vault.as_ref(),
                         colossus_home_root.as_ref(),
                         &storage_path,
                     )?,
@@ -806,14 +833,19 @@ impl Runtime {
             sandbox_boundary_mode,
             sandbox_boundary_acknowledged,
         ));
-        let gateway = Arc::new(EffectGateway::new(
+        let gateway = EffectGateway::new(
             Arc::clone(&journal),
             Arc::clone(&policy),
             approvals,
             SafetyKernel::new(known_capabilities)
                 .with_sandbox_boundary_gate(Arc::clone(&sandbox_boundary_gate)),
             permit_key,
-        ));
+        );
+        let gateway = Arc::new(if let Some(shared) = &options.shared_storage {
+            gateway.with_execution_fence(shared.fence.clone())
+        } else {
+            gateway
+        });
         let search_provider: Arc<dyn SearchProvider> = Arc::new(GatewaySearchProvider {
             gateway: Arc::clone(&gateway),
             searches,
@@ -823,6 +855,13 @@ impl Runtime {
             Arc::clone(&journal),
             Arc::clone(&projection_store),
         ));
+        if options.shared_storage.is_some() && config.memory.index_enabled {
+            // The lexical index is a disposable host-local cache. A successor may
+            // have an empty cache while SQL retains its predecessor's cursor.
+            // Replay this idempotent consumer under the new fenced owner; memory
+            // lifecycle truth remains in the shared journal.
+            external_work.reset("memory.tantivy-v1")?;
+        }
         let audit_exporter: Option<Arc<dyn AuditExporter>> = match &config.audit.exporter {
             AuditExporterConfig::Disabled => None,
             AuditExporterConfig::Directory { path } => {
