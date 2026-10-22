@@ -10,6 +10,19 @@ include breaking changes while the public API is still settling.
 
 ## [0.11.10] - 2026-10-22
 
+### Highlights
+
+- Hosted Web adds personal chats, separate agent management, private provider settings,
+  forks and side chats, with durable recovery across shared deployments.
+- Web and Desktop share compact navigation, aligned chat workspaces, resizable tabbed
+  inspectors and cleaner plan, activity, snapshot, source and resource views.
+- Web, Desktop and VS Code share streaming Markdown, syntax highlighting, code and
+  message copying, reported run usage and offline Mermaid previews.
+- Session titles update consistently across hosts and survive recovery without
+  replacing manually chosen names.
+- Windows Desktop reviews client-certificate choices inside the application while
+  keeping private keys in native custody.
+
 <!-- colossus:release-notes base=v0.11.8 -->
 
 ### Merged changes
@@ -80,6 +93,7 @@ include breaking changes while the public API is still settling.
 - repair browser deadlines and Windows desktop indexing ([#309](https://github.com/obscuritylabs/Colossus/pull/309))
 - **desktop:** keep PKI certificate selection inside the app ([#311](https://github.com/obscuritylabs/Colossus/pull/311))
 - **vscode:** retain interactive inspector Markdown ([29f90da](https://github.com/obscuritylabs/Colossus/commit/29f90daecbe5cb64c4c461a8d3640bf9ff70f13c))
+- **ui:** align clean installs and packaged avatar checks ([c5b3ba6](https://github.com/obscuritylabs/Colossus/commit/c5b3ba6bbd9d96038f8cadef4f88353130d7e59d))
 
 #### Security
 
@@ -123,8 +137,9 @@ include breaking changes while the public API is still settling.
 - **web:** wait for restored editors and navigation ([eef3c4e](https://github.com/obscuritylabs/Colossus/commit/eef3c4ee6ff9ccd73cefb3ffee386ade374bb93d))
 - **desktop:** lock the shared cloud executor ([1dc8796](https://github.com/obscuritylabs/Colossus/commit/1dc8796ffbe2a8012e0286206b016ed1a94af8ca))
 - **release:** prepare 0.11.10 stable history ([048ecc1](https://github.com/obscuritylabs/Colossus/commit/048ecc1a26ab133b6e0030e9a6498a630b1d34e9))
+- **release:** include PKI and inspector fixes in 0.11.10 ([9f2579a](https://github.com/obscuritylabs/Colossus/commit/9f2579a5a8f1219f0d3aa7d2439260f4ae3da1da))
 
-**Source:** [6cef0af](https://github.com/obscuritylabs/Colossus/commit/6cef0af6c5385d7688748c4136cb98a4c41b16f5)
+**Source:** [c5b3ba6](https://github.com/obscuritylabs/Colossus/commit/c5b3ba6bbd9d96038f8cadef4f88353130d7e59d)
 
 **Full changelog:** [v0.11.8...v0.11.10](https://github.com/obscuritylabs/Colossus/compare/v0.11.8...v0.11.10)
 
