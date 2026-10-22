@@ -78,6 +78,8 @@ include breaking changes while the public API is still settling.
 - **desktop:** resolve native validation and terminal capture races ([7e16b59](https://github.com/obscuritylabs/Colossus/commit/7e16b59af3205ade1cc280054ee66057b1e960fd))
 - **hosted:** retain runtimes during shared MCP sign-in ([2f261b9](https://github.com/obscuritylabs/Colossus/commit/2f261b985cd3b7e7b93e2ce1e5840c8cf484e847))
 - repair browser deadlines and Windows desktop indexing ([#309](https://github.com/obscuritylabs/Colossus/pull/309))
+- **desktop:** keep PKI certificate selection inside the app ([#311](https://github.com/obscuritylabs/Colossus/pull/311))
+- **vscode:** retain interactive inspector Markdown ([29f90da](https://github.com/obscuritylabs/Colossus/commit/29f90daecbe5cb64c4c461a8d3640bf9ff70f13c))
 
 #### Security
 
@@ -120,8 +122,9 @@ include breaking changes while the public API is still settling.
 - fence viewport pulses before browser session replacement ([5b0b0e0](https://github.com/obscuritylabs/Colossus/commit/5b0b0e095de45efd0e9e4ab47716c2ff811fae79))
 - **web:** wait for restored editors and navigation ([eef3c4e](https://github.com/obscuritylabs/Colossus/commit/eef3c4ee6ff9ccd73cefb3ffee386ade374bb93d))
 - **desktop:** lock the shared cloud executor ([1dc8796](https://github.com/obscuritylabs/Colossus/commit/1dc8796ffbe2a8012e0286206b016ed1a94af8ca))
+- **release:** prepare 0.11.10 stable history ([048ecc1](https://github.com/obscuritylabs/Colossus/commit/048ecc1a26ab133b6e0030e9a6498a630b1d34e9))
 
-**Source:** [1687beb](https://github.com/obscuritylabs/Colossus/commit/1687beb049a45e4da8a411b886dca51807878791)
+**Source:** [6cef0af](https://github.com/obscuritylabs/Colossus/commit/6cef0af6c5385d7688748c4136cb98a4c41b16f5)
 
 **Full changelog:** [v0.11.8...v0.11.10](https://github.com/obscuritylabs/Colossus/compare/v0.11.8...v0.11.10)
 
