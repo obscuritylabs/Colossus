@@ -1,14 +1,12 @@
 //! Native-only review of one expiring Chromium client identity request.
 
 use colossus_native_browser::pki::IdentityRequest;
-use tauri::{AppHandle, Manager as _, Webview, Window};
-use tauri_plugin_dialog::{
-    DialogExt as _, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
-};
+use tauri::{AppHandle, Webview};
 
 use super::{CertificateRequest, CertificateStatusDto};
 use crate::{
     browser::{commands::require_controller, manager::error},
+    client_identity_review::{self, ClientIdentityDisplay, ClientIdentityDisplayCandidate},
     dto::CommandErrorDto,
     state::AppState,
 };
@@ -55,13 +53,9 @@ pub(super) async fn review(
         surface,
         request: native_request,
     };
-    state.browser.hide_all();
-    let parent = app
-        .get_window("main")
-        .ok_or_else(|| error("The Desktop window has closed."))?;
     let fingerprint = prompt(
         &app,
-        &parent,
+        &review.surface,
         &review.request,
         caller,
         state,
@@ -70,7 +64,7 @@ pub(super) async fn review(
     )
     .await?;
     // No ownership locks remain held while the operator considers a native
-    // dialog. At dispatch, prevent workspace mutation and shutdown/commands,
+    // review. At dispatch, prevent workspace mutation and shutdown/commands,
     // then recheck the original controller generation and exact native request.
     let _operation = state.browser.operation.lock().await;
     let _selection = state.browser_selection().await;
@@ -97,41 +91,60 @@ pub(super) async fn review(
 
 async fn prompt(
     app: &AppHandle,
-    parent: &Window,
+    surface: &colossus_native_browser::chromium::Surface,
     native_request: &IdentityRequest,
     caller: &Webview,
     state: &AppState,
     generation: u64,
     scope: &str,
 ) -> Result<Option<String>, CommandErrorDto> {
-    for (index, candidate) in native_request.candidates.iter().enumerate() {
-        require_controller(caller)?;
-        if state.browser.validate(generation)? != scope || native_request.is_expired() {
-            return Err(error(
-                "The native identity request expired or its workspace changed.",
-            ));
-        }
-        let (sender, receive) = tokio::sync::oneshot::channel();
-        app.dialog().message(format!("Use this native client identity for this exact HTTPS origin?\n\nOrigin: {}\nCertificate DER SHA-256: {}\nCandidate {} of {}\n\nThe operating system keeps the private key. Chromium may reuse this choice for this exact HTTPS origin within this temporary browser session. Close all browser tabs to end the session. This does not grant agent authority. Select Next identity to review another candidate, or Cancel to send no identity. Native key-use acceptance for this preview is pending.", native_request.origin, candidate.fingerprint_sha256, index + 1, native_request.candidates.len()))
-            .parent(&parent).title("Review browser client identity (preview)")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::YesNoCancelCustom("Use identity".into(), "Next identity".into(), "Cancel".into()))
-            .show_with_result(move |result| { let _ = sender.send(result); });
-        let response = tokio::time::timeout(std::time::Duration::from_mins(2), receive)
-            .await
-            .map_err(|_| error("The native identity request expired."))?
-            .map_err(|_| error("The native identity dialog has closed."))?;
-        match response {
-            MessageDialogResult::Yes => {
-                return Ok(Some(candidate.fingerprint_sha256.clone()));
-            }
-            MessageDialogResult::Custom(label) if label == "Use identity" => {
-                return Ok(Some(candidate.fingerprint_sha256.clone()));
-            }
-            MessageDialogResult::No => {}
-            MessageDialogResult::Custom(label) if label == "Next identity" => {}
-            _ => return Ok(None),
-        }
+    require_controller(caller)?;
+    if state.browser.validate(generation)? != scope || native_request.is_expired() {
+        return Err(error(
+            "The native identity request expired or its workspace changed.",
+        ));
     }
-    Ok(None)
+    if let [candidate] = native_request.candidates.as_slice() {
+        return Ok(Some(candidate.fingerprint_sha256.clone()));
+    }
+    // The retained native Surface owns this legacy handshake. Its UI needs the
+    // native selection epoch, not a connected Runtime client's TargetHandle.
+    let epoch = *state.subscribe_selection().borrow();
+    if !state.selection_is_current(scope, epoch) {
+        return Err(error(
+            "The selected workspace changed before identity review.",
+        ));
+    }
+    let display = ClientIdentityDisplay {
+        origin: native_request.origin.clone(),
+        candidates: native_request
+            .candidates
+            .iter()
+            .map(|candidate| ClientIdentityDisplayCandidate {
+                label: candidate.label.clone(),
+                fingerprint_sha256: candidate.fingerprint_sha256.clone(),
+            })
+            .collect(),
+        remaining_ms: native_request.remaining_ms(),
+    };
+    let invalidated = async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            if state.browser.validate(generation).is_err()
+                || native_request.is_expired()
+                || !surface
+                    .pending_client_identity()
+                    .ok()
+                    .flatten()
+                    .is_some_and(|current| native_request.same_request(&current))
+            {
+                return;
+            }
+        }
+    };
+    tokio::select! {
+        biased;
+        () = invalidated => Err(error("The native identity request is no longer available.")),
+        result = client_identity_review::show(app, scope, epoch, display) => result,
+    }
 }

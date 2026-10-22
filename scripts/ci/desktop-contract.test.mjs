@@ -26,6 +26,66 @@ function read(relative) {
   return readFileSync(join(repository, relative), "utf8");
 }
 
+test("certificate review authority belongs only to its exact trusted child", () => {
+  const child = JSON.parse(
+    read("apps/desktop/src-tauri/capabilities/client-identity-review.json"),
+  );
+  const main = JSON.parse(
+    read("apps/desktop/src-tauri/capabilities/main-chat.json"),
+  );
+  const terminal = JSON.parse(
+    read("apps/desktop/src-tauri/capabilities/terminal-pty.json"),
+  );
+  const permissions = [
+    "allow-client-identity-review-context",
+    "allow-finish-client-identity-review",
+  ];
+  assert.deepEqual(child.webviews, ["client-identity-review"]);
+  assert.equal(child.windows, undefined);
+  assert.equal(child.remote, undefined);
+  assert.equal(child.local, true);
+  assert.deepEqual(child.permissions, permissions);
+  assert.ok(main.permissions.includes("allow-sync-client-identity-appearance"));
+  for (const permission of permissions) {
+    assert.ok(!main.permissions.includes(permission));
+    assert.ok(!terminal.permissions.includes(permission));
+  }
+  assert.ok(
+    !child.permissions.includes("allow-sync-client-identity-appearance"),
+  );
+  for (const path of [
+    "apps/desktop/src-tauri/src/lib.rs",
+    "apps/desktop/src-tauri/src/browser/acceptance.rs",
+    "apps/desktop/src-tauri/src/browser/acceptance/client_identity.rs",
+  ]) {
+    const composition = read(path);
+    assert.match(composition, /ClientIdentityReviewState::default\(\)/u, path);
+    assert.match(composition, /TerminalPaneState::default\(\)/u, path);
+    assert.match(composition, /client_identity_review::protocol::SCHEME/u, path);
+    assert.match(composition, /client_identity_review::protocol::respond/u, path);
+    assert.match(
+      composition,
+      /client_identity_review::client_identity_review_context/u,
+      path,
+    );
+    assert.match(
+      composition,
+      /client_identity_review::finish_client_identity_review/u,
+      path,
+    );
+    assert.match(
+      composition,
+      /client_identity_review::sync_client_identity_appearance/u,
+      path,
+    );
+    assert.match(composition, /client_identity_review::handle_window_event/u, path);
+  }
+  const acceptance = read("apps/desktop/src-tauri/src/browser/acceptance.rs");
+  assert.match(acceptance, /client_identity_review::controller_loading/u);
+  assert.match(acceptance, /super::handle_window_event\(window, event\)/u);
+  assert.match(acceptance, /run_lifecycle\(application, &completed\)/u);
+});
+
 test(
   "native computer diagnostics retain bounded stdout and stderr failure tails",
   { skip: process.platform !== "win32" },
@@ -147,6 +207,7 @@ test("development Tauri configuration uses prepared native executables", () => {
     "main-chat",
     "terminal-pty",
     "command-approval",
+    "client-identity-review",
   ]);
   assert.deepEqual(config.plugins.updater, {
     endpoints: [],

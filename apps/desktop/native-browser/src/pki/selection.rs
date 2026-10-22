@@ -27,6 +27,8 @@ pub struct IdentityCandidate {
     not_after: i64,
     /// SHA-256 of the exact public DER certificate, never its private key.
     pub fingerprint_sha256: String,
+    /// Bounded plain-text subject label derived from the public certificate.
+    pub label: String,
 }
 
 /// One exact native handshake request. Closing/revoking the tab invalidates it.
@@ -71,6 +73,8 @@ impl IdentityRequest {
                     not_before,
                     not_after,
                     fingerprint_sha256,
+                    label: colossus_native_browser_pki::identity_label(der)
+                        .map_err(|_| PkiError::InvalidIdentity)?,
                 });
             }
         }
@@ -86,10 +90,30 @@ impl IdentityRequest {
         })
     }
 
-    /// Native dialogs must dismiss expired reviews without selecting a key.
+    /// Native review surfaces must dismiss expired requests without selecting a key.
     #[must_use]
     pub fn is_expired(&self) -> bool {
         Instant::now() >= self.expires_at
+    }
+
+    /// Remaining original review lifetime; displaying a review never renews it.
+    #[must_use]
+    pub fn remaining_ms(&self) -> u32 {
+        u32::try_from(
+            self.expires_at
+                .saturating_duration_since(Instant::now())
+                .as_millis(),
+        )
+        .unwrap_or(u32::MAX)
+    }
+
+    /// Compare retained native requests without exposing their native IDs to a renderer.
+    #[must_use]
+    pub fn same_request(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.epoch == other.epoch
+            && self.origin == other.origin
+            && self.candidates == other.candidates
     }
 
     pub(crate) fn candidate_index(&self, reviewed_fingerprint: &str) -> Option<i32> {

@@ -194,6 +194,8 @@ impl PresentationHost for NativeRelay {
             }
             // Handoff is exclusively Runtime's gateway operation over its retained native client.
             PresentationCommand::FenceHuman { .. }
+            | PresentationCommand::PendingClientIdentity { .. }
+            | PresentationCommand::SelectClientIdentity { .. }
             | PresentationCommand::Ready
             | PresentationCommand::Poll { .. } => Err(PresentationError::Invalid),
             command => {

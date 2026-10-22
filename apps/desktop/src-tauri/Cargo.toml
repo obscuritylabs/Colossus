@@ -19,6 +19,7 @@ browser-preview = []
 windows-browser-functional-preview = ["browser-preview", "colossus-native-browser/windows-browser-functional-preview", "tauri/custom-protocol"]
 embedded-chromium-preview = ["browser-preview", "colossus-native-browser/cef-preview"]
 browser-test-bridge = ["browser-preview", "colossus-native-browser/native-test-driver"]
+client-identity-test-bridge = ["windows-browser-functional-preview"]
 # Separate-host Debug lane: link only the native pixel adapter; never bootstrap
 # an in-process CEF guest or fall back to a system webview for this lane.
 # This standalone example has no Vite server. Embed the built renderer at compile
@@ -40,6 +41,10 @@ required-features = ["approval-test-bridge"]
 [[example]]
 name = "browser-acceptance"
 required-features = ["browser-test-bridge"]
+
+[[example]]
+name = "client-identity-review-acceptance"
+required-features = ["client-identity-test-bridge"]
 
 [profile.release]
 lto = "thin"

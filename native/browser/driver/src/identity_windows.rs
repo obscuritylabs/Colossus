@@ -1,19 +1,20 @@
-//! One expiring native review of Chromium's exact pending client-key request.
+//! One expiring native request; only the separate Desktop owner may choose a key.
 //! Public certificate metadata only; Chromium performs all Windows private-key use.
-mod dialog;
 #[cfg(test)]
 mod tests;
 
+use colossus_browser_presentation::{
+    ClientIdentityCandidate, ClientIdentityChallenge, ClientIdentityKey, ClientIdentityPolicy,
+    PresentationError,
+};
 use colossus_contracts::BrowserOrigin;
-use colossus_native_browser_pki::{fingerprint, identity_validity};
+use colossus_native_browser_pki::{fingerprint, identity_label, identity_validity};
 use colossus_ports::BrowserDriverControl;
 use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
-    thread::JoinHandle,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -23,8 +24,18 @@ const TIMEOUT: Duration = Duration::from_secs(45);
 pub(super) struct Candidate {
     index: i32,
     fingerprint: String,
+    label: String,
     not_before: i64,
     not_after: i64,
+}
+impl Candidate {
+    fn current(&self, now: i64) -> bool {
+        self.not_before <= now && now < self.not_after
+    }
+}
+
+fn now() -> Option<i64> {
+    i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs()).ok()
 }
 
 #[derive(Clone)]
@@ -45,31 +56,59 @@ impl Request {
             || self.control.is_cancelled()
             || Instant::now() >= self.deadline
     }
-    fn selected(&self, fingerprint: Option<&str>) -> i32 {
-        if self.cancelled() {
-            return -1;
+    pub fn key(&self) -> ClientIdentityKey {
+        ClientIdentityKey {
+            tab: self.tab,
+            generation: self.generation,
+            request_id: self.request_id,
+            control_generation: self.control_generation,
         }
-        let Some(now) = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .ok()
-            .and_then(|value| i64::try_from(value.as_secs()).ok())
-        else {
+    }
+    fn selected(&self, fingerprint: Option<&str>) -> i32 {
+        let Some(now) = now().filter(|_| !self.cancelled()) else {
             return -1;
         };
         self.candidates
             .iter()
             .find(|candidate| {
-                Some(candidate.fingerprint.as_str()) == fingerprint
-                    && candidate.not_before <= now
-                    && now < candidate.not_after
+                Some(candidate.fingerprint.as_str()) == fingerprint && candidate.current(now)
             })
             .map_or(-1, |candidate| candidate.index)
     }
+    fn challenge(&self) -> Option<ClientIdentityChallenge> {
+        let now = now().filter(|_| !self.cancelled())?;
+        let remaining_ms = u32::try_from(
+            self.deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis(),
+        )
+        .ok()?
+        .max(1);
+        Some(ClientIdentityChallenge {
+            key: self.key(),
+            origin: self.origin.clone(),
+            candidates: self
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.current(now))
+                .map(|candidate| ClientIdentityCandidate {
+                    fingerprint_sha256: candidate.fingerprint.clone(),
+                    label: candidate.label.clone(),
+                })
+                .collect(),
+            remaining_ms,
+        })
+    }
 }
 
+enum Decision {
+    Pending,
+    Select(String),
+    Decline,
+}
 struct Pending {
     request: Request,
-    result: mpsc::Receiver<Option<String>>,
+    decision: Decision,
 }
 
 #[derive(Default)]
@@ -77,12 +116,14 @@ pub(crate) struct Review {
     enabled: bool,
     operation: Option<(u64, BrowserDriverControl)>,
     pending: Option<Pending>,
-    worker: Option<JoinHandle<()>>,
     attempts: u8,
 }
 impl Review {
     pub fn enable(&mut self, enabled: bool) {
         self.enabled = enabled;
+        if !enabled {
+            self.cancel(None);
+        }
     }
     pub fn operation(&mut self, generation: u64, control: BrowserDriverControl) {
         self.cancel(None);
@@ -106,12 +147,8 @@ impl Review {
             pending.request.cancel.store(true, Ordering::Release);
         }
     }
-    fn retire_worker(&mut self) {
-        if self.worker.as_ref().is_some_and(JoinHandle::is_finished)
-            && let Some(worker) = self.worker.take()
-        {
-            let _ = worker.join();
-        }
+    pub fn request(&self) -> Option<Request> {
+        self.pending.as_ref().map(|pending| pending.request.clone())
     }
     pub fn start(
         &mut self,
@@ -121,10 +158,8 @@ impl Review {
         origin: BrowserOrigin,
         certificates: &[&[u8]],
     ) -> bool {
-        self.retire_worker();
         if !self.enabled
             || self.pending.is_some()
-            || self.worker.is_some()
             || self.attempts >= 8
             || tab == 0
             || generation == 0
@@ -144,9 +179,6 @@ impl Review {
         }
         let mut candidates = Vec::<Candidate>::new();
         for (index, der) in certificates.iter().enumerate() {
-            if der.is_empty() || der.len() > 65_536 {
-                return false;
-            }
             let Ok(validity) = identity_validity(der) else {
                 return false;
             };
@@ -158,9 +190,13 @@ impl Review {
                 {
                     return false;
                 }
+                let Ok(label) = identity_label(der) else {
+                    return false;
+                };
                 candidates.push(Candidate {
                     index: index as i32,
                     fingerprint,
+                    label,
                     not_before,
                     not_after,
                 });
@@ -169,63 +205,92 @@ impl Review {
         if candidates.is_empty() {
             return false;
         }
-        let request = Request {
-            tab,
-            generation,
-            request_id,
-            control_generation,
-            origin,
-            candidates,
-            deadline: Instant::now() + TIMEOUT,
-            cancel: Arc::new(AtomicBool::new(false)),
-            control,
-        };
-        let prompt = request.clone();
-        let (send, result) = mpsc::sync_channel(1);
-        let Ok(worker) = std::thread::Builder::new()
-            .name("colossus-browser-identity-review".into())
-            .spawn(move || {
-                let _ = send.send(dialog::prompt(&prompt));
-            })
-        else {
-            return false;
-        };
-        self.worker = Some(worker);
         self.attempts += 1;
-        self.pending = Some(Pending { request, result });
+        self.pending = Some(Pending {
+            request: Request {
+                tab,
+                generation,
+                request_id,
+                control_generation,
+                origin,
+                candidates,
+                deadline: Instant::now() + TIMEOUT,
+                cancel: Arc::new(AtomicBool::new(false)),
+                control,
+            },
+            decision: Decision::Pending,
+        });
         true
     }
-    /// Move a decision once. The owning CEF thread must recheck native authority.
+    /// Explicit policy is applied only to this pending request, never future requests.
+    pub fn pending(
+        &mut self,
+        policy: ClientIdentityPolicy,
+    ) -> Result<Option<ClientIdentityChallenge>, PresentationError> {
+        let Some(pending) = self.pending.as_mut() else {
+            return Ok(None);
+        };
+        if !matches!(pending.decision, Decision::Pending) {
+            return Ok(None);
+        }
+        let Some(challenge) = pending.request.challenge() else {
+            return Ok(None);
+        };
+        if challenge.candidates.is_empty() {
+            pending.decision = Decision::Decline;
+            return Ok(None);
+        }
+        challenge.validate()?;
+        if policy == ClientIdentityPolicy::AutomaticIfUnique && challenge.candidates.len() == 1 {
+            pending.decision = Decision::Select(challenge.candidates[0].fingerprint_sha256.clone());
+            return Ok(None);
+        }
+        Ok(Some(challenge))
+    }
+    /// Queue one native Desktop decision. Consumption still belongs to the CEF thread.
+    pub fn select(
+        &mut self,
+        key: ClientIdentityKey,
+        fingerprint: Option<String>,
+    ) -> Result<(), PresentationError> {
+        key.validate()?;
+        let pending = self
+            .pending
+            .as_mut()
+            .filter(|pending| {
+                pending.request.key() == key
+                    && !pending.request.cancelled()
+                    && matches!(pending.decision, Decision::Pending)
+            })
+            .ok_or(PresentationError::Stale)?;
+        if let Some(fingerprint) = fingerprint {
+            if pending.request.selected(Some(&fingerprint)) < 0 {
+                return Err(PresentationError::Invalid);
+            }
+            pending.decision = Decision::Select(fingerprint);
+        } else {
+            pending.decision = Decision::Decline;
+        }
+        Ok(())
+    }
+    /// Move a decision once. The owning CEF thread must repeat native authority checks.
     pub fn ready(&mut self) -> Option<(Request, i32)> {
-        self.retire_worker();
         let pending = self.pending.as_ref()?;
-        let selection = if pending.request.cancelled() {
+        let fingerprint = if pending.request.cancelled() {
             None
         } else {
-            match pending.result.try_recv() {
-                Ok(selection) => selection,
-                Err(mpsc::TryRecvError::Empty) => return None,
-                Err(mpsc::TryRecvError::Disconnected) => None,
+            match &pending.decision {
+                Decision::Pending => return None,
+                Decision::Select(fingerprint) => Some(fingerprint.as_str()),
+                Decision::Decline => None,
             }
         };
+        let index = pending.request.selected(fingerprint);
         let pending = self.pending.take()?;
-        let index = pending.request.selected(selection.as_deref());
         Some((pending.request, index))
     }
     pub fn finish(&mut self) {
         self.cancel(None);
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while self
-            .worker
-            .as_ref()
-            .is_some_and(|worker| !worker.is_finished())
-        {
-            if Instant::now() >= deadline {
-                std::process::abort();
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        self.retire_worker();
         self.pending = None;
         self.operation = None;
     }

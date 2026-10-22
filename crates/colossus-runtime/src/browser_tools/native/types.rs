@@ -455,6 +455,8 @@ pub(in crate::browser_tools) struct NativeState {
     pub(in crate::browser_tools) agent_requests:
         Mutex<BTreeMap<BrowserSessionId, BrowserDriverOpenRequest>>,
     pub(in crate::browser_tools) agent_generations: Mutex<BTreeMap<BrowserSessionId, u64>>,
+    pub(in crate::browser_tools) identity_attempts:
+        Mutex<BTreeMap<BrowserSessionId, colossus_browser_presentation::ClientIdentityKey>>,
     pub(in crate::browser_tools) opening: AsyncMutex<()>,
     pub(in crate::browser_tools) stopped: AtomicBool,
 }
@@ -470,6 +472,7 @@ impl NativeState {
             current: Mutex::new(None),
             agent_requests: Mutex::new(BTreeMap::new()),
             agent_generations: Mutex::new(BTreeMap::new()),
+            identity_attempts: Mutex::new(BTreeMap::new()),
             opening: AsyncMutex::new(()),
             stopped: AtomicBool::new(false),
         })

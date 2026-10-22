@@ -42,6 +42,15 @@ Where the Desktop build offers it, **Browser** opens websites and local previews
 
 Under **Settings → Global → Browser**, set a new-tab page with a full HTTP or HTTPS address. The default is an empty tab. This preference does not restore tabs or browsing history.
 
+When a Windows website requests a client certificate, Desktop automatically uses a
+single matching eligible identity. If several match, choose one in the certificate
+panel inside the Desktop window, or select **Cancel** to send none. The panel shows
+the requesting site, certificate names and SHA-256 fingerprints. Expired or invalid
+certificates are excluded. Windows keeps the private key; the site determines whether
+login succeeds. The choice may be reused for that exact site until the temporary browser
+session ends. Browser identities use Windows certificate storage; the PEM identity in
+Desktop's network settings configures provider and HTTP calls separately.
+
 ## Computer use
 
 On Windows, **Settings → Global → Computer use** controls the default and

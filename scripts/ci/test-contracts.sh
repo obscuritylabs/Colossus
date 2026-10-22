@@ -281,6 +281,45 @@ if $script_dir/require-success.sh eligibility=skipped >/dev/null 2>&1; then
     exit 1
 fi
 
+# Keep the compiler-output mitigation local to Windows Desktop, and fail before
+# any Cargo build if its exact native compiler cannot be resolved and executed.
+"${NODE:-node}" --input-type=module - "$script_dir/../../.github/workflows/premerge.yml" <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const workflow = readFileSync(process.argv[2], 'utf8').replaceAll('\r\n', '\n');
+const start = workflow.indexOf('\n  windows-desktop:\n');
+const end = workflow.indexOf('\n  fuzz:\n', start);
+assert.ok(start >= 0 && end > start, 'Windows Desktop job must be independently scoped');
+const windows = workflow.slice(start, end);
+const outside = workflow.slice(0, start) + workflow.slice(end);
+assert.doesNotMatch(outside, /\bclang-cl(?:\.exe)?\b|^\s+(?:CC|CXX):/mu);
+
+const selection = windows.indexOf('Get-Command clang-cl.exe');
+const probeStart = windows.lastIndexOf('\n      - name:', selection);
+const probeEnd = windows.indexOf('\n      - name:', probeStart + 1);
+const firstCargo = windows.search(/\bcargo\s/u);
+assert.ok(selection >= 0 && probeStart >= 0 && probeEnd > selection && probeEnd < firstCargo,
+  'Compiler prerequisite must run before the first Cargo command');
+const probe = windows.slice(probeStart, probeEnd);
+assert.match(probe, /shell: pwsh\n/u);
+assert.match(probe, /timeout-minutes: 1\n/u);
+assert.doesNotMatch(probe, /continue-on-error:|\n        if:/u);
+assert.match(probe, /\$ErrorActionPreference = 'Stop'/u);
+const resolved = probe.match(/\$(\w+)\s*=\s*\(Get-Command clang-cl\.exe\b[^\n]*-CommandType Application\b[^\n]*-ErrorAction Stop\)\.(?:Source|Path)/u);
+assert.ok(resolved, 'Resolve an executable application path without an alias or fallback');
+const compiler = '\\$' + resolved[1];
+const version = probe.search(new RegExp('&\\s+' + compiler + '\\s+--version', 'u'));
+const checked = probe.search(/if\s*\(\s*\$LASTEXITCODE\s*-ne\s*0\s*\)\s*\{\s*exit\s+\$LASTEXITCODE\s*\}/u);
+const exported = ['CC', 'CXX'].map(name =>
+  probe.search(new RegExp(`["']${name}=${compiler}["']`, 'u')));
+const destination = probe.search(/Add-Content\b[^\n]*-LiteralPath\s+\$env:GITHUB_ENV\b/u);
+assert.ok(version >= 0 && checked > version && exported.every(index => index > checked) &&
+  destination > Math.max(...exported),
+  'Both compiler paths must be exported only after a successful version probe');
+assert.doesNotMatch(windows, /CMAKE_(?:C_COMPILER|CXX_COMPILER|GENERATOR_TOOLSET)|-T\s*(?:ClangCL|LLVM)/u);
+NODE
+
 # The optional R2 backend must not replace the GitHub read-only fallback when
 # fork PRs have no secrets, and must never write with a read credential.
 r2_env_file=$(mktemp)

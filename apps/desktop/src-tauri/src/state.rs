@@ -565,6 +565,41 @@ impl AppState {
         })
     }
 
+    /// Lease the current registered target only when both native reads are immediately available.
+    ///
+    /// A certificate challenge can arrive while navigation holds a selection read and a
+    /// workspace switch is queued. Waiting behind that writer would also wait for the
+    /// navigation being challenged, so the broker must decline rather than await a lease.
+    #[cfg(any(
+        test,
+        all(
+            windows,
+            any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            )
+        )
+    ))]
+    pub(crate) fn try_selected_target(&self, target_id: &str) -> Option<SelectedTargetLease<'_>> {
+        let selection = self.selected_target_id.try_read().ok()?;
+        if selection.as_deref() != Some(target_id) {
+            return None;
+        }
+        let target = self
+            .targets
+            .try_read()
+            .ok()?
+            .get(target_id)
+            .filter(|target| !target.is_closed())
+            .cloned()?;
+        Some(SelectedTargetLease {
+            target,
+            target_id: target_id.to_owned(),
+            epoch: self.selection_epoch.load(Ordering::Acquire),
+            _selection: selection,
+        })
+    }
+
     pub(crate) async fn bind_runs(&self, lease: &SelectedTargetLease<'_>, run_ids: Vec<String>) {
         let mut bindings = self.run_targets.write().await;
         let new_bindings = run_ids
@@ -1696,6 +1731,10 @@ impl AppState {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "state/selection_tests.rs"]
+mod selection_tests;
 
 #[cfg(test)]
 mod tests {

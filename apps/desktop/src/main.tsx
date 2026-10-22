@@ -3,6 +3,7 @@ import { DesktopStartup } from "./components/DesktopStartup";
 import { createRoot } from "react-dom/client";
 import { SetupPresentationProvider } from "./SetupPresentation";
 import { DesktopPreferencesProvider } from "./DesktopPreferencesProvider";
+import { ClientIdentityAppearanceSync } from "./theme/ClientIdentityAppearanceSync";
 
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { installRendererFailureHandlers } from "./renderer-logging";
@@ -93,6 +94,19 @@ if (
       );
     },
   );
+} else if (
+  new URLSearchParams(window.location.search).get("surface") ===
+  "client-identity-review"
+) {
+  void import("./ClientIdentityReview").then(
+    ({ default: ClientIdentityReview }) => {
+      createRoot(root).render(
+        <AppErrorBoundary>
+          <ClientIdentityReview />
+        </AppErrorBoundary>,
+      );
+    },
+  );
 } else if (terminalSurface) {
   void import("./TerminalWindow").then(({ default: TerminalWindow }) => {
     createRoot(root).render(
@@ -107,6 +121,7 @@ if (
   const App = lazy(() => import("./App"));
   createRoot(root).render(
     <AppearanceProvider initialPreference={initialAppearance}>
+      <ClientIdentityAppearanceSync />
       <DesktopPreferencesProvider>
         <AppErrorBoundary>
           <Suspense fallback={<DesktopStartup />}>

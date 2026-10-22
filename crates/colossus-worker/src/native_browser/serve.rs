@@ -143,6 +143,32 @@ pub(super) async fn handle(
                 NativeBrowserReply::Unavailable
             }
         }
+        NativeBrowserRequest::PendingClientIdentity { policy } => match &service.authority {
+            Some(authority) => match service
+                .runtime
+                .pending_native_browser_client_identity(authority, policy)
+                .await
+            {
+                Ok(review) => NativeBrowserReply::ClientIdentity { review },
+                Err(error) => native_error(error),
+            },
+            None => NativeBrowserReply::Unavailable,
+        },
+        NativeBrowserRequest::SelectClientIdentity {
+            session,
+            key,
+            fingerprint_sha256,
+        } => match &service.authority {
+            Some(authority) => match service
+                .runtime
+                .select_native_browser_client_identity(authority, &session, key, fingerprint_sha256)
+                .await
+            {
+                Ok(()) => NativeBrowserReply::ClientIdentitySelected,
+                Err(error) => native_error(error),
+            },
+            None => NativeBrowserReply::Unavailable,
+        },
         NativeBrowserRequest::Close { session } => match service.finish(&session, true).await {
             Ok(()) => NativeBrowserReply::Closed,
             Err(_) => NativeBrowserReply::OutcomeUnknown,

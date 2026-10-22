@@ -1,5 +1,7 @@
 //! Distinct Desktop admission authority, separate from worker/TUI and browser-host keys.
-use crate::{Configure, PresentationError};
+use crate::{
+    ClientIdentityChallenge, ClientIdentityKey, ClientIdentityPolicy, Configure, PresentationError,
+};
 use colossus_contracts::{BrowserControlLease, BrowserSessionId, BrowserUrl};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -119,12 +121,43 @@ impl NativeBrowserOpen {
     }
 }
 
+/// An enrolled native review can exist before the initial browser navigation completes.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeClientIdentityReview {
+    /// Original supervised session, resolved against this native application's ownership.
+    pub session: BrowserSessionId,
+    /// One expiring request containing only public certificate metadata.
+    pub challenge: ClientIdentityChallenge,
+}
+impl NativeClientIdentityReview {
+    /// Validate public metadata before native display; this does not establish ownership.
+    pub fn validate(&self) -> Result<(), PresentationError> {
+        self.challenge.validate()
+    }
+}
+
 /// Exactly one authenticated admission operation; presentation uses its own derived key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum NativeBrowserRequest {
     /// Check accepted Embedded availability without allocating a host.
     Probe,
+    /// Inspect this native application's pending requests, including initial navigation.
+    /// Automatic singleton selection is explicit native policy, not a capability grant.
+    PendingClientIdentity {
+        /// Native Desktop selection policy; never supplied by a model or guest page.
+        policy: ClientIdentityPolicy,
+    },
+    /// Submit one native choice for the exact retained request. An uncertain reply is not retried.
+    SelectClientIdentity {
+        /// Original session, resolved against the authenticated native application.
+        session: BrowserSessionId,
+        /// One-use native request reference; no presentation lease is required.
+        key: ClientIdentityKey,
+        /// Exact offered public DER fingerprint, or no certificate.
+        fingerprint_sha256: Option<String>,
+    },
     /// Explicit native human admission to an app-owned canonical conversation.
     Open(NativeBrowserOpen),
     /// Read-only pixels for an existing run-owned Embedded page. Runtime verifies
@@ -160,6 +193,22 @@ impl NativeBrowserRequest {
     pub fn validate(&self) -> Result<(), PresentationError> {
         match self {
             Self::Open(request) => request.validate(),
+            Self::SelectClientIdentity {
+                key,
+                fingerprint_sha256,
+                ..
+            } => {
+                key.validate()?;
+                if fingerprint_sha256.as_ref().is_some_and(|fingerprint| {
+                    fingerprint.len() != 64
+                        || !fingerprint
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                }) {
+                    return Err(PresentationError::Invalid);
+                }
+                Ok(())
+            }
             Self::Watch {
                 run_id,
                 conversation_id,
@@ -193,6 +242,13 @@ pub enum NativeBrowserReply {
     Denied,
     /// Accepted platform Embedded support is available; no host was launched.
     Available,
+    /// Public identity review metadata for this enrolled application only.
+    ClientIdentity {
+        /// None when no current native request needs a human choice.
+        review: Option<NativeClientIdentityReview>,
+    },
+    /// The exact native decision was submitted; only the remote server proves login success.
+    ClientIdentitySelected,
     /// Human ownership was admitted and the same stream becomes a native relay.
     Opened {
         /// Exact canonical conversation selected or created by Runtime.
