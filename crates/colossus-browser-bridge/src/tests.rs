@@ -25,6 +25,9 @@ use crate::{
     wire::{Request, Response},
 };
 
+#[path = "tests/deadlines.rs"]
+mod deadlines;
+
 fn test_key(bytes: [u8; 32]) -> BrowserBridgeKey {
     BrowserBridgeKey::from_bootstrap(zeroize::Zeroizing::new(bytes))
 }

@@ -1019,7 +1019,7 @@ const FIELD_DESCRIPTORS: ManagedFieldDescriptor[] = [
     "Limits",
     "Effect timeout",
     "Stop an effect after this many milliseconds.",
-    30_000,
+    15 * 60 * 1000,
     true,
     100,
     3_600_000,
