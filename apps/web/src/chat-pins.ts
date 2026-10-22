@@ -3,26 +3,34 @@ import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 /** Personal navigation preferences, matching Desktop's bounded local pin list. */
 export const MAX_PINNED_CHATS = 32;
 const PREFIX = "colossus.web.chat-pins:v1:";
+const COLLAPSED_PREFIX = "colossus.web.chat-pins-collapsed:v1:";
 const MAX_STORED_LENGTH = 65_536;
 const SESSION_NOTICE =
-  "Browser storage is unavailable. Pins are kept for this session only.";
+  "Browser storage is unavailable. Pin preferences are kept for this session only.";
 const LIMIT_NOTICE = `You can pin up to ${MAX_PINNED_CHATS} chats per project. Unpin a chat first.`;
 const EMPTY_IDS: readonly string[] = Object.freeze([]);
 
 interface Snapshot {
   ids: readonly string[];
+  collapsed: boolean;
   notice: string;
 }
 interface PinStore {
   getSnapshot: () => Snapshot;
   subscribe: (listener: () => void) => () => void;
   setPinned: (id: string, pinned: boolean) => void;
+  setCollapsed: (collapsed: boolean) => void;
 }
-const EMPTY_SNAPSHOT: Snapshot = { ids: EMPTY_IDS, notice: "" };
+const EMPTY_SNAPSHOT: Snapshot = {
+  ids: EMPTY_IDS,
+  collapsed: false,
+  notice: "",
+};
 const EMPTY_STORE: PinStore = {
   getSnapshot: () => EMPTY_SNAPSHOT,
   subscribe: () => () => {},
   setPinned: () => {},
+  setCollapsed: () => {},
 };
 const stores = new WeakMap<Window, Map<string, PinStore>>();
 
@@ -62,7 +70,11 @@ function parse(serialized: string | null): readonly string[] {
   }
 }
 
-function createStore(host: Window, key: string): PinStore {
+function createStore(
+  host: Window,
+  key: string,
+  collapsedKey: string,
+): PinStore {
   function read(): { ids: readonly string[]; failed: boolean } {
     try {
       return { ids: parse(host.localStorage.getItem(key)), failed: false };
@@ -70,21 +82,38 @@ function createStore(host: Window, key: string): PinStore {
       return { ids: EMPTY_IDS, failed: true };
     }
   }
+  function readCollapsed(): { collapsed: boolean; failed: boolean } {
+    try {
+      return {
+        collapsed: host.localStorage.getItem(collapsedKey) === "true",
+        failed: false,
+      };
+    } catch {
+      return { collapsed: false, failed: true };
+    }
+  }
   const initial = read();
-  let sessionOnly = initial.failed;
+  const initialCollapsed = readCollapsed();
+  let sessionOnly = initial.failed || initialCollapsed.failed;
   let snapshot: Snapshot = {
     ids: initial.ids,
+    collapsed: initialCollapsed.collapsed,
     notice: sessionOnly ? SESSION_NOTICE : "",
   };
   const listeners = new Set<() => void>();
-  function publish(ids: readonly string[], notice: string) {
+  function publish(
+    ids: readonly string[],
+    notice: string,
+    collapsed = snapshot.collapsed,
+  ) {
     if (
       snapshot.notice === notice &&
+      snapshot.collapsed === collapsed &&
       snapshot.ids.length === ids.length &&
       snapshot.ids.every((id, index) => id === ids[index])
     )
       return;
-    snapshot = { ids: Object.freeze([...ids]), notice };
+    snapshot = { ids: Object.freeze([...ids]), collapsed, notice };
     for (const listener of listeners) listener();
   }
   function refresh() {
@@ -93,15 +122,17 @@ function createStore(host: Window, key: string): PinStore {
     // browser persistence after its storage policy or quota has changed.
     if (sessionOnly) return;
     const latest = read();
-    if (latest.failed) {
+    const latestCollapsed = readCollapsed();
+    if (latest.failed || latestCollapsed.failed) {
       sessionOnly = true;
       publish(snapshot.ids, SESSION_NOTICE);
     } else {
-      publish(latest.ids, "");
+      publish(latest.ids, "", latestCollapsed.collapsed);
     }
   }
   function storage(event: StorageEvent) {
-    if (event.key !== key && event.key !== null) return;
+    if (event.key !== key && event.key !== collapsedKey && event.key !== null)
+      return;
     if (event.storageArea) {
       try {
         if (event.storageArea !== host.localStorage) return;
@@ -155,6 +186,22 @@ function createStore(host: Window, key: string): PinStore {
       }
       publish(next, sessionOnly ? SESSION_NOTICE : "");
     },
+    setCollapsed(collapsed) {
+      if (typeof collapsed !== "boolean") return;
+      if (!sessionOnly) {
+        const latest = readCollapsed();
+        if (latest.failed) sessionOnly = true;
+        else if (latest.collapsed !== collapsed) {
+          try {
+            // Keep the existing v1 ID record byte-compatible with older clients.
+            host.localStorage.setItem(collapsedKey, JSON.stringify(collapsed));
+          } catch {
+            sessionOnly = true;
+          }
+        }
+      }
+      publish(snapshot.ids, sessionOnly ? SESSION_NOTICE : "", collapsed);
+    },
   };
 }
 function storeFor(identity: string, project: string): PinStore {
@@ -172,7 +219,11 @@ function storeFor(identity: string, project: string): PinStore {
   }
   let store = scopes.get(key);
   if (!store) {
-    store = createStore(window, key);
+    store = createStore(
+      window,
+      key,
+      COLLAPSED_PREFIX + JSON.stringify([identity, project]),
+    );
     scopes.set(key, store);
   }
   return store;
@@ -199,5 +250,17 @@ export function useChatPins(identity: string, project: string) {
     },
     [store],
   );
-  return { ids: snapshot.ids, setPinned, notice: snapshot.notice };
+  const setCollapsed = useCallback(
+    (collapsed: boolean) => {
+      if (scope.current === store) store.setCollapsed(collapsed);
+    },
+    [store],
+  );
+  return {
+    ids: snapshot.ids,
+    setPinned,
+    collapsed: snapshot.collapsed,
+    setCollapsed,
+    notice: snapshot.notice,
+  };
 }

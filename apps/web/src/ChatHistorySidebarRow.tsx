@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { WorkspaceSidebarThreadContent } from "@colossus/ui";
 import { Button } from "@colossus/ui/components/ui/button";
 import { Input } from "@colossus/ui/components/ui/input";
@@ -55,6 +55,8 @@ export function ChatHistorySidebarRow({
   onFork,
   pinned = false,
   onPin,
+  visible = true,
+  onHiddenFocus,
 }: {
   thread: Thread;
   project: string;
@@ -69,6 +71,8 @@ export function ChatHistorySidebarRow({
   onFork: ((thread: Thread, source: Task) => void) | undefined;
   pinned?: boolean;
   onPin?: ((pinned: boolean) => void) | undefined;
+  visible?: boolean;
+  onHiddenFocus?: (() => void) | undefined;
 }) {
   const menu = useSidebarDropdown();
   const [bound, setBound] = useState(thread);
@@ -89,6 +93,17 @@ export function ChatHistorySidebarRow({
   const skipMenuFocus = useRef(false);
   const restoreTriggerFocus = useRef(false);
   const detailAbort = useRef<AbortController | null>(null);
+  const visibleRef = useRef(visible);
+  const hiddenHadFocus = useRef(false);
+  const hiddenFocusPending = useRef(false);
+  if (visibleRef.current && !visible) {
+    // Capture before the parent's hidden attribute can move focus to the body.
+    hiddenHadFocus.current = Boolean(
+      rowRef.current?.contains(document.activeElement) ||
+      menu.contentRef.current?.contains(document.activeElement),
+    );
+  }
+  visibleRef.current = visible;
   const owned =
     thread.project_id === project && thread.owner_user_id === identity;
   const allowed = canControl && owned;
@@ -117,19 +132,40 @@ export function ChatHistorySidebarRow({
   useEffect(() => {
     if (!menu.open) detailAbort.current?.abort();
   }, [menu.open]);
+  useLayoutEffect(() => {
+    if (visible) {
+      hiddenHadFocus.current = false;
+      hiddenFocusPending.current = false;
+      return;
+    }
+    const hadFocus = Boolean(
+      rowRef.current?.contains(document.activeElement) ||
+      menu.contentRef.current?.contains(document.activeElement) ||
+      (hiddenHadFocus.current && document.activeElement === document.body),
+    );
+    hiddenHadFocus.current = false;
+    restoreTriggerFocus.current = false;
+    detailAbort.current?.abort();
+    if (menu.open) {
+      hiddenFocusPending.current = hadFocus;
+      skipMenuFocus.current = true;
+      menu.onOpenChange(false);
+    } else if (hadFocus && !hiddenFocusPending.current) onHiddenFocus?.();
+  }, [visible, menu.open, menu.onOpenChange, menu.contentRef, onHiddenFocus]);
   useEffect(() => {
     if (!editing && !busy && restoreTriggerFocus.current) {
       restoreTriggerFocus.current = false;
-      menu.triggerRef.current?.focus();
+      if (visibleRef.current) menu.triggerRef.current?.focus();
     }
   }, [editing, busy, menu.triggerRef]);
   useEffect(() => {
-    if (!editing) return;
+    if (!editing || !visibleRef.current) return;
     titleRef.current?.focus();
     titleRef.current?.select();
     const escape = (event: KeyboardEvent) => {
       if (
         event.key === "Escape" &&
+        visibleRef.current &&
         !event.isComposing &&
         event.target instanceof Node &&
         renameRef.current?.contains(event.target) &&
@@ -147,6 +183,7 @@ export function ChatHistorySidebarRow({
   }, [editing, menu.triggerRef]);
 
   async function openMenu(open: boolean) {
+    if (open && !visibleRef.current) return;
     menu.onOpenChange(open);
     detailAbort.current?.abort();
     if (!open) return;
@@ -181,6 +218,7 @@ export function ChatHistorySidebarRow({
       menu.contentRef.current?.contains(document.activeElement),
     );
     const mayRestoreFocus = () =>
+      visibleRef.current &&
       actionHadFocus &&
       (document.activeElement === document.body ||
         rowRef.current?.contains(document.activeElement) ||
@@ -348,9 +386,21 @@ export function ChatHistorySidebarRow({
             collisionPadding={8}
             aria-label={`Actions for ${title}`}
             onCloseAutoFocus={(event) => {
-              if (skipMenuFocus.current) {
+              if (!visibleRef.current || skipMenuFocus.current) {
                 event.preventDefault();
                 skipMenuFocus.current = false;
+              }
+              if (hiddenFocusPending.current) {
+                hiddenFocusPending.current = false;
+                // Restore after the modal menu's focus trap has been removed,
+                // and leave any focus the user moved elsewhere untouched.
+                if (
+                  !visibleRef.current &&
+                  (document.activeElement === document.body ||
+                    rowRef.current?.contains(document.activeElement) ||
+                    menu.contentRef.current?.contains(document.activeElement))
+                )
+                  onHiddenFocus?.();
               }
             }}
           >

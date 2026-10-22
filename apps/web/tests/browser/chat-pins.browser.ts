@@ -280,6 +280,150 @@ test("archiving hides an open pin while Restore preserves it, and archived chats
   fixture.verify();
 });
 
+test("Pinned collapses with the keyboard, remembers its state, and reveals search matches without losing the chat draft", async ({
+  page,
+}) => {
+  const fixture = await pinFixture(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(parentUrl);
+  await openHistory(page);
+  const composer = page
+    .locator(".shared-inspector-main > .thread-detail")
+    .getByRole("textbox", { name: "Message the agent", exact: true });
+  await composer.fill("Keep this selected conversation draft");
+  await togglePin(page, parentTitle);
+  const heading = pinned(page).getByRole("button", {
+    name: "Pinned",
+    exact: true,
+  });
+  const selected = pinned(page).getByRole("link", {
+    name: parentTitle,
+    exact: true,
+  });
+  await expect(heading).toHaveAttribute("aria-expanded", "true");
+  const controlledId = await heading.getAttribute("aria-controls");
+  expect(controlledId).toBeTruthy();
+  const controlledRows = page.locator(`[id=${JSON.stringify(controlledId)}]`);
+  await expect(controlledRows).toHaveCount(1);
+  await heading.focus();
+  await heading.press("Enter");
+  await expect(heading).toHaveAttribute("aria-expanded", "false");
+  await expect(controlledRows).toBeHidden();
+  await expect(heading).toBeFocused();
+  await expect(composer).toHaveValue("Keep this selected conversation draft");
+  await expect(page).toHaveURL(parentUrl);
+  await heading.press("Space");
+  await expect(heading).toHaveAttribute("aria-expanded", "true");
+  await expect(controlledRows).toBeVisible();
+  await expect(selected).toHaveAttribute("aria-current", "page");
+  await expect(composer).toHaveValue("Keep this selected conversation draft");
+  await heading.press("Space");
+  await expect(heading).toHaveAttribute("aria-expanded", "false");
+  await page.reload();
+  await openHistory(page);
+  await expect(heading).toHaveAttribute("aria-expanded", "false");
+  await expect(selected).toBeHidden();
+  await expect(page).toHaveURL(parentUrl);
+  await composer.fill("Keep this draft after reload");
+  const search = page.getByRole("searchbox", { name: "Search your chats" });
+  await search.fill("Browser model");
+  await expect(heading).toHaveAttribute("aria-expanded", "true");
+  await expect(selected).toBeVisible();
+  await heading.focus();
+  await heading.press("Enter");
+  await expect(heading).toHaveAttribute("aria-expanded", "false");
+  await expect(selected).toBeHidden();
+  await search.fill("Browser model conversation");
+  await expect(heading).toHaveAttribute("aria-expanded", "true");
+  await expect(selected).toBeVisible();
+  await search.clear();
+  await expect(heading).toHaveAttribute("aria-expanded", "false");
+  await expect(selected).toBeHidden();
+  await expect(composer).toHaveValue("Keep this draft after reload");
+  await togglePin(page, recentTitle);
+  await expect(heading).toHaveAttribute("aria-expanded", "true");
+  await expect(pinned(page).getByRole("link")).toHaveCount(2);
+  await expect(selected).toHaveAttribute("aria-current", "page");
+  await expect(composer).toHaveValue("Keep this draft after reload");
+  expect(fixture.mutations).toEqual([]);
+  expect(fixture.submissions).toEqual([]);
+  fixture.verify();
+});
+
+test("cross-tab collapse closes a pinned row menu and preserves unrelated composer focus", async ({
+  page,
+}) => {
+  const fixture = await pinFixture(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(parentUrl);
+  await openHistory(page);
+  await togglePin(page, parentTitle);
+  const composer = page
+    .locator(".shared-inspector-main > .thread-detail")
+    .getByRole("textbox", { name: "Message the agent", exact: true });
+  await composer.fill("Keep typing while another tab changes the sidebar");
+  const heading = pinned(page).getByRole("button", {
+    name: "Pinned",
+    exact: true,
+  });
+  async function collapseFromOtherTab(collapsed: boolean) {
+    await page.evaluate(
+      ({ account, project, collapsed }) => {
+        const key =
+          "colossus.web.chat-pins-collapsed:v1:" +
+          JSON.stringify([account, project]);
+        const oldValue = localStorage.getItem(key);
+        const newValue = JSON.stringify(collapsed);
+        localStorage.setItem(key, newValue);
+        window.dispatchEvent(
+          new StorageEvent("storage", {
+            key,
+            oldValue,
+            newValue,
+            storageArea: localStorage,
+            url: location.href,
+          }),
+        );
+      },
+      { account: "browser-user", project, collapsed },
+    );
+  }
+  await actions(page, parentTitle).focus();
+  await actions(page, parentTitle).press("Enter");
+  const unpin = page.getByRole("menuitemcheckbox", {
+    name: `Unpin ${parentTitle}`,
+    exact: true,
+  });
+  await unpin.focus();
+  await expect(unpin).toBeFocused();
+  await collapseFromOtherTab(true);
+  await expect(heading).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(heading).toBeFocused();
+  await expect(composer).toHaveValue(
+    "Keep typing while another tab changes the sidebar",
+  );
+  await expect(page).toHaveURL(parentUrl);
+  await heading.press("Enter");
+  await expect(heading).toHaveAttribute("aria-expanded", "true");
+  await expect(actions(page, parentTitle)).toBeVisible();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await composer.focus();
+  await collapseFromOtherTab(true);
+  await expect(heading).toHaveAttribute("aria-expanded", "false");
+  await expect(composer).toBeFocused();
+  await collapseFromOtherTab(false);
+  await expect(heading).toHaveAttribute("aria-expanded", "true");
+  await expect(composer).toBeFocused();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(composer).toHaveValue(
+    "Keep typing while another tab changes the sidebar",
+  );
+  expect(fixture.mutations).toEqual([]);
+  expect(fixture.submissions).toEqual([]);
+  fixture.verify();
+});
+
 test.describe("touch pins", () => {
   test.use({ hasTouch: true });
   for (const appearance of appearanceCases.filter(
@@ -325,6 +469,22 @@ test.describe("touch pins", () => {
         await page.keyboard.press("Escape");
         await expect(trigger).toBeFocused();
         await expect(pinned(page)).toBeVisible();
+        const heading = pinned(page).getByRole("button", {
+          name: "Pinned",
+          exact: true,
+        });
+        await heading.tap();
+        await expect(heading).toHaveAttribute("aria-expanded", "false");
+        await expect(row).toBeHidden();
+        expect((await heading.boundingBox())!.height).toBeGreaterThanOrEqual(
+          44,
+        );
+        await page.screenshot({
+          path: `output/playwright/chat-pins-collapsed-${appearance.id}-large-${width}.png`,
+        });
+        await heading.tap();
+        await expect(heading).toHaveAttribute("aria-expanded", "true");
+        await expect(row).toBeVisible();
         expect(
           await page.evaluate(
             () => document.documentElement.scrollWidth <= innerWidth,

@@ -155,6 +155,40 @@
   line-height: var(--line-height-body);
   font-weight: 500;
 }
+.chat-history-group-heading.is-collapsible {
+  padding: 0;
+}
+.chat-history-group-toggle.ui-button {
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  border-color: transparent;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  text-align: start;
+}
+.chat-history-group-toggle.ui-button:hover {
+  border-color: transparent;
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}
+.chat-history-group-toggle:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: -2px;
+}
+.chat-history-group-toggle[aria-expanded="false"] > svg {
+  transform: rotate(-90deg);
+}
+.chat-history-group-items {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.chat-history-group-items[hidden] {
+  display: none;
+}
 .chat-history-entry {
   position: relative;
   min-width: 0;
@@ -394,12 +428,18 @@
 :root[data-text-size="large"] .chat-history-rename-actions .ui-button {
   min-height: var(--control-height-touch);
 }
+:root[data-text-size="large"] .chat-history-group-toggle {
+  min-height: var(--control-height-touch);
+}
 :root[data-text-size="large"]
   .chat-history-row-menu
   :is([role="menuitem"], [role="menuitemcheckbox"]) {
   min-height: var(--control-height-touch);
 }
 @media (pointer: coarse), (max-width: 760px) {
+  .chat-history-group-toggle {
+    min-height: var(--control-height-touch);
+  }
   .chat-history-row-menu :is([role="menuitem"], [role="menuitemcheckbox"]) {
     min-height: var(--control-height-touch);
   }

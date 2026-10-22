@@ -9,10 +9,10 @@ import {
 } from "@colossus/ui/components/ui/dropdown-menu";
 import { useSidebarDropdown } from "@colossus/ui/hooks/useSidebarDropdown";
 import {
+  IconChevronDown,
   IconDots,
   IconLock,
   IconMessageCircle,
-  IconPin,
   IconPlus,
   IconPlugConnected,
   IconRefresh,
@@ -54,6 +54,10 @@ export function ChatHistorySidebar({
 }) {
   const [query, setQuery] = useState("");
   const pins = useChatPins(identity, project);
+  const [searchDisclosure, setSearchDisclosure] = useState<{
+    query: string;
+    collapsed: boolean;
+  } | null>(null);
   const [{ search, archive, cursors }, setView] = useState({
     search: "",
     archive: "false",
@@ -96,10 +100,15 @@ export function ChatHistorySidebar({
   }, [refreshKey, history.refresh]);
   const menu = useSidebarDropdown();
   const sidebarRef = useRef<HTMLElement>(null);
+  const pinnedHeadingRef = useRef<HTMLButtonElement>(null);
   const pinFocus = useRef<string | null>(null);
   const [pinFocusVersion, setPinFocusVersion] = useState(0);
   const changePin = (id: string, pinned: boolean) => {
     pinFocus.current = id;
+    if (pinned) {
+      pins.setCollapsed(false);
+      setSearchDisclosure(null);
+    }
     pins.setPinned(id, pinned);
     setPinFocusVersion((value) => value + 1);
   };
@@ -121,6 +130,12 @@ export function ChatHistorySidebar({
     target?.focus();
   }, [pins.ids, pinFocusVersion]);
   const metadataId = useId();
+  const pinnedListId = metadataId + "-pinned";
+  const pinnedExpanded = search
+    ? searchDisclosure?.query === search
+      ? !searchDisclosure.collapsed
+      : true
+    : !pins.collapsed;
   const now = new Date();
   const pinIds = new Set(pins.ids);
   const releasedPins = new Map(
@@ -241,7 +256,10 @@ export function ChatHistorySidebar({
           label="Search your chats"
           placeholder="Search chats…"
           value={query}
-          onChange={setQuery}
+          onChange={(value) => {
+            setQuery(value);
+            setSearchDisclosure(null);
+          }}
         />
         <div className="chat-history-filter">
           <RadioGroup
@@ -280,53 +298,82 @@ export function ChatHistorySidebar({
               className="chat-history-group"
               aria-label={group.label}
             >
-              <h3 className="chat-history-group-heading">
+              <h3
+                className={`chat-history-group-heading${group.label === "Pinned" ? " is-collapsible" : ""}`}
+              >
                 {group.label === "Pinned" ? (
-                  <IconPin size={13} aria-hidden="true" />
-                ) : null}
-                {group.label}
+                  <FoundationButton
+                    ref={pinnedHeadingRef}
+                    variant="ghost"
+                    className="chat-history-group-toggle"
+                    aria-label="Pinned"
+                    aria-expanded={pinnedExpanded}
+                    aria-controls={pinnedListId}
+                    onClick={() => {
+                      if (search)
+                        setSearchDisclosure({
+                          query: search,
+                          collapsed: pinnedExpanded,
+                        });
+                      else pins.setCollapsed(pinnedExpanded);
+                    }}
+                  >
+                    Pinned
+                    <IconChevronDown size={14} aria-hidden="true" />
+                  </FoundationButton>
+                ) : (
+                  group.label
+                )}
               </h3>
-              {group.threads.map((thread) => (
-                <ChatHistorySidebarRow
-                  key={JSON.stringify([
-                    identity,
-                    project,
-                    thread.thread_id,
-                    thread.node_id,
-                    thread.owner_user_id,
-                    thread.session_id,
-                  ])}
-                  thread={thread}
-                  project={project}
-                  selected={selected?.thread_id === thread.thread_id}
-                  now={now}
-                  metadataId={metadataId + "-" + thread.thread_id}
-                  identity={identity}
-                  pinned={pinIds.has(thread.thread_id)}
-                  onPin={(pinned) => {
-                    if (
-                      thread.project_id === project &&
-                      thread.owner_user_id === identity
-                    ) {
-                      changePin(thread.thread_id, pinned);
-                    }
-                  }}
-                  canControl={canControl}
-                  onFork={onFork}
-                  onRefresh={refresh}
-                  onChanged={(value) => {
-                    refresh();
-                    onThreadChanged?.(value);
-                  }}
-                  onRemovedFocus={() => {
-                    sidebarRef.current
-                      ?.querySelector<HTMLAnchorElement>(
-                        '[aria-label="New chat"]',
-                      )
-                      ?.focus();
-                  }}
-                />
-              ))}
+              <div
+                className="chat-history-group-items"
+                id={group.label === "Pinned" ? pinnedListId : undefined}
+                hidden={group.label === "Pinned" && !pinnedExpanded}
+              >
+                {group.threads.map((thread) => (
+                  <ChatHistorySidebarRow
+                    key={JSON.stringify([
+                      identity,
+                      project,
+                      thread.thread_id,
+                      thread.node_id,
+                      thread.owner_user_id,
+                      thread.session_id,
+                    ])}
+                    thread={thread}
+                    project={project}
+                    selected={selected?.thread_id === thread.thread_id}
+                    now={now}
+                    metadataId={metadataId + "-" + thread.thread_id}
+                    identity={identity}
+                    pinned={pinIds.has(thread.thread_id)}
+                    visible={group.label !== "Pinned" || pinnedExpanded}
+                    onHiddenFocus={() => pinnedHeadingRef.current?.focus()}
+                    onPin={(pinned) => {
+                      if (
+                        thread.project_id === project &&
+                        thread.owner_user_id === identity
+                      ) {
+                        changePin(thread.thread_id, pinned);
+                      }
+                    }}
+                    canControl={canControl}
+                    onFork={onFork}
+                    onRefresh={refresh}
+                    onChanged={(value) => {
+                      refresh();
+                      onThreadChanged?.(value);
+                    }}
+                    onRemovedFocus={() => {
+                      sidebarRef.current
+                        ?.querySelector<HTMLAnchorElement>(
+                          '[aria-label="New chat"]',
+                        )
+                        ?.focus();
+                    }}
+                  />
+                ))}
+              </div>
             </section>
           ))}
         </nav>

@@ -10,9 +10,17 @@ let current: ReturnType<typeof useChatPins>;
 let identity: string;
 let project: string;
 let sequence = 0;
-let rendered: { identity: string; project: string; ids: readonly string[] }[];
+let rendered: {
+  identity: string;
+  project: string;
+  ids: readonly string[];
+  collapsed: boolean;
+}[];
 function key(user = identity, scope = project) {
   return "colossus.web.chat-pins:v1:" + JSON.stringify([user, scope]);
+}
+function collapsedKey(user = identity, scope = project) {
+  return "colossus.web.chat-pins-collapsed:v1:" + JSON.stringify([user, scope]);
 }
 function save(ids: unknown[], user = identity, scope = project) {
   window.localStorage.setItem(
@@ -30,6 +38,7 @@ function Probe(props: {
     identity: props.identity,
     project: props.project,
     ids: current.ids,
+    collapsed: current.collapsed,
   });
   props.onRender?.();
   return null;
@@ -47,6 +56,9 @@ async function render(user = identity, scope = project, onRender?: () => void) {
 }
 async function pin(id: string, pinned = true) {
   await act(() => current.setPinned(id, pinned));
+}
+async function collapse(collapsed = true) {
+  await act(() => current.setCollapsed(collapsed));
 }
 async function storage(eventKey: string | null = key(), area?: Storage) {
   await act(() =>
@@ -312,10 +324,148 @@ it("does not read or write pin storage for an absent or invalid authenticated sc
   const writes = vi.spyOn(window.localStorage, "setItem");
   await render("", project);
   await pin("ignored");
+  await collapse();
   await render(identity, "../invalid");
   await pin("ignored");
+  await collapse();
   expect(current.ids).toEqual([]);
+  expect(current.collapsed).toBe(false);
   expect(current.notice).toBe("");
   expect(reads).not.toHaveBeenCalled();
   expect(writes).not.toHaveBeenCalled();
+});
+
+it("persists collapse separately without changing the v1 pin record or pin IDs", async () => {
+  const original = '{ "version": 1, "ids": ["first", "second"] }';
+  window.localStorage.setItem(key(), original);
+  await render();
+  expect(current.collapsed).toBe(false);
+  await collapse();
+  expect(current.collapsed).toBe(true);
+  expect(current.ids).toEqual(["first", "second"]);
+  expect(window.localStorage.getItem(key())).toBe(original);
+  expect(window.localStorage.getItem(collapsedKey())).toBe("true");
+  await act(() => root.unmount());
+  root = createRoot(container);
+  await render();
+  expect(current.collapsed).toBe(true);
+  await collapse(false);
+  expect(current.collapsed).toBe(false);
+  expect(window.localStorage.getItem(collapsedKey())).toBe("false");
+  expect(window.localStorage.getItem(key())).toBe(original);
+});
+
+it("fences collapse preferences and stale handlers across account and project changes", async () => {
+  window.localStorage.setItem(collapsedKey(), "true");
+  await render();
+  expect(current.collapsed).toBe(true);
+  const previous = current.setCollapsed;
+  const bob = `${identity}-bob`;
+  await render(bob, project, () => previous(false));
+  expect(current.collapsed).toBe(false);
+  expect(
+    rendered
+      .filter((value) => value.identity === bob)
+      .every((value) => !value.collapsed),
+  ).toBe(true);
+  expect(window.localStorage.getItem(collapsedKey())).toBe("true");
+  expect(window.localStorage.getItem(collapsedKey(bob))).toBeNull();
+  await collapse();
+  expect(window.localStorage.getItem(collapsedKey(bob))).toBe("true");
+  await render(identity, "other-project");
+  expect(current.collapsed).toBe(false);
+  await render();
+  expect(current.collapsed).toBe(true);
+});
+
+it("accepts only a boolean collapse preference and follows current cross-tab values", async () => {
+  for (const [index, value] of [
+    "null",
+    '"true"',
+    "1",
+    "{}",
+    "invalid",
+  ].entries()) {
+    const scope = `collapse-invalid-${index}`;
+    window.localStorage.setItem(collapsedKey(identity, scope), value);
+    await render(identity, scope);
+    expect(current.collapsed).toBe(false);
+  }
+  save(["first"]);
+  await render();
+  window.localStorage.setItem(collapsedKey(), "true");
+  await storage(collapsedKey("other-user"));
+  expect(current.collapsed).toBe(false);
+  await storage(collapsedKey(), window.sessionStorage);
+  expect(current.collapsed).toBe(false);
+  await act(() =>
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: collapsedKey(),
+        newValue: "false",
+        storageArea: window.localStorage,
+      }),
+    ),
+  );
+  expect(current.collapsed).toBe(true);
+  expect(current.ids).toEqual(["first"]);
+  window.localStorage.setItem(collapsedKey(), "false");
+  await storage(collapsedKey());
+  expect(current.collapsed).toBe(false);
+  window.localStorage.setItem(collapsedKey(), "true");
+  // An explicit expansion must win even before the other tab's event arrives.
+  await collapse(false);
+  expect(window.localStorage.getItem(collapsedKey())).toBe("false");
+  window.localStorage.setItem(collapsedKey(), "true");
+  await storage(collapsedKey());
+  window.localStorage.clear();
+  await storage(null);
+  expect(current.collapsed).toBe(false);
+  expect(current.ids).toEqual([]);
+});
+
+it("retains pins and session collapse choices when collapse storage writes fail", async () => {
+  save(["existing"]);
+  await render();
+  const original = window.localStorage.getItem(key());
+  const writes = vi
+    .spyOn(window.localStorage, "setItem")
+    .mockImplementation(() => {
+      throw new DOMException("Storage is full", "QuotaExceededError");
+    });
+  await collapse();
+  expect(current.collapsed).toBe(true);
+  expect(current.ids).toEqual(["existing"]);
+  expect(current.notice).toContain("session only");
+  expect(window.localStorage.getItem(key())).toBe(original);
+  await collapse(false);
+  await collapse();
+  expect(writes).toHaveBeenCalledTimes(1);
+  writes.mockRestore();
+  await storage(collapsedKey());
+  expect(current.collapsed).toBe(true);
+  await render(identity, "other-project");
+  await render();
+  expect(current.collapsed).toBe(true);
+  expect(current.ids).toEqual(["existing"]);
+});
+
+it("preserves durable pin IDs when reading the separate collapse key is denied", async () => {
+  save(["existing"]);
+  const getItem = window.localStorage.getItem.bind(window.localStorage);
+  vi.spyOn(window.localStorage, "getItem").mockImplementation((storageKey) => {
+    if (storageKey === collapsedKey())
+      throw new DOMException("Blocked", "SecurityError");
+    return getItem(storageKey);
+  });
+  await render();
+  expect(current.ids).toEqual(["existing"]);
+  expect(current.collapsed).toBe(false);
+  expect(current.notice).toContain("Browser storage is unavailable");
+  await collapse();
+  expect(current.collapsed).toBe(true);
+  expect(current.ids).toEqual(["existing"]);
+  expect(getItem(key())).toBe(
+    JSON.stringify({ version: 1, ids: ["existing"] }),
+  );
 });

@@ -50,6 +50,10 @@ Open a chat's actions menu and choose **Pin** to keep it in **Pinned** above
 recent history. Pinning does not open the chat or interrupt running work. Choose
 **Unpin** from the same menu to return it to its date group.
 
+Click the **Pinned** heading to collapse or expand its list. Your account's choice
+is remembered for this project in the current browser. Search temporarily shows
+matching pins; clearing search restores your saved collapse preference.
+
 Pins stay visible when you page through older chats, and title search filters them
 along with recent history. Archived chats leave the open list; restoring a pinned
 chat returns it to **Pinned**. You can also unpin it from the archived list.
