@@ -7,7 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { InboxInspectionRequest } from "../src/model.js";
 import type { InspectionView } from "../src/model.js";
 import { brandMarks, element, node } from "./ui.js";
-import { markdown } from "./markdown.js";
+import { MarkdownPreview } from "./markdown.js";
 declare function acquireVsCodeApi(): {
   postMessage(
     message: { type: "ready" | "refreshInspection" } | InboxInspectionRequest,
@@ -25,6 +25,22 @@ let error = "";
 let connected = false;
 let inboxRoot: Root | undefined;
 let inboxContainer: HTMLElement | undefined;
+let outputPreview:
+  { runId: string; text: string; view: MarkdownPreview } | undefined;
+
+function disposeOutputPreview() {
+  outputPreview?.view.dispose();
+  outputPreview = undefined;
+}
+
+window.addEventListener("pagehide", (event) => {
+  if (event.persisted) return;
+  disposeOutputPreview();
+  inboxRoot?.unmount();
+  inboxRoot = undefined;
+  inboxContainer = undefined;
+});
+
 const reads = new Map<
   string,
   {
@@ -103,6 +119,13 @@ function render() {
     inboxRoot = undefined;
     inboxContainer = undefined;
   }
+  if (
+    tab !== "output" ||
+    !view?.output ||
+    outputPreview?.runId !== view.run.id ||
+    outputPreview?.text !== view.output
+  )
+    disposeOutputPreview();
   content.replaceChildren();
   if (!view) {
     element("title").textContent = "State inspector";
@@ -187,11 +210,17 @@ function render() {
     content.append(
       node("h2", view.plan ? "Saved plan / run output" : "Released output"),
     );
-    content.append(
-      view.output
-        ? markdown(view.output)
-        : node("p", "No terminal output has been saved for this run.", "muted"),
-    );
+    if (view.output) {
+      outputPreview ??= {
+        runId: run.id,
+        text: view.output,
+        view: new MarkdownPreview(view.output),
+      };
+      content.append(outputPreview.view.element);
+    } else
+      content.append(
+        node("p", "No terminal output has been saved for this run.", "muted"),
+      );
   } else {
     content.append(
       node("h2", "Session activity"),

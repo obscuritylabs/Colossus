@@ -1,7 +1,11 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { AxeBuilder } from "@axe-core/playwright";
-import { initialView, type WorkView } from "../../src/model.js";
+import {
+  initialView,
+  type InspectionView,
+  type WorkView,
+} from "../../src/model.js";
 
 const processes = readFileSync(
   new URL("../fixtures/process-tables.txt", import.meta.url),
@@ -495,6 +499,160 @@ test("every supported offline diagram renders without style exceptions or networ
     });
   }
   expect(policyViolations).toEqual([]);
+  expect(errors).toEqual([]);
+  expect(outbound).toEqual([]);
+});
+
+test("inspector output keeps Markdown mounted for highlighting, diagrams and controls until replacement or disposal", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  const outbound: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("request", (request) => {
+    if (!request.url().startsWith("http://127.0.0.1:4312"))
+      outbound.push(request.url());
+  });
+  await page.addInitScript(() => {
+    const captured = window as unknown as {
+      copiedText: string;
+      policyViolations: string[];
+      acquireVsCodeApi: () => unknown;
+    };
+    captured.acquireVsCodeApi = () => ({ postMessage() {} });
+    captured.policyViolations = [];
+    document.addEventListener("securitypolicyviolation", (event) =>
+      captured.policyViolations.push(event.violatedDirective),
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          captured.copiedText = text;
+        },
+      },
+    });
+  });
+  await page.goto("/inspector");
+  const code = 'def inspect():\n    return "saved output"';
+  const diagram = "flowchart LR\n A[Saved output] --> B[Review]";
+  const view: InspectionView = {
+    run: {
+      id: "inspector-run",
+      sessionId: "inspector-session",
+      title: "Inspect saved output",
+      role: "primary",
+      mode: "execute",
+      status: "completed",
+      createdAt: "2026-10-21T10:00:00Z",
+      updatedAt: "2026-10-21T10:00:01Z",
+      startedAt: "2026-10-21T10:00:00Z",
+      finishedAt: "2026-10-21T10:00:01Z",
+      sequence: "3",
+      pendingInteractions: 0,
+    },
+    output: [
+      `\`\`\`python\n${code}\n\`\`\``,
+      `\`\`\`mermaid\n${diagram}\n\`\`\``,
+      "[Generated link](https://example.invalid/private)",
+      "![Generated image](https://example.invalid/image)",
+    ].join("\n\n"),
+    model: "fixture-model",
+    provider: "fixture-provider",
+    activities: [],
+    activityState: "No activity",
+    activityHasMore: false,
+    observedAt: "2026-10-21T10:00:02Z",
+  };
+  const inspect = (next: InspectionView) =>
+    page.evaluate(
+      (value) =>
+        window.postMessage(
+          {
+            type: "inspection",
+            view: value,
+            loading: false,
+            connected: true,
+            error: "",
+          },
+          "*",
+        ),
+      next,
+    );
+  await inspect(view);
+  await page.getByRole("button", { name: "Output", exact: true }).click();
+  const output = page.locator("#inspection-content");
+  const block = output.getByRole("region", {
+    name: "python code block",
+    exact: true,
+  });
+  await expect(block.locator(".syntax-keyword").first()).toHaveText("def");
+  await block.getByRole("button", { name: "Copy code", exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { copiedText: string }).copiedText,
+      ),
+    )
+    .toBe(code);
+  const wrap = block.getByRole("button", { name: "Wrap code", exact: true });
+  await wrap.click();
+  await expect(wrap).toHaveAttribute("aria-pressed", "true");
+  await expect(block.locator("pre")).toHaveCSS("white-space", "pre-wrap");
+  const preview = output.getByRole("img", {
+    name: "Mermaid diagram",
+    exact: true,
+  });
+  await expect(preview).toBeVisible();
+  const mermaid = output.getByRole("region", {
+    name: "mermaid code block",
+    exact: true,
+  });
+  await mermaid.getByRole("button", { name: "Source", exact: true }).click();
+  await expect(mermaid.locator("pre code")).toHaveText(diagram);
+  await mermaid.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(preview).toBeVisible();
+  await expect(output.locator("a, img, script, foreignObject")).toHaveCount(0);
+
+  // Refreshes of unchanged output retain the live controls; changing tabs
+  // disposes the old root and remounts a fully interactive output preview.
+  await inspect({ ...view, observedAt: "2026-10-21T10:00:03Z" });
+  await expect(wrap).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await expect(output.locator(".markdown-code-block")).toHaveCount(0);
+  await page.getByRole("button", { name: "Output", exact: true }).click();
+  await expect(block.locator(".syntax-keyword").first()).toHaveText("def");
+  await expect(wrap).toHaveAttribute("aria-pressed", "false");
+  await expect(preview).toBeVisible();
+  await page.screenshot({ path: "artifacts/inspector-markdown.png" });
+
+  const replacement = 'def inspect():\n    return "replacement output"';
+  await inspect({
+    ...view,
+    run: { ...view.run, id: "replacement-run" },
+    output: `\`\`\`python\n${replacement}\n\`\`\``,
+  });
+  await expect(block.locator("pre code")).toHaveText(replacement);
+  await expect(block.locator(".syntax-keyword").first()).toHaveText("def");
+  await expect(preview).toHaveCount(0);
+  await block.getByRole("button", { name: "Copy code", exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => (window as unknown as { copiedText: string }).copiedText,
+      ),
+    )
+    .toBe(replacement);
+  await page.evaluate(() =>
+    window.dispatchEvent(new PageTransitionEvent("pagehide")),
+  );
+  await expect(output.locator(".markdown-code-block")).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { policyViolations: string[] }).policyViolations,
+    ),
+  ).toEqual([]);
   expect(errors).toEqual([]);
   expect(outbound).toEqual([]);
 });
