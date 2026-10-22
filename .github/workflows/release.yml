@@ -885,6 +885,16 @@ jobs:
           key: release-desktop-x86_64-pc-windows-msvc
           cache-targets: false
 
+      - name: Select the Windows Desktop C and C++ compiler
+        shell: pwsh
+        timeout-minutes: 1
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Compiler = (Get-Command clang-cl.exe -CommandType Application -ErrorAction Stop).Source
+          & $Compiler --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @("CC=$Compiler", "CXX=$Compiler") | Add-Content -LiteralPath $env:GITHUB_ENV
+
       - name: Install locked Desktop dependencies
         working-directory: apps/desktop
         run: |
@@ -1094,6 +1104,16 @@ jobs:
           workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
           key: release-desktop-signed-x86_64-pc-windows-msvc
           cache-targets: false
+
+      - name: Select the Windows Desktop C and C++ compiler
+        shell: pwsh
+        timeout-minutes: 1
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Compiler = (Get-Command clang-cl.exe -CommandType Application -ErrorAction Stop).Source
+          & $Compiler --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @("CC=$Compiler", "CXX=$Compiler") | Add-Content -LiteralPath $env:GITHUB_ENV
 
       - name: Install locked Desktop dependencies
         working-directory: apps/desktop

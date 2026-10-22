@@ -1328,6 +1328,30 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
   );
 });
 
+for (const jobName of ["desktop_windows_preview", "desktop_windows_signed"]) {
+  test(`${jobName} verifies both native compilers before building Desktop`, () => {
+    const job = read(".github/workflows/release.yml")
+      .split(/\n(?=  [\w-]+:\n)/u)
+      .find((section) => section.startsWith(`  ${jobName}:\n`));
+    assert.ok(job, `${jobName} release job must exist`);
+    const steps = job.split(/\n(?=      - name:)/u);
+    const compiler = steps.findIndex((step) => step.includes("Get-Command clang-cl.exe"));
+    const nativeBuild = steps.findIndex((step) =>
+      /^\s*(?:run:\s*)?(?:cargo\s|tauri\s|\.\/scripts\/(?:stage-browser-windows-preview|package-desktop-windows)\.ps1)/mu.test(step),
+    );
+    assert.ok(compiler >= 0 && nativeBuild > compiler,
+      "verify the native compiler before the first Cargo, browser or packaging build");
+    const probe = steps[compiler];
+    assert.match(probe, /shell: pwsh\n/u);
+    assert.match(probe, /timeout-minutes: 1\n/u);
+    assert.doesNotMatch(probe, /continue-on-error:|\n        if:/u);
+    assert.match(probe, /\$ErrorActionPreference = 'Stop'/u);
+    assert.match(probe, /\$Compiler = \(Get-Command clang-cl\.exe -CommandType Application -ErrorAction Stop\)\.Source/u);
+    assert.match(probe, /& \$Compiler --version\s+if \(\$LASTEXITCODE -ne 0\) \{ exit \$LASTEXITCODE \}/u);
+    assert.match(probe, /@\("CC=\$Compiler", "CXX=\$Compiler"\) \| Add-Content -LiteralPath \$env:GITHUB_ENV/u);
+  });
+}
+
 test("Developer Preview compilation and ad-hoc signing use separate runners", () => {
   const workflow = read(".github/workflows/release.yml");
   const buildStart = workflow.indexOf("  desktop_macos_build:");
