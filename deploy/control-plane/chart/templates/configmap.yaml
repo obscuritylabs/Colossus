@@ -1,0 +1,29 @@
+{{- $dbTls := dict "kind" "webpki_roots" -}}
+{{- if .Values.postgres.enabled -}}
+  {{- $dbTls = dict "kind" "in_cluster" "service" (include "cp.postgresName" .) "namespace" .Release.Namespace -}}
+{{- else if eq .Values.database.external.tls.mode "custom_ca" -}}
+  {{- $dbTls = dict "kind" "custom_ca" "caPemPath" "/etc/colossus/database/ca.pem" -}}
+{{- end -}}
+{{- $oidc := ternary (dict "label" .Values.auth.oidc.label "issuer" .Values.auth.oidc.issuer "client_id" .Values.auth.oidc.clientId "client_secret_file" (ternary "/etc/colossus/oidc/client-secret" nil (or (ne .Values.auth.oidc.existingSecret "") (ne .Values.auth.oidc.clientSecret "")))) nil .Values.auth.oidc.enabled -}}
+{{- $local := ternary (dict "session_seconds" .Values.auth.local.sessionSeconds) nil .Values.auth.local.enabled -}}
+{{- $bootstrap := dict "display_name" .Values.auth.bootstrap.displayName "email" (default nil .Values.auth.bootstrap.email) "oidc_subject" (default nil .Values.auth.bootstrap.oidcSubject) "username" (ternary .Values.auth.bootstrap.username nil .Values.auth.local.enabled) "password_variable" (ternary "COLOSSUS_CONTROL_PLANE_BOOTSTRAP_PASSWORD" nil .Values.auth.local.enabled) -}}
+{{- $config := dict
+  "http_bind" "0.0.0.0:8080" "grpc_bind" "0.0.0.0:8443"
+  "public_origin" (printf "https://%s" .Values.browserHost)
+  "grpc_endpoint" (printf "https://%s" .Values.connectorHost)
+  "ca_certificate" "/etc/colossus/tls/ca.pem" "ca_key" "/etc/colossus/tls/ca-key.pem"
+  "server_certificate" "/etc/colossus/tls/server.pem" "server_key" "/etc/colossus/tls/server-key.pem"
+  "web_root" "/opt/colossus/web" "local_development" false "memberships" (list)
+  "oidc" $oidc "local_auth" $local "bootstrap_admin" (ternary $bootstrap nil .Values.auth.bootstrap.enabled)
+  "auth_key_variable" "COLOSSUS_CONTROL_PLANE_AUTH_KEY"
+  "database" (dict "connectionVariable" "COLOSSUS_CONTROL_PLANE_DATABASE" "schema" .Values.database.schema "tls" $dbTls "maxConnections" .Values.database.maxConnections "connectionTimeoutMs" .Values.database.connectionTimeoutMs "statementTimeoutMs" .Values.database.statementTimeoutMs)
+  "maintenance" .Values.maintenance "classification" .Values.classification -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "cp.fullname" . }}-config
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+data:
+  control-plane.json: |
+    {{- $config | toPrettyJson | nindent 4 }}

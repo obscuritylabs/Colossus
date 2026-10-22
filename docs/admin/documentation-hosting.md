@@ -7,7 +7,7 @@ type: how-to
 
 # Host public documentation
 
-The Control Plane Kubernetes template serves public documentation at
+The Control Plane Helm chart serves public documentation at
 `https://colossus.example.com/docs/`. The documentation image contains the same
 canonical Zensical pages, local search index, diagrams, and compatibility redirects
 as its source release. It runs separately from the Control Plane and needs no
@@ -16,7 +16,7 @@ database, account, credentials, or persistent volume.
 ## Deploy with the Control Plane
 
 Follow [Control Plane deployment](cloud-control-plane.md#deploy-on-kubernetes) and
-select both images in `deploy/control-plane/kubernetes/kustomization.yaml`:
+select matching `image` and `documentation.image` tags or digests in Helm values:
 
 - `ghcr.io/obscuritylabs/colossus-control-plane:TAG`
 - `ghcr.io/obscuritylabs/colossus-documentation:TAG`
@@ -26,23 +26,24 @@ digests. Wait for the documentation candidate and publication workflows to succe
 the source checkout alone does not establish that a registry image exists. On first
 GHCR publication, verify public package visibility and an anonymous pull of its
 published digest before advertising the image. Replace the example browser hostname
-and supply its TLS Secret. The browser
-Ingress routes `/docs` to the documentation Service and `/` to the Control Plane;
+and supply its TLS Secret. The selected browser
+route sends `/docs` to the documentation Service and `/` to the Control Plane;
 keep `/docs/` intact and do not add a path rewrite. The same browser certificate covers
 both applications. A separate hostname can route its `/docs` prefix to the same
 documentation Service.
 
 ```sh
-kubectl kustomize deploy/control-plane/kubernetes
-kubectl apply -k deploy/control-plane/kubernetes
-kubectl -n colossus rollout status deployment/colossus-documentation
+helm template colossus-control-plane \
+  oci://registry-1.docker.io/obscuritylabs/colossus-control-plane-chart \
+  --version X.Y.Z --namespace colossus -f deployment-values.yaml
+kubectl -n colossus rollout status deployment/colossus-control-plane-docs
 curl --fail https://colossus.example.com/docs/
 curl --fail https://colossus.example.com/docs/admin/cloud-control-plane/
 curl --fail https://colossus.example.com/docs/search.json
 ```
 
-The documentation deployment has two replicas and a disruption budget. It runs as
-UID/GID 10001, drops all capabilities, disables privilege escalation and service-account
+The documentation deployment has three replicas and a disruption budget. It uses UID/GID 10001 on standard Kubernetes and SCC-assigned identities on OpenShift,
+drops all capabilities, disables privilege escalation and service-account
 tokens, uses a read-only root filesystem, and mounts only a bounded temporary directory.
 Readiness reads the actual generated homepage; liveness checks the static server.
 GET and HEAD are supported. Missing pages retain HTTP 404 responses.

@@ -23,7 +23,7 @@ pub(super) fn trust(
     additional: &AdditionalRootCertificates,
 ) -> CloudResult<Option<MakeRustlsConnect>> {
     let mut roots = match &config.tls {
-        CloudDatabaseTls::Disabled => return Ok(None),
+        CloudDatabaseTls::Disabled | CloudDatabaseTls::InCluster { .. } => return Ok(None),
         CloudDatabaseTls::WebpkiRoots => {
             let mut roots = RootCertStore {
                 roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
@@ -67,12 +67,21 @@ pub(super) fn trust(
 }
 
 pub(super) fn parse(value: &str, config: &CloudDatabaseConfig) -> CloudResult<Config> {
+    config.validate()?;
     let mut pg = value
         .parse::<Config>()
         .map_err(|_| CloudError::InvalidArgument)?;
     pg.application_name("colossus-cloud");
     pg.connect_timeout(Duration::from_millis(config.connection_timeout_ms));
-    if config.tls == CloudDatabaseTls::Disabled {
+    if let CloudDatabaseTls::InCluster { service, namespace } = &config.tls {
+        let expected = format!("{service}.{namespace}.svc");
+        if !matches!(pg.get_hosts(), [Host::Tcp(host)] if host == &expected)
+            || !pg.get_hostaddrs().is_empty()
+        {
+            return Err(CloudError::InvalidArgument);
+        }
+        pg.ssl_mode(SslMode::Disable);
+    } else if config.tls == CloudDatabaseTls::Disabled {
         if !pg.get_hosts().iter().all(|host| match host {
             Host::Tcp(host) => {
                 host.eq_ignore_ascii_case("localhost")
@@ -82,7 +91,8 @@ pub(super) fn parse(value: &str, config: &CloudDatabaseConfig) -> CloudResult<Co
             }
             #[cfg(unix)]
             Host::Unix(_) => true,
-        }) {
+        }) || !pg.get_hostaddrs().iter().all(std::net::IpAddr::is_loopback)
+        {
             return Err(CloudError::InvalidArgument);
         }
         pg.ssl_mode(SslMode::Disable);
@@ -126,4 +136,94 @@ pub(super) async fn establish(
         .await
         .map_err(|_| categorical_connection_error())?;
     Ok(connection)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(tls: CloudDatabaseTls) -> CloudDatabaseConfig {
+        CloudDatabaseConfig {
+            connection_variable: "DATABASE_URL".into(),
+            schema: "control_plane".into(),
+            tls,
+            max_connections: 8,
+            connection_timeout_ms: 5000,
+            statement_timeout_ms: 15000,
+        }
+    }
+
+    #[test]
+    fn in_cluster_plaintext_requires_one_exact_service_and_no_address_override() {
+        let config = config(CloudDatabaseTls::InCluster {
+            service: "colossus-postgres".into(),
+            namespace: "colossus".into(),
+        });
+        let parsed = parse("host=colossus-postgres.colossus.svc user=colossus", &config).unwrap();
+        assert_eq!(parsed.get_ssl_mode(), SslMode::Disable);
+        for value in [
+            "host=database.example.com",
+            "host=colossus-postgres.other.svc",
+            "host=colossus-postgres",
+            "host=colossus-postgres.colossus.svc.evil.example",
+            "host=colossus-postgres.colossus.svc,external.example.com",
+            "host=colossus-postgres.colossus.svc hostaddr=203.0.113.1",
+            "hostaddr=127.0.0.1",
+            "host=/tmp",
+            "user=colossus",
+        ] {
+            assert!(parse(value, &config).is_err(), "accepted {value}");
+        }
+    }
+
+    #[test]
+    fn disabled_fixture_tls_cannot_override_loopback_with_a_remote_address() {
+        let config = config(CloudDatabaseTls::Disabled);
+        assert!(parse("host=localhost hostaddr=203.0.113.1", &config).is_err());
+        assert!(parse("host=localhost hostaddr=127.0.0.1", &config).is_ok());
+    }
+
+    #[test]
+    fn verified_tls_is_required_even_when_the_url_requests_plaintext() {
+        let config = config(CloudDatabaseTls::WebpkiRoots);
+        let parsed = parse("host=database.example.com sslmode=disable", &config).unwrap();
+        assert_eq!(parsed.get_ssl_mode(), SslMode::Require);
+    }
+
+    #[test]
+    fn in_cluster_names_are_dns_labels_and_roundtrip_as_explicit_configuration() {
+        for name in [
+            "",
+            "other.svc",
+            "-postgres",
+            "postgres-",
+            "Postgres",
+            "../postgres",
+        ] {
+            assert!(
+                config(CloudDatabaseTls::InCluster {
+                    service: name.into(),
+                    namespace: "colossus".into(),
+                })
+                .validate()
+                .is_err()
+            );
+            assert!(
+                config(CloudDatabaseTls::InCluster {
+                    service: "postgres".into(),
+                    namespace: name.into(),
+                })
+                .validate()
+                .is_err()
+            );
+        }
+        let value = config(CloudDatabaseTls::InCluster {
+            service: "postgres".into(),
+            namespace: "colossus".into(),
+        });
+        let json = serde_json::to_value(&value).unwrap();
+        assert_eq!(json["tls"]["kind"], "in_cluster");
+        let decoded: CloudDatabaseConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, value);
+    }
 }

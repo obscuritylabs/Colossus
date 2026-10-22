@@ -1,0 +1,7 @@
+routing:
+  mode: istio
+  istio:
+    gateways: [istio-system/colossus]
+mesh:
+  mode: sidecar
+# See gateway-listeners.yaml for the platform-owned gateway prerequisite.

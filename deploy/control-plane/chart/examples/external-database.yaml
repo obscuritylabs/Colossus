@@ -1,0 +1,13 @@
+postgres:
+  enabled: false
+database:
+  external:
+    existingSecret: colossus-database-url
+    secretKey: database
+    tls:
+      mode: webpki_roots
+# For RDS or a private CA, also use:
+#     tls:
+#       mode: custom_ca
+#       existingSecret: colossus-database-ca
+#       caKey: ca.pem

@@ -1,0 +1,11 @@
+routing:
+  mode: istio
+  istio:
+    gateways: [istio-system/colossus]
+mesh:
+  mode: ambient
+# Enroll database pods too; never enable namespace sidecar injection in ambient mode.
+postgres:
+  podLabels:
+    istio.io/dataplane-mode: ambient
+    sidecar.istio.io/inject: "false"

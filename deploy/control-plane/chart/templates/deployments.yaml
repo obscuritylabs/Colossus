@@ -1,0 +1,196 @@
+{{- range $component := list "server" "documentation" }}
+{{- $server := eq $component "server" }}
+{{- if or $server $.Values.documentation.enabled }}
+{{- $name := include "cp.fullname" $ }}
+{{- if not $server }}{{ $name = printf "%s-docs" $name }}{{ end }}
+{{- $image := ternary $.Values.image $.Values.documentation.image $server }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "cp.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  {{- if or (not $server) (not $.Values.autoscaling.enabled) }}
+  replicas: {{ ternary $.Values.replicaCount $.Values.documentation.replicaCount $server }}
+  {{- end }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "cp.componentSelector" (dict "root" $ "component" $component) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- mergeOverwrite (deepCopy $.Values.podLabels) (include "cp.componentSelector" (dict "root" $ "component" $component) | fromYaml) (include "cp.meshLabels" $ | fromYaml) | toYaml | nindent 8 }}
+      {{- $annotations := deepCopy $.Values.podAnnotations }}
+      {{- if $server }}
+        {{- $_ := set $annotations "checksum/config" (include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum) }}
+        {{- $_ := set $annotations "colossus.ai/tls-renewal-revision" $.Values.tls.renewalRevision }}
+      {{- end }}
+      {{- with $annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 45
+      {{- with $.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- include "cp.podSecurityContext" $ | nindent 8 }}
+      {{- include "cp.spread" (dict "root" $ "component" $component) | nindent 6 }}
+      {{- with $.Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ $component }}
+          image: {{ include "cp.image" (dict "root" $ "image" $image) | quote }}
+          imagePullPolicy: {{ $image.pullPolicy }}
+          securityContext:
+            {{- include "cp.containerSecurityContext" $ | nindent 12 }}
+          resources:
+            {{- ternary $.Values.resources $.Values.documentation.resources $server | toYaml | nindent 12 }}
+          ports:
+            - {name: http, containerPort: 8080}
+            {{- if $server }}
+            - {name: tls-connector, containerPort: 8443}
+            {{- end }}
+          {{- if $server }}
+          env:
+            - name: COLOSSUS_CONTROL_PLANE_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  {{- if $.Values.postgres.enabled }}
+                  name: {{ include "cp.databaseSecret" $ }}
+                  key: uri
+                  {{- else }}
+                  name: {{ include "cp.externalDatabaseSecret" $ }}
+                  key: {{ $.Values.database.external.secretKey }}
+                  {{- end }}
+            - name: COLOSSUS_CONTROL_PLANE_AUTH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cp.stateSecret" $ }}
+                  key: {{ $.Values.auth.state.authKeyKey }}
+            {{- if and $.Values.auth.bootstrap.enabled $.Values.auth.local.enabled }}
+            - name: COLOSSUS_CONTROL_PLANE_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cp.stateSecret" $ }}
+                  key: {{ $.Values.auth.state.bootstrapPasswordKey }}
+            {{- end }}
+          startupProbe:
+            httpGet: {path: /health/ready, port: http}
+            periodSeconds: 2
+            failureThreshold: 150
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: {{ ternary "/health/ready" "/docs/" $server }}
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 10
+          volumeMounts:
+            - {name: temporary, mountPath: /tmp}
+            {{- if $server }}
+            - {name: config, mountPath: /etc/colossus/control-plane.json, subPath: control-plane.json, readOnly: true}
+            - {name: tls, mountPath: /etc/colossus/tls, readOnly: true}
+            {{- if and $.Values.auth.oidc.enabled (or $.Values.auth.oidc.existingSecret $.Values.auth.oidc.clientSecret) }}
+            - {name: oidc, mountPath: /etc/colossus/oidc, readOnly: true}
+            {{- end }}
+            {{- if and (not $.Values.postgres.enabled) (eq $.Values.database.external.tls.mode "custom_ca") }}
+            - {name: database-ca, mountPath: /etc/colossus/database, readOnly: true}
+            {{- end }}
+            {{- end }}
+      volumes:
+        - name: temporary
+          emptyDir: {sizeLimit: 64Mi}
+        {{- if $server }}
+        - name: config
+          configMap:
+            name: {{ include "cp.fullname" $ }}-config
+        - name: tls
+          secret:
+            secretName: {{ include "cp.tlsSecret" $ }}
+            defaultMode: 288
+            items:
+              - {key: {{ $.Values.tls.caCertificateKey }}, path: ca.pem}
+              - {key: {{ $.Values.tls.caPrivateKeyKey }}, path: ca-key.pem}
+              - {key: {{ $.Values.tls.serverCertificateKey }}, path: server.pem}
+              - {key: {{ $.Values.tls.serverPrivateKeyKey }}, path: server-key.pem}
+        {{- if and $.Values.auth.oidc.enabled (or $.Values.auth.oidc.existingSecret $.Values.auth.oidc.clientSecret) }}
+        - name: oidc
+          secret:
+            secretName: {{ include "cp.oidcSecret" $ }}
+            defaultMode: 288
+            items:
+              - {key: {{ $.Values.auth.oidc.secretKey }}, path: client-secret}
+        {{- end }}
+        {{- if and (not $.Values.postgres.enabled) (eq $.Values.database.external.tls.mode "custom_ca") }}
+        - name: database-ca
+          secret:
+            secretName: {{ include "cp.databaseCaSecret" $ }}
+            defaultMode: 288
+            items:
+              - {key: {{ $.Values.database.external.tls.caKey }}, path: ca.pem}
+        {{- end }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "cp.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+  {{- if $server }}
+  {{- with $.Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "cp.componentSelector" (dict "root" $ "component" $component) | nindent 4 }}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+    {{- if $server }}
+    - {name: tls-connector, port: 8443, targetPort: tls-connector}
+    {{- end }}
+{{- if $.Values.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "cp.labels" $ | nindent 4 }}
+spec:
+  maxUnavailable: {{ $.Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "cp.componentSelector" (dict "root" $ "component" $component) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

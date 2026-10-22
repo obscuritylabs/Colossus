@@ -89,12 +89,15 @@ Build the standalone Control Plane image from the repository root:
 
 ```sh
 docker build -f deploy/control-plane/Dockerfile -t colossus-control-plane:local .
-kubectl kustomize deploy/control-plane/kubernetes
+cargo xtask check helm
 ```
 
 The default image uses the release profile. `--build-arg PROFILE=dev` builds a stripped
 debug image for local Linux acceptance. Builder/runtime images and local fixtures are
-digest pinned. Production deployment and Secret configuration belong to the
+digest pinned. The Helm chart replaces the Kustomize manifests and is packaged with its pinned
+PostgreSQL dependency for disconnected installs. Static validation covers Kubernetes
+1.34, routing variants, OpenShift identities, authentication and real server config;
+it does not install or upgrade a cluster. Production deployment and Secret configuration belong to the
 [operator guide](../admin/cloud-control-plane.md).
 
 Run the [local documentation image](documentation.md#build-the-on-prem-documentation-image)

@@ -1,0 +1,53 @@
+{{- if eq .Values.browserHost .Values.connectorHost -}}
+  {{- fail "browserHost and connectorHost must be different TLS SNI hostnames" -}}
+{{- end -}}
+{{- if and (not .Values.auth.local.enabled) (not .Values.auth.oidc.enabled) -}}
+  {{- fail "enable local authentication, OIDC, or both" -}}
+{{- end -}}
+{{- if and .Values.auth.bootstrap.enabled (not .Values.auth.local.enabled) (not .Values.auth.bootstrap.oidcSubject) -}}
+  {{- fail "OIDC-only bootstrap requires auth.bootstrap.oidcSubject" -}}
+{{- end -}}
+{{- if and .Values.auth.oidc.enabled (or (not .Values.auth.oidc.issuer) (not .Values.auth.oidc.clientId)) -}}
+  {{- fail "OIDC requires issuer and clientId" -}}
+{{- end -}}
+{{- if and .Values.autoscaling.enabled (lt (int .Values.autoscaling.maxReplicas) (int .Values.autoscaling.minReplicas)) -}}
+  {{- fail "autoscaling.maxReplicas must be >= minReplicas" -}}
+{{- end -}}
+{{- if and .Values.postgres.enabled .Values.postgres.namespaceOverride (ne .Values.postgres.namespaceOverride .Release.Namespace) -}}
+  {{- fail "bundled postgres must use the release namespace" -}}
+{{- end -}}
+{{- if and .Values.postgres.enabled (ne .Values.postgres.service.type "ClusterIP") -}}
+  {{- fail "bundled plaintext postgres must use a ClusterIP Service" -}}
+{{- end -}}
+{{- if and .Values.postgres.enabled (ne (int .Values.postgres.replicaCount) 1) -}}
+  {{- fail "bundled postgres is a single persistent instance; use external PostgreSQL for HA" -}}
+{{- end -}}
+{{- if and .Values.postgres.enabled (gt (len (include "cp.postgresName" .)) 50) -}}
+  {{- fail "bundled postgres name must be at most 50 characters; set postgres.fullnameOverride" -}}
+{{- end -}}
+{{- if and .Values.postgres.enabled (eq .Values.platform "openshift") (not (.Capabilities.APIVersions.Has "route.openshift.io/v1")) (ne .Values.postgres.targetPlatform "openshift") -}}
+  {{- fail "set postgres.targetPlatform=openshift with platform=openshift for offline rendering" -}}
+{{- end -}}
+
+{{- if and .Values.auth.bootstrap.oidcSubject (not .Values.auth.oidc.enabled) -}}
+  {{- fail "auth.bootstrap.oidcSubject requires OIDC to be enabled" -}}
+{{- end -}}
+{{- if and .Values.auth.bootstrap.enabled .Values.auth.local.enabled (not .Values.auth.bootstrap.username) -}}
+  {{- fail "local bootstrap requires auth.bootstrap.username" -}}
+{{- end -}}
+{{- if eq .Values.auth.state.authKeyKey .Values.auth.state.bootstrapPasswordKey -}}
+  {{- fail "auth key and bootstrap password must use different Secret keys" -}}
+{{- end -}}
+{{- $keys := list .Values.tls.caCertificateKey .Values.tls.caPrivateKeyKey .Values.tls.serverCertificateKey .Values.tls.serverPrivateKeyKey -}}
+{{- if ne (len ($keys | uniq)) 4 -}}
+  {{- fail "connector TLS Secret keys must be distinct" -}}
+{{- end -}}
+{{- if and (not .Values.tls.existingSecret) (not .Values.tls.caCertificate) (or .Values.tls.caPrivateKey .Values.tls.serverCertificate .Values.tls.serverPrivateKey) -}}
+  {{- fail "supply the complete connector CA/key and server certificate/key set" -}}
+{{- end -}}
+{{- if and .Values.postgres.enabled (ne (tpl .Values.postgres.customUser.existingSecret .Subcharts.postgres) (include "cp.databaseSecret" .)) -}}
+  {{- fail "configure the bundled application Secret with global.databaseSecretName" -}}
+{{- end -}}
+{{- if and .Values.postgres.enabled (ne (tpl .Values.postgres.auth.existingSecret .Subcharts.postgres) (include "cp.postgresAdminSecret" .)) -}}
+  {{- fail "configure the bundled administrator Secret with global.postgresAdminSecretName" -}}
+{{- end -}}

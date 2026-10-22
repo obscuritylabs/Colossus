@@ -526,3 +526,44 @@ node scripts/ci/release-oci.mjs prepare v0.10.10-preview.12 /tmp/new-release-out
 The round-trip check requires ORAS 1.3.4 and opens no socket. CI pins the ORAS installer
 action and verifies the downloaded CLI checksum; it runs the contracts and real local
 OCI round trip before any job receives registry write permission.
+
+## Control Plane Helm chart
+
+The chart's `version` and `appVersion` in `deploy/control-plane/chart/Chart.yaml` must
+match `[workspace.package].version` and the annotated release tag without its `v`.
+Update all three during release preparation; validation rejects drift. The first chart
+release must contain the server change that recognizes `in_cluster` database transport;
+earlier published server images cannot run the default bundled-database configuration. Its PostgreSQL
+dependency is vendored with a lockfile, archive checksum and upstream licenses. Update
+it only in a reviewed source change and rerun `cargo xtask check helm`.
+
+`control-plane-chart.yml` runs static Helm validation on chart/application configuration
+pull requests and annotated release tags. It retains the exact packaged offline chart
+and a source/digest manifest for thirty days on successful tag builds. It never installs
+or upgrades a cluster. A release archive also includes the chart source under `deploy/`.
+
+Before first publication, create the public Docker Hub repository
+`obscuritylabs/colossus-control-plane-chart`. Configure the GitHub environment
+`control-plane-chart-publication` to admit only approved publisher runs and provide
+`DOCKERHUB_USERNAME` and a `DOCKERHUB_TOKEN` with write access limited to that repository.
+Enable immutable release tags in the registry. The existing GHCR server/documentation
+image publication remains separate; both must succeed before advertising a chart that
+uses their release-matched tags.
+
+Publishing the reviewed GitHub Release runs `control-plane-chart-publish.yml`. Protected
+main publisher code verifies the annotated tag's ancestry and exact successful tag
+candidate before using Docker Hub credentials. It pushes that candidate's unchanged
+bytes through Helm OCI, refuses conflicting existing version tags, and pulls the result
+back to verify the archive digest. Matching retries reuse the existing version. No
+moving alias is published. For an interrupted publication:
+
+```sh
+gh workflow run control-plane-chart-publish.yml --ref main -f tag=vX.Y.Z
+```
+
+An expired candidate blocks publication; restore an exact successful tag build before
+retrying. Verify public package visibility and an anonymous chart pull before announcing
+availability. Export the published chart and all three images for disconnected installs;
+the packaged chart already contains every chart dependency. Registry publication is
+not evidence of a successful cluster deployment. Follow the operator guide for database
+backup, certificate retention and rollout checks.

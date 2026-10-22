@@ -1,0 +1,11 @@
+auth:
+  oidc:
+    enabled: true
+    label: Keycloak
+    issuer: https://identity.example.com/realms/colossus
+    clientId: colossus
+    existingSecret: colossus-oidc
+  bootstrap:
+    oidcSubject: REPLACE_WITH_VERIFIED_SUBJECT
+# Local accounts remain enabled. To disable: auth.local.enabled=false.
+# Register https://colossus.example.com/auth/callback with the provider.

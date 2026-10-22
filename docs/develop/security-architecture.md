@@ -1299,3 +1299,16 @@ durable effect evidence or a new session; they are never silently truncated or g
 Security-boundary changes require focused negative tests, permit-claim/replay tests,
 adapter quarantine tests, journal evidence tests, and the relevant live platform
 acceptance suite.
+
+## Bundled Control Plane database transport
+
+[ADR 0009](adr/0009-control-plane-helm-database-boundary.md) records this deployment
+trust decision. The Helm deployment may explicitly select `database.tls.kind: in_cluster` for its
+bundled PostgreSQL Service. That mode requires one exact `SERVICE.NAMESPACE.svc` host
+and rejects host-address overrides and multiple hosts. It is an operator-selected
+cluster trust boundary, not a namespace or network-isolation attestation. The chart
+keeps the database Service private and supplies an ingress NetworkPolicy; enforcement
+requires the platform CNI. External databases retain verified public-root or private-CA
+TLS. The separate disabled-TLS fixture mode remains loopback/Unix-only and is rejected
+by production server configuration. Neither setting relaxes connector mutual TLS,
+browser authentication, runtime policy, or journal boundaries.

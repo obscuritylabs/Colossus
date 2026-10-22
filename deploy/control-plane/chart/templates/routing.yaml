@@ -1,0 +1,127 @@
+{{- $name := include "cp.fullname" . }}
+{{- if eq .Values.routing.mode "ingress-nginx" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}-browser
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+  annotations:
+    {{- mergeOverwrite (dict "nginx.ingress.kubernetes.io/proxy-read-timeout" "3600" "nginx.ingress.kubernetes.io/proxy-send-timeout" "3600") .Values.routing.ingress.browserAnnotations (dict "nginx.ingress.kubernetes.io/proxy-buffering" "off" "nginx.ingress.kubernetes.io/ssl-redirect" "true") | toYaml | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.routing.ingress.className }}
+  tls:
+    - hosts: [{{ .Values.browserHost | quote }}]
+      secretName: {{ .Values.routing.browserTlsSecret }}
+  rules:
+    - host: {{ .Values.browserHost | quote }}
+      http:
+        paths:
+          {{- if .Values.documentation.enabled }}
+          - path: /docs
+            pathType: Prefix
+            backend:
+              service: {name: {{ $name }}-docs, port: {name: http}}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: {{ $name }}, port: {name: http}}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $name }}-connector
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+  annotations:
+    {{- mergeOverwrite (deepCopy .Values.routing.ingress.connectorAnnotations) (dict "nginx.ingress.kubernetes.io/ssl-passthrough" "true" "nginx.ingress.kubernetes.io/backend-protocol" "HTTPS") | toYaml | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.routing.ingress.className }}
+  rules:
+    - host: {{ .Values.connectorHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: {{ $name }}, port: {name: tls-connector}}
+{{- else if eq .Values.routing.mode "istio" }}
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $name }}-browser
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+spec:
+  hosts: [{{ .Values.browserHost | quote }}]
+  gateways: {{ toJson .Values.routing.istio.gateways }}
+  http:
+    {{- if .Values.documentation.enabled }}
+    - match:
+        - uri: {exact: /docs}
+        - uri: {prefix: /docs/}
+      route:
+        - destination: {host: {{ $name }}-docs.{{ .Release.Namespace }}.svc.cluster.local, port: {number: 8080}}
+    {{- end }}
+    - route:
+        - destination: {host: {{ $name }}.{{ .Release.Namespace }}.svc.cluster.local, port: {number: 8080}}
+      timeout: 0s
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: {{ $name }}-connector
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+spec:
+  hosts: [{{ .Values.connectorHost | quote }}]
+  gateways: {{ toJson .Values.routing.istio.gateways }}
+  tls:
+    - match:
+        - port: 443
+          sniHosts: [{{ .Values.connectorHost | quote }}]
+      route:
+        - destination: {host: {{ $name }}.{{ .Release.Namespace }}.svc.cluster.local, port: {number: 8443}}
+{{- else if eq .Values.routing.mode "gateway-api" }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $name }}-browser
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.routing.gatewayAPI.name }}
+      namespace: {{ default .Release.Namespace .Values.routing.gatewayAPI.namespace }}
+      sectionName: {{ .Values.routing.gatewayAPI.browserSectionName }}
+  hostnames: [{{ .Values.browserHost | quote }}]
+  rules:
+    {{- if .Values.documentation.enabled }}
+    - matches:
+        - path: {type: PathPrefix, value: /docs}
+      backendRefs:
+        - {name: {{ $name }}-docs, port: 8080}
+    {{- end }}
+    - matches:
+        - path: {type: PathPrefix, value: /}
+      timeouts: {request: 0s}
+      backendRefs:
+        - {name: {{ $name }}, port: 8080}
+---
+apiVersion: {{ .Values.routing.gatewayAPI.tlsRouteApiVersion }}
+kind: TLSRoute
+metadata:
+  name: {{ $name }}-connector
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.routing.gatewayAPI.name }}
+      namespace: {{ default .Release.Namespace .Values.routing.gatewayAPI.namespace }}
+      sectionName: {{ .Values.routing.gatewayAPI.connectorSectionName }}
+  hostnames: [{{ .Values.connectorHost | quote }}]
+  rules:
+    - backendRefs:
+        - {name: {{ $name }}, port: 8443}
+{{- end }}

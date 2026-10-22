@@ -134,7 +134,7 @@ docker build -f deploy/documentation/Dockerfile \
   --build-arg SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" \
   -t colossus-documentation:local .
 node deploy/documentation/smoke.mjs colossus-documentation:local
-kubectl kustomize deploy/control-plane/kubernetes
+cargo xtask check helm
 ```
 
 The smoke runs the actual image with its non-root identity, read-only root filesystem,

@@ -15,39 +15,101 @@ their own journals, provider credentials, tools, policy, approvals and sandboxin
 
 ## Deploy on Kubernetes
 
-Provision PostgreSQL with a dedicated database role and cloud schema. The role must
-own the schema and its tables so startup can apply versioned migrations; it does not
-need access to runtime journals or other application schemas. Configure verified
-TLS and keep database credentials in your normal secret manager.
-Released conversation records are readable by the database role; configure database,
-disk and backup encryption through your deployment platform.
+Use the Helm chart from Docker Hub on Kubernetes 1.34 or newer. The chart replaces
+both former Kustomize deployments and targets GKE, EKS, OpenShift, and disconnected
+installations. Provision DNS, three schedulable zones, a persistent StorageClass,
+a resource metrics API for autoscaling, and your selected ingress/gateway controller.
+The controller and its CRDs are platform prerequisites.
 
-Use `deploy/control-plane/kubernetes`. Pin the server image to an exact published
-release or digest, replace both example hostnames, and configure `control-plane.json`.
-The template also deploys release-matched public documentation at `/docs/`; pin the
-documentation image and retain the Ingress prefix as described in
-[documentation hosting](documentation-hosting.md).
-The server binary is `colossus-control-plane`; `colossus-cloud-server` remains a
-compatibility entry point for existing deployments.
+Create a values file with your two hostnames and routing choice, then install the
+release-matched chart:
 
-The default template supports on-prem installations without an identity provider.
-Set `local_auth` to configure local sessions and provision the first administrator
-with `bootstrap_admin.username`, `display_name`, and a `password_variable` secret
-reference. No default password or public registration exists. The initial password
-must contain at least 15 characters. Include a `bootstrap-password` key in the state
-Secret for initial provisioning; after an administrator exists, bootstrap does not
-replace that account or its credential. Administrators create, suspend, reactivate,
-and reset accounts in **Administration → Users**. Password resets and suspension
-invalidate existing sessions. Password hashes use Argon2id; login throttling is shared
-across replicas.
+```sh
+helm upgrade --install colossus-control-plane \
+  oci://registry-1.docker.io/obscuritylabs/colossus-control-plane-chart \
+  --version X.Y.Z --namespace colossus --create-namespace \
+  -f deployment-values.yaml
+kubectl -n colossus rollout status deployment/colossus-control-plane
+kubectl -n colossus rollout status deployment/colossus-control-plane-docs
+```
 
-To use an identity provider, configure `oidc` with its exact issuer, client, and
-human-readable `label`, such as `Keycloak`. Register the exact browser
-`/auth/callback` URL. Sign-in uses authorization code, S256 PKCE, state, and nonce.
-The login button displays the configured provider label. Set the explicit
-`bootstrap_admin.oidc_subject` for the first global administrator. OIDC users are bound
-to the verified issuer and subject; email does not automatically link accounts.
-Local and OIDC sign-in can be enabled together, or either can be used independently.
+The [chart values and examples](https://github.com/obscuritylabs/Colossus/tree/main/deploy/control-plane/chart)
+own the complete configuration, Secret key contracts, routing prerequisites and
+OpenShift/offline overrides. Pin both server and documentation images to reviewed
+release tags or digests. Wait for all image and chart publication workflows before
+using a new source version. The server image includes the browser application;
+release-matched public documentation is deployed separately at `/docs/` by default.
+
+The default configuration uses local accounts. The chart generates a random initial
+administrator password, a shared flow-encryption key, connector certificates, and
+separate application/administrator database credentials. Read the initial password
+privately from Secret `colossus-control-plane-state`, key `bootstrap-password`.
+There is no default password or public registration. Bootstrap does not reset an
+existing administrator's credential. All generated durable identity Secrets are retained
+on Helm uninstall and reused on reinstall under the same release name and namespace.
+Back them up alongside the database. Existing Secrets can replace every generated
+credential; use stable existing Secrets for GitOps and repeated offline rendering.
+
+Optional OIDC supports GitLab and Keycloak through ordinary issuer/client configuration.
+Register the exact `https://BROWSER_HOST/auth/callback` URL and explicitly set the
+first administrator's verified subject. Local and OIDC sign-in can coexist, or local
+sign-in can be disabled. Accounts bind to verified issuer and subject; email never
+links accounts automatically. OIDC certificates must be trusted by the server's OIDC
+client independently of database CA settings.
+
+### Database, replicas and storage
+
+The chart installs a pinned PostgreSQL dependency with one persistent instance and
+a dedicated non-superuser application role. This database uses explicit plaintext
+`in_cluster` transport to its exact same-namespace Service hostname. A database ingress
+NetworkPolicy restricts access to server pods; ensure your CNI enforces it. This is an
+operator-selected cluster trust boundary, not proof of network isolation or encryption.
+The database is a single point of failure; select external managed PostgreSQL for
+database HA.
+
+For RDS or an existing database, disable `postgres.enabled` and supply the connection
+URL through a Secret. The role must own its dedicated database/schema so startup can
+apply checksummed migrations. External database TLS is mandatory: public trust roots
+or a mounted private CA bundle both verify the certificate and hostname. The loopback
+fixture's disabled-TLS mode remains unavailable to production deployments.
+
+Default autoscaling spans three to six server replicas. Each uses a pool of eight
+connections plus a notification listener: 27 at three pods, 54 at six, or 63 during
+one-pod rolling surge. Reserve additional PostgreSQL capacity for backup and administration.
+Hard zone spreading distributes three replicas across three eligible availability zones.
+For more zones, raise the replica minimum to at least the number of zones; smaller
+clusters require explicit topology overrides. The default resources are initial budgets
+for ten users with agents, rather than a measured capacity guarantee.
+
+Server pods need no persistent volume. PostgreSQL owns cloud state, browser sessions,
+OIDC flows, queues, history and fenced runtime leases; local runtime journals remain
+local. Migrations run at startup under a schema-specific advisory lock, so replicas can
+start concurrently. Helm rollback does not reverse migrations. Follow the
+[backup and restore procedure](#back-up-and-restore-the-cloud-database) before upgrades.
+
+### Browser and connector networking
+
+Browser HTTPS terminates at the trusted controller; keep SSE buffering off and preserve
+`/api`, `/auth`, `/docs/` and direct application URLs. Connector TLS passes through to
+port 8443 with its original client certificate and HTTP/2 stream. It must never be
+terminated and re-originated by the ingress controller.
+
+The chart supports ingress-nginx, Istio VirtualServices with injected sidecars or
+ambient workloads, and Gateway API HTTPRoute/TLSRoute. Each routing controller needs
+an HTTPS browser listener and a distinct connector hostname with TLS passthrough.
+ingress-nginx requires `--enable-ssl-passthrough`. Gateway API needs TLSRoute-capable
+CRDs/controller; Kubernetes alone does not install them. Platform operators own gateway
+listeners, browser HTTPS certificates, mesh admission and network policy. See the chart's
+listener examples and the [documentation hosting guide](documentation-hosting.md).
+
+`/health/live` reports process health; `/health/ready` probes the database. SIGTERM
+closes streams and drains for up to thirty seconds; pods receive a forty-five-second
+grace period so connectors can reconnect from durable cursors. The generated connector
+server leaf must be renewed before expiry. Changing `tls.renewalRevision` reissues it
+under the retained CA and rolls pods. Externally supplied Secret changes require a
+pod rollout; identities are read at process startup.
+
+## Sign-in and project administration
 
 Users, project memberships, and project hierarchy live in PostgreSQL. The legacy
 `memberships` configuration is a one-time migration seed; subsequent configuration
@@ -84,81 +146,6 @@ server handlers.
 Browser-session and PKCE-flow identities are bound to the configured issuer and client
 ID. Changing either invalidates existing browser cookies and in-progress sign-ins;
 users must authenticate again under the new identity configuration.
-
-The database block uses camel-case keys; server-level keys use snake case:
-
-```json
-{
-  "database": {
-    "connectionVariable": "COLOSSUS_CONTROL_PLANE_DATABASE",
-    "schema": "colossus_control_plane",
-    "tls": { "kind": "webpki_roots" },
-    "maxConnections": 16,
-    "connectionTimeoutMs": 5000,
-    "statementTimeoutMs": 15000
-  },
-  "auth_key_variable": "COLOSSUS_CONTROL_PLANE_AUTH_KEY",
-  "maintenance": {
-    "batchLimit": 256,
-    "deliveredOutboxRetentionSeconds": 86400
-  }
-}
-```
-
-Supply a PostgreSQL connection URL in `COLOSSUS_CONTROL_PLANE_DATABASE`; the configuration
-contains only its environment-variable name. `webpki_roots` verifies the database
-hostname and certificate chain. For a private CA, use
-`{"kind":"custom_ca","caPemPath":"/etc/colossus/tls/database-ca.pem"}` and add that
-PEM file to the mounted TLS Secret. Production rejects disabled database TLS.
-
-Generate a separate random 32-byte hex OIDC-flow encryption key and store it in a
-protected file for Secret creation. All replicas must receive the same key. This key
-protects the PKCE/nonce sign-in flow stored in PostgreSQL; it is independent of runtime
-journal encryption and machine certificate keys.
-
-```sh
-kubectl create namespace colossus
-kubectl -n colossus create secret generic colossus-control-plane-state \
-  --from-file=database=/secure/cloud/database-url \
-  --from-file=auth-key=/secure/cloud/auth-key \
-  --from-file=bootstrap-password=/secure/cloud/bootstrap-password
-kubectl -n colossus create secret generic colossus-control-plane-oidc \
-  --from-file=client-secret=/secure/cloud/oidc-client-secret
-kubectl -n colossus create secret generic colossus-control-plane-tls \
-  --from-file=ca.pem=/secure/cloud/ca.pem \
-  --from-file=ca-key.pem=/secure/cloud/ca-key.pem \
-  --from-file=server.pem=/secure/cloud/server.pem \
-  --from-file=server-key.pem=/secure/cloud/server-key.pem
-kubectl -n colossus create secret tls colossus-browser-tls \
-  --cert=/secure/cloud/browser.pem --key=/secure/cloud/browser-key.pem
-kubectl apply -k deploy/control-plane/kubernetes
-kubectl -n colossus rollout status deployment/colossus-control-plane
-```
-
-The deployment has two replicas, rolling updates and a disruption budget. Each
-replica uses a bounded asynchronous database pool plus one notification-listener
-connection: with the default pool, allow up to 34 database connections for two
-steady-state replicas and 51 while a third pod rolls in. Reserve capacity for backup,
-monitoring and administration. Change the pool or replica count only with measured
-connection and event-rate budgets.
-
-Browser sessions, encrypted OIDC flows, durable commands and runtime ownership leases
-are shared in PostgreSQL. Connection fencing prevents a previous replica from committing
-runtime updates after a replacement obtains ownership. The service applies checksummed
-SQL migrations under a schema-specific advisory lock; independent replicas can start
-together. Changed migration SQL fails startup instead of silently changing the schema.
-The cloud deployment needs no journal anchor PVC. Its history and operational state
-live in PostgreSQL; runtime journals remain local to their runtimes.
-
-Browser HTTPS terminates at the trusted ingress. The separate runtime hostname on
-port 443 passes TCP/TLS through to port 8443, preserving HTTP/2 and client certificates.
-The runtime server leaf must cover that hostname and chain to the configured connector
-CA. The ingress example uses ingress-nginx's
-[SSL passthrough](https://kubernetes.github.io/ingress-nginx/user-guide/tls/#ssl-passthrough);
-enable its controller flag or use your environment's equivalent TCP forwarding.
-Keep browser SSE buffering disabled. `/health/live` reports the server process;
-`/health/ready` probes the database. SIGTERM closes streams and drains the server so
-connectors can reconnect and resume from committed cursors.
 
 Coordinate auth-key rotation across all replicas. An in-progress sign-in encrypted
 with an old key must restart after rotation; existing browser sessions use independent
@@ -424,13 +411,13 @@ secret-management backup; database snapshots alone do not restore these credenti
 Runtime journals and native connector vaults need their own existing backup policy.
 
 For a portable logical backup, configure a protected libpq service and password file
-with verified TLS. The commands below use the example `colossus_cloud` schema and keep
+with verified TLS. The commands below use the example `colossus_control_plane` schema and keep
 connection passwords out of command arguments:
 
 ```sh
 umask 077
 pg_dump --dbname='service=colossus-cloud-backup' --format=custom \
-  --schema=colossus_cloud --file=/secure/backups/colossus-cloud.dump
+  --schema=colossus_control_plane --file=/secure/backups/colossus-cloud.dump
 pg_restore --list /secure/backups/colossus-cloud.dump
 ```
 
@@ -446,11 +433,11 @@ zero, take the dump, and export the retained audit heads before restarting:
 ```sh
 kubectl -n colossus scale deployment/colossus-control-plane --replicas=0
 pg_dump --dbname='service=colossus-cloud-backup' --format=custom \
-  --schema=colossus_cloud --file=/secure/backups/colossus-cloud.dump
+  --schema=colossus_control_plane --file=/secure/backups/colossus-cloud.dump
 psql --dbname='service=colossus-cloud-backup' --set=ON_ERROR_STOP=1 \
-  --command='COPY (SELECT DISTINCT ON (project_id,entity_kind,parent_id,id) project_id,entity_kind,parent_id,id,revision,chain_hash FROM colossus_cloud.cloud_audit ORDER BY project_id,entity_kind,parent_id,id,revision DESC) TO STDOUT WITH CSV HEADER' \
+  --command='COPY (SELECT DISTINCT ON (project_id,entity_kind,parent_id,id) project_id,entity_kind,parent_id,id,revision,chain_hash FROM colossus_control_plane.cloud_audit ORDER BY project_id,entity_kind,parent_id,id,revision DESC) TO STDOUT WITH CSV HEADER' \
   > /secure/backups/colossus-cloud-audit-heads.csv
-kubectl -n colossus scale deployment/colossus-control-plane --replicas=2
+kubectl -n colossus scale deployment/colossus-control-plane --replicas=3
 kubectl -n colossus rollout status deployment/colossus-control-plane
 ```
 
