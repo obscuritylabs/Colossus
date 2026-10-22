@@ -1,0 +1,83 @@
+name: Control Plane chart candidate
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - deploy/control-plane/**
+      - crates/colossus-cloud/**
+      - crates/colossus-cloud-chat/**
+      - crates/colossus-cloud-server/**
+      - crates/colossus-cloud-postgres/**
+      - xtask/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/control-plane-chart*.yml
+      - scripts/ci/*control-plane-chart*
+      - scripts/ci/install-helm.sh
+      - scripts/ci/verify-control-plane-assets.mjs
+permissions:
+  contents: read
+concurrency:
+  group: control-plane-chart-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20
+        with:
+          toolchain: 1.96.0
+      - name: Restore main Rust dependency build cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: . -> target
+          shared-key: pr-linux
+          key: recipe-v1
+          cache-targets: true
+          save-if: false
+      - name: Verify publisher contracts
+        run: |
+          node --test scripts/ci/control-plane-chart.test.mjs
+          bash -n scripts/ci/publish-control-plane-chart.sh
+      - name: Install verified Helm
+        run: bash scripts/ci/install-helm.sh
+      - name: Install native Rust dependencies
+        run: sudo apt-get update && sudo apt-get install --yes pkg-config libssl-dev libdbus-1-dev libsecret-1-dev
+      - name: Lint and render the chart without a cluster
+        run: cargo xtask check helm
+      - name: Verify annotated tag and retain the tested offline chart
+        if: github.event_name == 'push'
+        env:
+          SOURCE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="$SOURCE_TAG"
+          commit=$(git rev-parse HEAD)
+          test "$(git cat-file -t "$tag")" = tag
+          git merge-base --is-ancestor "$commit" origin/main
+          output="$RUNNER_TEMP/control-plane-chart"
+          mkdir -p "$output"
+          helm package deploy/control-plane/chart --destination "$output"
+          node scripts/ci/control-plane-chart.mjs candidate "$output" "$tag" "$commit"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.event_name == 'push'
+        with:
+          name: colossus-control-plane-chart-${{ github.ref_name }}
+          path: ${{ runner.temp }}/control-plane-chart/*
+          if-no-files-found: error
+          retention-days: 30

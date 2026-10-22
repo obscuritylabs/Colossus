@@ -19,6 +19,14 @@ pub enum CloudDatabaseTls {
         /// Native adapter-owned PEM trust path.
         ca_pem_path: PathBuf,
     },
+    /// Explicit plaintext transport to the bundled Kubernetes Service. This is an
+    /// operator-selected trust boundary, not an attestation of network isolation.
+    InCluster {
+        /// Exact Service DNS label in the control plane's namespace.
+        service: String,
+        /// Namespace containing both the control plane and database Service.
+        namespace: String,
+    },
     /// Explicit isolated loopback/Unix fixture only; remote plaintext is rejected.
     Disabled,
 }
@@ -65,8 +73,22 @@ impl CloudDatabaseConfig {
         {
             return Err(CloudError::InvalidArgument);
         }
+        if let CloudDatabaseTls::InCluster { service, namespace } = &self.tls
+            && (!dns_label(service) || !dns_label(namespace))
+        {
+            return Err(CloudError::InvalidArgument);
+        }
         Ok(())
     }
+}
+fn dns_label(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && value.as_bytes()[0].is_ascii_alphanumeric()
+        && value.as_bytes()[value.len() - 1].is_ascii_alphanumeric()
 }
 fn identifier(value: &str, max: usize) -> bool {
     !value.is_empty()

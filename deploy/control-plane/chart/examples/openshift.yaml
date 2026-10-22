@@ -1,0 +1,5 @@
+# GKE/EKS use values.yaml directly; select a provisioned StorageClass if necessary.
+platform: openshift
+postgres:
+  targetPlatform: openshift
+# The SCC supplies UID/GID and fsGroup; no anyuid SCC or privileged init job is needed.

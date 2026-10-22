@@ -114,8 +114,10 @@ try {
 
   for (const path of [
     "/docs/",
-    "/docs/admin/cloud-control-plane/",
-    "/docs/admin/documentation-hosting/",
+    "/docs/cloud/",
+    "/docs/cloud/deployment/",
+    "/docs/cloud/deployment/kubernetes/",
+    "/docs/cloud/deployment/documentation/",
     "/docs/develop/application-sdk/",
   ]) {
     const response = successful(path);
@@ -167,8 +169,9 @@ try {
     return url.pathname;
   });
   for (const path of [
-    "/docs/admin/cloud-control-plane/",
-    "/docs/admin/documentation-hosting/",
+    "/docs/cloud/",
+    "/docs/cloud/deployment/kubernetes/",
+    "/docs/cloud/deployment/documentation/",
     "/docs/develop/application-sdk/",
   ]) {
     assert.ok(locations.includes(path), `search includes ${path}`);
@@ -181,6 +184,12 @@ try {
   assert.doesNotMatch(legacy, /obscuritylabs\.github\.io|\/Colossus\//);
   successful("/docs/get-started/quickstart/");
   verified.push("portable legacy compatibility redirect");
+  for (const path of ["/docs/admin/cloud-control-plane/", "/docs/admin/documentation-hosting/"]) {
+    const moved = successful(path).body.toString();
+    assert.match(moved, /\/docs\/cloud\//);
+    assert.doesNotMatch(moved, /obscuritylabs\.github\.io|\/Colossus\//);
+  }
+  verified.push("moved Cloud deployment routes");
 
   const head = request("/docs/", "HEAD");
   assert.equal(head.status, 200);

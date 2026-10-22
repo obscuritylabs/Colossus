@@ -138,7 +138,7 @@ to that owner. Local lexical indexes are disposable. External masters derive key
 runtime namespace/purpose; an independently administered anchor service preserves
 rollback detection outside the journal database. The compatibility single-host mode
 retains local private state and remains limited to one replica. See
-[hosted chat operation](../admin/cloud-control-plane.md#scale-hosted-chat-across-replicas).
+[hosted chat operation](../cloud/deployment/hosted-chat.md).
 
 Manual Desktop credentials and platform-backed MCP OAuth share the
 `colossus-credentials` adapter. `HostSecret` (64 KiB) and `VaultRecord` (1 MiB) are

@@ -73,6 +73,7 @@ fn component_check(
         }
         Component::Desktop => surfaces::desktop(repository),
         Component::Web => surfaces::web(repository),
+        Component::Helm => surfaces::helm(repository),
         Component::Docs => surfaces::docs(repository),
         Component::Dependencies => surfaces::dependencies(repository),
         Component::Workflows => surfaces::workflows(repository),

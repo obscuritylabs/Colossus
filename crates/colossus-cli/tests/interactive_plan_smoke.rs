@@ -3,6 +3,9 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+#[path = "support/terminal_environment.rs"]
+mod terminal_environment;
+
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use process_support::tempdir;
 use serde_json::{Value, json};
@@ -679,7 +682,7 @@ fn run_full_screen_lifecycle(
         process.env("TMP", isolated_home.temporary_directory());
     }
     process.env("COLOSSUS_THEME_DIR", workspace.join("themes"));
-    process.env("TERM", "xterm-256color");
+    terminal_environment::configure(&mut process);
     let mut child = pair
         .slave
         .spawn_command(process)

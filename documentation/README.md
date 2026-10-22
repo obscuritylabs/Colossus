@@ -7,6 +7,11 @@ inside `docs/` and is excluded from publishing and search.
 - `tui-offline-session.txt` is the literal 132×24 Ratatui frame used for the homepage
   screenshot.
 
+Compatibility routes cover historical uppercase HTML pages and moved directory
+pages through their `index.html` paths. Fragment mappings can select a new anchor
+or a root-relative page and anchor when a guide is split. The generator validates
+these paths and keeps them under the selected GitHub Pages or on-prem mount root.
+
 The TUI frame was recaptured on 2026-08-20 from `target/debug/colossus` in a fixed-size
 tmux pane immediately after `config init`, using the generated `echo` profile, the
 `workspace-development` sandbox preset, and keyless offline storage. It shows the

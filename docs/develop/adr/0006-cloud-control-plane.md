@@ -150,4 +150,4 @@ private-key operation requires revisiting this decision and exception.
 Sandbox provisioning, scheduling and cloud artifact/context transfer remain separate
 extensions. Registered fleet size and replica count are not capacity evidence;
 representative concurrent stream, history-query and failover measurements are required. See [cloud development](../cloud-control-plane.md)
-and [operations](../../admin/cloud-control-plane.md) for current setup and acceptance.
+and [operations](../../cloud/deployment/index.md) for current setup and acceptance.

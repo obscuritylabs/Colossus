@@ -310,6 +310,33 @@ pub(super) fn workflows(repository: &Repository) -> Result<(), String> {
     repository.task("actionlint").run()
 }
 
+pub(super) fn helm(repository: &Repository) -> Result<(), String> {
+    let helm = env::var_os("HELM").unwrap_or_else(|| "helm".into());
+    repository
+        .task(helm)
+        .args([
+            "lint",
+            "deploy/control-plane/chart",
+            "--strict",
+            "--kube-version",
+            "1.34.0",
+        ])
+        .run()?;
+    repository
+        .task(cargo_program())
+        .args([
+            "test",
+            "--locked",
+            "-p",
+            "colossus-cloud-server",
+            "--test",
+            "helm_chart",
+            "--",
+            "--ignored",
+        ])
+        .run()
+}
+
 pub(super) fn dependencies(repository: &Repository) -> Result<(), String> {
     cargo(
         repository,

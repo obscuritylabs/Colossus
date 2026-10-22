@@ -1,0 +1,26 @@
+{{- if and .Values.postgres.enabled .Values.database.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "cp.fullname" . }}-database
+  labels:
+    {{- include "cp.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "postgres.selectorLabels" .Subcharts.postgres | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "cp.componentSelector" (dict "root" . "component" "server") | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: {{ .Values.postgres.service.targetPort }}}
+        {{- if eq .Values.mesh.mode "ambient" }}
+        - {protocol: TCP, port: 15008}
+        {{- end }}
+    {{- with .Values.database.networkPolicy.extraIngress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

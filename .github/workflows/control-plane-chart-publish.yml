@@ -1,0 +1,78 @@
+name: Publish Control Plane chart
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable or preview release tag
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: control-plane-chart-publication-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  publisher-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      revision: ${{ steps.publisher.outputs.revision }}
+    steps:
+      - name: Resolve protected main publisher
+        id: publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          revision=$(gh api repos/obscuritylabs/Colossus/git/ref/heads/main --jq .object.sha)
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+  publish:
+    needs: publisher-revision
+    if: >-
+      github.repository == 'obscuritylabs/Colossus' &&
+      ((github.event_name == 'release' && github.event.release.draft == false) ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: control-plane-chart-publication
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.publisher-revision.outputs.revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+      - name: Verify protected publisher contracts
+        run: node --test scripts/ci/control-plane-chart.test.mjs
+      - name: Install verified Helm
+        run: bash scripts/ci/install-helm.sh
+      - name: Isolate registry credentials
+        run: printf 'HELM_REGISTRY_CONFIG=%s/chart-registry/config.json\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Authenticate to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: printf '%s' "$DOCKERHUB_TOKEN" | helm registry login registry-1.docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
+      - name: Publish the exact successful tag candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: bash scripts/ci/publish-control-plane-chart.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: colossus-control-plane-chart-publication-${{ github.event.release.tag_name || inputs.tag }}
+          path: ${{ runner.temp }}/control-plane-chart-publication/publication.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove registry credentials
+        if: always()
+        run: helm registry logout registry-1.docker.io

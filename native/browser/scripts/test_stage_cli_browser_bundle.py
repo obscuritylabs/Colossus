@@ -59,6 +59,7 @@ class OfflineBrowserByteCustody(unittest.TestCase):
             root = Path(directory)
             source, target = root / "source", root / "target"
             source.write_bytes(b"public synthetic payload")
+            source.chmod(0o600)
             copy_verified(source, target, hashlib.sha256(source.read_bytes()).hexdigest(), source.stat().st_size, 0o500, 128)
             self.assertEqual(target.read_bytes(), source.read_bytes())
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o500)
@@ -69,6 +70,7 @@ class OfflineBrowserByteCustody(unittest.TestCase):
                 root = Path(directory)
                 source, target = root / "source", root / "target"
                 source.write_bytes(b"bounded payload")
+                source.chmod(0o600)
                 digest, size = hashlib.sha256(source.read_bytes()).hexdigest(), source.stat().st_size
                 if mutation == "digest":
                     digest = "0" * 64
@@ -90,6 +92,7 @@ class OfflineBrowserByteCustody(unittest.TestCase):
             root = Path(directory)
             source, target = root / "source", root / "target"
             source.write_bytes(b"new")
+            source.chmod(0o600)
             target.write_bytes(b"preserved")
             with self.assertRaises(FileExistsError):
                 copy_verified(source, target, hashlib.sha256(b"new").hexdigest(), 3, 0o600, 128)

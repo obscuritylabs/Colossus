@@ -34,6 +34,11 @@ dependency, so contributors and release runners do not need an ambient `protoc` 
 Language SDK generation remains separate and uses its own pinned local generator
 toolchain under `sdk/`.
 
+Helm chart changes additionally require Helm 3.19.0 (or an explicit `HELM` executable)
+and `cargo xtask check helm`. This gate lints, renders and packages without a cluster.
+The [chart README](https://github.com/obscuritylabs/Colossus/tree/main/deploy/control-plane/chart)
+owns supported deployment options.
+
 ## Optional mise bootstrap
 
 The root `mise.toml` is an opt-in bootstrap for Node, Python, Go, actionlint,

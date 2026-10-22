@@ -1,0 +1,13 @@
+global:
+  # Mirror every image (including PostgreSQL) and preserve each repository path.
+  imageRegistry: registry.internal.example.com
+  imagePullSecrets: [mirror-credentials]
+  databaseSecretName: colossus-database
+  postgresAdminSecretName: colossus-postgres-admin
+auth:
+  state:
+    existingSecret: colossus-state
+tls:
+  existingSecret: colossus-connector-tls
+# Package includes all chart dependencies; installation needs no upstream chart repo.
+# For remote PostgreSQL, also set postgres.enabled=false and verified TLS settings.

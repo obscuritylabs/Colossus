@@ -1,0 +1,215 @@
+# All non-dependency values are documented in README.md and values.schema.json.
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  # Existing bundled-database application Secret; see README for required keys.
+  databaseSecretName: ""
+  postgresAdminSecretName: ""
+
+nameOverride: colossus-control-plane
+fullnameOverride: ""
+platform: kubernetes # kubernetes or openshift; OpenShift is also detected through its API.
+replicaCount: 3
+image:
+  registry: ghcr.io
+  repository: obscuritylabs/colossus-control-plane
+  tag: "" # Defaults to v<appVersion>.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+browserHost: colossus.example.com
+connectorHost: runtimes.colossus.example.com
+service:
+  annotations: {}
+resources:
+  requests: {cpu: 250m, memory: 256Mi}
+  limits: {cpu: "2", memory: 1Gi}
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+# Three schedulable zones are required by default. Override for single-zone clusters.
+topologySpread:
+  enabled: true
+  minDomains: 3
+  maxSkew: 1
+  whenUnsatisfiable: DoNotSchedule
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile: {type: RuntimeDefault}
+containerSecurityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities: {drop: [ALL]}
+
+# Cluster operators own the ingress controller / gateway deployment and its CRDs.
+routing:
+  mode: ingress-nginx # ingress-nginx, istio, gateway-api, or none
+  browserTlsSecret: colossus-browser-tls
+  ingress:
+    className: nginx
+    browserAnnotations: {}
+    connectorAnnotations: {}
+  istio:
+    # Existing Gateway(s): browser HTTPS termination + connector TLS PASSTHROUGH.
+    gateways: [istio-system/colossus]
+  gatewayAPI:
+    # Existing Gateway with named HTTPS and TLS/Passthrough listeners.
+    name: colossus
+    namespace: "" # Defaults to the release namespace.
+    browserSectionName: browser
+    connectorSectionName: connector
+    tlsRouteApiVersion: gateway.networking.k8s.io/v1
+mesh:
+  mode: none # none, sidecar, ambient; does not modify namespace labels.
+
+auth:
+  local:
+    enabled: true
+    sessionSeconds: 28800
+  oidc:
+    enabled: false
+    label: OpenID Connect
+    issuer: ""
+    clientId: ""
+    clientSecret: ""
+    existingSecret: ""
+    secretKey: client-secret
+  bootstrap:
+    enabled: true
+    displayName: Administrator
+    username: admin
+    oidcSubject: ""
+    email: ""
+    # Empty generates a random password; read it from the state Secret after install.
+    password: ""
+  state:
+    existingSecret: ""
+    authKeyKey: auth-key
+    bootstrapPasswordKey: bootstrap-password
+    # Empty generates a random 32-byte hex key. Shared across all replicas.
+    authKey: ""
+
+# The connector CA signs enrollment certificates; it is independent of browser HTTPS.
+tls:
+  existingSecret: ""
+  caCertificateKey: ca.pem
+  caPrivateKeyKey: ca-key.pem
+  serverCertificateKey: server.pem
+  serverPrivateKeyKey: server-key.pem
+  # Empty material generates an Ed25519 CA and server leaf on first installation.
+  caCertificate: ""
+  caPrivateKey: ""
+  serverCertificate: ""
+  serverPrivateKey: ""
+  validityDays: 365
+  # Change to reissue the generated server leaf under the retained CA and roll pods.
+  renewalRevision: ""
+
+# Used when postgres.enabled=false. TLS cannot be disabled for an external database.
+database:
+  networkPolicy:
+    enabled: true
+    extraIngress: [] # Explicit backup/administration peers for the bundled database.
+  schema: colossus_control_plane
+  maxConnections: 8 # Plus one notification connection per pod; 63 total at max surge.
+  connectionTimeoutMs: 5000
+  statementTimeoutMs: 15000
+  external:
+    existingSecret: ""
+    secretKey: database
+    # Prefer existingSecret. Inline values are retained in Helm release history.
+    url: ""
+    tls:
+      mode: webpki_roots # webpki_roots or custom_ca
+      existingSecret: ""
+      caKey: ca.pem
+      caCertificate: ""
+
+maintenance:
+  batchLimit: 256
+  deliveredOutboxRetentionSeconds: 86400
+classification:
+  enabled: false
+  text: ""
+  tone: neutral
+  position: top_and_bottom
+
+# Optional shared SQL hosted execution; keys and anchor authority remain external.
+chat:
+  enabled: false
+  existingSecret: "" # journal-key, signing-key, wrapping-key, anchor-token
+  providerKey: provider-key # Optional shared provider key; empty for personal credentials.
+  maxActiveRuntimes: 4
+  idleSeconds: 300
+  cacheSizeLimit: 4Gi
+  anchor:
+    endpoint: "" # Independent HTTPS checkpoint authority, ending in /v1/anchors.
+    existingCaSecret: ""
+    caKey: ca.pem
+  # Native ChatProjectConfig snapshots; see examples/hosted-chat.yaml.
+  projects: {}
+
+documentation:
+  enabled: true
+  replicaCount: 3
+  image:
+    registry: ghcr.io
+    repository: obscuritylabs/colossus-documentation
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests: {cpu: 25m, memory: 32Mi}
+    limits: {cpu: 250m, memory: 128Mi}
+
+# Pinned CloudPirates dependency, vendored in charts/ for offline installation.
+# A single persistent database is not database HA. Use external managed HA if needed.
+postgres:
+  enabled: true
+  replicaCount: 1
+  targetPlatform: ""
+  image:
+    imagePullPolicy: IfNotPresent
+  auth:
+    existingSecret: '{{ include "cp.postgresAdminSecret" . }}'
+    username: postgres
+    database: postgres
+  customUser:
+    existingSecret: '{{ include "cp.databaseSecret" . }}'
+    secretKeys:
+      name: CUSTOM_USER
+      database: CUSTOM_DB
+      password: CUSTOM_PASSWORD
+  service:
+    type: ClusterIP
+  serviceAccount:
+    automountServiceAccountToken: false
+  podSecurityContext:
+    fsGroup: 999
+    seccompProfile: {type: RuntimeDefault}
+  containerSecurityContext:
+    readOnlyRootFilesystem: true
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 1Gi}
+  persistence:
+    enabled: true
+    size: 20Gi
+  config:
+    postgresql:
+      max_connections: 100
+      effective_cache_size: 512MB
+  # The dependency supplies writable data, runtime and /tmp volumes.
