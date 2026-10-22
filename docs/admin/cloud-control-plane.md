@@ -428,11 +428,21 @@ hosted boundary.
 ## Configure deployment markings and monitor policy
 
 A global administrator can configure a plain-text classification banner in
-**Administration → Settings**, including tone and top or top-and-bottom placement.
+**Administration → Authentication & settings**, including tone and top or
+top-and-bottom placement.
 The optional `classification` server configuration seeds the marking only when no
 saved display setting exists; subsequent administrator edits survive restarts. The
 marking is visible on sign-in and authenticated screens and does not enforce data
 classification or change native permissions.
+
+To publish custom marking colors, open **Settings → Global → Appearance** as a
+global administrator. Under **Classification banner colors**, choose the background
+and text colors, review the preview, then select **Publish banner colors**. Both
+colors must use opaque `#RRGGBB` values with at least 4.5:1 text contrast. The saved
+pair applies to everyone's authenticated and sign-in banners. **Use tone colors**
+restores the selected tone's theme colors. These controls leave the marking's text,
+visibility and placement unchanged; personal theme and text-size preferences remain
+local to each browser.
 
 An agent's **Policy** view shows bounded configuration released by that authenticated
 runtime: access profile, sandbox, approval mode, grant roles/tools, configured model
@@ -446,6 +456,43 @@ failed runs are not treated as policy violations.
 Desktop's global **Control Plane** settings manage named endpoint profiles and show
 workspace connections. Selecting a profile only pre-fills its endpoint. Enrollment,
 local sharing, and grant confirmation remain explicit per workspace.
+
+## Publish instance announcements
+
+Global administrators publish product updates and operational notices through
+**Administration → Announcements**. Every signed-in account can read published
+announcements; drafts and archives remain administrator-only. These notices are
+separate from the deployment classification marking.
+
+1. Select **New announcement** and enter a title, compact banner summary and
+   Markdown message. Use **Preview** to review the banner and full message before
+   publication. Markdown supports links, lists and code; bodies are limited to
+   16 KiB of UTF-8 text and use the shared safe renderer.
+2. Choose a style and priority. Enable **Show a dismissible banner** to make the
+   update eligible for the compact banner below the application toolbar. Priority
+   chooses among eligible banners. The full message also appears in the toolbar's
+   **Announcements** center.
+3. Optionally set **Expires at** in your local time. Expired announcements leave
+   the active feed and banner. Leave it empty to retain the publication until you
+   archive it.
+4. Select **Save draft** to retain unpublished work or **Publish to everyone** to
+   release it. Edit a publication with **Publish changes**; use **Archive
+   announcement** to withdraw it while retaining its administrative history.
+
+Opening an update marks it read. Dismissing its banner also marks it read, while the
+message remains available in the Announcements center. Read and dismissal state are
+stored on the server for that account, so another browser or server restart preserves
+them; one user's dismissal does not hide an update for another user.
+Open clients refresh announcements and marking colors on focus and every 30 seconds
+while visible. Use the application toolbar's refresh action to check announcements
+immediately.
+
+Publishing changed title, summary, Markdown or style creates a new content publication
+and makes it unread and eligible for dismissal again. Changing priority, banner
+eligibility or expiration preserves existing read and dismissal state. Archiving and
+republishing identical content also preserves that state. If a save cannot be
+confirmed, use **Check save status** before retrying the retained exact save; reload
+the current version when another administrator has changed it.
 
 ## Initialize cloud storage
 

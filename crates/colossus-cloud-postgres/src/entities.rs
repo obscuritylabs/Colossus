@@ -3,7 +3,7 @@ use colossus_cloud::{
     CloudError, CloudResult,
     storage::{
         EntityKey, EntityKind, EntityMutation, EntityOrder, EntityQuery, EntityRecord, EntityValue,
-        conflict, decode_page_cursor, encode_page_cursor,
+        conflict, decode_page_cursor, encode_announcement_page_cursor, encode_page_cursor,
     },
 };
 use colossus_ports::StoreError;
@@ -22,6 +22,8 @@ pub(super) fn table(kind: EntityKind) -> &'static str {
         EntityKind::OidcIdentity => "user_identities",
         EntityKind::LocalCredential => "local_credentials",
         EntityKind::Setting => "control_plane_settings",
+        EntityKind::Announcement => "announcements",
+        EntityKind::AnnouncementReceipt => "announcement_receipts",
         EntityKind::Project => "projects",
         EntityKind::Membership => "project_memberships",
         EntityKind::AuthFlow => "oidc_flows",
@@ -162,7 +164,9 @@ pub(super) async fn list(
         | EntityKind::SessionMapping => "node_id",
         _ => "NULL::TEXT",
     };
-    let status = if query.kind == EntityKind::User {
+    let status = if query.kind == EntityKind::Announcement {
+        "publication_status"
+    } else if query.kind == EntityKind::User {
         "CASE WHEN active THEN 'active' ELSE 'disabled' END"
     } else if query.kind == EntityKind::Membership {
         "CASE WHEN cardinality(permissions)>0 THEN 'active' ELSE 'removed' END"
@@ -190,9 +194,13 @@ pub(super) async fn list(
     } else {
         "FALSE"
     };
-    let status_filter = if query.kind == EntityKind::Thread
-        && query.status.as_deref() == Some("main")
+    let status_filter = if query.kind == EntityKind::Announcement
+        && query.status.as_deref() == Some("active_banner")
     {
+        "($6::TEXT='active_banner' AND banner AND publication_status='published' AND publication_revision>0 AND (expires_at IS NULL OR expires_at::TIMESTAMPTZ>clock_timestamp()) AND $12::TEXT IS NOT NULL AND NOT EXISTS(SELECT 1 FROM announcement_receipts receipt WHERE receipt.project_id=source.project_id AND receipt.parent_id=$12 AND receipt.id=source.id AND NOT receipt.deleted AND receipt.dismissed_revision>=source.publication_revision))".to_owned()
+    } else if query.kind == EntityKind::Announcement && query.status.as_deref() == Some("active") {
+        "($6::TEXT='active' AND publication_status='published' AND publication_revision>0 AND (expires_at IS NULL OR expires_at::TIMESTAMPTZ>clock_timestamp()))".to_owned()
+    } else if query.kind == EntityKind::Thread && query.status.as_deref() == Some("main") {
         "($6::TEXT='main' AND branch_kind IS DISTINCT FROM 'aside')".to_owned()
     } else if query.kind == EntityKind::User && query.status.as_deref() == Some("administrator") {
         "($6::TEXT='administrator' AND active AND is_admin)".to_owned()
@@ -253,16 +261,24 @@ pub(super) async fn list(
             "domain_created_at DESC,id DESC,parent_id DESC",
             "domain_created_at",
         ),
+        EntityOrder::AnnouncementPriority => (
+            "(priority,published_at,id,parent_id)<($13::BIGINT,$9,$3,$10)",
+            "priority DESC,published_at DESC,id DESC,parent_id DESC",
+            "published_at",
+        ),
     };
-    let page_time =
-        format!("to_char({time_column} AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')");
+    let page_time = if query.order == EntityOrder::AnnouncementPriority {
+        "published_at".into()
+    } else {
+        format!("to_char({time_column} AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')")
+    };
     let search = match query.kind {
         EntityKind::User => "display_name",
         EntityKind::Project => "project_name",
         EntityKind::Host => "host_name",
         EntityKind::Node | EntityKind::Invitation => "label",
         EntityKind::Workspace => "workspace_name",
-        EntityKind::Thread => "title",
+        EntityKind::Thread | EntityKind::Announcement => "title",
         _ => "''::TEXT",
     };
     let node_visibility = |alias: &str| {
@@ -301,7 +317,7 @@ pub(super) async fn list(
     let selection = rows::selection(query.kind, "r", "r.page_time");
     let joins = rows::joins(query.kind, "r");
     let sql = format!("SELECT {selection} FROM ({page}) r {joins} ORDER BY r.page_ordinal");
-    let statement = sql_query(sql)
+    let mut statement = sql_query(sql)
         .into_boxed::<Pg>()
         .bind::<Text, _>(query.project_id.clone())
         .bind::<Nullable<Text>, _>(query.parent_id.clone())
@@ -315,18 +331,38 @@ pub(super) async fn list(
         .bind::<Nullable<Text>, _>(after_parent.map(str::to_owned))
         .bind::<Nullable<Text>, _>(query.host_id.clone())
         .bind::<Nullable<Text>, _>(query.visible_to.clone());
+    if query.order == EntityOrder::AnnouncementPriority {
+        statement = statement.bind::<Nullable<BigInt>, _>(
+            position
+                .as_ref()
+                .and_then(|position| position.priority)
+                .map(i64::from),
+        );
+    }
     let rows = rows::load(conn, query.kind, statement, None)
         .await
         .map_err(CloudError::from)?;
     let mut result = Vec::with_capacity(rows.len());
     for row in rows {
         let mut record = row.record;
-        record.page_cursor = Some(encode_page_cursor(
-            query,
-            &row.page_time,
-            &record.key.id,
-            record.key.parent_id.as_deref().unwrap_or_default(),
-        )?);
+        record.page_cursor = Some(if query.order == EntityOrder::AnnouncementPriority {
+            let EntityValue::Announcement(value) = &record.value else {
+                return Err(CloudError::Storage);
+            };
+            encode_announcement_page_cursor(
+                query,
+                &row.page_time,
+                &record.key.id,
+                value.announcement.priority,
+            )?
+        } else {
+            encode_page_cursor(
+                query,
+                &row.page_time,
+                &record.key.id,
+                record.key.parent_id.as_deref().unwrap_or_default(),
+            )?
+        });
         result.push(record);
     }
     Ok(result)

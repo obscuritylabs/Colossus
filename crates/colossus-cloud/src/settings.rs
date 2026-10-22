@@ -4,7 +4,7 @@ use crate::{CloudCaller, CloudError, CloudPermission, CloudRepository, CloudResu
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-/// Closed visual severity choices; no arbitrary CSS colors.
+/// Closed visual severity choices backed by shared theme tokens.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClassificationTone {
@@ -28,6 +28,43 @@ pub enum ClassificationPosition {
     #[default]
     TopAndBottom,
 }
+/// Literal deployment banner colors; CSS expressions and low-contrast pairs are rejected.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClassificationColors {
+    /// Background color in the exact `#RRGGBB` format.
+    pub background: String,
+    /// Text color in the exact `#RRGGBB` format, with at least 4.5:1 contrast.
+    pub text: String,
+}
+impl ClassificationColors {
+    /// Require a pair of opaque sRGB colors readable at the banner's ordinary text size.
+    pub fn validate(&self) -> CloudResult<()> {
+        let background = color_luminance(&self.background).ok_or(CloudError::InvalidArgument)?;
+        let text = color_luminance(&self.text).ok_or(CloudError::InvalidArgument)?;
+        if (background.max(text) + 0.05) / (background.min(text) + 0.05) < 4.5 {
+            return Err(CloudError::InvalidArgument);
+        }
+        Ok(())
+    }
+}
+fn color_luminance(color: &str) -> Option<f64> {
+    if color.len() != 7
+        || !color.starts_with('#')
+        || !color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
+    {
+        return None;
+    }
+    let channel = |index| {
+        let value = f64::from(u8::from_str_radix(&color[index..index + 2], 16).ok()?) / 255.0;
+        Some(if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        })
+    };
+    Some(0.2126 * channel(1)? + 0.7152 * channel(3)? + 0.0722 * channel(5)?)
+}
 /// Plain-text deployment marking, rendered in the application chrome and sign-in view.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +77,9 @@ pub struct ClassificationBanner {
     pub tone: ClassificationTone,
     /// Placement around the application chrome.
     pub position: ClassificationPosition,
+    /// Optional administrator-published colors; absent preserves existing tone colors and audit bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colors: Option<ClassificationColors>,
 }
 impl ClassificationBanner {
     /// Validate bounded plain text; the tone and position are closed enums.
@@ -49,6 +89,9 @@ impl ClassificationBanner {
             || (self.enabled && self.text.trim().is_empty())
         {
             return Err(CloudError::InvalidArgument);
+        }
+        if let Some(colors) = &self.colors {
+            colors.validate()?;
         }
         Ok(())
     }
@@ -180,6 +223,10 @@ impl CloudRepository {
         }
         settings.classification.validate()?;
         settings.classification.text = settings.classification.text.trim().into();
+        if let Some(colors) = &mut settings.classification.colors {
+            colors.background.make_ascii_lowercase();
+            colors.text.make_ascii_lowercase();
+        }
         let expected_revision = settings.revision;
         settings.revision = expected_revision
             .checked_add(1)
@@ -265,6 +312,61 @@ fn label(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::storage::MemoryCloudStore;
+
+    #[test]
+    fn legacy_banner_serialization_remains_identical_without_color_overrides() {
+        let legacy = serde_json::json!({
+            "revision": 7,
+            "classification": {
+                "enabled": true,
+                "text": "INTERNAL",
+                "tone": "warning",
+                "position": "top_and_bottom"
+            }
+        });
+        let settings: super::ControlPlaneSettings = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(settings.classification.colors.is_none());
+        assert_eq!(serde_json::to_value(settings).unwrap(), legacy);
+    }
+
+    #[test]
+    fn classification_colors_require_literal_hex_and_readable_contrast() {
+        for (background, text) in [
+            ("#FFFFFF", "#000000"),
+            ("#000000", "#ffffff"),
+            ("#008000", "#ffffff"),
+            ("#767676", "#ffffff"),
+        ] {
+            assert!(
+                super::ClassificationColors {
+                    background: background.into(),
+                    text: text.into()
+                }
+                .validate()
+                .is_ok()
+            );
+        }
+        for (background, text) in [
+            ("white", "#000000"),
+            ("#fff", "#000000"),
+            ("#ffffff00", "#000000"),
+            ("url(https://example.test)", "#000000"),
+            ("#ffffff", "var(--text)"),
+            ("#ffffff", "#cccccc"),
+            ("#000000", "#222222"),
+            ("#777777", "#ffffff"),
+            ("#１２３４５６", "#ffffff"),
+        ] {
+            assert!(
+                super::ClassificationColors {
+                    background: background.into(),
+                    text: text.into()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+    }
     #[test]
     fn stale_or_missing_policy_observations_never_establish_current_alignment() {
         let posture:colossus_sdk::RuntimePolicyPosture=serde_json::from_value(serde_json::json!({
@@ -313,12 +415,33 @@ mod tests {
         let mut settings = repo.display_settings().await.unwrap();
         settings.classification.enabled = true;
         settings.classification.text = " INTERNAL <restricted> ".into();
+        settings.classification.colors = Some(ClassificationColors {
+            background: "#008000".into(),
+            text: "#FFFFFF".into(),
+        });
         let saved = repo
             .replace_display_settings("administrator", settings.clone())
             .await
             .unwrap();
         assert_eq!(saved.classification.text, "INTERNAL <restricted>");
         assert_eq!(saved.revision, 1);
+        assert_eq!(
+            saved.classification.colors.as_ref().unwrap().text,
+            "#ffffff"
+        );
+        assert_eq!(repo.display_settings().await.unwrap(), saved);
+        let mut invalid = saved.clone();
+        invalid.classification.colors = Some(ClassificationColors {
+            background: "#ffffff".into(),
+            text: "#eeeeee".into(),
+        });
+        assert_eq!(
+            repo.replace_display_settings("administrator", invalid)
+                .await
+                .unwrap_err(),
+            CloudError::InvalidArgument
+        );
+        assert_eq!(repo.display_settings().await.unwrap(), saved);
         assert_eq!(
             repo.replace_display_settings("administrator", settings)
                 .await

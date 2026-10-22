@@ -6,6 +6,7 @@ import { ApiFailure, request } from "./api";
 import { rememberSignInReturn } from "./navigation";
 import { errorMessage } from "./resources";
 import type { AuthConfig, Classification } from "./control-api";
+import { classificationColorVariables } from "@colossus/ui/lib/classification-colors";
 export function SignIn({
   config,
   classification,
@@ -21,9 +22,13 @@ export function SignIn({
     [password, setPassword] = useState(""),
     [failure, setFailure] = useState(""),
     [busy, setBusy] = useState(false);
+  const classificationStyle = classificationColorVariables(
+    classification?.colors,
+  );
   const banner = classification?.enabled ? (
     <div
-      className={`control-classification classification-${classification.tone}`}
+      className={`control-classification classification-${classification.tone}${classificationStyle ? " classification-custom-colors" : ""}`}
+      style={classificationStyle}
     >
       {classification.text}
     </div>

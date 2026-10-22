@@ -13,7 +13,7 @@ export type AgentView =
   | "plugins"
   | "library"
   | "connections";
-export type AdminView = "users" | "projects" | "settings";
+export type AdminView = "users" | "projects" | "settings" | "announcements";
 export type Route =
   | { kind: "global"; surface: Surface; project?: string; view?: AdminView }
   | { kind: "project-create"; project?: undefined }
@@ -52,7 +52,7 @@ const agentViews = new Set([
   "library",
   "connections",
 ]);
-const adminViews = new Set(["users", "projects", "settings"]);
+const adminViews = new Set(["users", "projects", "settings", "announcements"]);
 const invalid = (): Route => ({
   kind: "invalid",
   message:

@@ -383,3 +383,8 @@
   color: var(--red-text);
   border-color: var(--red-border);
 }
+.control-classification.classification-custom-colors {
+  background: var(--classification-background);
+  color: var(--classification-text);
+  border-color: currentColor;
+}

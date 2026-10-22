@@ -59,6 +59,7 @@ import { DocumentationLink } from "./DocumentationLink";
 import { ChatHistorySidebar } from "./ChatHistorySidebar";
 import { WebSettings } from "./WebSettings";
 import { useResource } from "./resources";
+import { useInstanceAnnouncements } from "./InstanceAnnouncements";
 const ThreadDetail = lazy(() =>
   import("./ThreadDetail").then((module) => ({ default: module.ThreadDetail })),
 );
@@ -136,6 +137,7 @@ export function AuthenticatedApp({
     thread: Thread | null;
   }>({ project, href: globalHref("chat", project), thread: null });
   const { appearance, setAppearance } = useAppearance();
+  const announcements = useInstanceAnnouncements(me.user.id);
   const [nodeCache, setNodes] = useState<FleetNode[]>([]),
     [hostCache, setHosts] = useState<Host[]>([]),
     [taskCache, setTasks] = useState<Task[]>([]),
@@ -731,6 +733,7 @@ export function AuthenticatedApp({
           </span>
         }
         classification={settings?.classification}
+        announcement={announcements.notice}
         user={
           <ControlPlaneAccountMenu
             name={me.user.display_name}
@@ -854,6 +857,7 @@ export function AuthenticatedApp({
         }
         header={
           <>
+            {announcements.control}
             {surface !== "chat" ? (
               <span className="connection-indicator">
                 <span className={`dot ${live ? "live" : ""}`} />
@@ -870,6 +874,7 @@ export function AuthenticatedApp({
                 threadResource.refresh();
                 taskResource.refresh();
                 selectedAgent.refresh();
+                announcements.refresh();
               }}
             >
               <IconRefresh size={16} aria-hidden="true" />
@@ -1053,6 +1058,8 @@ export function AuthenticatedApp({
               }
               appearance={appearance}
               onAppearance={setAppearance}
+              isGlobalAdmin={me.user.is_admin}
+              onEnvironmentSettings={onSettings}
               initialScope={settingsScope}
               onReturn={() => navigation.go(returnToWork.current)}
               onConnections={openConnections}

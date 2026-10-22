@@ -63,7 +63,7 @@ function luminance(color: string): number {
   return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
 }
 
-function contrastRatio(first: string, second: string): number {
+export function contrastRatio(first: string, second: string): number {
   const brighter = Math.max(luminance(first), luminance(second));
   const darker = Math.min(luminance(first), luminance(second));
   return (brighter + 0.05) / (darker + 0.05);

@@ -4,6 +4,7 @@ use crate::{
     CloudError, CloudHost, CloudMessage, CloudNode, CloudProject, CloudResult, CloudTask,
     CloudThread, CloudWorkspace, Enrollment, LocalCredential, OidcIdentity, PendingCommand,
     ProjectMembership, UserAccount,
+    announcements::{AnnouncementReceipt, AnnouncementRecord},
     settings::{ControlPlaneSettings, ProjectPolicyExpectation},
 };
 use serde::Serialize;
@@ -83,6 +84,10 @@ pub enum EntityValue {
     Renewal(CertificateRenewal),
     /// Deployment display configuration.
     DisplaySettings(ControlPlaneSettings),
+    /// Global announcement content and exact allocation/edit reconciliation evidence.
+    Announcement(AnnouncementRecord),
+    /// Account-owned publication acknowledgement state.
+    AnnouncementReceipt(AnnouncementReceipt),
     /// Monitoring baseline with no execution authority.
     PolicyExpectation(ProjectPolicyExpectation),
     /// One-time account configuration marker.
@@ -134,7 +139,8 @@ entity_data! {
     Workspace(CloudWorkspace), Thread(CloudThread), ThreadMessage(CloudMessage),
     Task(CloudTask) boxed, Command(PendingCommand) boxed, Reference(String), Admission(Admission),
     Invitation(Enrollment), Renewal(CertificateRenewal), DisplaySettings(ControlPlaneSettings),
-    PolicyExpectation(ProjectPolicyExpectation), BootstrapMarker(BootstrapMarker)
+    PolicyExpectation(ProjectPolicyExpectation), BootstrapMarker(BootstrapMarker),
+    Announcement(AnnouncementRecord), AnnouncementReceipt(AnnouncementReceipt)
 }
 
 impl EntityValue {
@@ -220,6 +226,16 @@ impl EntityValue {
                             && !owner.chars().any(char::is_control)
                     })
             }
+            Self::Announcement(value) => {
+                root && key.project_id == crate::IDENTITY_NAMESPACE
+                    && value.announcement.id == key.id
+            }
+            Self::AnnouncementReceipt(value) => {
+                key.project_id == crate::IDENTITY_NAMESPACE
+                    && value.announcement_id == key.id
+                    && key.parent_id.as_deref() == Some(value.user_id.as_str())
+                    && value.dismissed_revision <= value.read_revision
+            }
             Self::DisplaySettings(_) => {
                 root && key.project_id == crate::IDENTITY_NAMESPACE && key.id == "display"
             }
@@ -255,6 +271,8 @@ impl EntityValue {
             Self::Task(value) => value.revision = revision,
             Self::Command(value) => value.revision = revision,
             Self::DisplaySettings(value) => value.revision = revision,
+            Self::Announcement(value) => value.announcement.revision = revision,
+            Self::AnnouncementReceipt(value) => value.revision = revision,
             Self::PolicyExpectation(value) => value.revision = revision,
             _ => {}
         }
@@ -287,6 +305,11 @@ impl EntityValue {
                         | Self::PolicyExpectation(_)
                         | Self::BootstrapMarker(_),
                     EntityKind::Setting
+                )
+                | (Self::Announcement(_), EntityKind::Announcement)
+                | (
+                    Self::AnnouncementReceipt(_),
+                    EntityKind::AnnouncementReceipt
                 )
                 | (Self::AuthFlow(_), EntityKind::AuthFlow)
         )
@@ -346,6 +369,7 @@ impl EntityValue {
             Self::Workspace(value) => &value.label,
             Self::Thread(value) => &value.title,
             Self::Invitation(value) => &value.label,
+            Self::Announcement(value) => &value.announcement.title,
             _ => "",
         }
     }
@@ -354,6 +378,7 @@ impl EntityValue {
     pub fn created_at(&self) -> Option<&str> {
         match self {
             Self::User(value) => Some(&value.user.created_at),
+            Self::Announcement(value) => Some(&value.announcement.created_at),
             Self::Project(value) => Some(&value.created_at),
             Self::Thread(value) => Some(&value.created_at),
             Self::ThreadMessage(value) => Some(&value.created_at),
@@ -366,6 +391,8 @@ impl EntityValue {
     pub fn updated_at(&self) -> Option<&str> {
         match self {
             Self::User(value) => Some(&value.user.updated_at),
+            Self::Announcement(value) => Some(&value.announcement.updated_at),
+            Self::AnnouncementReceipt(value) => Some(&value.updated_at),
             Self::Project(value) => Some(&value.updated_at),
             Self::Thread(value) => Some(&value.updated_at),
             Self::Task(value) => Some(&value.updated_at),
@@ -404,6 +431,7 @@ impl EntityValue {
     /// User-visible lifecycle state used by collection filters.
     pub fn status(&self) -> &str {
         match self {
+            Self::Announcement(value) => value.announcement.status.as_str(),
             Self::Thread(value) => value
                 .branch
                 .as_ref()

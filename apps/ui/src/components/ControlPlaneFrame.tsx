@@ -25,6 +25,10 @@ import {
   useSidebar,
 } from "./ui/sidebar.js";
 import { TooltipProvider } from "./ui/tooltip.js";
+import {
+  classificationColorVariables,
+  type ClassificationColors,
+} from "../lib/classification-colors";
 
 export interface ControlPlaneNavigation {
   id: string;
@@ -40,6 +44,7 @@ export interface ClassificationBanner {
   text: string;
   tone: "neutral" | "info" | "warning" | "danger";
   position: "top" | "top_and_bottom";
+  colors?: ClassificationColors | null;
 }
 interface FrameProps {
   current: string;
@@ -52,6 +57,7 @@ interface FrameProps {
   footer?: ReactNode;
   children: ReactNode;
   classification?: ClassificationBanner | undefined;
+  announcement?: ReactNode;
   user?: ReactNode;
   activeScopeKey?: string;
 }
@@ -59,9 +65,13 @@ interface FrameProps {
 /** Owned shadcn presentation; hosts retain routes, records and authority. */
 export function ControlPlaneFrame(props: FrameProps) {
   const classification = props.classification;
+  const classificationStyle = classificationColorVariables(
+    classification?.colors,
+  );
   const banner = classification?.enabled ? (
     <div
-      className={`control-classification classification-${classification.tone}`}
+      className={`control-classification classification-${classification.tone}${classificationStyle ? " classification-custom-colors" : ""}`}
+      style={classificationStyle}
       role="note"
       aria-label="Environment classification"
     >
@@ -99,6 +109,7 @@ function ControlWorkbench({
   activeScopeKey,
   sidebarHeader,
   title,
+  announcement,
 }: FrameProps) {
   const { setOpenMobile, openMobile, open, isMobile } = useSidebar();
   const appTrigger = useRef<HTMLButtonElement>(null);
@@ -186,6 +197,7 @@ function ControlWorkbench({
         </div>
         <div>{header}</div>
       </header>
+      {announcement}
       <div className="control-workbench">
         {compactScope ? null : scopeNavigation}
         <div className="control-content">{children}</div>

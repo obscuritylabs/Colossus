@@ -81,6 +81,7 @@ macro_rules! row {
 }
 
 mod accounts;
+mod announcements;
 mod conversations;
 mod inventory;
 mod placements;

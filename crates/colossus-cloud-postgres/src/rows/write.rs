@@ -1,7 +1,7 @@
 //! Shared CAS/audit/outbox statement with native bindings from each typed row.
 use super::{
-    DomainRow, Metadata, accounts::*, conversations::*, inventory::*, placements::*,
-    settings::SettingsRow,
+    DomainRow, Metadata, accounts::*, announcements::*, conversations::*, inventory::*,
+    placements::*, settings::SettingsRow,
 };
 use colossus_cloud::storage::{EntityKind, EntityMutation, conflict};
 use colossus_ports::StoreError;
@@ -118,6 +118,8 @@ pub(crate) async fn write(
         EntityKind::Invitation => write!(InvitationRow),
         EntityKind::Renewal => write!(RenewalRow),
         EntityKind::Setting => write!(SettingsRow),
+        EntityKind::Announcement => write!(AnnouncementRow),
+        EntityKind::AnnouncementReceipt => write!(AnnouncementReceiptRow),
         EntityKind::AuthFlow => write!(AuthFlowRow),
     }
 }

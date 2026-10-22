@@ -16,6 +16,8 @@ import { ProjectEditor, SectionTabs } from "./Projects";
 import { globalHref, type AdminView } from "./routes";
 import { projectCreateHref } from "./routes";
 import { RouteLink } from "./navigation";
+import { AdminAnnouncements } from "./AdminAnnouncements";
+import { classificationColorVariables } from "@colossus/ui/lib/classification-colors";
 export function Administration({
   authConfig,
   onRefresh,
@@ -37,13 +39,17 @@ export function Administration({
         <div>
           <span className="eyebrow">Administration</span>
           <h1>Control Plane administration</h1>
-          <p>Manage identities, project structure, and environment settings.</p>
+          <p>
+            Manage identities, projects, announcements, and environment
+            settings.
+          </p>
         </div>
       </header>
       <SectionTabs
         items={[
           { id: "users", label: "Users" },
           { id: "projects", label: "Projects" },
+          { id: "announcements", label: "Announcements" },
           { id: "settings", label: "Authentication & settings" },
         ]}
         current={tab}
@@ -56,6 +62,8 @@ export function Administration({
         <Users authConfig={authConfig} />
       ) : tab === "projects" ? (
         <AdminProjects onRefresh={onRefresh} />
+      ) : tab === "announcements" ? (
+        <AdminAnnouncements />
       ) : (
         <EnvironmentSettings onSaved={onSettings} />
       )}
@@ -635,7 +643,8 @@ function EnvironmentSettings({
             </div>
             {draft.enabled ? (
               <div
-                className={`control-classification classification-${draft.tone}`}
+                className={`control-classification classification-${draft.tone}${classificationColorVariables(draft.colors) ? " classification-custom-colors" : ""}`}
+                style={classificationColorVariables(draft.colors)}
                 aria-label="Banner preview"
               >
                 {draft.text || "Classification preview"}

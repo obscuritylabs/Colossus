@@ -9,6 +9,13 @@ import type {
   ThemePalettes,
 } from "../lib/palette";
 import { DropdownSelect } from "./DropdownSelect";
+import { Button } from "./Controls";
+import {
+  ClassificationColorsEditor,
+  type ClassificationColorsControls,
+} from "./ClassificationColorsEditor";
+export { ClassificationColorsEditor } from "./ClassificationColorsEditor";
+export type { ClassificationColorsControls } from "./ClassificationColorsEditor";
 type ColorThemePreference = "system" | "dark" | "light";
 type TextSizePreference = "compact" | "comfortable" | "large";
 export interface AppearanceControls {
@@ -28,6 +35,7 @@ export interface AppearanceControls {
   resetPalette: (theme: PaletteTheme) => void;
   showSecurityWarnings?: boolean;
   setShowSecurityWarnings?: (value: boolean) => void;
+  classification?: ClassificationColorsControls;
 }
 const COLOR_THEME_COPY: Record<ColorThemePreference, string> = {
   system: "Match your operating system and update automatically.",
@@ -256,9 +264,9 @@ export function AppearanceSettings({
               {paletteError ??
                 "Background, surface, and icon colors keep content readable."}
             </p>
-            <button
+            <Button
               type="button"
-              className="button secondary compact"
+              variant="secondary"
               disabled={presetPreview || isDefaultPalette(editedTheme, palette)}
               onClick={() => {
                 resetPalette(editedTheme);
@@ -267,7 +275,7 @@ export function AppearanceSettings({
             >
               <IconRefresh size={16} aria-hidden="true" />
               Reset {editedTheme} colors
-            </button>
+            </Button>
           </div>
         </div>
         <div
@@ -314,6 +322,9 @@ export function AppearanceSettings({
               </small>
             </span>
           </label>
+        ) : null}
+        {controls.classification ? (
+          <ClassificationColorsEditor {...controls.classification} />
         ) : null}
         {children}
       </div>

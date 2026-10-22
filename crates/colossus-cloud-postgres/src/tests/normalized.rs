@@ -3,7 +3,9 @@ use super::*;
 use colossus_cloud::{
     CloudPermission, Enrollment, LocalCredential, LoginIdentityMetadata, OidcIdentity,
     PendingCommand, ProjectMembership, ProjectRole, identity_key, membership_key,
-    settings::{ClassificationBanner, ControlPlaneSettings, ProjectPolicyExpectation},
+    settings::{
+        ClassificationBanner, ClassificationColors, ControlPlaneSettings, ProjectPolicyExpectation,
+    },
 };
 use colossus_cloud_protocol::{CloudReply, Command};
 use diesel::{
@@ -197,6 +199,10 @@ fn domain_records() -> Vec<EntityMutation> {
                 classification: ClassificationBanner {
                     enabled: true,
                     text: "Fixture classification".into(),
+                    colors: Some(ClassificationColors {
+                        background: "#008000".into(),
+                        text: "#ffffff".into(),
+                    }),
                     ..Default::default()
                 },
             },

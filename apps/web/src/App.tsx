@@ -31,6 +31,11 @@ export function App() {
     [signOutError, setSignOutError] = useState(""),
     [signOutPending, setSignOutPending] = useState(false);
   const epoch = useRef(0);
+  const settingsEpoch = useRef(0);
+  const applySettings = useCallback((value: PublicSettings) => {
+    settingsEpoch.current++;
+    setSettings(value);
+  }, []);
   const signingOut = useRef(false);
   const loadMe = useCallback(async (signal?: AbortSignal) => {
     if (signingOut.current) return;
@@ -80,13 +85,45 @@ export function App() {
             "Sign-in configuration could not be loaded. Refresh to retry.",
           );
       });
-    void request<PublicSettings>("/api/settings", undefined, abort.signal)
-      .then((value) => {
-        if (!abort.signal.aborted) setSettings(value);
-      })
-      .catch(() => {});
     return () => abort.abort();
   }, [loadMe]);
+  useEffect(() => {
+    const abort = new AbortController();
+    let pending = false;
+    const load = async () => {
+      if (pending) return;
+      pending = true;
+      const generation = settingsEpoch.current;
+      try {
+        const value = await request<PublicSettings>(
+          "/api/settings",
+          undefined,
+          abort.signal,
+        );
+        if (!abort.signal.aborted && generation === settingsEpoch.current)
+          setSettings(value);
+      } catch {
+        // Keep the last released classification while a background refresh is unavailable.
+      } finally {
+        pending = false;
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void load();
+    }, 30_000);
+    const visible = () => {
+      if (!document.hidden) void load();
+    };
+    window.addEventListener("focus", visible);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      abort.abort();
+      window.clearInterval(timer);
+      window.removeEventListener("focus", visible);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, []);
   async function signOut() {
     if (signingOut.current) return;
     signingOut.current = true;
@@ -141,7 +178,7 @@ export function App() {
           me={me}
           authConfig={authConfig}
           settings={settings}
-          onSettings={setSettings}
+          onSettings={applySettings}
           loadMe={() => void loadMe()}
           onSignOut={() => void signOut()}
           signOutError={signOutError}

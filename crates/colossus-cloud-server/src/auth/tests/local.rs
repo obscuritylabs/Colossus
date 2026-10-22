@@ -3,7 +3,7 @@ use colossus_cloud::{
     CloudProject, CloudUser, LocalCredential, LoginIdentityMetadata, ProjectRole, UserAccount,
 };
 
-const PASSWORD: &str = "fixture local password 2026";
+pub(super) const PASSWORD: &str = "fixture local password 2026";
 
 #[tokio::test]
 async fn bootstrap_existing_oidc_account_adds_local_binding_once_without_resetting_credentials() {
@@ -80,7 +80,7 @@ async fn bootstrap_existing_oidc_account_adds_local_binding_once_without_resetti
     );
     server.abort();
 }
-async fn fixture_local() -> (Authentication, tokio::task::JoinHandle<()>) {
+pub(super) async fn fixture_local() -> (Authentication, tokio::task::JoinHandle<()>) {
     let (oidc, _, server) = fixture().await;
     let mut config = oidc.config.clone();
     config.oidc = None;
@@ -145,7 +145,11 @@ fn csrf() -> HeaderMap {
     headers.insert("x-colossus-csrf", HeaderValue::from_static("1"));
     headers
 }
-async fn local_cookie(auth: &Authentication, username: &str, password: &str) -> HeaderMap {
+pub(super) async fn local_cookie(
+    auth: &Authentication,
+    username: &str,
+    password: &str,
+) -> HeaderMap {
     let mut headers = csrf();
     let cookie = auth
         .local_login(&headers, username.into(), Zeroizing::new(password.into()))

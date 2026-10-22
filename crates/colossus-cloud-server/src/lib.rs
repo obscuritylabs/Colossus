@@ -2,6 +2,7 @@
 mod admin;
 /// Separately deployed protected rollback-anchor authority for hosted Chat.
 pub mod anchor_authority;
+mod announcements;
 mod auth;
 mod certificates;
 mod chat;

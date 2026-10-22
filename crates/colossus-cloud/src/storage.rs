@@ -28,6 +28,10 @@ pub enum EntityKind {
     LocalCredential,
     /// Global control-plane product settings.
     Setting,
+    /// Administrator-published instance announcement.
+    Announcement,
+    /// Account-owned monotone announcement acknowledgement.
+    AnnouncementReceipt,
     /// Cloud project authority boundary.
     Project,
     /// Explicit subject membership and project permission ceiling.
@@ -83,6 +87,8 @@ impl EntityKey {
             EntityKind::OidcIdentity => "oidc-identity",
             EntityKind::LocalCredential => "local-credential",
             EntityKind::Setting => "setting",
+            EntityKind::Announcement => "announcement",
+            EntityKind::AnnouncementReceipt => "announcement-receipt",
             EntityKind::Project => "project",
             EntityKind::Membership => "membership",
             EntityKind::AuthFlow => "auth-flow",
@@ -194,6 +200,8 @@ pub enum EntityOrder {
     CreatedAsc,
     /// Newest creation first with the resource identifier breaking timestamp ties.
     CreatedDesc,
+    /// Announcement priority, publication time and identity, all descending.
+    AnnouncementPriority,
 }
 
 /// Validated stable timestamp/resource position decoded from a collection cursor.
@@ -205,6 +213,8 @@ pub struct CloudPagePosition {
     pub id: String,
     /// Parent used to deterministically break equal identifier/timestamp ties.
     pub parent_id: String,
+    /// Announcement priority at the boundary; absent for other collection orders.
+    pub priority: Option<u8>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -214,6 +224,8 @@ struct EncodedCloudCursor {
     timestamp: String,
     id: String,
     parent_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    priority: Option<u8>,
 }
 fn cursor_query_hash(query: &EntityQuery) -> CloudResult<String> {
     use sha2::Digest;
@@ -243,6 +255,33 @@ pub fn encode_page_cursor(
     id: &str,
     parent: &str,
 ) -> CloudResult<String> {
+    if query.order == EntityOrder::AnnouncementPriority {
+        return Err(CloudError::InvalidArgument);
+    }
+    encode_position(query, timestamp, id, parent, None)
+}
+/// Encode the complete priority/publication boundary for an announcement page.
+pub fn encode_announcement_page_cursor(
+    query: &EntityQuery,
+    timestamp: &str,
+    id: &str,
+    priority: u8,
+) -> CloudResult<String> {
+    if query.kind != EntityKind::Announcement
+        || query.order != EntityOrder::AnnouncementPriority
+        || priority > 100
+    {
+        return Err(CloudError::InvalidArgument);
+    }
+    encode_position(query, timestamp, id, "", Some(priority))
+}
+fn encode_position(
+    query: &EntityQuery,
+    timestamp: &str,
+    id: &str,
+    parent: &str,
+    priority: Option<u8>,
+) -> CloudResult<String> {
     if matches!(query.order, EntityOrder::IdAsc | EntityOrder::IdDesc) {
         return Ok(id.into());
     }
@@ -254,6 +293,7 @@ pub fn encode_page_cursor(
         timestamp: timestamp.into(),
         id: id.into(),
         parent_id: parent.into(),
+        priority,
     };
     Ok(format!(
         "cp1_{}",
@@ -262,6 +302,9 @@ pub fn encode_page_cursor(
 }
 /// Decode and bind an opaque cursor to the exact project/filter/order collection.
 pub fn decode_page_cursor(query: &EntityQuery) -> CloudResult<Option<CloudPagePosition>> {
+    if query.order == EntityOrder::AnnouncementPriority && query.kind != EntityKind::Announcement {
+        return Err(CloudError::InvalidArgument);
+    }
     let Some(after) = &query.after else {
         return Ok(None);
     };
@@ -284,6 +327,10 @@ pub fn decode_page_cursor(query: &EntityQuery) -> CloudResult<Option<CloudPagePo
         || value.id.is_empty()
         || value.id.len() > 128
         || value.parent_id.len() > 128
+        || (query.order == EntityOrder::AnnouncementPriority
+            && (value.priority.is_none_or(|priority| priority > 100)
+                || !value.parent_id.is_empty()))
+        || (query.order != EntityOrder::AnnouncementPriority && value.priority.is_some())
     {
         return Err(CloudError::InvalidArgument);
     }
@@ -296,6 +343,7 @@ pub fn decode_page_cursor(query: &EntityQuery) -> CloudResult<Option<CloudPagePo
         timestamp: value.timestamp,
         id: value.id,
         parent_id: value.parent_id,
+        priority: value.priority,
     }))
 }
 
@@ -808,7 +856,15 @@ impl CloudStore for MemoryCloudStore {
                         _ => false,
                     })
                     && query.status.as_ref().is_none_or(|status| {
-                        if query.kind == EntityKind::Thread && status == "main" {
+                        if query.kind == EntityKind::Announcement && matches!(status.as_str(), "active" | "active_banner") {
+                            matches!(&r.value, EntityValue::Announcement(record) if record.announcement.active_at(time::OffsetDateTime::now_utc().unix_timestamp())
+                                && (status == "active" || (record.announcement.banner && query.visible_to.as_ref().is_some_and(|user| {
+                                    let key = EntityKey { kind: EntityKind::AnnouncementReceipt, project_id: query.project_id.clone(), parent_id: Some(user.clone()), id: r.key.id.clone() };
+                                    state.deleted.contains(&key) || state.entities.get(&key).is_none_or(|receipt| {
+                                        matches!(&receipt.value, EntityValue::AnnouncementReceipt(receipt) if receipt.dismissed_revision < record.announcement.publication_revision)
+                                    })
+                                }))))
+                        } else if query.kind == EntityKind::Thread && status == "main" {
                             r.value.status() != "aside"
                         } else if query.kind == EntityKind::User && status == "administrator" {
                             r.value.active_administrator()
@@ -842,6 +898,12 @@ impl CloudStore for MemoryCloudStore {
             match query.order {
                 EntityOrder::UpdatedDesc => record.value.updated_at(),
                 EntityOrder::CreatedAsc | EntityOrder::CreatedDesc => record.value.created_at(),
+                EntityOrder::AnnouncementPriority => match &record.value {
+                    EntityValue::Announcement(record) => {
+                        record.announcement.published_at.as_deref()
+                    }
+                    _ => None,
+                },
                 _ => None,
             }
             .filter(|value| !value.is_empty())
@@ -855,6 +917,14 @@ impl CloudStore for MemoryCloudStore {
         };
         let key = |record: &EntityRecord| {
             (
+                if query.order == EntityOrder::AnnouncementPriority {
+                    match &record.value {
+                        EntityValue::Announcement(record) => record.announcement.priority,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                },
                 epoch(&timestamp(record)),
                 record.key.id.clone(),
                 record.key.parent_id.clone().unwrap_or_default(),
@@ -863,7 +933,10 @@ impl CloudStore for MemoryCloudStore {
         records.sort_by_key(|record| key(record));
         if matches!(
             query.order,
-            EntityOrder::IdDesc | EntityOrder::UpdatedDesc | EntityOrder::CreatedDesc
+            EntityOrder::IdDesc
+                | EntityOrder::UpdatedDesc
+                | EntityOrder::CreatedDesc
+                | EntityOrder::AnnouncementPriority
         ) {
             records.reverse();
         }
@@ -882,6 +955,7 @@ impl CloudStore for MemoryCloudStore {
                 EntityOrder::CreatedAsc => position.as_ref().is_none_or(|position| {
                     key(record)
                         > (
+                            position.priority.unwrap_or(0),
                             epoch(&position.timestamp),
                             position.id.clone(),
                             position.parent_id.clone(),
@@ -890,6 +964,7 @@ impl CloudStore for MemoryCloudStore {
                 _ => position.as_ref().is_none_or(|position| {
                     key(record)
                         < (
+                            position.priority.unwrap_or(0),
                             epoch(&position.timestamp),
                             position.id.clone(),
                             position.parent_id.clone(),
@@ -899,12 +974,24 @@ impl CloudStore for MemoryCloudStore {
             .take(query.limit.min(100));
         records
             .map(|mut record| {
-                record.page_cursor = Some(encode_page_cursor(
-                    query,
-                    &timestamp(&record),
-                    &record.key.id,
-                    record.key.parent_id.as_deref().unwrap_or_default(),
-                )?);
+                record.page_cursor = Some(if query.order == EntityOrder::AnnouncementPriority {
+                    let EntityValue::Announcement(value) = &record.value else {
+                        return Err(CloudError::Storage);
+                    };
+                    encode_announcement_page_cursor(
+                        query,
+                        &timestamp(&record),
+                        &record.key.id,
+                        value.announcement.priority,
+                    )?
+                } else {
+                    encode_page_cursor(
+                        query,
+                        &timestamp(&record),
+                        &record.key.id,
+                        record.key.parent_id.as_deref().unwrap_or_default(),
+                    )?
+                });
                 Ok(record)
             })
             .collect()

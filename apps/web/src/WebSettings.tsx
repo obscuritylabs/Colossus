@@ -1,4 +1,5 @@
 import type { CredentialTarget } from "./credential-types";
+import type { PublicSettings } from "./control-api";
 import {
   useEffect,
   useLayoutEffect,
@@ -38,6 +39,8 @@ export function WebSettings({
   canConnect,
   appearance,
   onAppearance,
+  isGlobalAdmin = false,
+  onEnvironmentSettings,
   initialScope = "global",
   onReturn,
   onConnections,
@@ -52,6 +55,8 @@ export function WebSettings({
   canConnect: boolean;
   appearance: ComponentProps<typeof AppearanceSettings>["appearance"];
   onAppearance: ComponentProps<typeof AppearanceSettings>["onChange"];
+  isGlobalAdmin?: boolean;
+  onEnvironmentSettings?: (settings: PublicSettings) => void;
   initialScope?: "global" | "space";
   onReturn: () => void;
   onConnections: () => void;
@@ -128,6 +133,8 @@ export function WebSettings({
             <AppearanceSettings
               appearance={appearance}
               onChange={onAppearance}
+              isGlobalAdmin={isGlobalAdmin}
+              {...(onEnvironmentSettings ? { onEnvironmentSettings } : {})}
             />
           ) : personalTab === "credentials" ? (
             <ChatCredentials
