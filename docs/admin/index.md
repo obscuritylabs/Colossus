@@ -11,6 +11,9 @@ Colossus treats model calls, filesystem access, processes, network traffic, dura
 state, and extensions as separate operational concerns. A provider being connected does
 not grant it access to a repository, and an approval does not widen the sandbox.
 
+For the browser application and its Kubernetes installation, use the dedicated
+[Cloud](../cloud/index.md) and [Cloud deployment](../cloud/deployment/index.md) guides.
+
 Start with the operational layer that matches your job:
 
 - [Colossus home and workspace resolution](../reference/colossus-home.md) for

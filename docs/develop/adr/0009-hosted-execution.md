@@ -50,5 +50,5 @@ crash recovery still distinguishes Interrupted from OutcomeUnknown and never bli
 repeats uncertain effects. This decision introduces bounded dispatch and lifecycle
 management, not a second workflow engine or a claim of arbitrary checkpoint replay.
 See [state and recovery](../state-recovery.md) for canonical execution guarantees and
-[Hosted operation](../../admin/cloud-control-plane.md#scale-hosted-chat-across-replicas)
+[Hosted operation](../../cloud/deployment/hosted-chat.md)
 for current deployment and upgrade requirements.

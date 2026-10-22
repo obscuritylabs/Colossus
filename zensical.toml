@@ -71,6 +71,20 @@ nav = [
       { "Desktop setup files" = "get-started/desktop-setup-files.md" },
     ] },
   ] },
+  { "Cloud" = [
+    { "Overview" = "cloud/index.md" },
+    { "Work in Cloud" = "cloud/work.md" },
+    { "Connect runtimes" = "cloud/connect-runtimes.md" },
+    { "Projects and access" = "cloud/administration.md" },
+    { "Deployment" = [
+      { "Overview" = "cloud/deployment/index.md" },
+      { "Install with Helm" = "cloud/deployment/kubernetes.md" },
+      { "Configure your installation" = "cloud/deployment/configuration.md" },
+      { "Enable hosted chat" = "cloud/deployment/hosted-chat.md" },
+      { "Host documentation" = "cloud/deployment/documentation.md" },
+      { "Upgrade, backup, and recovery" = "cloud/deployment/operations.md" },
+    ] },
+  ] },
   { "Use" = [
     { "Overview" = "use/index.md" },
     { "Connect a model" = [
@@ -117,8 +131,6 @@ nav = [
     { "Policy and OPA" = "admin/policy-opa.md" },
     { "Sandbox" = "admin/sandbox.md" },
     { "Storage and worker" = "admin/storage-worker.md" },
-    { "Cloud control plane" = "admin/cloud-control-plane.md" },
-    { "Host public documentation" = "admin/documentation-hosting.md" },
     { "Audit, telemetry, and recovery" = "admin/audit-telemetry-recovery.md" },
     { "Offline operation" = "admin/offline-airgap.md" },
     { "Troubleshooting" = "admin/troubleshooting.md" },
@@ -175,6 +187,7 @@ nav = [
       { "ADR 0007: Agent communication" = "develop/adr/0007-agent-communication.md" },
       { "ADR 0008: Owned Chromium browser" = "develop/adr/0008-owned-chromium-browser.md" },
       { "ADR 0009: Hosted execution" = "develop/adr/0009-hosted-execution.md" },
+      { "ADR 0010: Control Plane Helm" = "develop/adr/0010-control-plane-helm-database-boundary.md" },
     ] },
     { "Runtime and ports" = "develop/runtime-ports.md" },
     { "OpenTelemetry implementation" = "develop/observability.md" },

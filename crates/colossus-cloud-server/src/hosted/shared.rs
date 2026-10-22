@@ -94,6 +94,10 @@ impl SharedChat {
             PostgresEventJournal, PostgresJournalConfig, PostgresJournalFence, PostgresTlsConfig,
         };
         let tls = match &self.database.tls {
+            // The bundled cloud-database exception does not widen runtime-journal trust.
+            colossus_cloud_postgres::CloudDatabaseTls::InCluster { .. } => {
+                return Err(CloudError::InvalidArgument);
+            }
             colossus_cloud_postgres::CloudDatabaseTls::Disabled => PostgresTlsConfig::Disabled,
             colossus_cloud_postgres::CloudDatabaseTls::WebpkiRoots => {
                 PostgresTlsConfig::WebpkiRoots

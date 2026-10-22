@@ -1,15 +1,15 @@
 # Colossus Control Plane deployment
 
-The [operator guide](../../docs/admin/cloud-control-plane.md) owns authentication,
+The [operator guide](../../docs/cloud/deployment/index.md) owns authentication,
 TLS, PostgreSQL, runtime enrollment, backup and recovery procedures.
 
-- `kubernetes/` is the default two-replica, stateless controller deployment. Built-in
-  hosted Chat is disabled; independently enrolled runtimes keep their own execution
-  state.
-- `overlays/hosted-chat-sql/` enables shared PostgreSQL hosted Chat with two rolling
+- `chart/` is the Kubernetes 1.34+ Helm deployment with three controller replicas,
+  documentation and optional bundled PostgreSQL. Built-in hosted Chat is disabled by
+  default; independently enrolled runtimes keep their own execution state.
+- `chart/examples/hosted-chat.yaml` enables shared PostgreSQL hosted Chat with rolling
   replicas, fenced execution ownership and disposable caches. It requires a separately
-  administered checkpoint-anchor service and externally managed keys.
-- `overlays/hosted-chat/` is a compatibility alias for the shared SQL overlay.
+  administered checkpoint-anchor service and externally managed keys. The chart replaces
+  the former Kustomize base and hosted-chat overlays.
 - `Dockerfile` builds the controller, its optional controlled-chat composition and
   the web assets from the same source. The image also contains `colossus-chat-anchor`
   for the separately administered anchor service. It contains no user execution environment.
@@ -33,11 +33,11 @@ for publication verification and recovery.
 Render locally without contacting a cluster:
 
 ```sh
-kubectl kustomize deploy/control-plane/kubernetes
-kubectl kustomize deploy/control-plane/overlays/hosted-chat
-kubectl kustomize deploy/control-plane/overlays/hosted-chat-sql
+helm template colossus-control-plane deploy/control-plane/chart --namespace colossus
+helm template colossus-control-plane deploy/control-plane/chart --namespace colossus \
+  -f deploy/control-plane/chart/examples/hosted-chat.yaml
 ```
 
-Pin the server/documentation image names and tags or digests in the base
-`kustomization.yaml`. Both deployments require the configured PostgreSQL and TLS
-Secrets; hosted Chat also needs external headless keys and the independent anchor authority. These templates are examples to adapt to your infrastructure.
+Pin the server/documentation image tags or digests through chart values. Hosted Chat
+also needs external headless keys and the independent anchor authority. Review the
+[chart guide](chart/README.md) for Secret contracts and migration from Kustomize.

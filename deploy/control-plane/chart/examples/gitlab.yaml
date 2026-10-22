@@ -1,0 +1,11 @@
+auth:
+  oidc:
+    enabled: true
+    label: GitLab
+    issuer: https://gitlab.example.com
+    clientId: REPLACE_WITH_APPLICATION_ID
+    existingSecret: colossus-oidc
+  bootstrap:
+    oidcSubject: REPLACE_WITH_VERIFIED_SUBJECT
+# Register https://colossus.example.com/auth/callback; allow openid/profile scopes.
+# Local accounts remain enabled. To disable: auth.local.enabled=false.

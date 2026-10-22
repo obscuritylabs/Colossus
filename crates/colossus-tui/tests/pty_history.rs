@@ -452,6 +452,26 @@ impl InteractiveHost for FixtureHost {
     }
 }
 
+fn fixture_command() -> CommandBuilder {
+    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    // Match the synthetic VT100 terminal rather than inheriting outer graphics hints.
+    // Unsupported graphics probes can consume input and restore stale terminal modes.
+    for variable in [
+        "KITTY_WINDOW_ID",
+        "TERM_PROGRAM",
+        "WEZTERM_EXECUTABLE",
+        "KONSOLE_VERSION",
+        "VTE_VERSION",
+        "WINDOWID",
+        "FOOT_CLIENT_PID",
+        "MLTERM",
+    ] {
+        command.env_remove(variable);
+    }
+    command.env("TERM", "xterm-256color");
+    command
+}
+
 #[test]
 fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
     let pty_system = native_pty_system();
@@ -463,7 +483,7 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
             pixel_height: 0,
         })
         .expect("PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.arg("--exact");
     command.arg("fixture_process");
     command.arg("--nocapture");
@@ -644,7 +664,7 @@ fn text_selection_freezes_stream_redraw_and_restores_captured_input() {
             pixel_height: 0,
         })
         .expect("selection PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.args(["--exact", "fixture_process", "--nocapture"]);
     command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
     command.env("COLOSSUS_TUI_STREAM_FIXTURE", "1");
@@ -724,7 +744,7 @@ fn multiline_turn_and_keyboard_restoration(newline: &[u8]) {
             pixel_height: 0,
         })
         .expect("PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.arg("--exact");
     command.arg("fixture_process");
     command.arg("--nocapture");
@@ -818,7 +838,7 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
             pixel_height: 0,
         })
         .expect("PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.arg("--exact");
     command.arg("fixture_process");
     command.arg("--nocapture");
@@ -1010,7 +1030,7 @@ fn unicode_history_draft_roundtrip(restore_edit: bool) {
             pixel_height: 0,
         })
         .expect("Unicode proof PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.args(["--exact", "fixture_process", "--nocapture"]);
     command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
     command.env("COLOSSUS_TUI_MODE", "alternate");
@@ -1084,7 +1104,7 @@ fn submitted_input_history_traverses_repeatedly_and_completion_keeps_key_precede
             pixel_height: 0,
         })
         .expect("PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.arg("--exact");
     command.arg("fixture_process");
     command.arg("--nocapture");
@@ -1195,7 +1215,7 @@ fn completed_streaming_output_moves_immediately_into_native_scrollback() {
             pixel_height: 0,
         })
         .expect("PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.arg("--exact");
     command.arg("fixture_process");
     command.arg("--nocapture");
@@ -1296,7 +1316,7 @@ fn inline_completion_chrome_never_enters_native_scrollback() {
             pixel_height: 0,
         })
         .expect("PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.arg("--exact");
     command.arg("fixture_process");
     command.arg("--nocapture");
@@ -1533,7 +1553,7 @@ fn inline_session_browser_uses_a_transient_screen_without_polluting_history() {
             pixel_height: 0,
         })
         .expect("PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.arg("--exact");
     command.arg("fixture_process");
     command.arg("--nocapture");
@@ -1646,7 +1666,7 @@ fn inline_theme_picker_uses_a_transient_screen_without_polluting_history() {
             pixel_height: 0,
         })
         .expect("PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.arg("--exact");
     command.arg("fixture_process");
     command.arg("--nocapture");
@@ -1755,7 +1775,7 @@ fn inline_completion_restores_a_full_main_screen_without_changing_history() {
             pixel_height: 0,
         })
         .expect("PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.arg("--exact");
     command.arg("fixture_process");
     command.arg("--nocapture");
@@ -1854,7 +1874,7 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
             pixel_height: 0,
         })
         .expect("PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.arg("--exact");
     command.arg("fixture_process");
     command.arg("--nocapture");
@@ -1955,7 +1975,7 @@ fn f4_dictation_displays_a_meter_and_enter_submits_the_final_revision() {
             pixel_height: 0,
         })
         .expect("PTY");
-    let mut command = CommandBuilder::new(std::env::current_exe().expect("test executable"));
+    let mut command = fixture_command();
     command.cwd(std::env::current_dir().expect("fixture directory"));
     command.args(["--exact", "fixture_process", "--nocapture"]);
     command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");

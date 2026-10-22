@@ -1,0 +1,17 @@
+Colossus Control Plane {{ .Chart.AppVersion }}
+Browser: https://{{ .Values.browserHost }}
+Connectors: https://{{ .Values.connectorHost }} (end-to-end mutual TLS)
+{{ if .Values.documentation.enabled }}Documentation: https://{{ .Values.browserHost }}/docs/{{ end }}
+
+Configure browser HTTPS and a TLS-passthrough connector listener on your controller.
+{{ if eq .Values.routing.mode "ingress-nginx" }}ingress-nginx requires --enable-ssl-passthrough.{{ end }}
+{{ if .Values.topologySpread.enabled }}Default scheduling requires {{ .Values.topologySpread.minDomains }} schedulable zones.{{ end }}
+{{ if .Values.autoscaling.enabled }}CPU autoscaling requires the cluster metrics API.{{ end }}
+{{ if and .Values.auth.local.enabled .Values.auth.bootstrap.enabled }}
+Initial username: {{ .Values.auth.bootstrap.username }}
+Read the initial password privately from Secret {{ include "cp.stateSecret" . }}, key {{ .Values.auth.state.bootstrapPasswordKey }}.
+Bootstrap never resets an existing administrator's password.
+{{ end }}
+Retain database volumes, connector CA, and authentication Secrets when recovering or migrating.
+Generated Secrets are reused through Helm's live-cluster lookup. GitOps/offline renders must
+use stable existing Secrets; do not repeatedly apply freshly generated random credentials.

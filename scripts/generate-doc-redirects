@@ -53,7 +53,8 @@ while IFS=$'\t' read -r legacy_path target_path fragment_map extra_field ||
     exit 1
   fi
 
-  if [[ ! "${legacy_path}" =~ ^/[A-Z][A-Z0-9_]*\.html$ ]]; then
+  if [[ ! "${legacy_path}" =~ ^/[A-Z][A-Z0-9_]*\.html$ ]] &&
+    [[ ! "${legacy_path}" =~ ^/([a-z0-9-]+/)+index\.html$ ]]; then
     echo "${manifest}:${line_number}: invalid legacy path: ${legacy_path}" >&2
     exit 1
   fi
@@ -80,7 +81,8 @@ while IFS=$'\t' read -r legacy_path target_path fragment_map extra_field ||
       old_fragment="${mapping%%=*}"
       new_fragment="${mapping#*=}"
       if [[ ! "${old_fragment}" =~ ^[a-z0-9][a-z0-9_-]*$ ]] ||
-        [[ ! "${new_fragment}" =~ ^[a-z0-9_-]*$ ]]; then
+        { [[ ! "${new_fragment}" =~ ^[a-z0-9_-]*$ ]] &&
+          [[ ! "${new_fragment}" =~ ^/([a-z0-9-]+/)*(#[a-z0-9][a-z0-9_-]*)?$ ]]; }; then
         echo "${manifest}:${line_number}: invalid fragment mapping: ${mapping}" >&2
         exit 1
       fi
@@ -91,6 +93,7 @@ while IFS=$'\t' read -r legacy_path target_path fragment_map extra_field ||
   canonical_url="${canonical_root}${target_path}"
   published_url="${published_root}${target_path}"
   output_path="${site_dir}/${legacy_path#/}"
+  mkdir -p "$(dirname "${output_path}")"
 
   {
     printf '%s\n' '<!doctype html>'
@@ -106,10 +109,12 @@ while IFS=$'\t' read -r legacy_path target_path fragment_map extra_field ||
     printf '%s\n' '    (() => {'
     printf '      const fragments = {%s};\n' "${fragment_entries}"
     printf '%s\n' '      const source = window.location.hash.slice(1);'
-    printf '%s\n' '      const mapped = Object.prototype.hasOwnProperty.call(fragments, source)'
+    printf '%s\n' '      const known = Object.prototype.hasOwnProperty.call(fragments, source);'
+    printf '%s\n' '      const mapped = known'
     printf '%s\n' '        ? fragments[source]'
     printf '%s\n' '        : source;'
-    printf '      const destination = "%s" + (mapped ? "#" + mapped : "");\n' "${published_url}"
+    printf '      const destination = known && mapped.startsWith("/") ? "%s" + mapped\n' "${published_root}"
+    printf '        : "%s" + (mapped ? "#" + mapped : "");\n' "${published_url}"
     printf '%s\n' '      window.location.replace(destination);'
     printf '%s\n' '    })();'
     printf '%s\n' '  </script>'

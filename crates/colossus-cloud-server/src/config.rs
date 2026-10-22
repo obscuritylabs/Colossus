@@ -339,6 +339,11 @@ impl Config {
     pub fn validate(&self) -> Result<(), &'static str> {
         if let Some(chat) = &self.chat {
             chat.validate()?;
+            if chat.shared.is_some()
+                && matches!(&self.database.tls, CloudDatabaseTls::InCluster { .. })
+            {
+                return Err("shared hosted chat requires verified database TLS");
+            }
             if !self.local_development
                 && (chat.shared.is_none()
                     || chat
@@ -504,38 +509,22 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::ChatProjectConfig;
 
     #[test]
-    fn hosted_kubernetes_example_uses_valid_production_configuration() {
-        let configuration: Config = serde_json::from_str(include_str!(
-            "../../../deploy/control-plane/overlays/hosted-chat-sql/control-plane.json"
+    fn hosted_helm_example_uses_valid_project_configuration() {
+        let values: serde_json::Value = serde_saphyr::from_str(include_str!(
+            "../../../deploy/control-plane/chart/examples/hosted-chat.yaml"
         ))
         .expect("hosted deployment example must deserialize");
-        configuration
-            .validate()
-            .expect("hosted deployment example must validate");
-        let chat = configuration.chat.as_ref().expect("explicit chat opt-in");
-        assert!(chat.shared.is_some());
-        assert!(chat.home.starts_with("/var/lib/colossus-chat"));
-        assert!(
-            chat.projects
-                .values()
-                .all(|project| project.codex_auth_path.is_none())
-        );
-        for project in configuration
-            .chat
-            .expect("explicit chat opt-in")
-            .projects
-            .values()
-        {
-            colossus_runtime::RuntimeConfig::from_yaml(
-                &project
-                    .runtime
-                    .to_yaml()
-                    .expect("runtime example must encode"),
-            )
-            .expect("runtime example must satisfy semantic validation");
+        assert_eq!(values["chat"]["enabled"], true);
+        let projects: std::collections::BTreeMap<String, ChatProjectConfig> =
+            serde_json::from_value(values["chat"]["projects"].clone())
+                .expect("native hosted project snapshots");
+        assert!(!projects.is_empty());
+        for project in projects.values() {
+            project.validate().expect("reviewed project authority");
+            assert!(project.codex_auth_path.is_none());
         }
     }
 }

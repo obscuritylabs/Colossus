@@ -1,0 +1,39 @@
+# Platform prerequisite examples, NOT Helm values. Choose one gateway implementation.
+# Istio: browser certificate is in the namespace of the actual ingress gateway pods.
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: colossus
+  namespace: istio-system
+spec:
+  selector: {istio: ingressgateway}
+  servers:
+    - port: {number: 443, name: https-browser, protocol: HTTPS}
+      hosts: [colossus.example.com]
+      tls: {mode: SIMPLE, credentialName: colossus-browser-tls}
+    - port: {number: 443, name: tls-connectors, protocol: TLS}
+      hosts: [runtimes.colossus.example.com]
+      tls: {mode: PASSTHROUGH}
+---
+# Gateway API: use a controller/class implementing HTTPRoute and TLSRoute passthrough.
+# This example's Gateway and browser certificate are both in the release namespace.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: colossus
+  namespace: colossus
+spec:
+  gatewayClassName: REPLACE_WITH_INSTALLED_CLASS
+  listeners:
+    - name: browser
+      hostname: colossus.example.com
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        certificateRefs: [{name: colossus-browser-tls}]
+    - name: connector
+      hostname: runtimes.colossus.example.com
+      protocol: TLS
+      port: 443
+      tls: {mode: Passthrough}

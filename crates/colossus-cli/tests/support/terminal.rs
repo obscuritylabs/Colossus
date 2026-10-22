@@ -7,6 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "terminal_environment.rs"]
+mod environment;
+
 pub(crate) struct Terminal {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     master: Box<dyn portable_pty::MasterPty + Send>,
@@ -22,7 +25,8 @@ impl Drop for Terminal {
 }
 
 impl Terminal {
-    pub(crate) fn start(command: CommandBuilder) -> Self {
+    pub(crate) fn start(mut command: CommandBuilder) -> Self {
+        environment::configure(&mut command);
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 40,

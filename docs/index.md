@@ -1,6 +1,6 @@
 ---
 title: Get started
-description: See why Colossus exists, then choose the CLI or Desktop for your first run.
+description: See why Colossus exists, then choose CLI, Desktop, or Cloud for your first task.
 audience: user
 type: concept
 icon: lucide/rocket
@@ -37,6 +37,15 @@ services you want to use.
     [Start on macOS :lucide-arrow-right:](get-started/desktop.md) ·
     [Start on Windows](get-started/windows-desktop.md) ·
     [Explore Desktop](desktop/index.md)
+
+-   :lucide-cloud:{ .lg .middle } **Cloud**
+
+    ---
+
+    Work in your organization's browser app, connect an agent, or deploy the Control Plane.
+
+    [Explore Cloud :lucide-arrow-right:](cloud/index.md) ·
+    [Deployment guides](cloud/deployment/index.md)
 
 </div>
 

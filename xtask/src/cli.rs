@@ -16,6 +16,7 @@ Components:
   sdk           Generated API compatibility and TypeScript, Python, and Go SDKs
   desktop       Desktop renderer audit, checks, tests, and build
   web           Cloud web renderer audit, checks, tests, and build
+  helm          Control Plane chart lint, render matrix, and offline packaging
   docs          Documentation build and verification
   dependencies  Root, fuzz, Desktop, and standalone native dependency policy
   workflows     CI classification contracts and workflow lint
@@ -28,6 +29,7 @@ pub(super) enum Component {
     Sdk,
     Desktop,
     Web,
+    Helm,
     Docs,
     Dependencies,
     Workflows,
@@ -41,6 +43,7 @@ impl Component {
             "sdk" => Ok(Self::Sdk),
             "desktop" => Ok(Self::Desktop),
             "web" => Ok(Self::Web),
+            "helm" => Ok(Self::Helm),
             "docs" => Ok(Self::Docs),
             "dependencies" => Ok(Self::Dependencies),
             "workflows" => Ok(Self::Workflows),
@@ -57,6 +60,7 @@ impl fmt::Display for Component {
             Self::Sdk => "sdk",
             Self::Desktop => "desktop",
             Self::Web => "web",
+            Self::Helm => "helm",
             Self::Docs => "docs",
             Self::Dependencies => "dependencies",
             Self::Workflows => "workflows",

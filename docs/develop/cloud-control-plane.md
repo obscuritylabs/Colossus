@@ -19,7 +19,7 @@ Persisted users and issuer/subject identities own project membership. Optional l
 login uses bounded Argon2id work, shared database attempt limits, and session revocation
 epochs; the explicit bootstrap configuration provisions the first administrator.
 Hierarchy membership is not inherited. Global administration does not disclose another
-user's personal chat history or runtime, and creates no execution grant. See [operator setup](../admin/cloud-control-plane.md) for the
+user's personal chat history or runtime, and creates no execution grant. See [operator setup](../cloud/deployment/index.md) for the
 production configuration and administration flow.
 
 `colossus-cloud-protocol` owns the closed versioned connection contract.
@@ -66,7 +66,7 @@ cargo run -p colossus-cloud-server --example init_runtime -- /private/tmp/coloss
 cargo build --locked -p colossus-cli -p colossus-connector --bins
 ```
 
-Follow [runtime enrollment](../admin/cloud-control-plane.md#enroll-a-cli-daemon) with
+Follow [runtime enrollment](../cloud/connect-runtimes.md#enroll-a-cli-daemon) with
 the generated runtime config and API directory. Use `--tool echo` for the Echo fixture.
 Cloud enrollment to the loopback host additionally requires `--allow-loopback-http`.
 Start the worker and connector in separate terminals. The browser should show the
@@ -89,13 +89,16 @@ Build the standalone Control Plane image from the repository root:
 
 ```sh
 docker build -f deploy/control-plane/Dockerfile -t colossus-control-plane:local .
-kubectl kustomize deploy/control-plane/kubernetes
+cargo xtask check helm
 ```
 
 The default image uses the release profile. `--build-arg PROFILE=dev` builds a stripped
 debug image for local Linux acceptance. Builder/runtime images and local fixtures are
-digest pinned. Production deployment and Secret configuration belong to the
-[operator guide](../admin/cloud-control-plane.md).
+digest pinned. The Helm chart replaces the Kustomize manifests and is packaged with its pinned
+PostgreSQL dependency for disconnected installs. Static validation covers Kubernetes
+1.34, routing variants, OpenShift identities, authentication and real server config;
+it does not install or upgrade a cluster. Production deployment and Secret configuration belong to the
+[operator guide](../cloud/deployment/index.md).
 
 Run the [local documentation image](documentation.md#build-the-on-prem-documentation-image)
 on loopback port 8081 alongside the web development server. Vite forwards the default
@@ -143,8 +146,9 @@ owner-authorized `/hosted/files/{artifact}` route and force attachment dispositi
 Shared replicas route file operations to the fenced owner through encrypted management;
 file data stays in the protected artifact journal. No file is extracted onto a worker.
 
-Use the reviewed example in `deploy/control-plane/overlays/hosted-chat-sql/control-plane.json`
-as an operator-owned seed. It contains no secret values. Select real project/model and
+Use `chat.projects` in `deploy/control-plane/chart/examples/hosted-chat.yaml`
+as an operator-owned seed. The Helm gate renders and validates the complete production
+server configuration. The example contains no secret values. Select real project/model and
 MCP identities, supply the named headless keys through a protected environment, and use
 an isolated private `chat.home` for development. The example is a Linux deployment;
 local paths must name a canonical owner-private directory on the development host.
@@ -261,11 +265,11 @@ anchors beside the runtime journal would weaken rollback detection. Local lexica
 indexes are rebuildable on takeover. Shared mode never falls back to local Redb or a
 platform credential vault. Omitting `shared` retains the earlier explicit single-host
 fixture only when the server sets `local_development`; production requires shared
-storage. The former RWO overlay path now aliases the SQL deployment.
+storage. The Helm hosted values replace the former Kustomize deployment paths.
 
-See [operator enablement](../admin/cloud-control-plane.md#scale-hosted-chat-across-replicas)
+See [operator enablement](../cloud/deployment/hosted-chat.md)
 for exact references, independent authority deployment, restore and migration limits.
-The SQL overlay demonstrates two replicas with disposable caches; it does not provision
+The Helm hosted example uses the chart's replicas with disposable caches; it does not provision
 an execution environment or an external secret manager.
 
 This is controlled chat rather than complete Desktop/TUI parity. Provider/model choice,
@@ -343,10 +347,10 @@ schemas from older baselines; no cloud data import is supported. Add a new migra
 for a deployed schema; do not change already applied SQL. Schema
 rollback files are destructive operator tools and are never executed by ordinary startup.
 The database and independently archived audit heads require tested restore procedures;
-[cloud operations](../admin/cloud-control-plane.md#back-up-and-restore-the-cloud-database)
+[cloud operations](../cloud/deployment/operations.md)
 owns those steps and the credential references.
 
-[Cloud storage initialization](../admin/cloud-control-plane.md#initialize-cloud-storage)
+[Cloud storage initialization](../cloud/deployment/configuration.md#use-an-external-database)
 owns the installed-binary startup and database preparation steps. Cloud schema changes
 never migrate or open local runtime journals.
 

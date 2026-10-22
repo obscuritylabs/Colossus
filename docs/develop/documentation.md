@@ -134,7 +134,7 @@ docker build -f deploy/documentation/Dockerfile \
   --build-arg SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" \
   -t colossus-documentation:local .
 node deploy/documentation/smoke.mjs colossus-documentation:local
-kubectl kustomize deploy/control-plane/kubernetes
+cargo xtask check helm
 ```
 
 The smoke runs the actual image with its non-root identity, read-only root filesystem,
@@ -162,7 +162,7 @@ VITE_COLOSSUS_DOCUMENTATION_URL=https://docs.example.com/docs/ \
 ```
 
 The destination is compile-time presentation configuration, not a new browser or
-runtime permission. See [operator deployment](../admin/documentation-hosting.md) for
+runtime permission. See [operator deployment](../cloud/deployment/documentation.md) for
 TLS, Ingress and release-image selection.
 
 For the local Control Plane web development server, run the documentation image

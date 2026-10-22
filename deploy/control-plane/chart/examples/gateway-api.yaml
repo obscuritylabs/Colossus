@@ -1,0 +1,9 @@
+routing:
+  mode: gateway-api
+  gatewayAPI:
+    name: colossus
+    namespace: colossus
+    browserSectionName: browser
+    connectorSectionName: connector
+    tlsRouteApiVersion: gateway.networking.k8s.io/v1
+# For older Gateway API CRDs, choose gateway.networking.k8s.io/v1alpha2 for TLSRoute.
