@@ -79,11 +79,20 @@ async fn serve(
     let mut observers = tokio::task::JoinSet::new();
     let mut watched = BTreeSet::<String>::new();
     let mut cursor = None;
+    let title_recovery =
+        super::title_recovery::recover(repo.clone(), node.clone(), runs.clone(), lease.clone());
+    tokio::pin!(title_recovery);
+    let mut titles_recovered = false;
     let result = async {
         loop {
             tokio::select! {
                 _ = close.changed() => { if *close.borrow() { return Ok(()); } },
                 _ = interval.tick() => {},
+                result = &mut title_recovery, if !titles_recovered => {
+                    result?;
+                    titles_recovered = true;
+                    continue;
+                },
             }
             while let Some(completed) = observers.try_join_next() {
                 let (id, _result) = completed.map_err(|_| CloudError::Storage)?;

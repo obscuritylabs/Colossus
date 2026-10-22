@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import {
   IconArchive,
   IconDots,
@@ -12,11 +12,13 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@colossus/ui/components/ui/dropdown-menu";
 import type { Run } from "../types";
 import { isTerminalStatus } from "../types";
 import { canForkThread, isThreadForkDraft } from "../thread-fork";
+import { runModeLabel, shortDateLabel } from "../presenters";
 import "./thread-fork.css";
 
 export function ThreadActionsMenu({
@@ -43,10 +45,23 @@ export function ThreadActionsMenu({
   onFork?: (() => void) | undefined;
 }) {
   const forkSelected = useRef(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [container, setContainer] = useState<HTMLElement | null>(null);
   return (
-    <DropdownMenu modal={false}>
+    <DropdownMenu
+      modal={false}
+      onOpenChange={(open) => {
+        if (open) {
+          // Keep the menu inside navigation's focus and pointer boundary.
+          setContainer(
+            triggerRef.current?.closest<HTMLElement>('[role="dialog"]') ?? null,
+          );
+        }
+      }}
+    >
       <DropdownMenuTrigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           className="work-item-action thread-actions-trigger"
           aria-label={`Thread actions for ${title}`}
@@ -57,7 +72,12 @@ export function ThreadActionsMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
+        className="thread-actions-content"
+        container={container}
+        collisionBoundary={container}
+        collisionPadding={8}
         aria-label={`Actions for ${title}`}
+        onEscapeKeyDown={(event) => event.stopPropagation()}
         onCloseAutoFocus={(event) => {
           if (forkSelected.current) {
             event.preventDefault();
@@ -65,6 +85,16 @@ export function ThreadActionsMenu({
           }
         }}
       >
+        <DropdownMenuLabel className="thread-actions-context">
+          <strong>{title}</strong>
+          <span>
+            {isThreadForkDraft(run) ? "Draft" : runModeLabel(run.mode)} ·{" "}
+            <time dateTime={run.updatedAt}>
+              {shortDateLabel(run.updatedAt)}
+            </time>
+          </span>
+        </DropdownMenuLabel>
+        <hr className="thread-actions-separator" />
         <DropdownMenuItem
           disabled={localDisabled}
           onSelect={onRename}
@@ -104,6 +134,7 @@ export function ThreadActionsMenu({
             {pinned ? "Unpin" : "Pin"}
           </span>
         </DropdownMenuCheckboxItem>
+        <hr className="thread-actions-separator" />
         <DropdownMenuItem
           disabled={disabled || archiving || !isTerminalStatus(run.status)}
           onSelect={onArchive}

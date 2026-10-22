@@ -60,6 +60,48 @@ function renderOutput(
 }
 
 describe("RunTimeline assistant output", () => {
+  it("attaches reported run usage to the response and sums model calls", () => {
+    const markup = renderOutput("Released response", "completed", "complete", [
+      {
+        runId: "run-markdown-test",
+        sequence: 1,
+        createdAt: "2026-10-21T12:00:00Z",
+        update: {
+          type: "usage",
+          usage: {
+            inputTokens: 10,
+            outputTokens: 3,
+            totalTokens: 13,
+            cachedInputTokens: 2,
+            reasoningTokens: 1,
+          },
+        },
+      },
+      {
+        runId: "run-markdown-test",
+        sequence: 2,
+        createdAt: "2026-10-21T12:00:01Z",
+        update: {
+          type: "usage",
+          usage: {
+            inputTokens: 2,
+            outputTokens: 3,
+            totalTokens: 5,
+            cachedInputTokens: null,
+            reasoningTokens: null,
+          },
+        },
+      },
+    ]);
+    expect(markup).toContain(
+      'aria-label="Reported run usage: 18 tokens; 12 input, 6 output"',
+    );
+    expect(markup).not.toContain("Cached input tokens");
+    expect(markup.match(/aria-label="Copy Colossus response"/g)).toHaveLength(
+      1,
+    );
+  });
+
   it("offers copy actions for user messages and the Colossus response", () => {
     const markup = renderOutput("Copy this response", "completed", "complete", [
       {
@@ -82,7 +124,7 @@ describe("RunTimeline assistant output", () => {
 
     expect(markup).toContain('aria-label="Copy message"');
     expect(markup).toContain('aria-label="Copy Colossus response"');
-    expect(markup.match(/message-copy-button/g)).toHaveLength(2);
+    expect(markup.match(/shared-message-copy /g)).toHaveLength(2);
   });
 
   it("surfaces the canonical draft and its authenticated Plan workflow handoff", () => {
@@ -200,13 +242,12 @@ describe("RunTimeline assistant output", () => {
     expect(markup).not.toContain("repo://docs/runtime.md");
   });
 
-  it("keeps active streamed output plain until the response is complete", () => {
+  it("renders Markdown while the response is still streaming", () => {
     const markup = renderOutput("# Still streaming", "running", "watching");
 
-    expect(markup).toContain("# Still streaming");
-    expect(markup).not.toContain('class="markdown-content"');
-    expect(markup).not.toContain("<h3>Still streaming</h3>");
-    expect(markup).toContain('class="stream-caret"');
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).toContain('class="shared-markdown markdown-content"');
+    expect(markup).toMatch(/<h[3-6]>Still streaming<\/h[3-6]>/u);
   });
 
   it("shows one live phase status instead of raw lifecycle notices", () => {

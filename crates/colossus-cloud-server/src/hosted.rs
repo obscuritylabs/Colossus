@@ -31,6 +31,7 @@ pub(crate) mod oauth;
 mod oauth_shared;
 mod pool;
 pub(crate) mod shared;
+mod title_recovery;
 mod worker;
 
 pub(crate) fn router() -> Router<Arc<State>> {

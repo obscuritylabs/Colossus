@@ -4,6 +4,8 @@ use colossus_cloud_protocol::{CloudReply, Command};
 use colossus_sdk::*;
 use std::{collections::BTreeSet, sync::Arc};
 
+#[path = "tests/branches.rs"]
+mod branches;
 #[path = "tests/discovery_snapshots.rs"]
 mod discovery_snapshots;
 #[path = "tests/hosted.rs"]
@@ -22,6 +24,8 @@ mod personal_roles;
 mod plans;
 #[path = "tests/resources.rs"]
 mod resources;
+#[path = "tests/titles.rs"]
+mod titles;
 
 fn caller(project: &str, permissions: &[CloudPermission]) -> CloudCaller {
     CloudCaller::new(
@@ -283,6 +287,7 @@ pub(crate) fn snapshot() -> GetRunResponse {
             run_id: "run-a".into(),
             session_id: "session-a".into(),
             title: "hello".into(),
+            title_revision: 0,
             role: "primary".into(),
             mode: RunMode::Execute,
             status: RunStatus::Running,

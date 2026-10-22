@@ -5,14 +5,11 @@ import {
   DEFAULT_GOAL_ITERATIONS,
   validGoalIterations,
 } from "@colossus/ui/components/GoalControls";
-import { MarkdownContent } from "@colossus/ui/conversation";
-import { WorkflowDialog } from "@colossus/ui/automations/WorkflowDialog";
 import {
   canContinuePlan,
   type SessionPlanReference,
 } from "@colossus/ui/session/selectors";
 import type { PlanStrategy } from "./plan-continuation";
-import { WebLink } from "./WebLink";
 
 /** Host-owned Plan decisions use the same public run admission as ordinary chat. */
 export function ThreadPlanDecision({
@@ -23,6 +20,7 @@ export function ThreadPlanDecision({
   onRevise,
   onExecute,
   inline = false,
+  onInspect,
 }: {
   plan: SessionPlanReference;
   available: boolean;
@@ -31,8 +29,8 @@ export function ThreadPlanDecision({
   onRevise: (plan: SessionPlanReference) => void;
   onExecute: (plan: SessionPlanReference, strategy: PlanStrategy) => void;
   inline?: boolean;
+  onInspect?: (plan: SessionPlanReference) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [iterations, setIterations] = useState(DEFAULT_GOAL_ITERATIONS);
   const actionable = canContinuePlan(plan, available);
   const controls = actionable ? (
@@ -41,7 +39,6 @@ export function ThreadPlanDecision({
         variant="secondary"
         disabled={busy}
         onClick={() => {
-          setOpen(false);
           onRevise(plan);
         }}
       >
@@ -50,7 +47,6 @@ export function ThreadPlanDecision({
       <Button
         disabled={busy}
         onClick={() => {
-          setOpen(false);
           onExecute(plan, "direct");
         }}
       >
@@ -67,7 +63,6 @@ export function ThreadPlanDecision({
           <Button
             disabled={busy || !validGoalIterations(iterations)}
             onClick={() => {
-              setOpen(false);
               onExecute(plan, { goal: { max_iterations: iterations } });
             }}
           >
@@ -94,27 +89,16 @@ export function ThreadPlanDecision({
       ) : null}
       <div className="thread-plan-actions">
         {inline ? null : (
-          <Button variant="secondary" onClick={() => setOpen(true)}>
+          <Button
+            variant="secondary"
+            onClick={() => onInspect?.(plan)}
+            disabled={!onInspect}
+          >
             Read plan
           </Button>
         )}
         {controls}
       </div>
-      {open ? (
-        <WorkflowDialog
-          title={plan.sourceRunTitle}
-          busy={busy}
-          onClose={() => setOpen(false)}
-        >
-          <MarkdownContent content={plan.output} linkComponent={WebLink} />
-          <div className="thread-plan-actions">
-            {controls}
-            <Button variant="secondary" onClick={() => setOpen(false)}>
-              Close plan
-            </Button>
-          </div>
-        </WorkflowDialog>
-      ) : null}
     </section>
   );
 }

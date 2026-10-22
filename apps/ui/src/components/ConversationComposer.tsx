@@ -100,7 +100,10 @@ export function ConversationComposer({
   const targetForm = formRef ?? localForm;
   const inputId = textareaProps?.id ?? id;
   return (
-    <div className={`shared-composer-dock ${className}`}>
+    <div
+      className={`shared-composer-dock ${className}`}
+      data-workspace-composer-dock
+    >
       <ConversationComposerFrame
         ref={targetForm}
         aria-label={label}

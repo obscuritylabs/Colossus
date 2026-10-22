@@ -28,9 +28,86 @@ pub(super) fn submission_id(
     )[..32]
         .to_owned())
 }
-fn valid_title(title: &str) -> CloudResult<()> {
+pub(super) fn valid_title(title: &str) -> CloudResult<()> {
     if title.trim().is_empty() || title.len() > 256 || title.chars().any(char::is_control) {
         return Err(CloudError::InvalidArgument);
+    }
+    Ok(())
+}
+pub(super) fn initial_title(request: &CreateRunRequest) -> String {
+    request
+        .input
+        .iter()
+        .find_map(|part| match part {
+            InputContentPart::Text(text) => Some(
+                text.split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(100)
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_else(|| "New thread".into())
+}
+
+pub(super) fn validate_runtime_title_transition(
+    previous: &colossus_sdk::Run,
+    next: &colossus_sdk::Run,
+) -> CloudResult<()> {
+    if previous.title_revision > 0
+        && (next.title_revision < previous.title_revision
+            || (next.title_revision == previous.title_revision && next.title != previous.title))
+    {
+        return Err(CloudError::Conflict);
+    }
+    Ok(())
+}
+
+/// Only a released, fixed-session SDK run can supply an automatic cloud title.
+pub(super) fn apply_runtime_title(thread: &mut CloudThread, task: &CloudTask) -> CloudResult<()> {
+    let Some(snapshot) = &task.snapshot else {
+        return Ok(());
+    };
+    let run = &snapshot.run;
+    if task.project_id != thread.project_id
+        || task.node_id != thread.node_id
+        || task.thread_id.as_deref() != Some(thread.thread_id.as_str())
+        || task.run_id.as_deref() != Some(run.run_id.as_str())
+        || thread.session_id.as_deref() != Some(run.session_id.as_str())
+    {
+        return Err(CloudError::PermissionDenied);
+    }
+    valid_title(&run.title)?;
+    let follows_runtime = match thread.title_overridden {
+        Some(overridden) => !overridden,
+        // Legacy custom names have no reliable provenance. Repair only the
+        // unambiguous initial-prompt placeholder of an ordinary cloud chat.
+        None => {
+            thread.source == "cloud"
+                && thread.branch.is_none()
+                && task.request.session_id.is_none()
+                && task.subject != "runtime"
+                && thread.title == initial_title(&task.request)
+        }
+    };
+    if thread.runtime_title_revision.is_some_and(|revision| {
+        run.title_revision < revision
+            || (run.title_revision == revision
+                && thread.title_overridden == Some(false)
+                && thread.title != run.title)
+    }) {
+        return Err(CloudError::Conflict);
+    }
+    if run.title_revision > 0 {
+        thread.runtime_title_revision = Some(run.title_revision);
+    }
+    // Generation zero is a per-run opening-prompt fallback, not a canonical
+    // session rename. Continuations must retain the conversation's original name.
+    if follows_runtime && run.title_revision > 0 {
+        thread.title = run.title.clone();
+        thread.title_overridden = Some(false);
     }
     Ok(())
 }
@@ -75,23 +152,8 @@ impl CloudRepository {
         // A personal execution environment cannot produce project-shared history.
         let owner_user_id =
             (personal || node.owner_user_id.is_some()).then(|| caller.subject().to_owned());
-        let title = title.unwrap_or_else(|| {
-            request
-                .input
-                .iter()
-                .find_map(|part| match part {
-                    InputContentPart::Text(text) => Some(
-                        text.split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                            .chars()
-                            .take(100)
-                            .collect(),
-                    ),
-                    _ => None,
-                })
-                .unwrap_or_else(|| "New thread".into())
-        });
+        let title_overridden = Some(title.is_some());
+        let title = title.unwrap_or_else(|| initial_title(&request));
         valid_title(&title)?;
         let now = timestamp()?;
         let thread = match self.thread(caller.project_id(), &id).await {
@@ -103,12 +165,15 @@ impl CloudRepository {
             Ok(_) => return Err(CloudError::Conflict),
             Err(CloudError::NotFound) => CloudThread {
                 owner_user_id,
+                branch: None,
                 thread_id: id.clone(),
                 project_id: caller.project_id().into(),
                 node_id: node_id.into(),
                 host_id: node.host_id,
                 workspace_id: node.workspace_id,
                 title,
+                title_overridden,
+                runtime_title_revision: None,
                 created_at: now.clone(),
                 updated_at: now,
                 revision: 0,
@@ -365,7 +430,7 @@ impl CloudRepository {
                 node_id: node,
                 host_id: None,
                 query,
-                status: None,
+                status: Some("main".into()),
                 archived,
                 visible_to: Some(caller.subject().into()),
                 order: EntityOrder::UpdatedDesc,
@@ -397,6 +462,7 @@ impl CloudRepository {
         if let Some(title) = title {
             valid_title(&title)?;
             thread.title = title.trim().into();
+            thread.title_overridden = Some(true);
         }
         if let Some(archived) = archived {
             thread.archived = archived;
@@ -592,6 +658,28 @@ impl CloudRepository {
 }
 
 impl CloudRepository {
+    pub(super) async fn runtime_title_write(&self, task: &CloudTask) -> CloudResult<Option<Write>> {
+        let Some(id) = &task.thread_id else {
+            return Ok(None);
+        };
+        let mut thread = self.thread(&task.project_id, id).await?;
+        let before = thread.clone();
+        apply_runtime_title(&mut thread, task)?;
+        if thread == before {
+            return Ok(None);
+        }
+        let revision = thread.revision;
+        thread.revision += 1;
+        thread.updated_at = timestamp()?;
+        Ok(Some(self.event(
+            &task.node_id,
+            thread_stream(&task.project_id, id),
+            revision,
+            "cloud.thread.title-synchronized.v1",
+            &thread,
+        )?))
+    }
+
     pub(super) async fn refresh_thread_progress(&self, task: &CloudTask) -> CloudResult<()> {
         let Some(id) = &task.thread_id else {
             return Ok(());
@@ -738,6 +826,8 @@ impl CloudRepository {
                                 .as_ref()
                                 .map(|snapshot| snapshot.run.title.clone())
                                 .unwrap_or_else(|| "Imported cloud task".into()),
+                            title_overridden: Some(false),
+                            runtime_title_revision: None,
                             created_at: if task.created_at.is_empty() {
                                 now.clone()
                             } else {
@@ -746,6 +836,7 @@ impl CloudRepository {
                             updated_at: now.clone(),
                             revision: 0,
                             archived: false,
+                            branch: None,
                             session_id: session.clone(),
                             sync_status: if task.output_limited {
                                 "incomplete"

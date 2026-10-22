@@ -179,6 +179,16 @@ impl EntityValue {
             Self::Thread(value) => {
                 root && value.thread_id == key.id
                     && value.project_id == key.project_id
+                    && value
+                        .runtime_title_revision
+                        .is_none_or(|revision| revision > 0)
+                    && value.branch.as_ref().is_none_or(|branch| {
+                        value.owner_user_id.is_some()
+                            && branch.parent_thread_id != value.thread_id
+                            && crate::validate_identifier(&branch.parent_thread_id).is_ok()
+                            && crate::validate_identifier(&branch.source_task_id).is_ok()
+                            && crate::validate_identifier(&branch.source_run_id).is_ok()
+                    })
                     && value.owner_user_id.as_ref().is_none_or(|owner| {
                         !owner.is_empty()
                             && owner.len() <= 256
@@ -313,9 +323,13 @@ impl EntityValue {
         }
     }
 
-    /// Exact conversation owning a task.
+    /// Conversation parent used by task, message and branch collection filters.
     pub fn thread_id(&self) -> Option<&str> {
         match self {
+            Self::Thread(value) => value
+                .branch
+                .as_ref()
+                .map(|branch| branch.parent_thread_id.as_str()),
             Self::Task(value) => value.thread_id.as_deref(),
             Self::ThreadMessage(value) => Some(&value.thread_id),
             _ => None,
@@ -390,6 +404,10 @@ impl EntityValue {
     /// User-visible lifecycle state used by collection filters.
     pub fn status(&self) -> &str {
         match self {
+            Self::Thread(value) => value
+                .branch
+                .as_ref()
+                .map_or("", |branch| branch.kind.as_str()),
             Self::Node(value) => value.execution_kind.as_str(),
             Self::User(value) => {
                 if value.user.active {

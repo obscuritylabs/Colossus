@@ -189,6 +189,27 @@ export function SidebarInset({
     />
   );
 }
+export function SidebarRail({
+  className,
+  onClick,
+  ...props
+}: React.ComponentProps<"button">) {
+  const { toggleSidebar } = useSidebar();
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      data-slot="sidebar-rail"
+      className={cn("ui-sidebar-rail", className)}
+      title="Toggle app sidebar"
+      onClick={(event) => {
+        onClick?.(event);
+        if (!event.defaultPrevented) toggleSidebar();
+      }}
+      {...props}
+    />
+  );
+}
 export function SidebarHeader({
   className,
   ...props
@@ -258,7 +279,7 @@ export function SidebarMenuButton({
 }: React.ComponentProps<"button"> & {
   asChild?: boolean;
   isActive?: boolean;
-  tooltip?: string;
+  tooltip?: string | undefined;
 }) {
   const Component = asChild ? Slot : "button";
   const button = (

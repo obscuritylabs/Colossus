@@ -296,12 +296,15 @@ impl CloudRepository {
                 Err(CloudError::NotFound) => (
                     CloudThread {
                         owner_user_id: current_node.owner_user_id.clone(),
+                        branch: None,
                         thread_id: thread_id.clone(),
                         project_id: node.project_id.clone(),
                         node_id: node.node_id.clone(),
                         host_id: current_node.host_id.clone(),
                         workspace_id: current_node.workspace_id.clone(),
                         title: run.title.chars().take(256).collect(),
+                        title_overridden: Some(false),
+                        runtime_title_revision: None,
                         created_at: run.created_at.clone(),
                         updated_at: run.updated_at.clone(),
                         revision: 0,
@@ -355,14 +358,22 @@ impl CloudRepository {
                     }
                     let revision = task.revision;
                     let before = task.clone();
+                    if let Some(previous) = &task.snapshot {
+                        super::threads::validate_runtime_title_transition(&previous.run, &run)?;
+                    }
                     task.thread_id = Some(thread_id.clone());
                     task.source_read_only = !discovered.controllable;
-                    if task
+                    let advanced = task
                         .snapshot
                         .as_ref()
-                        .is_none_or(|snapshot| snapshot.run.last_sequence < run.last_sequence)
-                    {
-                        if task.subject == "runtime" {
+                        .is_none_or(|snapshot| snapshot.run.last_sequence < run.last_sequence);
+                    let title_changed = task.snapshot.as_ref().is_some_and(|snapshot| {
+                        snapshot.run.last_sequence == run.last_sequence
+                            && (snapshot.run.title != run.title
+                                || snapshot.run.title_revision != run.title_revision)
+                    });
+                    if advanced || title_changed {
+                        if task.subject == "runtime" && advanced {
                             task.history_complete = false;
                         }
                         task.snapshot = Some(GetRunResponse {
@@ -469,6 +480,7 @@ impl CloudRepository {
                 )?);
             }
             thread.session_id = Some(run.session_id.clone());
+            super::threads::apply_runtime_title(&mut thread, &task)?;
             thread.can_continue = discovered.continuable;
             thread.updated_at = thread.updated_at.max(run.updated_at);
             if task.last_sequence < run.last_sequence {

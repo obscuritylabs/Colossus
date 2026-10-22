@@ -378,6 +378,7 @@ mod tests {
             run_id: id.into(),
             session_id: session.into(),
             title: id.into(),
+            title_revision: 0,
             role: "primary".into(),
             mode: RunMode::Execute,
             status: RunStatus::Completed,

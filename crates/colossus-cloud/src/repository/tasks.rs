@@ -23,8 +23,19 @@ impl CloudRepository {
         &self,
         caller: &CloudCaller,
         node_id: &str,
+        request: CreateRunRequest,
+        conversation: Option<(crate::CloudThread, u64)>,
+    ) -> CloudResult<CloudTask> {
+        self.allocate_task_with_branch(caller, node_id, request, conversation, None)
+            .await
+    }
+    pub(super) async fn allocate_task_with_branch(
+        &self,
+        caller: &CloudCaller,
+        node_id: &str,
         mut request: CreateRunRequest,
         conversation: Option<(crate::CloudThread, u64)>,
+        branch_parent: Option<crate::CloudThread>,
     ) -> CloudResult<CloudTask> {
         caller.require(CloudPermission::Execute)?;
         if let Some((thread, _)) = &conversation {
@@ -34,14 +45,13 @@ impl CloudRepository {
         if node.revoked || !node.roles.contains(&request.role) {
             return Err(CloudError::PermissionDenied);
         }
-        // Plan continuation has a narrow, durable personal-session mapping. Other
-        // cross-run context and artifacts are not yet mapped for cloud callers.
+        // Only the source-bound branch service may install runtime branch context.
         if request.session_id.as_ref().is_some_and(|session| {
             conversation
                 .as_ref()
                 .and_then(|(thread, _)| thread.session_id.as_ref())
                 != Some(session)
-        }) || request.branch.is_some()
+        }) || request.branch.is_some() != branch_parent.is_some()
             || !request.plugin_skill_ids.is_empty()
             || request.input.is_empty()
             || request.input.len() > 128
@@ -196,6 +206,20 @@ impl CloudRepository {
                     &command,
                 )?,
             ];
+            if let Some(mut parent) = branch_parent.clone() {
+                // Fence archive/revision changes atomically with child allocation.
+                // No runtime transcript is copied into the cloud projection.
+                let revision = parent.revision;
+                parent.revision += 1;
+                parent.updated_at = super::threads::timestamp()?;
+                events.push(self.event(
+                    caller.subject(),
+                    super::threads::thread_stream(caller.project_id(), &parent.thread_id),
+                    revision,
+                    "cloud.thread.branch-created.v1",
+                    &parent,
+                )?);
+            }
             if let Some((mut thread, expected_revision)) = conversation.clone() {
                 if thread.revision != expected_revision {
                     return Err(CloudError::Conflict);

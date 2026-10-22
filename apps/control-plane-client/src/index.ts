@@ -52,8 +52,31 @@ export interface Host {
   revision: number;
   last_seen_at: number | null;
 }
+export type ThreadBranchKind = "fork" | "aside";
+export interface ThreadBranch {
+  kind: ThreadBranchKind;
+  parent_thread_id: string;
+  source_task_id: string;
+  source_run_id: string;
+}
+export interface CreateThreadBranchRequest<Request> {
+  source_task_id: string;
+  kind: ThreadBranchKind;
+  expected_revision: number;
+  title?: string | null;
+  request: Request;
+}
+export interface ThreadBranchPage {
+  threads: Thread[];
+  next_cursor: string | null;
+}
+export interface ThreadBranchResponse {
+  thread: Thread;
+  task: Task;
+}
 export interface Thread {
   owner_user_id?: string | null;
+  branch?: ThreadBranch | null;
   thread_id: string;
   project_id: string;
   node_id: string;
@@ -132,6 +155,7 @@ export interface Run {
   updated_at: string;
   role: string;
   mode: string;
+  archived?: boolean;
   last_sequence: number;
   terminal: unknown;
 }

@@ -788,6 +788,7 @@ impl EventSourcedRunRepository {
             })
             .ok_or_else(|| invariant(caller, "the durable session title is invalid"))?;
         run.title = title.into();
+        run.title_revision = event.stream_version;
         Ok(())
     }
 
@@ -1301,7 +1302,8 @@ impl RunRepository for EventSourcedRunRepository {
                     "atomic run creation returned invalid durable evidence",
                 ));
             }
-            let run = initial_run(run_envelope, new_run, request);
+            let mut run = initial_run(run_envelope, new_run, request);
+            self.apply_session_title(caller, &mut run)?;
             return Ok(Idempotent {
                 value: run,
                 replayed: false,
@@ -1946,6 +1948,7 @@ fn initial_run(envelope: &EventEnvelope, new_run: &NewRun, request: &CreateRunRe
         id: new_run.id().into(),
         session_id: new_run.session_id().into(),
         title: request.display_title(),
+        title_revision: 0,
         status: RunStatus::Queued,
         mode: request.mode,
         role: new_run.role().into(),
@@ -1969,6 +1972,7 @@ fn initial_run_from_created(envelope: &EventEnvelope, created: &RunCreated) -> R
         id: created.id.clone(),
         session_id: created.session_id.clone(),
         title: created.execution.request.display_title(),
+        title_revision: 0,
         status: RunStatus::Queued,
         mode: created.mode,
         role: created.role.clone(),

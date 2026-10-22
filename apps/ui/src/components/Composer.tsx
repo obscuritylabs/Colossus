@@ -60,7 +60,7 @@ export function ComposerModeSwitch<T extends string>({
       {options.map((option) => (
         <label key={option.value}>
           <input
-            id={`mode-${option.value}`}
+            id={`${name}-${option.value}`}
             type="radio"
             name={name}
             value={option.value}

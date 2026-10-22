@@ -1,3 +1,4 @@
+import type { ForkDraftSource } from "./ThreadBranchDraft";
 import {
   lazy,
   Suspense,
@@ -6,7 +7,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { ControlPlaneFrame, Button, DropdownSelect } from "@colossus/ui";
+import {
+  ControlPlaneFrame,
+  ControlPlaneProjectSwitcher,
+  ControlPlaneAccountMenu,
+  Button,
+} from "@colossus/ui";
 
 import {
   IconHome,
@@ -16,7 +22,6 @@ import {
   IconFolder,
   IconUsers,
   IconSettings,
-  IconLogout,
   IconRefresh,
   IconPlus,
   IconX,
@@ -73,6 +78,7 @@ import { conversationHref, isPersonalHostedChat } from "./conversation-route";
 import {
   agentHref,
   chatConnectionsHref,
+  chatThreadHref,
   globalHref,
   hostHref,
   projectHref,
@@ -121,6 +127,7 @@ export function AuthenticatedApp({
     "global",
   );
   const [chatRefresh, setChatRefresh] = useState(0);
+  const [forkDraft, setForkDraft] = useState<ForkDraftSource | null>(null);
   const returnToWork = useRef(globalHref("chat", project));
   const visitedChat = useRef("");
   const lastChat = useRef<{
@@ -725,29 +732,21 @@ export function AuthenticatedApp({
         }
         classification={settings?.classification}
         user={
-          <span className="sidebar-user" title={me.user.display_name}>
-            <span className="rail-user">
-              {me.user.display_name.slice(0, 2).toUpperCase()}
-            </span>
-            <span>{me.user.display_name}</span>
-          </span>
+          <ControlPlaneAccountMenu
+            name={me.user.display_name}
+            detail={me.user.email ?? "Signed in"}
+            onSettings={() => {
+              returnToWork.current = navigation.href;
+              setSettingsScope("global");
+              navigation.go(
+                globalHref("settings", authorizedProject ? project : undefined),
+              );
+            }}
+            onSignOut={onSignOut}
+            signingOut={signingOut}
+          />
         }
-        footer={
-          <>
-            <DocumentationLink />
-            <button
-              type="button"
-              className="ui-icon-button"
-              aria-label="Sign out"
-              aria-busy={signingOut}
-              title={signingOut ? "Signing out…" : "Sign out"}
-              disabled={signingOut}
-              onClick={onSignOut}
-            >
-              <IconLogout size={19} aria-hidden="true" />
-            </button>
-          </>
-        }
+        footer={<DocumentationLink showLabel />}
         sidebar={
           surface === "chat" && project && authorizedProject ? (
             <ChatHistorySidebar
@@ -756,6 +755,23 @@ export function AuthenticatedApp({
               identity={me.user.id}
               selected={personalSelection}
               refreshKey={chatRefresh}
+              canControl={permissions.includes("control")}
+              onThreadChanged={() => {
+                threadResource.refresh();
+                setChatRefresh((value) => value + 1);
+              }}
+              onFork={
+                permissions.includes("read") && permissions.includes("execute")
+                  ? (parent, source) => {
+                      setForkDraft({
+                        parent,
+                        source,
+                        key: crypto.randomUUID(),
+                      });
+                      navigation.go(chatThreadHref(project, parent.thread_id));
+                    }
+                  : undefined
+              }
               onConnections={openConnections}
               onProjectSettings={
                 permissions.includes("administer")
@@ -822,24 +838,19 @@ export function AuthenticatedApp({
           ) : undefined
         }
         sidebarHeader={
-          <label className="header-project">
-            <span>Project</span>
-            <DropdownSelect
-              aria-label="Select project"
-              value={authorizedProject ? project : ""}
-              onChange={(event) => selectProject(event.target.value)}
-            >
-              {!authorizedProject ? (
-                <option value="">Select an authorized project</option>
-              ) : null}
-              {me.projects.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                  {item.archived ? " · Archived" : ""}
-                </option>
-              ))}
-            </DropdownSelect>
-          </label>
+          <ControlPlaneProjectSwitcher
+            projects={me.projects.map((item) => ({
+              id: item.id,
+              name: item.name + (item.archived ? " · Archived" : ""),
+            }))}
+            value={authorizedProject ? project : ""}
+            onValueChange={selectProject}
+            onManageProjects={() =>
+              navigation.go(
+                globalHref("projects", authorizedProject ? project : undefined),
+              )
+            }
+          />
         }
         header={
           <>
@@ -911,6 +922,16 @@ export function AuthenticatedApp({
                 identity={me.user.id}
                 permissions={permissions}
                 selected={personalSelection}
+                forkDraft={
+                  forkDraft?.parent.project_id === project &&
+                  forkDraft.parent.owner_user_id === me.user.id
+                    ? forkDraft
+                    : null
+                }
+                onCloseFork={() => setForkDraft(null)}
+                onFork={(parent, source) =>
+                  setForkDraft({ parent, source, key: crypto.randomUUID() })
+                }
                 view={
                   route.kind === "chat-connections"
                     ? "connections"

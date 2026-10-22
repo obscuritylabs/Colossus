@@ -129,6 +129,7 @@ fn snapshot(index: usize, created: String) -> GetRunResponse {
             run_id: format!("run-{index}"),
             session_id: format!("session-{index}"),
             title: format!("Load fixture {index}"),
+            title_revision: 0,
             role: "primary".into(),
             mode: RunMode::Execute,
             status: RunStatus::Running,

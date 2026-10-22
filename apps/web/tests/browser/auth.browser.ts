@@ -30,14 +30,23 @@ test("a blocked logout stays visible and can be retried with the keyboard", asyn
       : route.fulfill({ status: 204 });
   });
   await page.goto("/fleet?project=browser-project");
-  const signOut = page.getByRole("button", { name: "Sign out", exact: true });
+  const accountMenu = page.getByRole("button", {
+    name: "Account menu",
+    exact: true,
+  });
+  await accountMenu.focus();
+  await accountMenu.press("Enter");
+  const signOut = page.getByRole("menuitem", { name: "Sign out", exact: true });
   await expect(signOut).toBeVisible();
   await signOut.focus();
   await page.keyboard.press("Enter");
   const alert = page.getByRole("alert");
   await expect(alert).toContainText("Could not sign out");
   await expect(alert).toContainText("Reload this page");
+  await accountMenu.press("Enter");
   await expect(signOut).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await expect(accountMenu).toBeFocused();
   await expect(
     page.getByRole("heading", { name: "Sign in to your Control Plane" }),
   ).toBeHidden();

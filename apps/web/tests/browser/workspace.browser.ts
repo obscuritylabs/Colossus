@@ -1,11 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
 import { browserFixture } from "./fixture";
 import { appearanceCases, selectAppearance } from "./appearance";
+import type { ThreadDetailResponse } from "../../src/api";
 
 async function expectIconRail(page: Page) {
   const rail = page.locator(".control-app-sidebar");
   await expect(rail).toBeVisible();
   await expect(rail).toHaveAttribute("data-collapsible", "icon");
+  await expect
+    .poll(async () => (await rail.boundingBox())?.width ?? 0)
+    .toBeLessThanOrEqual(72);
   const bounds = await rail.boundingBox();
   expect(bounds!.width).toBeGreaterThanOrEqual(44);
   expect(bounds!.width).toBeLessThanOrEqual(72);
@@ -17,7 +21,10 @@ async function expectIconRail(page: Page) {
     await expect(link).toHaveAttribute("title", name);
   }
   await expect(
-    rail.getByRole("button", { name: "Sign out", exact: true }),
+    rail.getByRole("button", { name: "Select project", exact: true }),
+  ).toBeVisible();
+  await expect(
+    rail.getByRole("button", { name: "Account menu", exact: true }),
   ).toBeVisible();
 }
 
@@ -210,6 +217,26 @@ test("narrow app navigation and conversation history open independently with key
   await expect(
     dialog.getByRole("navigation", { name: "Your chat history", exact: true }),
   ).toHaveCount(0);
+  const accountMenu = dialog.getByRole("button", {
+    name: "Account menu",
+    exact: true,
+  });
+  await accountMenu.focus();
+  await accountMenu.press("Enter");
+  await expect(
+    page.getByRole("menuitem", { name: "Sign out", exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page
+        .getByRole("menu")
+        .evaluate((menu) => menu.contains(document.activeElement)),
+    )
+    .toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toBeHidden();
+  await expect(accountMenu).toBeFocused();
+  await expect(dialog).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await expect(appToggle).toBeFocused();
@@ -224,6 +251,183 @@ test("narrow app navigation and conversation history open independently with key
   await expect(
     page.getByRole("textbox", { name: "Message Colossus", exact: true }),
   ).toBeVisible();
+  await appToggle.press("Enter");
+  await dialog
+    .getByRole("button", { name: "Account menu", exact: true })
+    .press("Enter");
+  await page
+    .getByRole("menuitem", { name: "Settings", exact: true })
+    .press("Enter");
+  await expect(dialog).toBeHidden();
+  await page.locator("#appearance-text-size").click();
+  await page.getByRole("option", { name: "Large", exact: true }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-text-size", "large");
+  await appToggle.click();
+  await dialog
+    .getByRole("button", { name: "Select project", exact: true })
+    .press("Enter");
+  await page
+    .getByRole("menuitem", { name: "Manage projects", exact: true })
+    .press("Enter");
+  await expect(
+    page.getByRole("heading", { name: "Projects", exact: true }),
+  ).toBeVisible();
+  await expect(dialog).toBeHidden();
+  await appToggle.click();
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(appToggle).toBeFocused();
+  fixture.verify();
+});
+
+test("compact Large chat history keeps keyboard filters, title search, and drafts usable", async ({
+  page,
+}) => {
+  const fixture = await browserFixture(page, { managedChat: true });
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "colossus.web.appearance.v1",
+      JSON.stringify({ colorTheme: "dark", textSize: "large" }),
+    ),
+  );
+  const historyPaths: URL[] = [];
+  await page.route(
+    "**/api/projects/browser-project/chat/threads?**",
+    async (route) => {
+      const url = new URL(route.request().url());
+      historyPaths.push(url);
+      const archived = url.searchParams.get("archived") === "true";
+      const title = archived
+        ? "Archived browser conversation"
+        : "Browser model conversation";
+      const matches =
+        !url.searchParams.get("query") ||
+        title
+          .toLowerCase()
+          .includes(url.searchParams.get("query")!.toLowerCase());
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          threads: matches
+            ? [
+                {
+                  thread_id: archived ? "archived-thread" : "browser-thread",
+                  project_id: "browser-project",
+                  owner_user_id: "browser-user",
+                  node_id: fixture.nodeId,
+                  title,
+                  created_at: "2026-10-16T10:00:00Z",
+                  updated_at: "2026-10-16T10:00:00Z",
+                  revision: 1,
+                  archived,
+                  session_id: "browser-session",
+                  sync_status: "current",
+                  source: "cloud",
+                  can_continue: true,
+                },
+              ]
+            : [],
+          next_cursor: null,
+        }),
+      });
+    },
+  );
+  await page.goto("/projects/browser-project/chat/browser-thread");
+  const draft = page.getByRole("textbox", {
+    name: "Message the agent",
+    exact: true,
+  });
+  await draft.fill("Keep this draft while reviewing chat history");
+  const toggle = page.getByRole("button", {
+    name: "Toggle conversation list",
+    exact: true,
+  });
+  await toggle.press("Enter");
+  const dialog = page.getByRole("dialog");
+  const history = dialog.getByRole("region", {
+    name: "Your chats",
+    exact: true,
+  });
+  await expect(
+    history.getByRole("heading", { name: "Chats", exact: true }),
+  ).toBeVisible();
+  const selected = history.getByRole("link", {
+    name: "Browser model conversation",
+    exact: true,
+  });
+  await expect(selected).toHaveAttribute("aria-current", "page");
+  await expect(selected).toHaveAccessibleDescription(/Updated /);
+  const options = history.getByRole("button", {
+    name: "Chat options",
+    exact: true,
+  });
+  await options.press("Enter");
+  const refresh = page.getByRole("menuitem", {
+    name: "Refresh chats",
+    exact: true,
+  });
+  await expect(refresh).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(options).toBeFocused();
+  await expect(dialog).toBeVisible();
+  await options.press("Enter");
+  const requestsBeforeRefresh = historyPaths.length;
+  await refresh.press("Enter");
+  await expect
+    .poll(() => historyPaths.length)
+    .toBeGreaterThan(requestsBeforeRefresh);
+  await expect(dialog).toBeVisible();
+  const view = history.getByRole("radiogroup", {
+    name: "Chat history view",
+    exact: true,
+  });
+  const open = view.getByRole("radio", { name: "Open", exact: true });
+  const archived = view.getByRole("radio", { name: "Archived", exact: true });
+  await open.focus();
+  await open.press("ArrowRight");
+  await expect(archived).toBeFocused();
+  await expect(archived).toBeChecked();
+  await expect(
+    history.getByRole("link", {
+      name: "Archived browser conversation",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect
+    .poll(() => historyPaths.at(-1)?.searchParams.get("archived"))
+    .toBe("true");
+  const search = history.getByRole("searchbox", {
+    name: "Search your chats",
+    exact: true,
+  });
+  await search.fill("missing conversation");
+  await expect(
+    history.getByText("No matching chats", { exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() => historyPaths.at(-1)?.searchParams.get("query"))
+    .toBe("missing conversation");
+  expect(historyPaths.at(-1)?.searchParams.get("archived")).toBe("true");
+  await search.fill("");
+  await archived.focus();
+  await archived.press("ArrowLeft");
+  await expect(open).toBeChecked();
+  await expect(selected).toBeVisible();
+  await expect
+    .poll(() => historyPaths.at(-1)?.searchParams.has("query"))
+    .toBe(false);
+  await page.screenshot({
+    path: "output/playwright/chat-history-narrow-large.png",
+  });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(toggle).toBeFocused();
+  await expect(draft).toHaveValue(
+    "Keep this draft while reviewing chat history",
+  );
+  expect(historyPaths.every((url) => !url.searchParams.has("user_id"))).toBe(
+    true,
+  );
   fixture.verify();
 });
 
@@ -235,6 +439,7 @@ test("collapsed app icons keep navigation available and expand with the keyboard
     administer: true,
   });
   await page.setViewportSize({ width: 1210, height: 954 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() =>
     localStorage.setItem(
       "colossus.web.appearance.v1",
@@ -259,6 +464,34 @@ test("collapsed app icons keep navigation available and expand with the keyboard
     "Keep this draft while collapsing the app menu",
   );
   const rail = page.locator(".control-app-sidebar");
+  await expect(rail).toHaveCSS("transition-duration", "0s");
+  const projectMenu = rail.getByRole("button", {
+    name: "Select project",
+    exact: true,
+  });
+  await projectMenu.press("Enter");
+  await expect(
+    page.getByRole("menuitem", { name: "Browser test project", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toBeHidden();
+  await expect(projectMenu).toBeFocused();
+  const accountMenu = rail.getByRole("button", {
+    name: "Account menu",
+    exact: true,
+  });
+  await accountMenu.press("Enter");
+  for (const name of ["Settings", "Sign out"]) {
+    await expect(
+      page.getByRole("menuitem", { name, exact: true }),
+    ).toBeVisible();
+  }
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toBeHidden();
+  await expect(accountMenu).toBeFocused();
+  await expect(input).toHaveValue(
+    "Keep this draft while collapsing the app menu",
+  );
   await rail.getByRole("link", { name: "Fleet", exact: true }).press("Enter");
   await expect(
     page.getByRole("heading", { name: "Fleet", exact: true }),
@@ -274,7 +507,7 @@ test("collapsed app icons keep navigation available and expand with the keyboard
   await page.keyboard.press("ControlOrMeta+b");
   await expect(appToggle).toHaveAttribute("aria-expanded", "true");
   await expect(
-    rail.getByRole("combobox", { name: "Select project", exact: true }),
+    rail.getByRole("button", { name: "Select project", exact: true }),
   ).toBeVisible();
   await expect(
     rail.getByRole("link", { name: "Chat", exact: true }).locator("span"),
@@ -302,20 +535,28 @@ test("short desktop Large navigation scrolls to its destinations and footer", as
   ).toBeInViewport();
   await sidebar.hover();
   await page.mouse.wheel(0, 800);
-  const signOut = sidebar.getByRole("button", {
-    name: "Sign out",
+  const accountMenu = sidebar.getByRole("button", {
+    name: "Account menu",
     exact: true,
   });
-  await expect(signOut).toBeInViewport();
+  await expect(accountMenu).toBeInViewport();
   for (const name of ["Home", "Chat", "Fleet", "Projects", "Settings"]) {
     const destination = sidebar.getByRole("link", { name, exact: true });
     await destination.focus();
     await expect(destination).toBeFocused();
     await expect(destination).toBeInViewport();
   }
+  await accountMenu.focus();
+  await expect(accountMenu).toBeFocused();
+  await expect(accountMenu).toBeInViewport();
+  await accountMenu.press("Enter");
+  const signOut = page.getByRole("menuitem", { name: "Sign out", exact: true });
+  await expect(signOut).toBeInViewport();
   await signOut.focus();
   await expect(signOut).toBeFocused();
   await expect(signOut).toBeInViewport();
+  await page.keyboard.press("Escape");
+  await expect(accountMenu).toBeFocused();
   fixture.verify();
 });
 
@@ -514,7 +755,7 @@ test("built workspace keeps chat and Fleet inside the main pane with expanded an
       expect(
         layout.host.right,
         `${name}: host content within main`,
-      ).toBeLessThan(layout.main.right);
+      ).toBeLessThanOrEqual(layout.main.right);
       expect(
         layout.hostActions!.right,
         `${name}: host actions within main`,
@@ -536,6 +777,169 @@ test("built workspace keeps chat and Fleet inside the main pane with expanded an
   fixture.verify();
 });
 
+for (const appearance of appearanceCases) {
+  test(`released session views preserve data truth and host links in a narrow Large ${appearance.label} layout`, async ({
+    page,
+  }) => {
+    const fixture = await browserFixture(page, {
+      managedChat: true,
+      plan: true,
+    });
+    const output =
+      "## Inspect released session records\n\n1. Review the retained records before making changes.\n\n## Sources\n\n- [R1] Official documentation — https://example.test/documentation/session-resources\n- [R2] Workspace evidence — repo://docs/develop/session-resources.md";
+    const detail: ThreadDetailResponse = {
+      thread: {
+        thread_id: "browser-thread",
+        project_id: "browser-project",
+        node_id: fixture.nodeId,
+        owner_user_id: "browser-user",
+        title: "Browser model conversation",
+        created_at: "2026-10-16T10:00:00Z",
+        updated_at: "2026-10-16T10:01:00Z",
+        revision: 1,
+        archived: false,
+        source: "cloud",
+        sync_status: "current",
+        can_continue: true,
+        session_id: "browser-session",
+      },
+      tasks: [
+        {
+          task_id: "browser-plan-task",
+          project_id: "browser-project",
+          node_id: fixture.nodeId,
+          subject: "browser-user",
+          run_id: "browser-plan-run",
+          last_sequence: 1,
+          revision: 1,
+          request: {
+            input: [{ text: "Inspect session records" }],
+            mode: "plan",
+            role: "primary",
+          },
+          snapshot: {
+            run: {
+              run_id: "browser-plan-run",
+              session_id: "browser-session",
+              title: "Inspect session records",
+              status: "completed",
+              mode: "plan",
+              role: "primary",
+              last_sequence: 1,
+              created_at: "2026-10-16T10:00:00Z",
+              updated_at: "2026-10-16T10:01:00Z",
+              terminal: {
+                result: { output, plan_id: "browser-plan", plan_revision: 2 },
+              },
+            },
+            pending_interactions: [],
+          },
+        },
+      ],
+      messages: [],
+    };
+    await page.route(
+      "**/api/projects/browser-project/threads/browser-thread",
+      (route) =>
+        route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify(detail),
+        }),
+    );
+    await selectAppearance(page, appearance);
+    await page.goto("/projects/browser-project/chat/browser-thread");
+    const tabs = page.getByRole("navigation", {
+      name: "Session views",
+      exact: true,
+    });
+    await tabs.getByRole("button", { name: "Topology", exact: true }).click();
+    await expect(
+      page.getByText("Session map unavailable", { exact: true }),
+    ).toBeVisible();
+    for (const name of ["Fit", "Collapse all", "Layers"]) {
+      await expect(page.getByRole("button", { name, exact: true })).toHaveCount(
+        0,
+      );
+    }
+    await page.screenshot({
+      path: `output/playwright/session-topology-${appearance.id}-large.png`,
+    });
+    await tabs.getByRole("button", { name: "Plans", exact: true }).click();
+    const plans = page.locator(".session-plan-list");
+    await expect(
+      plans.getByText("Status not reported", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      plans.getByRole("button", { name: "Revise", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      plans.getByRole("heading", {
+        name: "Inspect released session records",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page.screenshot({
+      path: `output/playwright/session-plans-${appearance.id}-large.png`,
+    });
+    await plans.getByRole("button", { name: "Read plan", exact: true }).click();
+    await expect(
+      page.getByRole("heading", {
+        name: "Inspect session records",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await page
+      .getByRole("dialog", { name: "Plan", exact: true })
+      .getByRole("button", { name: "Close plan", exact: true })
+      .click();
+    await tabs.getByRole("button", { name: "Snapshots", exact: true }).click();
+    await expect(
+      page.getByLabel("Snapshot count unavailable", { exact: true }),
+    ).toHaveText("—");
+    await expect(
+      page.getByText("Context snapshots are unavailable", { exact: true }),
+    ).toBeVisible();
+    await page.screenshot({
+      path: `output/playwright/session-snapshots-${appearance.id}-large.png`,
+    });
+    await tabs.getByRole("button", { name: "Sources", exact: true }).click();
+    const sources = page.locator(".session-source-list");
+    await expect(
+      sources.getByText("Official documentation", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      sources.getByRole("link", {
+        name: "https://example.test/documentation/session-resources",
+        exact: true,
+      }),
+    ).toHaveAttribute("rel", "noopener noreferrer");
+    await expect(
+      sources.getByRole("button", { name: "Open file", exact: true }),
+    ).toHaveCount(0);
+    await page.screenshot({
+      path: `output/playwright/session-sources-${appearance.id}-large.png`,
+    });
+    await tabs.getByRole("button", { name: "Resources", exact: true }).click();
+    await expect(
+      page.getByText("Durable records are unavailable", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", {
+        name: /Context snapshots Immutable compacted context/u,
+      }),
+    ).toContainText("—");
+    await page.screenshot({
+      path: `output/playwright/session-resources-${appearance.id}-large.png`,
+    });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    fixture.verify();
+  });
+}
+
 for (const appearance of appearanceCases.slice(0, 2)) {
   test(`Desktop ${appearance.label} workspace preserves drafts and uses one app window for chat and settings`, async ({
     page,
@@ -547,8 +951,8 @@ for (const appearance of appearanceCases.slice(0, 2)) {
     await expect(page.locator(".control-app-sidebar")).toBeVisible();
     await expect(
       page
-        .locator(".control-sidebar-context")
-        .getByRole("combobox", { name: "Select project", exact: true }),
+        .locator('.control-app-sidebar [data-slot="sidebar-header"]')
+        .getByRole("button", { name: "Select project", exact: true }),
     ).toBeVisible();
     await expect(page.locator(".control-primary-rail")).toHaveCount(0);
     await expect(page.locator(".chat-history")).toHaveCount(0);
@@ -603,7 +1007,10 @@ for (const appearance of appearanceCases.slice(0, 2)) {
     ).toHaveCount(0);
     await followup.fill("Preserve this follow-up while I review settings");
     await page
-      .getByRole("button", { name: "Project settings", exact: true })
+      .getByRole("button", { name: "Chat options", exact: true })
+      .press("Enter");
+    await page
+      .getByRole("menuitem", { name: "Project settings", exact: true })
       .press("Enter");
     const sections = page.getByRole("navigation", {
       name: "Settings sections",

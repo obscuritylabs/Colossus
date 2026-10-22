@@ -761,6 +761,14 @@ their bounded read-only retry policy. Embedded and custom checked streams instea
 fail closed when reconciliation is unavailable or does not exactly match; a clean
 close is never accepted as silent completion.
 
+`Run.title` follows the canonical session title when one is set. Its `title_revision`
+is the session-title index stream version, independent of the run's `last_sequence`.
+Compare positive title revisions only within the same `session_id`; a lower revision
+must not replace a newer title received from another run or discovery page. Zero
+denotes the opening title or an older server without title revisions and must not
+replace a positive revision. The run-feed cursor and execution `etag` remain unchanged
+by this display metadata.
+
 When `CreateRun` omits `session_id`, the durable run receives a server-owned session
 identity. The canonical session is materialized during agent initialization if
 execution proceeds; cancellation before start can leave that identity associated only

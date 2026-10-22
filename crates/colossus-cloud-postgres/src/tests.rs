@@ -5,11 +5,13 @@ use colossus_ports::StoreError;
 use diesel_async::SimpleAsyncConnection;
 use serde_json::json;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+mod branches;
 mod fixtures;
 mod identity;
 mod normalized;
 mod personal;
 mod resources;
+mod titles;
 
 fn key(kind: EntityKind, id: &str) -> EntityKey {
     EntityKey {

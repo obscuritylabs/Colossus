@@ -4,6 +4,11 @@ export {
   ConversationTimeline,
 } from "./components/Conversation.js";
 export type { ConversationEntryProps } from "./components/Conversation.js";
+export { MessageCopyButton } from "./components/MessageCopyButton.js";
+export type { MessageCopyButtonProps } from "./components/MessageCopyButton.js";
+export { ConversationUsageDetails } from "./components/ConversationUsage.js";
+export { sumConversationUsage } from "./lib/conversation-usage.js";
+export type { ConversationUsage } from "./lib/conversation-usage.js";
 export { ConversationActivity } from "./components/ConversationActivity.js";
 export type {
   ConversationActivityProps,
@@ -37,3 +42,18 @@ export type {
 } from "./components/WorkPresentation.js";
 
 export { ReleasedRunActivity } from "./components/ReleasedRunActivity.js";
+export {
+  ConversationSelectionLauncher,
+  useConversationSelection,
+} from "./conversation/ConversationSelection.js";
+export type {
+  ConversationSelection,
+  ConversationSelectionBounds,
+  ConversationSelectionLauncherProps,
+  ConversationSelectionOptions,
+  ConversationSelectionQuote,
+} from "./conversation/ConversationSelection.js";
+export {
+  boundedConversationQuote,
+  MAX_CONVERSATION_QUOTE_BYTES,
+} from "./conversation/selection-quote.js";

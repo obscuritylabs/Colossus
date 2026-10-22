@@ -135,6 +135,90 @@
     gap: 18px;
   }
 }
+.shared-work-header.is-compact {
+  position: relative;
+  box-sizing: border-box;
+  min-height: var(--workspace-header-height, var(--control-height-touch));
+  height: var(--workspace-header-height, var(--control-height-touch));
+  flex: none;
+  flex-wrap: nowrap;
+  gap: 8px;
+  padding: 0 12px;
+}
+.shared-work-header.is-compact .surface-title-copy {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+.shared-work-header.is-compact h2 {
+  max-width: none;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-tight);
+  letter-spacing: normal;
+}
+.shared-work-header.is-compact .surface-header-actions {
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+.work-header-details {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+.work-header-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--workspace-header-height, var(--control-height-touch));
+  padding-inline: 4px;
+  border-radius: var(--radius-sm);
+  list-style: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.work-header-details > summary::-webkit-details-marker {
+  display: none;
+}
+.work-header-details > summary:hover,
+.work-header-details[open] > summary {
+  color: var(--text-strong);
+}
+.work-header-details > summary:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: -3px;
+}
+.work-header-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+.work-header-details-content {
+  position: absolute;
+  z-index: 30;
+  top: 100%;
+  right: 12px;
+  display: grid;
+  gap: 8px;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 32px));
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  color: var(--muted);
+  white-space: normal;
+}
+.work-header-details:not([open]) > .work-header-details-content {
+  display: none;
+}
+.work-header-details-content > strong {
+  color: var(--text-strong);
+  font-size: var(--font-size-body-sm);
+}
 .shared-overview-header {
   display: flex;
   align-items: center;

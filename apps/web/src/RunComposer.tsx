@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState, useId } from "react";
 import { Button, ComposerModeSwitch, DropdownSelect } from "@colossus/ui";
 import { Badge } from "@colossus/ui/components/ui/badge";
 import { ConversationComposer } from "@colossus/ui/conversation";
@@ -15,7 +15,7 @@ import type {
   ResearchSourceKind,
 } from "@colossus/ui/session/types";
 import { useRunModeCapabilities } from "./research-capability";
-import { ModelPicker } from "@colossus/ui/model-picker";
+import { ComposerModelPicker as ModelPicker } from "./ComposerModelPicker";
 import {
   REASONING_EFFORTS,
   reasoningEffort,
@@ -85,6 +85,7 @@ export function RunComposer({
   stopping = false,
   stopDisabled = false,
   hostedProject,
+  conversationBranch = false,
 }: {
   nodes: FleetNode[];
   nodeId: string;
@@ -107,7 +108,9 @@ export function RunComposer({
   stopping?: boolean;
   stopDisabled?: boolean;
   hostedProject?: string | undefined;
+  conversationBranch?: boolean;
 }) {
+  const modeGroup = useId();
   const [attachments, setAttachments] = useState<HostedAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [draft, setDraft] = useState(""),
@@ -141,7 +144,9 @@ export function RunComposer({
   useEffect(() => {
     if (draftSeed) {
       setDraft(draftSeed.text);
-      input.current?.focus();
+      // A draft can open from a menu whose focus scope is still closing.
+      const frame = requestAnimationFrame(() => input.current?.focus());
+      return () => cancelAnimationFrame(frame);
     }
   }, [draftSeed?.key, draftSeed?.text]);
   const attempt = useRef<SubmissionAttempt | null>(null);
@@ -492,6 +497,7 @@ export function RunComposer({
             </span>
           )}
           <ComposerModeSwitch
+            name={modeGroup}
             value={mode}
             onChange={setMode}
             disabled={disabled || busy || Boolean(planContinuation)}
@@ -501,7 +507,7 @@ export function RunComposer({
               {
                 value: "goal",
                 label: "Goal",
-                disabled: !capabilities.goal,
+                disabled: conversationBranch || !capabilities.goal,
                 title: capabilities.goal
                   ? "Continue toward an objective within an explicit iteration limit"
                   : "Connect a runtime with Goal support and authorized Goal tools.",
@@ -509,7 +515,7 @@ export function RunComposer({
               {
                 value: "research",
                 label: "Research",
-                disabled: !researchAvailable,
+                disabled: conversationBranch || !researchAvailable,
                 title: researchAvailable
                   ? "Run a bounded evidence-and-citation task"
                   : "Connect a runtime that advertises Research support.",

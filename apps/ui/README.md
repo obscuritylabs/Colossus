@@ -125,6 +125,23 @@ can supply a `linkComponent` that validates navigation through their own authori
 Desktop uses its browser controller. VS Code keeps generated links inert. Shared
 styles respond to the same palette and text-size preferences as settings controls.
 
+Markdown uses Streamdown for incomplete streaming content. Pass `isStreaming` only
+while the host is receiving that message. The parser keeps one bounded message block
+so character, node and depth limits apply across the whole response. Code blocks share
+a language header, explicit copy action, keyboard scrolling and wrapping. Shiki loads
+only supported grammars on demand and emits semantic CSS classes, preserving each
+host's content security policy without inline token styles. Unknown languages remain
+readable plain text. Mermaid previews load on demand for completed, bounded offline
+flow, sequence, state, class, ER, Gantt and pie diagrams. Configuration directives,
+interactive links, embedded HTML and remote media are unavailable in previews; source
+remains accessible and copyable. Generated SVG is copied through a bounded geometry
+and text allowlist into React, never inserted as HTML.
+
+`ConversationEntry` owns the common message copy action and optional reported usage
+footer. Hosts supply counts only from released updates bound to that run; missing
+counts remain unavailable. The footer labels this as reported run usage and shows it
+once on the final assistant message rather than attributing it to every message.
+
 `ControlPlaneFrame` uses the owned shadcn sidebar, menu, sheet and tooltip
 foundations. Import `styles/control-plane.css` in the web host; its
 workbench styles stay out of Desktop and editor bundles. Shared controls retain

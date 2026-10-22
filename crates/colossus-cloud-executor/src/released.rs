@@ -63,6 +63,7 @@ mod tests {
                 run_id: "run-1".into(),
                 session_id: "session-1".into(),
                 title: "Test task".into(),
+                title_revision: 0,
                 role: "primary".into(),
                 mode: RunMode::Execute,
                 status: RunStatus::Completed,

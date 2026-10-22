@@ -10,6 +10,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 mod accounts;
+mod branches;
 mod delivery;
 mod discovery;
 pub use discovery::DiscoverySnapshot;

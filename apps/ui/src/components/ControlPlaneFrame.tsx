@@ -12,11 +12,15 @@ import {
 } from "./ui/sheet.js";
 import {
   Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarHeader,
   SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  SidebarRail,
   SidebarTrigger,
   useSidebar,
 } from "./ui/sidebar.js";
@@ -155,6 +159,7 @@ function ControlWorkbench({
             aria-controls="control-app-navigation"
             title="Toggle app sidebar (⌘/Ctrl B)"
           />
+          <span className="control-header-separator" aria-hidden="true" />
           {sidebar ? (
             compactScope ? (
               <Sheet open={scopeOpenMobile} onOpenChange={setScopeOpenMobile}>
@@ -201,88 +206,95 @@ function ControlWorkbench({
           appTrigger.current?.focus();
         }}
       >
-        <div className="control-brand" title="Colossus">
-          <img src={colossusMark} alt="" />
-          <div>
-            <strong>Colossus</strong>
-            <small>Your agent workspace</small>
-          </div>
-        </div>
-        {sidebarHeader ? (
-          <div className="control-sidebar-context">{sidebarHeader}</div>
-        ) : null}
-        <nav>
-          {[...new Set(navigation.map((item) => item.group ?? ""))].map(
-            (group) => (
-              <section
-                className="control-navigation-group"
-                key={group}
-                aria-label={group || undefined}
-              >
-                {group ? (
-                  <h2 className="control-navigation-heading">{group}</h2>
-                ) : null}
-                <SidebarMenu>
-                  {navigation
-                    .filter((item) => (item.group ?? "") === group)
-                    .map((item) => (
-                      <SidebarMenuItem key={item.id}>
-                        <SidebarMenuButton
-                          asChild
-                          isActive={current === item.id}
-                          className="control-app-link"
-                        >
-                          {item.href && !item.disabled ? (
-                            <a
-                              href={item.href}
-                              aria-current={
-                                current === item.id ? "page" : undefined
-                              }
-                              title={item.label}
-                              aria-label={item.label}
-                              onClick={(event) => {
-                                if (
-                                  event.button ||
-                                  event.metaKey ||
-                                  event.ctrlKey ||
-                                  event.shiftKey ||
-                                  event.altKey
-                                )
-                                  return;
-                                event.preventDefault();
-                                onNavigate(item.id);
-                              }}
-                            >
-                              {item.icon}
-                              <span>{item.label}</span>
-                            </a>
-                          ) : (
-                            <button
-                              type="button"
-                              aria-current={
-                                current === item.id ? "page" : undefined
-                              }
-                              disabled={item.disabled}
-                              onClick={() => onNavigate(item.id)}
-                              title={item.label}
-                              aria-label={item.label}
-                            >
-                              {item.icon}
-                              <span>{item.label}</span>
-                            </button>
-                          )}
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    ))}
-                </SidebarMenu>
-              </section>
-            ),
+        <SidebarHeader>
+          {sidebarHeader ?? (
+            <div className="control-brand" title="Colossus">
+              <img src={colossusMark} alt="" />
+              <div>
+                <strong>Colossus</strong>
+                <small>Your agent workspace</small>
+              </div>
+            </div>
           )}
-        </nav>
-        <div className="control-rail-footer">
-          {user}
-          {footer}
-        </div>
+        </SidebarHeader>
+        <SidebarContent>
+          <nav aria-label="Application">
+            {[...new Set(navigation.map((item) => item.group ?? ""))].map(
+              (group) => (
+                <section
+                  className="control-navigation-group"
+                  key={group}
+                  aria-label={group || undefined}
+                >
+                  {group ? (
+                    <h2 className="control-navigation-heading">{group}</h2>
+                  ) : null}
+                  <SidebarMenu>
+                    {navigation
+                      .filter((item) => (item.group ?? "") === group)
+                      .map((item) => (
+                        <SidebarMenuItem key={item.id}>
+                          <SidebarMenuButton
+                            asChild
+                            isActive={current === item.id}
+                            className="control-app-link"
+                            tooltip={
+                              !isMobile && !open ? item.label : undefined
+                            }
+                          >
+                            {item.href && !item.disabled ? (
+                              <a
+                                href={item.href}
+                                aria-current={
+                                  current === item.id ? "page" : undefined
+                                }
+                                title={item.label}
+                                aria-label={item.label}
+                                onClick={(event) => {
+                                  if (
+                                    event.button ||
+                                    event.metaKey ||
+                                    event.ctrlKey ||
+                                    event.shiftKey ||
+                                    event.altKey
+                                  )
+                                    return;
+                                  event.preventDefault();
+                                  onNavigate(item.id);
+                                }}
+                              >
+                                {item.icon}
+                                <span>{item.label}</span>
+                              </a>
+                            ) : (
+                              <button
+                                type="button"
+                                aria-current={
+                                  current === item.id ? "page" : undefined
+                                }
+                                disabled={item.disabled}
+                                onClick={() => onNavigate(item.id)}
+                                title={item.label}
+                                aria-label={item.label}
+                              >
+                                {item.icon}
+                                <span>{item.label}</span>
+                              </button>
+                            )}
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      ))}
+                  </SidebarMenu>
+                </section>
+              ),
+            )}
+          </nav>
+          {footer ? (
+            <div className="control-sidebar-utilities">{footer}</div>
+          ) : null}
+        </SidebarContent>
+        {user ? <SidebarFooter>{user}</SidebarFooter> : null}
+        <SidebarRail aria-label="Toggle sidebar at edge" />
       </Sidebar>
       {workArea}
     </>

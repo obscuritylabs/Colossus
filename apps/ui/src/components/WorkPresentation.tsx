@@ -1,4 +1,4 @@
-import type { ReactNode, Ref } from "react";
+import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { IconClock } from "@tabler/icons-react";
 
 export type SessionWorkspaceView =
@@ -79,6 +79,77 @@ export const WORK_STATUS_PRESENTATIONS: Readonly<
     tone: "danger",
   },
 };
+function WorkHeaderDetails({
+  statusLabel,
+  status,
+  startedLabel,
+  modeLabel,
+  children,
+}: {
+  statusLabel: string;
+  status?: WorkStatusPresentation | undefined;
+  startedLabel?: string | null | undefined;
+  modeLabel?: string | undefined;
+  children?: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const disclosure = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !disclosure.current?.contains(event.target)
+      )
+        setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      disclosure.current?.querySelector("summary")?.focus();
+    };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, [open]);
+  return (
+    <details
+      className="work-header-details"
+      ref={disclosure}
+      open={open}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
+      <summary
+        className={status ? "tone-" + status.tone : undefined}
+        aria-label={`Conversation details, ${statusLabel}`}
+        title="Conversation details"
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((value) => !value);
+        }}
+      >
+        <span className="work-header-status-dot" aria-hidden="true" />
+        <span>{statusLabel}</span>
+      </summary>
+      <div className="work-header-details-content">
+        <strong>Conversation details</strong>
+        <span className={status ? "tone-" + status.tone : undefined}>
+          {status?.copy ?? statusLabel}
+        </span>
+        {startedLabel ? <span>Started {startedLabel}</span> : null}
+        {modeLabel ? <span>{modeLabel}</span> : null}
+        {children}
+      </div>
+    </details>
+  );
+}
 export function WorkSurfaceHeader({
   title,
   titleId,
@@ -90,6 +161,8 @@ export function WorkSurfaceHeader({
   breadcrumbTrailing,
   actions,
   editing,
+  variant = "default",
+  details,
 }: {
   title: string;
   titleId?: string;
@@ -101,22 +174,29 @@ export function WorkSurfaceHeader({
   breadcrumbTrailing?: ReactNode;
   actions?: ReactNode;
   editing?: ReactNode;
+  variant?: "default" | "compact";
+  details?: ReactNode;
 }) {
+  const compact = variant === "compact";
   return (
-    <header className="surface-header work-surface-header shared-work-header">
+    <header
+      className={`surface-header work-surface-header shared-work-header${compact ? " is-compact" : ""}`}
+    >
       <div className="surface-title-copy">
-        <p className="surface-breadcrumb">
-          <span>Work</span>
-          <span aria-hidden="true">/</span>
-          <span>{statusLabel}</span>
-          {breadcrumbTrailing}
-        </p>
+        {!compact ? (
+          <p className="surface-breadcrumb">
+            <span>Work</span>
+            <span aria-hidden="true">/</span>
+            <span>{statusLabel}</span>
+            {breadcrumbTrailing}
+          </p>
+        ) : null}
         {editing ?? (
           <h2 id={titleId} ref={titleRef} tabIndex={titleRef ? -1 : undefined}>
             {title}
           </h2>
         )}
-        {status ? (
+        {status && !compact ? (
           <p className="surface-run-meta">
             <span className={"tone-" + status.tone}>{status.copy}</span>
             {startedLabel ? (
@@ -129,6 +209,17 @@ export function WorkSurfaceHeader({
           </p>
         ) : null}
       </div>
+      {compact ? (
+        <WorkHeaderDetails
+          statusLabel={statusLabel}
+          status={status}
+          startedLabel={startedLabel}
+          modeLabel={modeLabel}
+        >
+          {breadcrumbTrailing}
+          {details}
+        </WorkHeaderDetails>
+      ) : null}
       <div className="surface-header-actions">{actions}</div>
     </header>
   );

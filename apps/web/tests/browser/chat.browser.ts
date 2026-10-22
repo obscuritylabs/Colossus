@@ -172,9 +172,11 @@ for (const appearance of appearanceCases) {
         .getByRole("navigation", { name: "Your chat history" })
         .getByRole("link", { name: "Browser model conversation", exact: true }),
     ).toBeVisible();
-    await expect(
-      page.getByText("Only you can open these chats.", { exact: true }),
-    ).toBeVisible();
+    await expect(page.locator(".chat-history-private")).toHaveText("Private");
+    await expect(page.locator(".chat-history-private")).toHaveAttribute(
+      "title",
+      "Only you can open these chats.",
+    );
     fixture.verify();
   });
 }
@@ -189,7 +191,10 @@ for (const appearance of appearanceCases) {
     await page.getByRole("link", { name: "Chat", exact: true }).click();
     await openConversationList(page);
     await page
-      .getByRole("button", { name: "Project settings", exact: true })
+      .getByRole("button", { name: "Chat options", exact: true })
+      .click();
+    await page
+      .getByRole("menuitem", { name: "Project settings", exact: true })
       .click();
     await expect(
       page.getByRole("heading", { name: "Providers", exact: true }),

@@ -4,6 +4,7 @@ import { Scanner } from "@tailwindcss/oxide";
 import { validateViewContributions } from "./validate-manifest.mjs";
 import { cp, mkdir, readdir, rm, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
+import { mermaidEsbuildCompatibility } from "../../ui/build/mermaid-compatibility.mjs";
 
 validateViewContributions(JSON.parse(await readFile("package.json", "utf8")));
 
@@ -65,7 +66,12 @@ const browserBuild = await build({
   bundle: true,
   platform: "browser",
   target: "es2022",
-  format: "iife",
+  // Keep syntax grammars and Mermaid off the initial chat/settings module graph.
+  // A nonce on the entry module also authorizes its local module dependencies.
+  format: "esm",
+  splitting: true,
+  chunkNames: "chunks/[name]-[hash]",
+  plugins: [mermaidEsbuildCompatibility()],
   jsx: "automatic",
   define: { "process.env.NODE_ENV": '"production"' },
   loader: { ".svg": "dataurl" },

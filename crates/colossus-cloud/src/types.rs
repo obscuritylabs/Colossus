@@ -180,6 +180,52 @@ pub struct CloudWorkspace {
     /// Optimistic metadata revision.
     pub revision: u64,
 }
+/// Presentation and lifecycle relation of a canonical conversation branch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudBranchKind {
+    /// Independent continuation created from a settled source turn.
+    Fork,
+    /// Side conversation attached to its source conversation.
+    Aside,
+}
+impl CloudBranchKind {
+    /// Stable wire and database discriminator.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fork => "fork",
+            Self::Aside => "aside",
+        }
+    }
+}
+/// Immutable cloud lineage; the runtime alone resolves canonical transcript context.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudThreadBranch {
+    /// Child presentation and lifecycle kind.
+    pub kind: CloudBranchKind,
+    /// Exact source cloud conversation.
+    pub parent_thread_id: String,
+    /// Exact admitted cloud source turn.
+    pub source_task_id: String,
+    /// Runtime source resolved through its durable allocation receipt.
+    pub source_run_id: String,
+}
+/// Source-bound admission request. Clients cannot nominate runtime context boundaries.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateCloudThreadBranch {
+    /// Exact released source task in the selected parent.
+    pub source_task_id: String,
+    /// Whether to create an independent fork or attached side conversation.
+    pub kind: CloudBranchKind,
+    /// Exact visible parent metadata revision on first admission.
+    pub expected_revision: u64,
+    /// Optional bounded child title.
+    pub title: Option<String>,
+    /// First child prompt and normal execution settings; branch/session must be absent.
+    pub request: CreateRunRequest,
+}
 /// Human-operated cloud conversation mapped to one exact runtime session.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -191,6 +237,9 @@ pub struct CloudThread {
     /// Personal owner, derived from the authenticated account; absent preserves shared history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_user_id: Option<String>,
+    /// Immutable source lineage for cloud-created forks and side conversations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<CloudThreadBranch>,
     /// Immutable enrolled runtime placement.
     pub node_id: String,
     /// Native host grouping if advertised.
@@ -199,6 +248,12 @@ pub struct CloudThread {
     pub workspace_id: Option<String>,
     /// Human-editable bounded conversation title.
     pub title: String,
+    /// Explicit cloud title preference; absent retains unknown legacy provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_overridden: Option<bool>,
+    /// Highest observed canonical title generation within the fixed runtime session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_title_revision: Option<u64>,
     /// UTC RFC3339 creation time.
     pub created_at: String,
     /// UTC RFC3339 last conversation change.

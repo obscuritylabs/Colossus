@@ -95,9 +95,115 @@
 }
 .shared-message-actions {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+.shared-message-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+.shared-message-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: var(--control-height-compact);
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+  cursor: pointer;
+}
+.shared-message-copy:hover {
+  border-color: var(--border);
+  background: var(--surface-raised);
+  color: var(--text-strong);
+}
+.shared-message-copy:focus-visible,
+.shared-message-usage > summary:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+}
+.shared-message-copy:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.shared-message-copy.is-failed {
+  color: var(--red);
+}
+.shared-copy-buffer {
+  position: fixed;
+  inset: 0 auto auto 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.shared-message-usage {
+  min-width: 0;
+  max-width: 100%;
+}
+.shared-message-usage > summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px 0;
+  border-radius: var(--radius-sm);
+  list-style: none;
+  cursor: pointer;
+}
+.shared-message-usage > summary::-webkit-details-marker {
+  display: none;
+}
+.shared-message-usage > summary:hover {
+  color: var(--text-strong);
+}
+.shared-message-usage-details {
+  max-width: 32em;
   margin-top: 5px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+.shared-message-usage-details strong {
+  color: var(--text-strong);
+}
+.shared-message-usage-details dl {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0;
+}
+.shared-message-usage-details dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.shared-message-usage-details dd {
+  margin: 0;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.shared-message-usage-details p {
+  margin: 0;
+  line-height: var(--line-height-body);
+}
+@media (pointer: coarse) {
+  .shared-message-copy,
+  .shared-message-usage > summary {
+    min-height: var(--control-height-touch);
+  }
 }
 .shared-preserve-lines {
   white-space: pre-wrap;

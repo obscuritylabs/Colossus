@@ -1960,6 +1960,9 @@ test("session snapshots and every durable record family are listable and inspect
     scrollHeight: element.scrollHeight,
   }));
   expect(previewHeight.clientHeight).toBeLessThan(previewHeight.scrollHeight);
+  await page.screenshot({
+    path: "output/playwright/session-snapshots-populated.png",
+  });
   await page.getByRole("button", { name: "View snapshot" }).first().click();
   const details = page.getByLabel("Thread details", { exact: true });
   await expect(
@@ -2004,6 +2007,9 @@ test("session snapshots and every durable record family are listable and inspect
   ]) {
     await expect(resources.getByText(label, { exact: true })).toBeVisible();
   }
+  await page.screenshot({
+    path: "output/playwright/session-resources-populated.png",
+  });
   await resources.getByText("Key decisions", { exact: true }).click();
   await resources
     .getByRole("button", { name: /Keep execution boundary unchanged/u })
@@ -2291,6 +2297,9 @@ test("plan titles open the rendered plan and previews do not leak Markdown synta
     card.getByRole("heading", { name: "Desktop Plan workflow" }),
   ).toBeVisible();
   await expect(card).not.toContainText("## Desktop Plan workflow");
+  await page.screenshot({
+    path: "output/playwright/session-plans-populated.png",
+  });
 
   await card
     .getByRole("button", { name: "Plan the Desktop release workflow" })
@@ -2376,6 +2385,38 @@ test("Session Map keeps its root visible without horizontal overflow at compact 
   const stage = page.locator(".session-map-stage");
   const primary = page.locator(".session-map-primary");
   await expect(primary).toBeVisible();
+  const layers = page.getByRole("button", { name: "Layers", exact: true });
+  await layers.focus();
+  await layers.press("Enter");
+  const layerOptions = page.getByRole("dialog", {
+    name: "Session map layers",
+    exact: true,
+  });
+  await expect(layerOptions).toBeVisible();
+  for (const name of ["Agents", "Work", "Context", "Research", "Outputs"]) {
+    await expect(
+      layerOptions.getByRole("switch", { name, exact: true }),
+    ).toBeChecked();
+  }
+  await page.screenshot({
+    path: "output/playwright/session-map-layers-compact.png",
+  });
+  const outputs = layerOptions.getByRole("switch", {
+    name: "Outputs",
+    exact: true,
+  });
+  await outputs.focus();
+  await outputs.press("Space");
+  await expect(stage.getByRole("button", { name: /^Artifacts /u })).toHaveCount(
+    0,
+  );
+  await outputs.press("Space");
+  await expect(stage.getByRole("button", { name: /^Artifacts /u })).toHaveCount(
+    1,
+  );
+  await page.keyboard.press("Escape");
+  await expect(layerOptions).toBeHidden();
+  await expect(layers).toBeFocused();
   await expect
     .poll(() =>
       stage.evaluate((element) => element.scrollWidth - element.clientWidth),

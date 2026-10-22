@@ -308,11 +308,16 @@ async fn loopback_with_screenshots(
                 socket.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await.unwrap();
                 let _ = started.send(());
                 let mut byte = [0];
-                let count = tokio::time::timeout(Duration::from_secs(3), socket.read(&mut byte))
+                let closed = tokio::time::timeout(Duration::from_secs(3), socket.read(&mut byte))
                     .await
-                    .expect("cancelled adapter must close pending HTTP body")
-                    .unwrap();
-                assert_eq!(count, 0);
+                    .expect("cancelled adapter must close pending HTTP body");
+                // Cancelling before reading the response headers can close TCP
+                // with a reset instead of EOF; both close the pending body.
+                match closed {
+                    Ok(0) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+                    result => panic!("cancelled adapter left pending HTTP body: {result:?}"),
+                }
                 continue;
             }
             let (status, mime, body) = if reject && step == 2 {

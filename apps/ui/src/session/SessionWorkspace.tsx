@@ -18,7 +18,7 @@ import {
   IconTopologyStar3,
 } from "@tabler/icons-react";
 import { lazy, Suspense, useCallback, useMemo, useState } from "react";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 
 import { shortDateLabel } from "./types";
 import {
@@ -31,8 +31,29 @@ import type { RunView } from "./types";
 import type { SessionMap, SessionMapResource } from "./types";
 import type { AgentParticipant, AgentWorkState } from "./types";
 import type { ArtifactViewItem } from "./types";
-import { DropdownSelect } from "../components/DropdownSelect";
-import { MarkdownContent } from "./links";
+import { MarkdownContent, SessionLink } from "./links";
+import { Button } from "../components/ui/button";
+import { Badge } from "../components/ui/badge";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "../components/ui/popover";
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  EmptyDescription,
+} from "../components/ui/empty";
+import {
+  Item,
+  ItemMedia,
+  ItemContent,
+  ItemTitle,
+  ItemDescription,
+  ItemActions,
+} from "../components/ui/item";
 import { isWebUri, workspaceSourcePath } from "./sources";
 import type {
   SessionTopologyFamilyModel,
@@ -48,6 +69,36 @@ const SessionTopologyGraph = lazy(() =>
 export { SessionWorkspaceTabs } from "../conversation";
 import type { SessionWorkspaceView } from "../conversation";
 export type { SessionWorkspaceView } from "../conversation";
+
+function SessionEmpty({
+  icon: Icon,
+  title,
+  children,
+  loading = false,
+  alert = false,
+}: {
+  icon: ComponentType<{ size?: number; stroke?: number }>;
+  title: string;
+  children: ReactNode;
+  loading?: boolean;
+  alert?: boolean;
+}) {
+  return (
+    <Empty
+      className="session-view-empty"
+      role={alert ? "alert" : loading ? "status" : undefined}
+    >
+      <EmptyHeader>
+        <EmptyMedia variant="icon" aria-hidden="true">
+          <Icon size={20} stroke={1.6} />
+        </EmptyMedia>
+        <EmptyTitle>{title}</EmptyTitle>
+        <EmptyDescription>{children}</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
+}
+
 function readableState(state: AgentWorkState): string {
   return state.charAt(0).toUpperCase() + state.slice(1);
 }
@@ -301,6 +352,38 @@ export function SessionTopology({
     visibleFamilies,
   ]);
 
+  if (
+    loading ||
+    sessionMap === null ||
+    graphPrimary === null ||
+    sessionMap.sessionId !== opening?.run.sessionId
+  ) {
+    return (
+      <section
+        className="session-resource-view"
+        aria-labelledby="session-topology-title"
+      >
+        <header className="session-view-summary">
+          <div>
+            <h3 id="session-topology-title">Session map</h3>
+            <p>Explore the resources released by this session.</p>
+          </div>
+        </header>
+        <SessionEmpty
+          icon={IconTopologyStar3}
+          title={
+            loading ? "Loading session resources" : "Session map unavailable"
+          }
+          loading={loading}
+        >
+          {loading
+            ? "Reading records from the selected session."
+            : error || "Session resources will appear here when released."}
+        </SessionEmpty>
+      </section>
+    );
+  }
+
   return (
     <section className="session-map" aria-labelledby="session-topology-title">
       <header className="session-map-header">
@@ -309,84 +392,70 @@ export function SessionTopology({
           <p>Primary session · canonical resources and agent lineage</p>
         </div>
         <div className="session-map-actions">
-          <button
-            type="button"
+          <Button
+            variant="outline"
             onClick={() => {
               setExpanded(new Set(["memories"]));
               setFitRequest((current) => current + 1);
             }}
           >
             <IconArrowsMaximize size={15} stroke={1.6} /> Fit
-          </button>
-          <button type="button" onClick={() => setExpanded(new Set())}>
+          </Button>
+          <Button variant="outline" onClick={() => setExpanded(new Set())}>
             <IconListCheck size={15} stroke={1.6} /> Collapse all
-          </button>
-          <label>
-            <span className="sr-only">Session map scope</span>
-            <DropdownSelect defaultValue="session">
-              <option value="session">Entire session</option>
-            </DropdownSelect>
-          </label>
+          </Button>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline">
+                <IconAdjustments size={15} aria-hidden="true" /> Layers
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              className="session-map-layers"
+              aria-label="Session map layers"
+              align="end"
+            >
+              <header>
+                <IconAdjustments size={15} stroke={1.6} />
+                <strong>Layers</strong>
+              </header>
+              {LAYER_META.map((layer) => (
+                <label key={layer.id}>
+                  <span>{layer.label}</span>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    checked={layers.has(layer.id)}
+                    onChange={() =>
+                      setLayers((current) => {
+                        const next = new Set(current);
+                        if (next.has(layer.id)) next.delete(layer.id);
+                        else next.add(layer.id);
+                        return next;
+                      })
+                    }
+                  />
+                </label>
+              ))}
+            </PopoverContent>
+          </Popover>
         </div>
       </header>
 
       <div className="session-map-stage">
-        <aside className="session-map-layers" aria-label="Session map layers">
-          <header>
-            <IconAdjustments size={15} stroke={1.6} />
-            <strong>Layers</strong>
-          </header>
-          {LAYER_META.map((layer) => (
-            <label key={layer.id}>
-              <span>{layer.label}</span>
-              <input
-                type="checkbox"
-                role="switch"
-                checked={layers.has(layer.id)}
-                onChange={() =>
-                  setLayers((current) => {
-                    const next = new Set(current);
-                    if (next.has(layer.id)) next.delete(layer.id);
-                    else next.add(layer.id);
-                    return next;
-                  })
-                }
-              />
-            </label>
-          ))}
-        </aside>
-
-        {loading ? (
-          <div className="session-map-loading" role="status">
-            <span /> Loading session resources…
-          </div>
-        ) : sessionMap === null ||
-          opening === undefined ||
-          primary === undefined ||
-          graphPrimary === null ? (
-          <div className="session-view-empty">
-            <IconTopologyStar3 size={26} stroke={1.5} aria-hidden="true" />
-            <strong>Session map unavailable</strong>
-            <span>
-              {error ||
-                "Canonical session resources will appear here when released."}
-            </span>
-          </div>
-        ) : (
-          <Suspense
-            fallback={
-              <div className="session-map-loading" role="status">
-                <span /> Loading interactive session map…
-              </div>
-            }
-          >
-            <SessionTopologyGraph
-              primary={graphPrimary}
-              families={graphFamilies}
-              fitRequest={fitRequest}
-            />
-          </Suspense>
-        )}
+        <Suspense
+          fallback={
+            <div className="session-map-loading" role="status">
+              <span /> Loading interactive session map…
+            </div>
+          }
+        >
+          <SessionTopologyGraph
+            primary={graphPrimary}
+            families={graphFamilies}
+            fitRequest={fitRequest}
+          />
+        </Suspense>
         <label className="session-map-lineage-toggle">
           <input
             type="checkbox"
@@ -394,11 +463,13 @@ export function SessionTopology({
             checked={showRunLineage}
             onChange={(event) => setShowRunLineage(event.currentTarget.checked)}
           />
-          <span>Show run lineage</span>
+          <span>Show parent run IDs</span>
         </label>
       </div>
       {error !== "" && sessionMap !== null ? (
-        <p className="session-map-stale-note">{error}</p>
+        <p className="session-map-stale-note" role="status">
+          {error}
+        </p>
       ) : null}
     </section>
   );
@@ -409,7 +480,7 @@ function planStatus(plan: SessionPlanReference): string {
     return "Saved before cancellation";
   }
   return plan.status === null
-    ? "Draft"
+    ? "Status not reported"
     : plan.status.charAt(0).toUpperCase() + plan.status.slice(1);
 }
 
@@ -437,16 +508,19 @@ export function SessionPlansView({
       <header className="session-view-summary">
         <div>
           <h3 id="session-plans-title">Plans</h3>
-          <p>Durable plans released by runs in this session.</p>
+          <p>Plans released by loaded runs in this session.</p>
         </div>
-        <span>{plans.length}</span>
+        <Badge
+          className="session-view-count"
+          aria-label={`${plans.length} plans in loaded runs`}
+        >
+          {plans.length}
+        </Badge>
       </header>
       {plans.length === 0 ? (
-        <div className="session-view-empty">
-          <IconListDetails size={26} stroke={1.5} aria-hidden="true" />
-          <strong>No plans in this session</strong>
-          <span>Plan-mode results will appear here when released.</span>
-        </div>
+        <SessionEmpty icon={IconListDetails} title="No plans in this session">
+          Plan-mode results will appear here when released.
+        </SessionEmpty>
       ) : (
         <ol className="session-plan-list">
           {plans.map((plan) => (
@@ -456,16 +530,16 @@ export function SessionPlansView({
                   <IconListDetails size={18} stroke={1.6} />
                 </span>
                 <div>
-                  <button
+                  <Button
                     className="session-plan-title"
-                    type="button"
+                    variant="link"
                     onClick={() => onInspectPlan(plan)}
                   >
                     {plan.sourceRunTitle}
-                  </button>
+                  </Button>
                   <small>
                     Run {plan.runIndex} · Revision {plan.revision} ·{" "}
-                    {planStatus(plan)}
+                    <Badge>{planStatus(plan)}</Badge>
                   </small>
                   {plan.output.trim() === "" ? (
                     <p className="session-plan-preview-fallback">
@@ -479,20 +553,20 @@ export function SessionPlansView({
                   )}
                 </div>
                 <div className="session-resource-actions">
-                  <button type="button" onClick={() => onInspectPlan(plan)}>
+                  <Button variant="outline" onClick={() => onInspectPlan(plan)}>
                     Read plan
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="ghost"
                     disabled={!canContinuePlan(plan, continuationAvailable)}
                     onClick={() =>
                       onRevisePlan(plan.sourceRunId, plan.planId, plan.revision)
                     }
                   >
                     Revise
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="ghost"
                     disabled={!workflowAvailable}
                     onClick={() =>
                       onOpenPlanWorkflow(
@@ -502,7 +576,7 @@ export function SessionPlansView({
                     }
                   >
                     Open workflow
-                  </button>
+                  </Button>
                 </div>
               </article>
             </li>
@@ -529,51 +603,59 @@ export function SessionSourcesView({
       <header className="session-view-summary">
         <div>
           <h3 id="session-sources-title">Sources</h3>
-          <p>Released web and workspace citations across this session.</p>
+          <p>Citations from loaded research results in this session.</p>
         </div>
-        <span>{sources.length}</span>
+        <Badge
+          className="session-view-count"
+          aria-label={`${sources.length} sources in loaded results`}
+        >
+          {sources.length}
+        </Badge>
       </header>
       {sources.length === 0 ? (
-        <div className="session-view-empty">
-          <IconBook2 size={26} stroke={1.5} aria-hidden="true" />
-          <strong>No released sources</strong>
-          <span>
-            Research citations will remain available here across follow-ups.
-          </span>
-        </div>
+        <SessionEmpty icon={IconBook2} title="No released sources">
+          Research citations will appear here when released.
+        </SessionEmpty>
       ) : (
         <ol className="session-source-list">
           {sources.map((source) => {
             const workspacePath = workspaceSourcePath(source.uri);
             return (
               <li key={`${source.label}:${source.uri}`}>
-                <span className="session-resource-icon" aria-hidden="true">
-                  {isWebUri(source.uri) ? (
-                    <IconExternalLink size={17} stroke={1.6} />
-                  ) : (
-                    <IconFileText size={17} stroke={1.6} />
-                  )}
-                </span>
-                <span>
-                  <small>
-                    {source.label} · {source.sourceRunTitle}
-                  </small>
-                  <strong>{source.title}</strong>
-                  {isWebUri(source.uri) ? (
-                    <a href={source.uri} target="_blank" rel="noreferrer">
-                      {source.uri}
-                    </a>
-                  ) : workspacePath !== null && onOpenWorkspaceFile ? (
-                    <button
-                      type="button"
-                      onClick={() => onOpenWorkspaceFile(workspacePath)}
-                    >
-                      {workspacePath} · Open file
-                    </button>
-                  ) : (
-                    <code>{source.uri}</code>
-                  )}
-                </span>
+                <Item>
+                  <ItemMedia variant="icon" aria-hidden="true">
+                    {isWebUri(source.uri) ? (
+                      <IconExternalLink size={17} stroke={1.6} />
+                    ) : (
+                      <IconFileText size={17} stroke={1.6} />
+                    )}
+                  </ItemMedia>
+                  <ItemContent className="session-source-copy">
+                    <ItemTitle>{source.title}</ItemTitle>
+                    <ItemDescription>
+                      <Badge>{source.label}</Badge> {source.sourceRunTitle}
+                    </ItemDescription>
+                    <div className="session-source-location">
+                      {isWebUri(source.uri) ? (
+                        <SessionLink href={source.uri}>
+                          {source.uri}
+                        </SessionLink>
+                      ) : (
+                        <code>{source.uri}</code>
+                      )}
+                    </div>
+                  </ItemContent>
+                  {workspacePath !== null && onOpenWorkspaceFile ? (
+                    <ItemActions>
+                      <Button
+                        variant="outline"
+                        onClick={() => onOpenWorkspaceFile(workspacePath)}
+                      >
+                        Open file
+                      </Button>
+                    </ItemActions>
+                  ) : null}
+                </Item>
               </li>
             );
           })}
@@ -608,29 +690,45 @@ export function SessionSnapshotsView({
             canonical conversation history.
           </p>
         </div>
-        <span>{snapshots.length}</span>
+        <Badge
+          className="session-view-count"
+          aria-label={
+            sessionMap === null
+              ? "Snapshot count unavailable"
+              : `${snapshots.length} snapshots`
+          }
+        >
+          {sessionMap === null ? "—" : snapshots.length}
+        </Badge>
       </header>
       {loading && sessionMap === null ? (
-        <div className="session-view-empty">
-          <IconAdjustments size={26} stroke={1.5} aria-hidden="true" />
-          <strong>Loading context snapshots</strong>
-          <span>Reading bounded records from the selected session.</span>
-        </div>
+        <SessionEmpty
+          icon={IconAdjustments}
+          title="Loading context snapshots"
+          loading
+        >
+          Reading bounded records from the selected session.
+        </SessionEmpty>
       ) : error !== "" && sessionMap === null ? (
-        <div className="session-view-empty is-error" role="alert">
-          <IconAdjustments size={26} stroke={1.5} aria-hidden="true" />
-          <strong>Context snapshots are unavailable</strong>
-          <span>{error}</span>
-        </div>
+        <SessionEmpty
+          icon={IconAdjustments}
+          title="Context snapshots are unavailable"
+          alert
+        >
+          {error}
+        </SessionEmpty>
+      ) : sessionMap === null ? (
+        <SessionEmpty
+          icon={IconAdjustments}
+          title="Context snapshots are unavailable"
+        >
+          This connection has not released a session map.
+        </SessionEmpty>
       ) : snapshots.length === 0 ? (
-        <div className="session-view-empty">
-          <IconAdjustments size={26} stroke={1.5} aria-hidden="true" />
-          <strong>No context snapshots</strong>
-          <span>
-            Automatic or manual context compaction will create immutable
-            snapshots here.
-          </span>
-        </div>
+        <SessionEmpty icon={IconAdjustments} title="No context snapshots">
+          Automatic or manual context compaction will create immutable snapshots
+          here.
+        </SessionEmpty>
       ) : (
         <ol className="session-snapshot-list">
           {snapshots.map((snapshot) => {
@@ -645,14 +743,14 @@ export function SessionSnapshotsView({
                     <IconAdjustments size={18} stroke={1.6} />
                   </span>
                   <div>
-                    <button
+                    <Button
                       className="session-plan-title"
-                      type="button"
+                      variant="link"
                       onClick={() => onSelectResource(resource)}
                     >
                       Messages {snapshot.sourceStartSequence}–
                       {snapshot.sourceEndSequence}
-                    </button>
+                    </Button>
                     <small>
                       {snapshot.strategy.replaceAll("_", " ")} · {snapshot.id}
                     </small>
@@ -667,12 +765,12 @@ export function SessionSnapshotsView({
                     </span>
                   </div>
                   <div className="session-resource-actions">
-                    <button
-                      type="button"
+                    <Button
+                      variant="outline"
                       onClick={() => onSelectResource(resource)}
                     >
                       View snapshot
-                    </button>
+                    </Button>
                   </div>
                 </article>
               </li>
@@ -681,7 +779,9 @@ export function SessionSnapshotsView({
         </ol>
       )}
       {error !== "" && sessionMap !== null ? (
-        <p className="session-map-stale-note">{error}</p>
+        <p className="session-map-stale-note" role="status">
+          {error}
+        </p>
       ) : null}
     </section>
   );
@@ -776,33 +876,47 @@ export function SessionResourcesView({
         </div>
       </header>
       <div className="session-resource-groups">
-        <button type="button" onClick={() => onChangeView("plans")}>
-          <IconListDetails size={18} stroke={1.6} aria-hidden="true" />
-          <span>
-            <strong>Plans</strong>
-            <small>Durable session plans</small>
-          </span>
-          <b>{plans.length}</b>
-          <IconChevronRight size={15} stroke={1.6} aria-hidden="true" />
-        </button>
-        <button type="button" onClick={() => onChangeView("sources")}>
-          <IconBook2 size={18} stroke={1.6} aria-hidden="true" />
-          <span>
-            <strong>Sources</strong>
-            <small>Released research evidence</small>
-          </span>
-          <b>{sources.length}</b>
-          <IconChevronRight size={15} stroke={1.6} aria-hidden="true" />
-        </button>
-        <button type="button" onClick={() => onChangeView("snapshots")}>
-          <IconAdjustments size={18} stroke={1.6} aria-hidden="true" />
-          <span>
-            <strong>Context snapshots</strong>
-            <small>Immutable compacted context</small>
-          </span>
-          <b>{sessionMap?.contextSnapshots.length ?? "—"}</b>
-          <IconChevronRight size={15} stroke={1.6} aria-hidden="true" />
-        </button>
+        {(
+          [
+            {
+              view: "plans",
+              title: "Plans",
+              description: "Plans from loaded runs",
+              count: plans.length,
+              Icon: IconListDetails,
+            },
+            {
+              view: "sources",
+              title: "Sources",
+              description: "Citations from loaded results",
+              count: sources.length,
+              Icon: IconBook2,
+            },
+            {
+              view: "snapshots",
+              title: "Context snapshots",
+              description: "Immutable compacted context",
+              count: sessionMap?.contextSnapshots.length ?? "—",
+              Icon: IconAdjustments,
+            },
+          ] as const
+        ).map(({ view, title, description, count, Icon }) => (
+          <Item key={view} asChild>
+            <button type="button" onClick={() => onChangeView(view)}>
+              <ItemMedia variant="icon" aria-hidden="true">
+                <Icon size={18} stroke={1.6} />
+              </ItemMedia>
+              <ItemContent>
+                <ItemTitle>{title}</ItemTitle>
+                <ItemDescription>{description}</ItemDescription>
+              </ItemContent>
+              <ItemActions>
+                <Badge>{count}</Badge>
+                <IconChevronRight size={15} stroke={1.6} aria-hidden="true" />
+              </ItemActions>
+            </button>
+          </Item>
+        ))}
         <div className="session-artifact-group">
           <header>
             <IconFolder size={18} stroke={1.6} aria-hidden="true" />
@@ -862,6 +976,12 @@ export function SessionResourcesView({
               <small>{error}</small>
             </span>
           </div>
+        ) : null}
+        {error !== "" && sessionMap !== null ? (
+          <p className="session-map-stale-note" role="status">
+            Could not refresh durable records. Showing the last loaded records.{" "}
+            {error}
+          </p>
         ) : null}
         {sessionMap === null
           ? null

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   SessionPlansView,
   SessionResourcesView,
@@ -16,11 +16,7 @@ import {
   selectSessionPlans,
   type SessionPlanReference,
 } from "@colossus/ui/session/selectors";
-import { WorkflowDialog } from "@colossus/ui/automations/WorkflowDialog";
-import {
-  MarkdownContent,
-  type SessionWorkspaceView,
-} from "@colossus/ui/conversation";
+import { type SessionWorkspaceView } from "@colossus/ui/conversation";
 import { ThreadRunActivity } from "./ThreadRunActivity";
 import {
   taskTitle,
@@ -30,10 +26,16 @@ import {
   type Update,
 } from "./api";
 import { WebLink } from "./WebLink";
-import { Button } from "@colossus/ui";
+import {
+  Empty,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  EmptyDescription,
+} from "@colossus/ui/components/ui/empty";
+import { IconActivity } from "@tabler/icons-react";
 import { releasedArtifacts } from "./released-artifacts";
 import type { ArtifactViewItem } from "@colossus/ui/session/types";
-import { ThreadPlanDecision } from "./ThreadPlanDecision";
 import type { PlanStrategy } from "./plan-continuation";
 import "@colossus/ui/styles/session.css";
 import "@colossus/ui/styles/workflows.css";
@@ -115,9 +117,8 @@ export function ThreadSessionViews({
   onChangeView,
   onRevisePlan,
   canContinuePlan,
-  onExecutePlan,
-  goalAvailable = false,
-  busy = false,
+  onInspectPlan,
+  onInspectArtifact,
 }: {
   view: SessionWorkspaceView;
   tasks: Task[];
@@ -128,13 +129,13 @@ export function ThreadSessionViews({
   onExecutePlan?: (plan: SessionPlanReference, strategy: PlanStrategy) => void;
   goalAvailable?: boolean;
   busy?: boolean;
+  onInspectPlan?: (plan: SessionPlanReference) => void;
+  onInspectArtifact?: (artifact: ArtifactViewItem) => void;
 }) {
   const views = useMemo(
     () => sessionRunViews(tasks, updates),
     [tasks, updates],
   );
-  const [plan, setPlan] = useState<SessionPlanReference | null>(null);
-  const [artifact, setArtifact] = useState<ArtifactViewItem | null>(null);
   const artifacts = useMemo(
     () =>
       releasedArtifacts(updates).map((item) => ({
@@ -152,8 +153,10 @@ export function ThreadSessionViews({
     loading: false,
     error: LOCAL_RESOURCES,
     onSelectResource: () => {},
-    onSelectArtifact: (id: string) =>
-      setArtifact(artifacts.find((item) => item.id === id) ?? null),
+    onSelectArtifact: (id: string) => {
+      const artifact = artifacts.find((item) => item.id === id);
+      if (artifact) onInspectArtifact?.(artifact);
+    },
     artifacts,
     views,
   };
@@ -165,7 +168,7 @@ export function ThreadSessionViews({
             views={views}
             continuationAvailable={canContinuePlan}
             workflowAvailable={false}
-            onInspectPlan={setPlan}
+            onInspectPlan={(plan) => onInspectPlan?.(plan)}
             onRevisePlan={(sourceRunId, planId, revision) => {
               const match = selectSessionPlans(views).find(
                 (candidate) =>
@@ -213,9 +216,22 @@ export function ThreadSessionViews({
             <header className="session-view-summary">
               <div>
                 <h3>Activity</h3>
-                <p>Released activity across this session.</p>
+                <p>Released activity from loaded runs in this session.</p>
               </div>
             </header>
+            {tasks.length === 0 ? (
+              <Empty className="session-view-empty">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <IconActivity size={20} aria-hidden="true" />
+                  </EmptyMedia>
+                  <EmptyTitle>No released activity</EmptyTitle>
+                  <EmptyDescription>
+                    Run activity will appear here when released.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : null}
             {tasks.map((task) => (
               <ThreadRunActivity
                 key={task.task_id}
@@ -230,68 +246,6 @@ export function ThreadSessionViews({
             ))}
           </section>
         )}
-        {artifact ? (
-          <WorkflowDialog
-            title={artifact.fileName}
-            busy={false}
-            onClose={() => setArtifact(null)}
-          >
-            <dl className="configuration-list">
-              <div>
-                <dt>Media type</dt>
-                <dd>{artifact.mediaType}</dd>
-              </div>
-              <div>
-                <dt>Size</dt>
-                <dd>{artifact.sizeLabel}</dd>
-              </div>
-              <div>
-                <dt>State</dt>
-                <dd>{artifact.stateLabel}</dd>
-              </div>
-            </dl>
-            <p>
-              Released metadata is available here. Open local file contents in
-              Desktop.
-            </p>
-            <Button onClick={() => setArtifact(null)}>Close artifact</Button>
-          </WorkflowDialog>
-        ) : null}
-        {plan ? (
-          <WorkflowDialog
-            title={plan.sourceRunTitle}
-            busy={false}
-            onClose={() => setPlan(null)}
-          >
-            <MarkdownContent content={plan.output} linkComponent={WebLink} />
-            <ThreadPlanDecision
-              plan={plan}
-              available={
-                canContinuePlan &&
-                selectSessionPlans(views).some(
-                  (current) =>
-                    current.planId === plan.planId &&
-                    current.sourceRunId === plan.sourceRunId &&
-                    current.revision === plan.revision &&
-                    current.status === "draft" &&
-                    !current.continuationPending,
-                )
-              }
-              goalAvailable={goalAvailable}
-              busy={busy}
-              onRevise={(selected) => {
-                setPlan(null);
-                onRevisePlan(selected);
-              }}
-              onExecute={(selected, strategy) => {
-                setPlan(null);
-                onExecutePlan?.(selected, strategy);
-              }}
-              inline
-            />
-            <Button onClick={() => setPlan(null)}>Close plan</Button>
-          </WorkflowDialog>
-        ) : null}
       </div>
     </SessionPresentationProvider>
   );

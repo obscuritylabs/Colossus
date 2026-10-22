@@ -219,11 +219,15 @@ describe("human cloud conversation authority", () => {
       { owner: "alice", node: "node-a" },
     );
     await act(() => button("Read plan").click());
-    expect(document.querySelector("dialog")?.textContent).toContain(
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
       "A controlled plan",
     );
     await act(() =>
-      [...document.querySelectorAll<HTMLButtonElement>("dialog button")]
+      [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          '[role="dialog"] button',
+        ),
+      ]
         .find((item) => item.textContent === "Execute once")!
         .click(),
     );
@@ -434,6 +438,27 @@ describe("human cloud conversation authority", () => {
     ).toEqual(["Alice Example", "Bob Example", "User"]);
     expect(container.textContent).not.toContain("Human");
   });
+  it("refreshes the displayed title from canonical thread metadata when the runtime changes it", async () => {
+    let canonical = planHistory();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(canonical)),
+    );
+    await render(canonical.thread, [node], ["read"]);
+    const heading = () =>
+      container.querySelector(".shared-work-header h2")?.textContent;
+    expect(heading()).toBe(thread.title);
+    expect(heading()).not.toBe(canonical.tasks[0]?.snapshot?.run.title);
+
+    canonical = {
+      ...canonical,
+      thread: { ...canonical.thread, title: "A Funny Joke", revision: 8 },
+    };
+    await act(async () => {
+      TestEventSource.instances[0]!.dispatchEvent(new Event("thread_changed"));
+    });
+    expect(heading()).toBe("A Funny Joke");
+  });
   it("exposes a real Back permalink while plain clicks preserve the host callback and modified clicks remain native", async () => {
     vi.stubGlobal(
       "fetch",
@@ -579,7 +604,10 @@ describe("human cloud conversation authority", () => {
       ).toContain(`mcp.call · ${index === 0 ? "GitLab" : "Splunk"} · search`);
       expect(
         [...turn.children].map(
-          (child) => child.getAttribute("data-role") ?? child.className,
+          (child) =>
+            child.getAttribute("data-role") ??
+            child.querySelector("[data-role]")?.getAttribute("data-role") ??
+            child.className,
         ),
       ).toEqual(["user", "conversation-run", "assistant"]);
       expect(turn.querySelectorAll(".shared-activity-tool")).toHaveLength(1);
@@ -602,6 +630,35 @@ describe("human cloud conversation authority", () => {
         ?.contains(turns[1]!),
     ).toBe(true);
   });
+  it.each([
+    ["runtime", false, false],
+    ["alice", true, false],
+    ["alice", false, true],
+  ])(
+    "only offers side-chat actions for owned canonical sources (subject=%s, readOnly=%s)",
+    async (subject, readOnly, offered) => {
+      const detail = planHistory();
+      detail.tasks[0] = {
+        ...detail.tasks[0]!,
+        subject: String(subject),
+        source_read_only: Boolean(readOnly),
+        thread_id: thread.thread_id,
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => response(detail)),
+      );
+      await render(detail.thread, [node], ["read", "execute", "control"], {
+        owner: "alice",
+        node: node.node.node_id,
+      });
+      expect(
+        [...container.querySelectorAll("button")].some((button) =>
+          button.textContent?.includes("Ask in side chat"),
+        ),
+      ).toBe(offered);
+    },
+  );
   it("resolves a selected agent beyond the loaded fleet page without assuming its grant", async () => {
     const fetch = vi.fn(async (path: string) =>
       response(path.endsWith("/nodes/node-a") ? node : history),

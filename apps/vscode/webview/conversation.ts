@@ -223,6 +223,7 @@ export class Conversation {
   constructor(
     private root: HTMLElement,
     private scroll: HTMLElement,
+    private assistantMarkSrc?: string,
   ) {}
   render(view: WorkView, showTools: boolean, changingSession: boolean) {
     const atBottom =
@@ -255,7 +256,8 @@ export class Conversation {
     for (const message of view.messages) {
       const id = runId(message);
       if (message.role !== "user") addThread(id);
-      const signature = JSON.stringify(message);
+      const run = view.runs.find((run) => run.id === id);
+      const signature = JSON.stringify([message, run?.status]);
       let cached = this.messages.get(message.id);
       if (!cached) {
         const element = node(
@@ -288,6 +290,12 @@ export class Conversation {
               role,
               author: label,
               content: message.text,
+              assistantMarkSrc: this.assistantMarkSrc,
+              usage: message.role === "assistant" ? message.usage : undefined,
+              usageLabel: "Reported run usage",
+              streaming:
+                message.role === "assistant" &&
+                Boolean(run && ["queued", "running"].includes(run.status)),
             }),
           ),
         );

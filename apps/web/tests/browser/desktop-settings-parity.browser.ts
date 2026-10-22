@@ -115,8 +115,9 @@ async function openProjectSettings(page: Page) {
   await openAppSidebar(page);
   await page.getByRole("link", { name: "Chat", exact: true }).click();
   await openConversationList(page);
+  await page.getByRole("button", { name: "Chat options", exact: true }).click();
   await page
-    .getByRole("button", { name: "Project settings", exact: true })
+    .getByRole("menuitem", { name: "Project settings", exact: true })
     .click();
 }
 

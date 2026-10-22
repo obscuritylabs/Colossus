@@ -1,3 +1,4 @@
+import { ThreadBranchDraft, type ForkDraftSource } from "./ThreadBranchDraft";
 import { lazy, useEffect, useRef, useState } from "react";
 import { Button, WorkWelcome } from "@colossus/ui";
 import { WorkSurfaceHeader } from "@colossus/ui/conversation";
@@ -8,6 +9,7 @@ import {
   type FleetNode,
   type Permission,
   type Thread,
+  type Task,
 } from "./api";
 import { useResource, errorMessage } from "./resources";
 import { useNavigation } from "./navigation";
@@ -16,6 +18,7 @@ import { LoadState } from "./Home";
 import { RunComposer, type RunRequest } from "./RunComposer";
 import { ChatConnectionCredential } from "./ChatConnectionCredential";
 import "./chat-workspace.css";
+import "./thread-inspector.css";
 const ThreadDetail = lazy(() =>
   import("./ThreadDetail").then((module) => ({ default: module.ThreadDetail })),
 );
@@ -77,6 +80,9 @@ export function Chat({
   onConnections,
   onProjectSettings,
   onCloseConnections,
+  forkDraft,
+  onCloseFork,
+  onFork,
 }: {
   project: string;
   identity: string;
@@ -88,6 +94,9 @@ export function Chat({
   onConnections?: (() => void) | undefined;
   onProjectSettings?: (() => void) | undefined;
   onCloseConnections?: (() => void) | undefined;
+  forkDraft?: ForkDraftSource | null;
+  onCloseFork?: () => void;
+  onFork?: (thread: Thread, source: Task) => void;
 }) {
   const navigation = useNavigation();
   const path = `${projectPath(project)}/chat`;
@@ -445,102 +454,135 @@ export function Chat({
           className="chat-conversation-workspace"
           hidden={view === "connections"}
         >
-          {selected ? (
-            <ThreadDetail
-              key={selected.thread_id}
-              initial={selected}
+          {forkDraft ? (
+            <ThreadBranchDraft
+              key={forkDraft.key}
+              draft={forkDraft}
+              kind="fork"
               project={project}
               nodes={node ? [node] : []}
-              permissions={personalChatPermissions(
-                permissions,
-                selected.owner_user_id,
-                identity,
-                node?.node.node_id === selected.node_id,
-              )}
-              onBack={() => navigation.go(globalHref("chat", project))}
-              backHref={globalHref("chat", project)}
-              backLabel="All chats"
-              personalChat={
-                node ? { owner: identity, node: node.node.node_id } : undefined
+              disabled={
+                !canExecute ||
+                !node ||
+                node.node.revoked ||
+                node.node.node_id !== forkDraft.parent.node_id
               }
-              onConnections={onConnections}
-              initialComposerRequest={initialRequest}
+              onCancel={() => onCloseFork?.()}
               onChanged={onChanged}
+              onCreated={(child, submitted) => {
+                setInitialRequest(submitted);
+                setCreatedThread(child);
+                onCloseFork?.();
+                navigation.go(chatThreadHref(project, child.thread_id));
+              }}
             />
-          ) : detailLoading ? (
-            <p role="status">Opening your chat…</p>
-          ) : (
-            <div className="chat-new-workspace">
-              <WorkSurfaceHeader
-                title="New chat"
-                statusLabel="New work"
-                actions={
-                  <div className="thread-header-actions">
-                    <span className="chat-private-cue">
-                      <IconLock size={14} aria-hidden="true" /> Personal
-                    </span>
-                    {onConnections ? (
-                      <Button
-                        variant="tertiary"
-                        onClick={onConnections}
-                        aria-label="Manage your connections"
-                      >
-                        <IconPlugConnected size={16} aria-hidden="true" />{" "}
-                        Connections
-                      </Button>
-                    ) : null}
-                  </div>
+          ) : null}
+          <div
+            className="chat-conversation-preserved"
+            hidden={Boolean(forkDraft)}
+          >
+            {selected ? (
+              <ThreadDetail
+                key={selected.thread_id}
+                initial={selected}
+                project={project}
+                nodes={node ? [node] : []}
+                permissions={personalChatPermissions(
+                  permissions,
+                  selected.owner_user_id,
+                  identity,
+                  node?.node.node_id === selected.node_id,
+                )}
+                onBack={() => navigation.go(globalHref("chat", project))}
+                backHref={globalHref("chat", project)}
+                backLabel="All chats"
+                personalChat={
+                  node
+                    ? { owner: identity, node: node.node.node_id }
+                    : undefined
                 }
+                onConnections={onConnections}
+                initialComposerRequest={initialRequest}
+                onFork={onFork}
+                onChanged={onChanged}
               />
-              <div
-                className="chat-welcome"
-                tabIndex={0}
-                aria-label="New conversation"
-              >
-                <WorkWelcome
-                  eyebrow="Your personal conversation"
-                  title="What would you like to work on?"
-                  description="Think, write, research and work with your connected tools."
-                  suggestions={STARTERS}
-                  disabled={busy || !node || !canExecute}
-                  onSuggestion={(text) =>
-                    setDraftSeed({ key: crypto.randomUUID(), text })
+            ) : detailLoading ? (
+              <p role="status">Opening your chat…</p>
+            ) : (
+              <div className="chat-new-workspace">
+                <WorkSurfaceHeader
+                  variant="compact"
+                  title="New chat"
+                  statusLabel="New work"
+                  details={
+                    <span className="chat-private-cue">
+                      <IconLock size={14} aria-hidden="true" /> Personal chat
+                    </span>
+                  }
+                  actions={
+                    <div className="thread-header-actions">
+                      {onConnections ? (
+                        <Button
+                          variant="tertiary"
+                          onClick={onConnections}
+                          aria-label="Manage your connections"
+                        >
+                          <IconPlugConnected size={16} aria-hidden="true" />
+                        </Button>
+                      ) : null}
+                    </div>
                   }
                 />
-              </div>
-              {node ? (
-                <RunComposer
-                  key={node.node.node_id}
-                  nodes={[node]}
-                  nodeId={node.node.node_id}
-                  lockedRuntime
-                  runtimeLabel="Personal chat"
-                  hostedProject={project}
-                  busy={busy}
-                  disabled={!canExecute || node.node.revoked}
-                  label="Message Colossus"
-                  action="Send message"
-                  draftSeed={draftSeed}
-                  onSubmit={create}
-                />
-              ) : enabled ? (
-                <div className="chat-start">
-                  <Button
-                    variant="primary"
-                    disabled={busy || !canExecute}
-                    onClick={() => void connect()}
-                  >
-                    {busy ? "Starting…" : "Start chat"}
-                  </Button>
-                  {!permissions.includes("execute") ? (
-                    <p className="field-help">
-                      Chat requires execution access to this project.
-                    </p>
-                  ) : null}
+                <div
+                  className="chat-welcome"
+                  tabIndex={0}
+                  aria-label="New conversation"
+                >
+                  <WorkWelcome
+                    eyebrow="Your personal conversation"
+                    title="What would you like to work on?"
+                    description="Think, write, research and work with your connected tools."
+                    suggestions={STARTERS}
+                    disabled={busy || !node || !canExecute}
+                    onSuggestion={(text) =>
+                      setDraftSeed({ key: crypto.randomUUID(), text })
+                    }
+                  />
                 </div>
-              ) : null}
-            </div>
-          )}
+                {node ? (
+                  <RunComposer
+                    key={node.node.node_id}
+                    nodes={[node]}
+                    nodeId={node.node.node_id}
+                    lockedRuntime
+                    runtimeLabel="Personal chat"
+                    hostedProject={project}
+                    busy={busy}
+                    disabled={!canExecute || node.node.revoked}
+                    label="Message Colossus"
+                    action="Send message"
+                    draftSeed={draftSeed}
+                    onSubmit={create}
+                  />
+                ) : enabled ? (
+                  <div className="chat-start">
+                    <Button
+                      variant="primary"
+                      disabled={busy || !canExecute}
+                      onClick={() => void connect()}
+                    >
+                      {busy ? "Starting…" : "Start chat"}
+                    </Button>
+                    {!permissions.includes("execute") ? (
+                      <p className="field-help">
+                        Chat requires execution access to this project.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </section>

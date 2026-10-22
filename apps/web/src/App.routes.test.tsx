@@ -208,6 +208,31 @@ async function contains(text: string) {
     { timeout: 2000 },
   );
 }
+async function menuItem(triggerLabel: string, label: string) {
+  const trigger = container.querySelector<HTMLButtonElement>(
+    `button[aria-label="${triggerLabel}"]`,
+  );
+  if (!trigger) throw new Error(`Missing menu trigger: ${triggerLabel}`);
+  if (trigger.getAttribute("aria-expanded") !== "true") {
+    await act(() => {
+      trigger.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+  }
+  const item = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].find((item) => {
+    if (item.getAttribute("aria-label") === label) return true;
+    const copy = item.cloneNode(true) as HTMLElement;
+    copy
+      .querySelectorAll('[aria-hidden="true"]')
+      .forEach((node) => node.remove());
+    return copy.textContent?.trim() === label;
+  });
+  if (!item) throw new Error(`Missing menu action: ${label}`);
+  return item;
+}
 it("reopens an exact saved deep link and uses an authorized parent on direct-link Back", async () => {
   await act(() => root.render(<App />));
   await contains("Exact saved conversation");
@@ -298,12 +323,11 @@ it("defaults to an active project while preserving explicitly selected archived 
     false,
   );
 
-  await act(() => selector().click());
-  const archivedOption = [
-    ...document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
-  ].find((option) => option.textContent?.includes("Archived project"));
-  expect(archivedOption).toBeDefined();
-  await act(() => archivedOption!.click());
+  const archivedOption = await menuItem(
+    "Select project",
+    "Archived project · Archived",
+  );
+  await act(() => archivedOption.click());
   await ready();
   expect(location.search).toBe("?project=archived");
   expect(selector().textContent).toContain("Archived project");
@@ -366,17 +390,20 @@ it("shows a rejected logout and lets the user retry without hiding the signed-in
   });
   await act(() => root.render(<App />));
   await contains("Retained exact-resource reply");
-  const signOut = () =>
-    container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Sign out"]',
-    )!;
-  await act(() => signOut().click());
+  const signOut = await menuItem("Account menu", "Sign out");
+  await act(() => signOut.click());
   await contains("Could not sign out");
   expect(container.querySelector('[role="alert"]')?.textContent).toContain(
     "Reload this page",
   );
   expect(container.textContent).toContain("Retained exact-resource reply");
-  expect(signOut().disabled).toBe(false);
+  const availableSignOut = await menuItem("Account menu", "Sign out");
+  expect(availableSignOut.getAttribute("aria-disabled")).not.toBe("true");
+  await act(() => {
+    availableSignOut.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+  });
 
   fail = false;
   const retry = [...container.querySelectorAll("button")].find(
@@ -385,8 +412,9 @@ it("shows a rejected logout and lets the user retry without hiding the signed-in
   expect(retry).toBeDefined();
   await act(() => retry!.click());
   await ready();
-  expect(signOut().disabled).toBe(true);
-  await act(() => signOut().click());
+  const pendingSignOut = await menuItem("Account menu", "Signing out…");
+  expect(pendingSignOut.getAttribute("aria-disabled")).toBe("true");
+  await act(() => pendingSignOut.click());
   expect(paths.filter((path) => path === "/auth/logout")).toHaveLength(2);
   await act(() => pending.resolve!(new Response(null, { status: 204 })));
   await contains("Sign in to your Control Plane");
@@ -406,11 +434,8 @@ it("shows an unconfirmed logout when a gateway returns a sign-in page", async ()
   );
   await act(() => root.render(<App />));
   await contains("Retained exact-resource reply");
-  await act(() =>
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="Sign out"]')!
-      .click(),
-  );
+  const signOut = await menuItem("Account menu", "Sign out");
+  await act(() => signOut.click());
   await contains("Could not sign out");
   expect(container.textContent).toContain("Reload this page");
   expect(container.textContent).toContain("Retained exact-resource reply");

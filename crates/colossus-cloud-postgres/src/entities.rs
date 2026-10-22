@@ -143,10 +143,10 @@ pub(super) async fn list(
     query: &EntityQuery,
 ) -> CloudResult<Vec<EntityRecord>> {
     let table = table(query.kind);
-    let parent = if query.kind == EntityKind::Task {
-        "thread_id"
-    } else {
-        "parent_id"
+    let parent = match query.kind {
+        EntityKind::Task => "thread_id",
+        EntityKind::Thread => "branch_parent_thread_id",
+        _ => "parent_id",
     };
     let node = match query.kind {
         EntityKind::Node => "id",
@@ -168,6 +168,8 @@ pub(super) async fn list(
         "CASE WHEN cardinality(permissions)>0 THEN 'active' ELSE 'removed' END"
     } else if query.kind == EntityKind::Node {
         "execution_kind"
+    } else if query.kind == EntityKind::Thread {
+        "COALESCE(branch_kind,'')"
     } else if query.kind == EntityKind::Task {
         "status"
     } else if query.kind == EntityKind::Command {
@@ -188,12 +190,16 @@ pub(super) async fn list(
     } else {
         "FALSE"
     };
-    let status_filter = if query.kind == EntityKind::User
-        && query.status.as_deref() == Some("administrator")
+    let status_filter = if query.kind == EntityKind::Thread
+        && query.status.as_deref() == Some("main")
     {
+        "($6::TEXT='main' AND branch_kind IS DISTINCT FROM 'aside')".to_owned()
+    } else if query.kind == EntityKind::User && query.status.as_deref() == Some("administrator") {
         "($6::TEXT='administrator' AND active AND is_admin)".to_owned()
     } else if query.kind == EntityKind::Task && query.status.as_deref() == Some("unfinished") {
         "($6::TEXT='unfinished' AND dispatch_error IS NULL AND (snapshot IS NULL OR snapshot#>'{run,terminal}'='null'::JSONB OR snapshot#>'{run,terminal}' IS NULL OR (NOT output_limited AND last_sequence<snapshot_last_sequence)))".into()
+    } else if query.kind == EntityKind::Task && query.status.as_deref() == Some("bound") {
+        "($6::TEXT='bound' AND run_id IS NOT NULL)".into()
     } else if query.kind == EntityKind::Host && query.status.as_deref() == Some("connected") {
         "($6::TEXT='connected' AND (NOT EXISTS(SELECT 1 FROM runtime_agents n WHERE n.project_id=source.project_id AND n.host_id=source.id AND NOT n.deleted) OR EXISTS(SELECT 1 FROM runtime_agents n WHERE n.project_id=source.project_id AND n.host_id=source.id AND NOT n.deleted AND n.execution_kind='connected')))".into()
     } else if query.kind == EntityKind::Workspace && query.status.as_deref() == Some("connected") {

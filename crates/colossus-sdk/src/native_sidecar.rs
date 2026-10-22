@@ -2724,6 +2724,7 @@ mod tests {
             run_id: "run-approval".into(),
             session_id: "session-approval".into(),
             title: "Approval test".into(),
+            title_revision: 0,
             role: "primary".into(),
             mode: crate::RunMode::Execute,
             status: crate::RunStatus::Waiting,

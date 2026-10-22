@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ConversationUsage } from "@colossus/ui/lib/conversation-usage";
 import {
   CreateRunRequest,
   InteractionStatus,
@@ -53,6 +54,8 @@ export class WorkController {
   private abort: AbortController | undefined;
   private historyAbort: AbortController | undefined;
   private toolHistory = new Map<string, string>();
+  private usageReports = new Map<string, Map<bigint, ConversationUsage>>();
+  private usageTotals = new Map<string, ConversationUsage>();
   private interactions = new Map<string, Interaction>();
   private responding = new Set<string>();
   private uncertain = false;
@@ -122,6 +125,8 @@ export class WorkController {
     this.abort?.abort();
     this.historyAbort?.abort();
     this.toolHistory.clear();
+    this.usageReports.clear();
+    this.usageTotals.clear();
     this.abort = undefined;
     this.client?.close();
     this.client = undefined;
@@ -389,6 +394,8 @@ export class WorkController {
     this.historyAbort?.abort();
     this.toolHistory.clear();
     this.active = undefined;
+    this.usageReports.clear();
+    this.usageTotals.clear();
     this.interactions.clear();
     this.view.sessionId = "";
     this.modelSelections.delete("");
@@ -416,6 +423,8 @@ export class WorkController {
     this.historyAbort?.abort();
     this.toolHistory.clear();
     this.interactions.clear();
+    this.usageReports.clear();
+    this.usageTotals.clear();
     this.view.interactions = [];
     this.view.busy = true;
     this.view.status = "Loading conversation";
@@ -751,6 +760,7 @@ export class WorkController {
         this.publish();
         for await (const item of client.watch(id, abort.signal)) {
           if (epoch !== this.epoch || abort.signal.aborted) return;
+          if (item.value.runId !== id) continue;
           this.applyUpdate(item.value);
           this.publish();
         }
@@ -805,6 +815,9 @@ export class WorkController {
         this.view.tools = toolProgress(this.view.tools, item);
         break;
       }
+      case "usage":
+        this.recordUsage(item, item.runId);
+        break;
       case "interaction":
         this.addInteraction(update.value);
         break;
@@ -843,6 +856,58 @@ export class WorkController {
       default:
         break;
     }
+    const response = this.view.messages.find(
+      (message) => message.id === `assistant:${item.runId}`,
+    );
+    if (response) response.usage = this.runUsage(item.runId) ?? undefined;
+  }
+
+  private recordUsage(item: RunUpdate, runId: string) {
+    if (
+      item.runId !== runId ||
+      item.sequence <= 0n ||
+      item.update?.$case !== "usage"
+    )
+      return;
+    const reports =
+      this.usageReports.get(runId) ?? new Map<bigint, ConversationUsage>();
+    if (reports.has(item.sequence) || reports.size >= 2000) return;
+    const value = item.update.value;
+    reports.set(item.sequence, {
+      inputTokens: value.inputTokens.toString(),
+      outputTokens: value.outputTokens.toString(),
+      totalTokens: value.totalTokens.toString(),
+      cachedInputTokens: value.cachedInputTokens?.toString(),
+      reasoningTokens: value.reasoningTokens?.toString(),
+    });
+    this.usageReports.set(runId, reports);
+    this.usageTotals.delete(runId);
+  }
+
+  private runUsage(runId: string) {
+    const cached = this.usageTotals.get(runId);
+    if (cached) return cached;
+    const reports = [...(this.usageReports.get(runId)?.values() ?? [])];
+    if (!reports.length) return null;
+    const usage: ConversationUsage = {
+      inputTokens: "0",
+      outputTokens: "0",
+      totalTokens: "0",
+    };
+    for (const key of [
+      "inputTokens",
+      "outputTokens",
+      "totalTokens",
+      "cachedInputTokens",
+      "reasoningTokens",
+    ] as const) {
+      if (reports.every((report) => report[key] !== undefined))
+        usage[key] = reports
+          .reduce((total, report) => total + BigInt(report[key]!), 0n)
+          .toString();
+    }
+    this.usageTotals.set(runId, usage);
+    return usage;
   }
 
   private addInteraction(interaction: Interaction) {
@@ -918,6 +983,11 @@ export class WorkController {
     );
     for (const id of this.toolHistory.keys())
       if (!retained.has(id)) this.toolHistory.delete(id);
+    for (const id of this.usageReports.keys())
+      if (!retained.has(id)) {
+        this.usageReports.delete(id);
+        this.usageTotals.delete(id);
+      }
     const terminals = new Map<string, Run["terminal"]>();
     // Restore the most recent progress first within the read budget, then render
     // chronological turns. A slow old feed cannot starve the latest task.
@@ -975,6 +1045,7 @@ export class WorkController {
           runId: summary.runId,
           role: "assistant",
           text: terminal.value.output,
+          usage: this.runUsage(summary.runId) ?? undefined,
         });
       else if (terminal)
         messages.push({
@@ -1014,6 +1085,7 @@ export class WorkController {
       // never creates a run, executes a tool, or responds to an interaction.
       for await (const item of client.watch(id, abort.signal)) {
         if (epoch !== this.epoch || abort.signal.aborted) return;
+        this.recordUsage(item.value, id);
         tools = toolProgress(tools, item.value);
         const kind = item.value.update?.$case;
         if (kind === "result" || kind === "failure" || kind === "cancellation")

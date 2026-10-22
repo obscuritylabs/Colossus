@@ -279,13 +279,6 @@
   top: 10px;
   z-index: 2;
 }
-.work-layout.is-files-expanded {
-  grid-template-columns: minmax(0, 1fr) !important;
-}
-.work-layout.is-files-expanded > .work-thread,
-.work-layout.is-files-expanded > .aside-resize-handle {
-  display: none;
-}
 @media (max-width: 600px) {
   .workspace-files-drawer.enhanced-files {
     grid-template-columns: minmax(0, 1fr);

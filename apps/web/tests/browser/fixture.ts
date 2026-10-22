@@ -1,5 +1,10 @@
 import { expect, type Page } from "@playwright/test";
-import type { FleetNode, Thread, ThreadDetailResponse } from "../../src/api";
+import type {
+  FleetNode,
+  Thread,
+  ThreadDetailResponse,
+  Update,
+} from "../../src/api";
 import type { ChatSettingsSnapshot } from "../../src/chat-settings";
 import type { Me } from "../../src/control-api";
 import type { RunRequest } from "../../src/RunComposer";
@@ -94,6 +99,13 @@ interface Submission {
   expected_revision?: number;
   request: RunRequest;
 }
+interface BranchSubmission {
+  source_task_id: string;
+  kind: "fork" | "aside";
+  expected_revision: number;
+  title: string;
+  request: RunRequest;
+}
 
 /** Run the production App against a closed synthetic API, never a controller. */
 export async function browserFixture(
@@ -106,9 +118,12 @@ export async function browserFixture(
     projectName?: string;
     hostLabel?: string;
     managedChat?: boolean;
+    branches?: boolean;
     permissions?: Me["memberships"][number]["permissions"];
     settingsOverride?: Partial<ChatSettingsSnapshot>;
     providerPresets?: ProviderPreset[];
+    releasedMessages?: ThreadDetailResponse["messages"];
+    releasedUpdates?: Update[];
   } = {},
 ) {
   const identity = {
@@ -151,6 +166,13 @@ export async function browserFixture(
   const submissions: Submission[] = [],
     unexpected: string[] = [],
     errors: string[] = [];
+  const branchSubmissions: BranchSubmission[] = [];
+  const threadMutations: {
+    title?: string;
+    archived?: boolean;
+    revision: number;
+  }[] = [];
+  const branchDetails = new Map<string, ThreadDetailResponse>();
   const thread: Thread = {
     thread_id: "browser-thread",
     project_id: "browser-project",
@@ -176,9 +198,11 @@ export async function browserFixture(
           role: "user",
           text: "Retained personal chat question",
           created_at: timestamp,
+          ...(options.branches ? { task_id: "browser-plan-task" } : {}),
         },
       ]
     : [];
+  messages.push(...(options.releasedMessages ?? []));
   let created = Boolean(options.plan || options.managedChat),
     chatStarted = Boolean(options.plan || options.managedChat),
     personalConnected = false;
@@ -188,6 +212,7 @@ export async function browserFixture(
           task_id: "browser-plan-task",
           project_id: "browser-project",
           node_id: nodeId,
+          thread_id: thread.thread_id,
           subject: me.user.id,
           request: {
             input: [{ text: "Draft a controlled plan" }],
@@ -223,6 +248,15 @@ export async function browserFixture(
         },
       ]
     : [];
+  if (options.branches) {
+    messages.push({
+      message_id: "released-answer",
+      task_id: "browser-plan-task",
+      role: "assistant",
+      text: "Released evidence supports a careful review before proceeding.",
+      created_at: timestamp,
+    });
+  }
   if (options.running) {
     thread.active_task_id = "browser-active-task";
     tasks.push({
@@ -475,6 +509,8 @@ export async function browserFixture(
       if (host && path === `${base}/hosts/browser-host`) return json({ host });
       if (path === `${base}/tasks`)
         return json({ tasks: [], next_cursor: null });
+      if (options.branches && path === `${base}/tasks/browser-plan-task`)
+        return json({ task: tasks[0] });
       if (path === `${base}/chat`)
         return json({ enabled: true, node: chatStarted ? runtimeNode : null });
       if (path === `${base}/chat/providers`)
@@ -549,7 +585,21 @@ export async function browserFixture(
       )
         return json(projectSettings);
       if (path === `${base}/chat/threads`)
-        return json({ threads: created ? [thread] : [], next_cursor: null });
+        return json({
+          threads: created
+            ? [
+                thread,
+                ...[...branchDetails.values()]
+                  .filter((detail) => detail.thread.branch?.kind === "fork")
+                  .map((detail) => detail.thread),
+              ].filter(
+                (row) =>
+                  row.archived ===
+                  (url.searchParams.get("archived") === "true"),
+              )
+            : [],
+          next_cursor: null,
+        });
       if (path === `${base}/chat/connections`)
         return json({
           connections: [
@@ -577,12 +627,84 @@ export async function browserFixture(
         return json({ threads: created ? [thread] : [], next_cursor: null });
       if (path === `${base}/threads/browser-thread`)
         return json({ thread, messages, tasks });
+      if (
+        options.branches &&
+        path === `${base}/threads/browser-thread/branches`
+      )
+        return json({
+          threads: [...branchDetails.values()]
+            .map((detail) => detail.thread)
+            .filter(
+              (row) =>
+                row.branch?.kind === url.searchParams.get("kind") &&
+                row.archived === (url.searchParams.get("archived") === "true"),
+            ),
+          next_cursor: null,
+        });
+      if (options.branches) {
+        const branch = path.slice(`${base}/threads/`.length).split("/")[0]!;
+        const detail = branchDetails.get(branch);
+        if (detail && path === `${base}/threads/${branch}`) return json(detail);
+        if (detail && path === `${base}/threads/${branch}/events`)
+          return route.fulfill({
+            status: 200,
+            contentType: "text/event-stream",
+            body: ": synthetic branch\n\n",
+          });
+      }
       if (path === `${base}/threads/browser-thread/events`)
         return route.fulfill({
           status: 200,
           contentType: "text/event-stream",
-          body: ": synthetic browser fixture\n\n",
+          body:
+            (options.releasedUpdates ?? [])
+              .map(
+                (update) =>
+                  `event: run_update\ndata: ${JSON.stringify(update)}\n\n`,
+              )
+              .join("") +
+            (options.branches
+              ? `event: run_update\ndata: ${JSON.stringify({
+                  run_id: "browser-plan-run",
+                  task_id: "browser-plan-task",
+                  sequence: 1,
+                  created_at: timestamp,
+                  update: {
+                    message: {
+                      content: [
+                        {
+                          artifact: {
+                            artifact_id: "released-report",
+                            file_name: "evidence.json",
+                            media_type: "application/json",
+                            byte_length: 44,
+                            state: "released",
+                          },
+                        },
+                      ],
+                    },
+                  },
+                })}\n\n`
+              : ": synthetic browser fixture\n\n"),
         });
+    }
+    if (
+      options.branches &&
+      request.method() === "PATCH" &&
+      path.startsWith(`${base}/threads/`)
+    ) {
+      const childId = path.slice(`${base}/threads/`.length);
+      const target =
+        childId === thread.thread_id
+          ? thread
+          : branchDetails.get(childId)?.thread;
+      if (!target) throw new Error(`Unknown synthetic thread ${childId}`);
+      expect(request.headers()["x-colossus-csrf"]).toBe("1");
+      const body = request.postDataJSON();
+      expect(body.revision).toBe(target.revision);
+      threadMutations.push(body);
+      Object.assign(target, body, { revision: target.revision + 1 });
+      return json({ thread: target });
     }
     if (
       request.method() === "PUT" &&
@@ -604,6 +726,85 @@ export async function browserFixture(
     if (request.method() === "POST") {
       expect(request.headers()["x-colossus-csrf"]).toBe("1");
       const body = request.postDataJSON();
+      if (
+        options.branches &&
+        path === `${base}/threads/browser-thread/branches`
+      ) {
+        expect(body.source_task_id).toBe("browser-plan-task");
+        expect(body.expected_revision).toBe(thread.revision);
+        branchSubmissions.push(body);
+        const childId = `browser-${body.kind}-${branchSubmissions.length}`;
+        const child: Thread = {
+          ...thread,
+          thread_id: childId,
+          session_id: `${childId}-session`,
+          title: body.title,
+          revision: 1,
+          branch: {
+            kind: body.kind,
+            parent_thread_id: thread.thread_id,
+            source_task_id: "browser-plan-task",
+            source_run_id: "browser-plan-run",
+          },
+        };
+        const childTask: ThreadDetailResponse["tasks"][number] = {
+          ...tasks[0]!,
+          task_id: `${childId}-task`,
+          thread_id: childId,
+          run_id: `${childId}-run`,
+          request: body.request,
+          snapshot: {
+            run: {
+              ...tasks[0]!.snapshot!.run,
+              run_id: `${childId}-run`,
+              session_id: child.session_id!,
+              title: body.request.input.at(-1).text,
+              mode: "execute",
+              terminal: { result: { output: "Independent branch answer" } },
+            },
+            pending_interactions: [],
+          },
+        };
+        branchDetails.set(childId, {
+          thread: child,
+          tasks: [childTask],
+          messages: [
+            {
+              message_id: `${childId}-question`,
+              role: "user",
+              task_id: childTask.task_id,
+              text: body.request.input
+                .map((part: { text?: string }) => part.text ?? "")
+                .join("\n"),
+              created_at: timestamp,
+            },
+            {
+              message_id: `${childId}-answer`,
+              role: "assistant",
+              task_id: childTask.task_id,
+              text: "Independent branch answer",
+              created_at: timestamp,
+            },
+          ],
+        });
+        return json({ thread: child, task: childTask });
+      }
+      if (options.branches && path.endsWith("/messages")) {
+        const child = path.slice(`${base}/threads/`.length).split("/")[0]!;
+        const detail = branchDetails.get(child);
+        if (detail) {
+          expect(body.expected_revision).toBe(detail.thread.revision);
+          detail.thread.revision++;
+          submissions.push({ path, ...body });
+          detail.messages.push({
+            message_id: `${child}-message-${submissions.length}`,
+            role: "user",
+            text: body.request.input[0].text,
+            created_at: timestamp,
+          });
+          return json({ thread: detail.thread });
+        }
+      }
       if (path === "/api/projects" && options.globalAdmin) {
         identity.projects.push({
           ...body,
@@ -756,12 +957,19 @@ export async function browserFixture(
   return {
     nodeId,
     submissions,
+    branchSubmissions,
+    threadMutations,
     connectionActions,
     settingsSubmissions,
     credentialWrites,
     cancellationIds,
     authenticatePersonal: () => {
       personalConnected = true;
+    },
+    replaceReleasedMessage: (messageId: string, text: string) => {
+      const message = messages.find((row) => row.message_id === messageId);
+      if (!message) throw new Error(`Unknown synthetic message ${messageId}`);
+      message.text = text;
     },
     verify: (expectedConsoleErrors: string[] = []) => {
       expect(unexpected).toEqual([]);

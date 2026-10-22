@@ -566,6 +566,7 @@ impl AgentRunClient for CheckedSnapshotClient {
                 run_id: self.run_id.clone(),
                 session_id: "session-1".into(),
                 title: "Checked snapshot".into(),
+                title_revision: 0,
                 role: "primary".into(),
                 mode: RunMode::Execute,
                 status: if self.terminal {
@@ -915,6 +916,7 @@ impl AgentRunClient for TerminalSnapshotWatchClient {
                 run_id: self.run_id.clone(),
                 session_id: "session-1".into(),
                 title: "Terminal snapshot".into(),
+                title_revision: 0,
                 role: "primary".into(),
                 mode: RunMode::Execute,
                 status: RunStatus::Cancelled,

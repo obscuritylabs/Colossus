@@ -1,5 +1,19 @@
+import { useSidebarDropdown } from "@colossus/ui/hooks/useSidebarDropdown";
+import { InspectorLayout } from "@colossus/ui/components/InspectorLayout";
+import {
+  ThreadPlanInspection,
+  ThreadArtifactInspection,
+  type ThreadInspection,
+  inspectionKey,
+} from "./ThreadInspection";
+import { ThreadAsidePanel } from "./ThreadAsidePanel";
+import type { AsideDraftSource } from "./ThreadBranchDraft";
+import { latestChatForkSource } from "./ChatHistorySidebar.actions";
+import "@colossus/ui/styles/inspector.css";
+import "./thread-inspector.css";
 import { ThreadAgentInboxes } from "./ThreadAgentInboxes";
 import { WebLink } from "./WebLink";
+import { releasedRunUsage } from "./message-usage";
 import {
   WorkSurfaceHeader,
   SESSION_WORKSPACE_VIEWS,
@@ -7,6 +21,8 @@ import {
   type SessionWorkspaceView,
   ConversationEntry,
   ConversationTimeline,
+  ConversationSelectionLauncher,
+  boundedConversationQuote,
 } from "@colossus/ui/conversation";
 import {
   DropdownMenu,
@@ -14,10 +30,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@colossus/ui/components/ui/dropdown-menu";
-import { IconDots } from "@tabler/icons-react";
+import { IconDots, IconGitFork, IconMessagePlus } from "@tabler/icons-react";
 import { Badge } from "@colossus/ui/components/ui/badge";
 import { Button as LinkButton } from "@colossus/ui/components/ui/button";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useId,
+} from "react";
 import { Button, TextInput } from "@colossus/ui";
 import {
   IconArchive,
@@ -96,6 +119,8 @@ export function ThreadDetail({
   personalChat,
   onConnections,
   initialComposerRequest,
+  onFork,
+  embedded = false,
 }: {
   initial: Thread;
   project: string;
@@ -109,6 +134,8 @@ export function ThreadDetail({
   personalChat?: { owner: string; node: string } | undefined;
   onConnections?: (() => void) | undefined;
   initialComposerRequest?: RunRequest | undefined;
+  onFork?: ((thread: Thread, source: Task) => void) | undefined;
+  embedded?: boolean;
 }) {
   const [detail, setDetail] = useState<ThreadDetailResponse>({
       thread: initial,
@@ -127,6 +154,48 @@ export function ThreadDetail({
     [below, setBelow] = useState(false),
     [historyBusy, setHistoryBusy] = useState(false),
     [resolvedTarget, setResolvedTarget] = useState<FleetNode | null>(null);
+  const actionsMenu = useSidebarDropdown();
+  const skipActionsFocus = useRef(false);
+  const headingId = useId();
+  const [inspectionState, setInspectionState] = useState<{
+    tabs: ThreadInspection[];
+    active: string | null;
+  }>({ tabs: [], active: null });
+  const inspection =
+    inspectionState.tabs.find(
+      (tab) => inspectionKey(tab) === inspectionState.active,
+    ) ?? null;
+  function setInspection(next: ThreadInspection | null) {
+    setInspectionState((current) => {
+      if (!next) return { ...current, active: null };
+      const key = inspectionKey(next);
+      const exists = current.tabs.some((tab) => inspectionKey(tab) === key);
+      return {
+        tabs: exists
+          ? current.tabs.map((tab) => (inspectionKey(tab) === key ? next : tab))
+          : [...current.tabs, next],
+        active: key,
+      };
+    });
+  }
+  function closeInspection(key: string) {
+    setInspectionState((current) => {
+      const index = current.tabs.findIndex((tab) => inspectionKey(tab) === key);
+      const tabs = current.tabs.filter((tab) => inspectionKey(tab) !== key);
+      return {
+        tabs,
+        active:
+          current.active === key
+            ? (tabs[index - 1] ?? tabs[index])
+              ? inspectionKey((tabs[index - 1] ?? tabs[index])!)
+              : null
+            : current.active,
+      };
+    });
+  }
+  const [asideDraft, setAsideDraft] = useState<AsideDraftSource | null>(null);
+  const [asideChild, setAsideChild] = useState<Thread | null>(null);
+  const [asideActivated, setAsideActivated] = useState(false);
   const [planContinuation, setPlanContinuation] =
     useState<PlanContinuation | null>(null);
   const path = `${projectPath(project)}/threads/${encodeURIComponent(initial.thread_id)}`;
@@ -520,6 +589,151 @@ export function ThreadDetail({
     });
     setView("conversation");
   }
+  const canBranch =
+    !embedded &&
+    permissions.includes("read") &&
+    permissions.includes("execute") &&
+    !thread.archived &&
+    Boolean(
+      personalChat &&
+      thread.owner_user_id === personalChat.owner &&
+      thread.node_id === personalChat.node,
+    ) &&
+    Boolean(target && !target.node.revoked);
+  const forkSource =
+    onFork && personalChat
+      ? latestChatForkSource(thread, detail, personalChat.owner)
+      : null;
+  function inspectPlan(plan: SessionPlanReference) {
+    setInspection({
+      kind: "plan",
+      sourceRunId: plan.sourceRunId,
+      planId: plan.planId,
+      revision: plan.revision,
+    });
+  }
+  function isAsideSource(source: Task | null | undefined): source is Task {
+    return Boolean(
+      canBranch &&
+      source &&
+      !source.source_read_only &&
+      source.run_id &&
+      source.subject === personalChat?.owner &&
+      source.thread_id === thread.thread_id &&
+      source.node_id === thread.node_id &&
+      source.project_id === project &&
+      source.snapshot?.run.session_id === thread.session_id &&
+      source.snapshot?.run.run_id === source.run_id &&
+      !source.snapshot?.run.archived &&
+      taskStatus(source) !== "queued",
+    );
+  }
+  function startAside(source: Task, quote: string, messageId?: string) {
+    if (!isAsideSource(source)) return;
+    const sourceElement = [
+      ...(conversation.current?.querySelectorAll<HTMLElement>(
+        "[data-aside-message-id]",
+      ) ?? []),
+    ].find((element) => element.dataset.asideMessageId === messageId);
+    if (sourceElement && !sourceElement.contains(document.activeElement))
+      sourceElement.focus({ preventScroll: true });
+    setAsideActivated(true);
+    setAsideDraft({
+      parent: thread,
+      source,
+      quote: boundedConversationQuote(quote),
+      key: crypto.randomUUID(),
+      ...(messageId ? { messageId } : {}),
+    });
+    setAsideChild(null);
+    setInspection({ kind: "aside" });
+  }
+  const inspector = (
+    <>
+      {inspectionState.tabs.map((tab) => {
+        const key = inspectionKey(tab);
+        if (tab.kind === "aside") return null;
+        const plan =
+          tab.kind === "plan"
+            ? plans.find(
+                (plan) =>
+                  plan.planId === tab.planId &&
+                  plan.sourceRunId === tab.sourceRunId &&
+                  plan.revision === tab.revision,
+              )
+            : null;
+        return (
+          <div
+            key={key}
+            className="shared-inspector-tool"
+            hidden={inspectionState.active !== key}
+          >
+            {tab.kind === "artifact" ? (
+              <ThreadArtifactInspection artifact={tab.artifact} />
+            ) : plan ? (
+              <ThreadPlanInspection
+                plan={plan}
+                available={
+                  canContinuePlan &&
+                  plan.status === "draft" &&
+                  !plan.continuationPending
+                }
+                goalAvailable={modeCapabilities.goal}
+                busy={busy}
+                onRevise={(plan) => {
+                  setInspection(null);
+                  choosePlan(plan);
+                }}
+                onExecute={(plan, strategy) => {
+                  setInspection(null);
+                  choosePlan(plan, strategy);
+                }}
+              />
+            ) : (
+              <p className="shared-inspector-document" role="status">
+                This plan revision is no longer in the released history. Review
+                the latest plan.
+              </p>
+            )}
+          </div>
+        );
+      })}
+      <div
+        className="shared-inspector-tool"
+        hidden={inspection?.kind !== "aside"}
+      >
+        {asideActivated ? (
+          <ThreadAsidePanel
+            project={project}
+            parent={thread}
+            nodes={composerNodes}
+            draft={asideDraft}
+            selected={asideChild}
+            disabled={!canBranch}
+            onSelect={setAsideChild}
+            onDiscard={() => setAsideDraft(null)}
+            onChanged={() => {
+              void refresh();
+              onChanged();
+            }}
+            renderChild={(child) => (
+              <ThreadDetail
+                embedded
+                initial={child}
+                project={project}
+                nodes={composerNodes}
+                permissions={permissions}
+                onBack={() => setAsideChild(null)}
+                onChanged={onChanged}
+                personalChat={personalChat}
+                backLabel="Side chats"
+              />
+            )}
+          />
+        ) : null}
+      </div>
+    </>
+  );
   const latestTask = running ?? tasks[0];
   const currentStatus = latestTask
     ? WORK_STATUS_PRESENTATIONS[taskStatus(latestTask)]
@@ -536,16 +750,17 @@ export function ThreadDetail({
           minute: "2-digit",
         })
       : null;
-  return (
+  const content = (
     <section
-      className={`detail thread-detail${personalChat ? " personal-chat-detail" : ""}`}
-      aria-labelledby="thread-heading"
+      className={`detail thread-detail${personalChat ? " personal-chat-detail" : ""}${embedded ? " is-aside-detail" : ""}`}
+      aria-labelledby={headingId}
     >
       <WorkSurfaceHeader
+        variant="compact"
         title={
           thread.title || (personalChat ? "Untitled chat" : "Untitled thread")
         }
-        titleId="thread-heading"
+        titleId={headingId}
         titleRef={heading}
         statusLabel={
           thread.archived
@@ -559,6 +774,30 @@ export function ThreadDetail({
             ? statusLabel(latestTask.request.mode) + " mode"
             : undefined
         }
+        details={
+          <>
+            {personalChat ? (
+              <span className="chat-private-cue">
+                <IconLock size={14} aria-hidden="true" /> Personal chat
+              </span>
+            ) : null}
+            <span
+              className={`thread-runtime-detail ${target?.presence?.ready ? "is-online" : ""}`}
+            >
+              <span
+                className={`dot ${target?.presence?.ready ? "live" : ""}`}
+                aria-hidden="true"
+              />
+              {personalChat || target?.node.execution_kind === "hosted"
+                ? target?.presence?.ready
+                  ? "Runtime ready"
+                  : "Runtime unavailable"
+                : target?.presence?.ready
+                  ? "Agent online"
+                  : "Agent offline"}
+            </span>
+          </>
+        }
         editing={
           editing ? (
             <form
@@ -568,7 +807,7 @@ export function ThreadDetail({
                 if (title.trim()) void metadata({ title: title.trim() });
               }}
             >
-              <h2 id="thread-heading" className="sr-only">
+              <h2 id={headingId} className="sr-only">
                 Rename {thread.title}
               </h2>
               <TextInput
@@ -624,68 +863,95 @@ export function ThreadDetail({
                 <span className="sr-only">{backLabel}</span>
               </Button>
             ) : null}
-            {personalChat ? (
-              <span className="chat-private-cue">
-                <IconLock size={14} aria-hidden="true" /> Personal
-              </span>
-            ) : null}
-            <Badge
-              className={`thread-presence ${target?.presence?.ready ? "is-online" : ""}`}
-            >
-              <span
-                className={`dot ${target?.presence?.ready ? "live" : ""}`}
-              />
-              {personalChat || target?.node.execution_kind === "hosted"
-                ? target?.presence?.ready
-                  ? "Ready"
-                  : "Unavailable"
-                : target?.presence?.ready
-                  ? "Agent online"
-                  : "Agent offline"}
-            </Badge>
-            {onConnections ? (
+            {!embedded ? (
               <Button
                 variant="tertiary"
-                onClick={onConnections}
-                aria-label="Manage your connections"
+                aria-label="Open side chats"
+                onClick={() => {
+                  setAsideActivated(true);
+                  setInspection({ kind: "aside" });
+                }}
               >
-                <IconPlugConnected size={16} aria-hidden="true" /> Connections
+                <IconMessagePlus size={16} aria-hidden="true" />
+                <span className="sr-only">Side chats</span>
               </Button>
             ) : null}
-            {permissions.includes("control") ? (
-              <DropdownMenu>
+            {onConnections ||
+            permissions.includes("control") ||
+            (onFork && !embedded && canBranch) ? (
+              <DropdownMenu
+                open={actionsMenu.open}
+                onOpenChange={actionsMenu.onOpenChange}
+                modal={actionsMenu.modal}
+              >
                 <DropdownMenuTrigger asChild>
                   <LinkButton
                     variant="ghost"
                     size="icon"
+                    ref={actionsMenu.triggerRef}
                     aria-label="Conversation actions"
                     disabled={busy}
                   >
                     <IconDots size={18} aria-hidden="true" />
                   </LinkButton>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem
-                    onSelect={() => {
-                      setTitle(thread.title);
-                      setEditing(true);
-                    }}
-                  >
-                    <IconEdit size={16} aria-hidden="true" />
-                    Rename thread
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={() =>
-                      void metadata({ archived: !thread.archived })
+                <DropdownMenuContent
+                  align="end"
+                  ref={actionsMenu.contentRef}
+                  container={actionsMenu.portalContainer}
+                  onCloseAutoFocus={(event) => {
+                    if (skipActionsFocus.current) {
+                      event.preventDefault();
+                      skipActionsFocus.current = false;
                     }
-                  >
-                    {thread.archived ? (
-                      <IconArchiveOff size={16} aria-hidden="true" />
-                    ) : (
-                      <IconArchive size={16} aria-hidden="true" />
-                    )}
-                    {thread.archived ? "Restore" : "Archive"}
-                  </DropdownMenuItem>
+                  }}
+                >
+                  {onConnections ? (
+                    <DropdownMenuItem onSelect={onConnections}>
+                      <IconPlugConnected size={16} aria-hidden="true" />
+                      Manage your connections
+                    </DropdownMenuItem>
+                  ) : null}
+                  {onFork && !embedded ? (
+                    <DropdownMenuItem
+                      disabled={!canBranch || !forkSource}
+                      onSelect={() => {
+                        if (forkSource) {
+                          skipActionsFocus.current = true;
+                          onFork(thread, forkSource);
+                        }
+                      }}
+                    >
+                      <IconGitFork size={16} aria-hidden="true" />
+                      Fork chat
+                    </DropdownMenuItem>
+                  ) : null}
+                  {permissions.includes("control") ? (
+                    <>
+                      <DropdownMenuItem
+                        onSelect={() => {
+                          skipActionsFocus.current = true;
+                          setTitle(thread.title);
+                          setEditing(true);
+                        }}
+                      >
+                        <IconEdit size={16} aria-hidden="true" />
+                        Rename thread
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          void metadata({ archived: !thread.archived })
+                        }
+                      >
+                        {thread.archived ? (
+                          <IconArchiveOff size={16} aria-hidden="true" />
+                        ) : (
+                          <IconArchive size={16} aria-hidden="true" />
+                        )}
+                        {thread.archived ? "Restore" : "Archive"}
+                      </DropdownMenuItem>
+                    </>
+                  ) : null}
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : null}
@@ -694,7 +960,9 @@ export function ThreadDetail({
       />
       <nav className="session-workspace-tabs" aria-label="Session views">
         {SESSION_WORKSPACE_VIEWS.filter(
-          (tab) => tab.id !== "inboxes" || canInspectInboxes,
+          (tab) =>
+            (!embedded || tab.id === "conversation") &&
+            (tab.id !== "inboxes" || canInspectInboxes),
         ).map((tab) => (
           <button
             key={tab.id}
@@ -777,37 +1045,72 @@ export function ThreadDetail({
                   firstResponse < 0 ? turn.messages.length : firstResponse,
                 task = turn.task,
                 status = task ? taskStatus(task) : "";
+              const lastResponse = [...turn.messages]
+                .reverse()
+                .find((message) => message.role === "assistant");
+              const usage = releasedRunUsage(turn.updates);
               const messageEntry = (
                 message: (typeof turn.messages)[number],
               ) => (
-                <ConversationEntry
+                <div
                   key={message.message_id}
-                  role={
-                    message.role === "user"
-                      ? "user"
-                      : message.role === "assistant"
-                        ? "assistant"
-                        : "system"
+                  tabIndex={-1}
+                  data-aside-source-task-id={
+                    isAsideSource(task) &&
+                    ["user", "assistant"].includes(message.role)
+                      ? task.task_id
+                      : undefined
                   }
-                  author={
-                    message.role === "user"
-                      ? detail.message_authors?.[message.message_id]
-                          ?.display_name || "User"
-                      : message.role === "assistant"
-                        ? "Colossus"
-                        : statusLabel(message.role)
-                  }
-                  createdAt={message.created_at}
-                  content={message.text}
-                  linkComponent={WebLink}
-                  status={
-                    message.status ? (
-                      <Badge className={`status status-${message.status}`}>
-                        {statusLabel(message.status)}
-                      </Badge>
-                    ) : null
-                  }
-                />
+                  data-aside-message-id={message.message_id}
+                >
+                  <ConversationEntry
+                    role={
+                      message.role === "user"
+                        ? "user"
+                        : message.role === "assistant"
+                          ? "assistant"
+                          : "system"
+                    }
+                    author={
+                      message.role === "user"
+                        ? detail.message_authors?.[message.message_id]
+                            ?.display_name || "User"
+                        : message.role === "assistant"
+                          ? "Colossus"
+                          : statusLabel(message.role)
+                    }
+                    createdAt={message.created_at}
+                    content={message.text}
+                    streaming={
+                      message === lastResponse &&
+                      Boolean(task && !terminalStatuses.has(taskStatus(task)))
+                    }
+                    usage={message === lastResponse ? usage : undefined}
+                    usageLabel="Reported run usage"
+                    actions={
+                      isAsideSource(task) &&
+                      ["user", "assistant"].includes(message.role) ? (
+                        <Button
+                          variant="tertiary"
+                          onClick={() =>
+                            startAside(task, message.text, message.message_id)
+                          }
+                        >
+                          <IconMessagePlus size={14} aria-hidden="true" /> Ask
+                          in side chat
+                        </Button>
+                      ) : undefined
+                    }
+                    linkComponent={WebLink}
+                    status={
+                      message.status ? (
+                        <Badge className={`status status-${message.status}`}>
+                          {statusLabel(message.status)}
+                        </Badge>
+                      ) : null
+                    }
+                  />
+                </div>
               );
               return (
                 <section
@@ -877,6 +1180,7 @@ export function ThreadDetail({
                           <ThreadPlanDecision
                             key={`${plan.planId}:${plan.revision}`}
                             plan={plan}
+                            onInspect={inspectPlan}
                             available={
                               canContinuePlan &&
                               !task.source_read_only &&
@@ -936,6 +1240,10 @@ export function ThreadDetail({
           tasks={tasks}
           updates={events}
           onChangeView={setView}
+          onInspectPlan={inspectPlan}
+          onInspectArtifact={(artifact) =>
+            setInspection({ kind: "artifact", artifact })
+          }
           canContinuePlan={canContinuePlan}
           onRevisePlan={(plan) => choosePlan(plan)}
           onExecutePlan={(plan, strategy) => choosePlan(plan, strategy)}
@@ -958,12 +1266,37 @@ export function ThreadDetail({
           Jump to latest
         </Button>
       ) : null}
+      {!embedded ? (
+        <ConversationSelectionLauncher
+          containerRef={conversation}
+          scopeKey={`${project}:${thread.thread_id}`}
+          enabled={canBranch && activeView === "conversation"}
+          resolveSource={(element) => {
+            const wrapper = element.closest<HTMLElement>(
+              "[data-aside-source-task-id]",
+            );
+            const task = tasks.find(
+              (item) =>
+                item.task_id === wrapper?.dataset.asideSourceTaskId &&
+                isAsideSource(item),
+            );
+            return task && wrapper?.dataset.asideMessageId
+              ? { task, messageId: wrapper.dataset.asideMessageId }
+              : null;
+          }}
+          onOpen={({ source, quote }) =>
+            startAside(source.task, quote, source.messageId)
+          }
+        />
+      ) : null}
       <RunComposer
         onPolicy={onPolicy}
         nodes={composerNodes}
         nodeId={thread.node_id}
         lockedRuntime
-        runtimeLabel={personalChat ? "Personal chat" : undefined}
+        runtimeLabel={
+          embedded ? "Side chat" : personalChat ? "Personal chat" : undefined
+        }
         hostedProject={personalChat ? project : undefined}
         initialRequest={initialComposerRequest}
         busy={busy}
@@ -980,7 +1313,7 @@ export function ThreadDetail({
         }
         stopDisabled={!target || target.node.revoked}
         disabled={!canWrite || !selectionAvailable}
-        label="Message the agent"
+        label={embedded ? "Message side chat" : "Message the agent"}
         action={
           active.length || thread.active_task_id
             ? "Queue message"
@@ -1016,5 +1349,42 @@ export function ThreadDetail({
         </p>
       ) : null}
     </section>
+  );
+  return embedded ? (
+    content
+  ) : (
+    <InspectorLayout
+      title={
+        inspection?.kind === "plan"
+          ? "Plan"
+          : inspection?.kind === "artifact"
+            ? "Artifact"
+            : "Side chats"
+      }
+      tabs={inspectionState.tabs.map((tab) => ({
+        id: inspectionKey(tab),
+        label:
+          tab.kind === "aside"
+            ? "Side chats"
+            : tab.kind === "artifact"
+              ? tab.artifact.fileName
+              : plans.find(
+                  (plan) =>
+                    plan.planId === tab.planId &&
+                    plan.sourceRunId === tab.sourceRunId &&
+                    plan.revision === tab.revision,
+                )?.sourceRunTitle || `Plan · revision ${tab.revision}`,
+      }))}
+      activeTab={inspectionState.active ?? undefined}
+      onTabChange={(key) =>
+        setInspectionState((current) => ({ ...current, active: key }))
+      }
+      onTabClose={closeInspection}
+      inspector={inspector}
+      open={inspection !== null}
+      onClose={() => setInspection(null)}
+    >
+      {content}
+    </InspectorLayout>
   );
 }

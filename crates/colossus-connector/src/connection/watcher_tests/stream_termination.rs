@@ -38,6 +38,7 @@ impl AgentRunClient for ClosedFeed {
                 run_id: "run".into(),
                 session_id: "session".into(),
                 title: "Test".into(),
+                title_revision: 0,
                 role: "primary".into(),
                 mode: RunMode::Execute,
                 status: if self.terminal {

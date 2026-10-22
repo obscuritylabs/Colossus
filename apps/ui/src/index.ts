@@ -39,6 +39,10 @@ export type {
 
 export { ControlPlaneFrame } from "./components/ControlPlaneFrame.js";
 export {
+  ControlPlaneProjectSwitcher,
+  ControlPlaneAccountMenu,
+} from "./components/ControlPlaneSidebarMenus.js";
+export {
   WorkWelcome,
   DEFAULT_WORK_STARTERS,
 } from "./components/WorkWelcome.js";

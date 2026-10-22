@@ -58,7 +58,10 @@ for (const appearance of appearanceCases) {
     await page.getByRole("link", { name: "Chat", exact: true }).click();
     await openConversationList(page);
     await page
-      .getByRole("button", { name: "Project settings", exact: true })
+      .getByRole("button", { name: "Chat options", exact: true })
+      .click();
+    await page
+      .getByRole("menuitem", { name: "Project settings", exact: true })
       .click();
     const sections = page.getByRole("navigation", {
       name: "Settings sections",

@@ -780,7 +780,7 @@ impl CloudStore for MemoryCloudStore {
                         )
                     })
                     && query.parent_id.as_ref().is_none_or(|p| {
-                        if query.kind == EntityKind::Task {
+                        if matches!(query.kind, EntityKind::Task | EntityKind::Thread) {
                             r.value.thread_id() == Some(p)
                         } else {
                             r.key.parent_id.as_ref() == Some(p)
@@ -808,10 +808,14 @@ impl CloudStore for MemoryCloudStore {
                         _ => false,
                     })
                     && query.status.as_ref().is_none_or(|status| {
-                        if query.kind == EntityKind::User && status == "administrator" {
+                        if query.kind == EntityKind::Thread && status == "main" {
+                            r.value.status() != "aside"
+                        } else if query.kind == EntityKind::User && status == "administrator" {
                             r.value.active_administrator()
                         } else if query.kind == EntityKind::Task && status == "unfinished" {
                             r.value.unfinished()
+                        } else if query.kind == EntityKind::Task && status == "bound" {
+                            matches!(&r.value, EntityValue::Task(task) if task.run_id.is_some())
                         } else if matches!(query.kind, EntityKind::Host | EntityKind::Workspace) && status == "connected" {
                             connected_inventory(&state, r)
                         } else if query.kind == EntityKind::Node && status == "hosted_pending" {

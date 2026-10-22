@@ -15,6 +15,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, convert::Infallible, sync::Arc, time::Duration};
 
+mod branches;
 mod diagnostics;
 mod spa;
 
@@ -32,6 +33,7 @@ pub(crate) fn router(state: Arc<State>) -> Router {
         .route("/api/projects/{project}/threads",get(threads).post(create_thread))
         .route("/api/projects/{project}/threads/{thread}",get(thread_detail).patch(edit_thread))
         .route("/api/projects/{project}/threads/{thread}/messages",post(send_message))
+        .route("/api/projects/{project}/threads/{thread}/branches",get(branches::list).post(branches::create))
         .route("/api/projects/{project}/threads/{thread}/events",get(thread_events))
         .route("/api/projects/{project}/tasks",get(tasks).post(create))
         .route("/api/projects/{project}/tasks/{task}",get(task))

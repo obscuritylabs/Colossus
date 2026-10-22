@@ -1,9 +1,12 @@
+import type { ConversationUsage } from "@colossus/ui/lib/conversation-usage";
+
 export interface MessageView {
   id: string;
   runId?: string;
   role: "user" | "assistant" | "notice";
   text: string;
   summary?: boolean;
+  usage?: ConversationUsage | undefined;
 }
 export interface ToolView {
   id: string;

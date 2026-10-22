@@ -8,8 +8,9 @@ import {
 } from "react";
 import type { ComponentPropsWithoutRef, ComponentType, ReactNode } from "react";
 import rehypeSanitize from "rehype-sanitize";
-import ReactMarkdown from "react-markdown";
-import type { Components, UrlTransform } from "react-markdown";
+import { Streamdown } from "streamdown";
+import { MarkdownCodeBlock } from "./MarkdownCodeBlock.js";
+import type { Components } from "streamdown";
 import remarkGfm from "remark-gfm";
 export type MarkdownLink = ComponentType<{
   href?: string | undefined;
@@ -44,6 +45,7 @@ export interface MarkdownContentProps {
   content: string;
   className?: string;
   linkComponent?: MarkdownLink | undefined;
+  isStreaming?: boolean | undefined;
 }
 
 interface MarkdownAstNode {
@@ -95,7 +97,8 @@ const ALLOWED_ELEMENTS = [
   "thead",
   "tr",
   "ul",
-];
+] as const;
+type MarkdownComponents = Pick<Components, (typeof ALLOWED_ELEMENTS)[number]>;
 const REHYPE_PLUGINS = [rehypeSanitize];
 // Presentation-only ordinals identify multiple scroll regions without speaking
 // framework IDs. Allocated once per mount; no transport/state authority lives here.
@@ -104,7 +107,7 @@ let nextScrollRegion = 1;
 // Remote images remain blocked. Links become explicit native-browser actions
 // only when a browser controller is available; never privileged-view navigation.
 // Preserve the validated spelling for native checks against saved instructions.
-const safeDestination: UrlTransform = (url, key) =>
+const safeDestination = (url: string, key: string) =>
   key === "href" && safeWebLink(url) ? url : null;
 
 function BlockedImage({ alt }: Pick<ComponentPropsWithoutRef<"img">, "alt">) {
@@ -144,21 +147,6 @@ function MarkdownTable({
       </span>
       <table>{children}</table>
     </div>
-  );
-}
-
-function MarkdownPre({
-  children,
-}: Pick<ComponentPropsWithoutRef<"pre">, "children">) {
-  const [ordinal] = useState(() => nextScrollRegion++);
-  return (
-    <pre
-      role="region"
-      aria-label={`Scrollable Markdown code block ${ordinal}`}
-      tabIndex={0}
-    >
-      {children}
-    </pre>
   );
 }
 
@@ -210,6 +198,12 @@ function enforceStructureBudget() {
         shallowestHeading = Math.min(shallowestHeading, current.node.depth);
       }
 
+      // Streamdown turns raw HTML into escaped text when rehype-raw is absent.
+      // Omit it before that conversion, matching the shared renderer contract.
+      if (current.node.children)
+        current.node.children = current.node.children.filter(
+          (child) => child.type !== "html",
+        );
       for (const child of current.node.children ?? []) {
         stack.push({ node: child, depth: current.depth + 1 });
       }
@@ -235,10 +229,43 @@ function enforceStructureBudget() {
 
 const REMARK_PLUGINS = [remarkGfm, enforceStructureBudget];
 
-const MARKDOWN_COMPONENTS: Components = {
+function tableAlignment(value: string | undefined): string | undefined {
+  return value === "left" || value === "center" || value === "right"
+    ? value
+    : undefined;
+}
+
+const MARKDOWN_COMPONENTS: MarkdownComponents = {
   a: InertLink,
   img: BlockedImage,
-  pre: MarkdownPre,
+  pre: MarkdownCodeBlock,
+  code: ({ children, className }) => (
+    <code className={className}>{children}</code>
+  ),
+  p: ({ children }) => <p>{children}</p>,
+  strong: ({ children }) => <strong>{children}</strong>,
+  em: ({ children }) => <em>{children}</em>,
+  del: ({ children }) => <del>{children}</del>,
+  ul: ({ children, className }) => <ul className={className}>{children}</ul>,
+  ol: ({ children, start }) => <ol start={start}>{children}</ol>,
+  li: ({ children, className }) => <li className={className}>{children}</li>,
+  blockquote: ({ children }) => <blockquote>{children}</blockquote>,
+  h1: ({ children }) => <h1>{children}</h1>,
+  h2: ({ children }) => <h2>{children}</h2>,
+  h3: ({ children }) => <h3>{children}</h3>,
+  h4: ({ children }) => <h4>{children}</h4>,
+  h5: ({ children }) => <h5>{children}</h5>,
+  h6: ({ children }) => <h6>{children}</h6>,
+  hr: () => <hr />,
+  thead: ({ children }) => <thead>{children}</thead>,
+  tbody: ({ children }) => <tbody>{children}</tbody>,
+  tr: ({ children }) => <tr>{children}</tr>,
+  th: ({ children, style }) => (
+    <th data-align={tableAlignment(style?.textAlign)}>{children}</th>
+  ),
+  td: ({ children, style }) => (
+    <td data-align={tableAlignment(style?.textAlign)}>{children}</td>
+  ),
   table: MarkdownTable,
   input: ({ checked }) => (
     <input
@@ -251,6 +278,11 @@ const MARKDOWN_COMPONENTS: Components = {
     />
   ),
 };
+
+// A single bounded block preserves the message-wide AST budget and heading levels.
+// Completed messages keep literal Markdown; active messages repair incomplete tokens.
+const wholeMessageBlock = (content: string): string[] => [content];
+const NO_LINK_MODAL = { enabled: false };
 
 function joinClasses(...classes: Array<string | undefined>): string {
   return classes
@@ -266,14 +298,20 @@ function MarkdownContentView({
   content,
   className,
   linkComponent,
+  isStreaming = false,
 }: MarkdownContentProps): ReactNode {
   const classes = joinClasses("shared-markdown", "markdown-content", className);
   const components = useMemo(
-    () =>
-      linkComponent
-        ? { ...MARKDOWN_COMPONENTS, a: linkComponent }
-        : MARKDOWN_COMPONENTS,
-    [linkComponent],
+    () => ({
+      ...MARKDOWN_COMPONENTS,
+      a: linkComponent ?? InertLink,
+      pre: ({ children }: ComponentPropsWithoutRef<"pre">) => (
+        <MarkdownCodeBlock isStreaming={isStreaming}>
+          {children}
+        </MarkdownCodeBlock>
+      ),
+    }),
+    [linkComponent, isStreaming],
   );
 
   if (content.length > MAX_MARKDOWN_CHARACTERS) {
@@ -289,16 +327,25 @@ function MarkdownContentView({
 
   return (
     <div className={classes}>
-      <ReactMarkdown
+      <Streamdown
+        prefix="ui"
+        mode="streaming"
+        parseMarkdownIntoBlocksFn={wholeMessageBlock}
+        parseIncompleteMarkdown={isStreaming}
+        isAnimating={isStreaming}
+        controls={false}
+        linkSafety={NO_LINK_MODAL}
         allowedElements={ALLOWED_ELEMENTS}
-        components={components}
+        // Upstream's arbitrary-tag index signature conflicts with its typed
+        // intrinsic props. This map contains only our allowlisted HTML tags.
+        components={components as unknown as Components}
         rehypePlugins={REHYPE_PLUGINS}
         remarkPlugins={REMARK_PLUGINS}
         skipHtml
         urlTransform={safeDestination}
       >
         {content}
-      </ReactMarkdown>
+      </Streamdown>
     </div>
   );
 }
@@ -310,7 +357,8 @@ export function markdownContentPropsAreEqual(
   return (
     previous.content === next.content &&
     previous.className === next.className &&
-    previous.linkComponent === next.linkComponent
+    previous.linkComponent === next.linkComponent &&
+    previous.isStreaming === next.isStreaming
   );
 }
 
