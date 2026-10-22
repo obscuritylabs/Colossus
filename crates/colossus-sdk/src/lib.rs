@@ -19,6 +19,8 @@ mod embedded;
 #[cfg(feature = "embedded")]
 mod embedded_projection;
 mod error;
+mod model_catalog;
+pub use model_catalog::ConfiguredModelProfile;
 #[cfg(feature = "daemon")]
 mod grpc;
 #[cfg(feature = "keyring")]
@@ -113,8 +115,9 @@ pub use macos_verified_process::{
 };
 #[cfg(feature = "sidecar")]
 pub use native_browser::{
-    NativeBrowserAttachment, NativeBrowserClient, NativeBrowserHandoff, NativeBrowserOpenRequest,
-    NativeBrowserSessionOwner,
+    ClientIdentityChallenge, ClientIdentityPolicy, NativeBrowserAttachment, NativeBrowserClient,
+    NativeBrowserHandoff, NativeBrowserIncarnation, NativeBrowserOpenRequest,
+    NativeBrowserSessionOwner, NativeClientIdentityReview,
 };
 #[cfg(feature = "daemon")]
 pub use native_daemon::NativeDaemonLifecycle;

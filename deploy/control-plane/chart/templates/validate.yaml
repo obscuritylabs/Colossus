@@ -1,6 +1,15 @@
 {{- if eq .Values.browserHost .Values.connectorHost -}}
   {{- fail "browserHost and connectorHost must be different TLS SNI hostnames" -}}
 {{- end -}}
+{{- if and .Values.chat.enabled (not .Values.chat.existingSecret) -}}
+  {{- fail "hosted chat requires chat.existingSecret with independent externally managed keys" -}}
+{{- end -}}
+{{- if and .Values.chat.enabled .Values.postgres.enabled -}}
+  {{- fail "hosted runtime journals require external verified-TLS PostgreSQL; set postgres.enabled=false" -}}
+{{- end -}}
+{{- if and .Values.chat.enabled (not (hasPrefix "https://" .Values.chat.anchor.endpoint)) -}}
+  {{- fail "hosted chat requires an independent HTTPS chat.anchor.endpoint" -}}
+{{- end -}}
 {{- if and (not .Values.auth.local.enabled) (not .Values.auth.oidc.enabled) -}}
   {{- fail "enable local authentication, OIDC, or both" -}}
 {{- end -}}

@@ -10,10 +10,15 @@ export function PopoverContent({
   className,
   align = "start",
   sideOffset = 6,
+  portalContainer,
   ...props
-}: ComponentProps<typeof PopoverPrimitive.Content>) {
+}: ComponentProps<typeof PopoverPrimitive.Content> & {
+  portalContainer?: ComponentProps<typeof PopoverPrimitive.Portal>["container"];
+}) {
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal
+      {...(portalContainer ? { container: portalContainer } : {})}
+    >
       <PopoverPrimitive.Content
         {...props}
         align={align}

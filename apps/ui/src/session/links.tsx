@@ -14,6 +14,17 @@ export function SessionPresentationProvider({
 }) {
   return <Links.Provider value={linkComponent}>{children}</Links.Provider>;
 }
+/** Released source navigation uses the same host authority as Markdown links. */
+export function SessionLink({
+  href,
+  children,
+}: {
+  href: string;
+  children: ReactNode;
+}) {
+  const Link = useContext(Links);
+  return Link ? <Link href={href}>{children}</Link> : <span>{children}</span>;
+}
 export function MarkdownContent({
   content,
   className,

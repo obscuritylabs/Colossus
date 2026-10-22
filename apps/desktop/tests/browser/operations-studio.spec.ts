@@ -587,6 +587,14 @@ test("system theme follows operating-system color changes", async ({
 test("light theme keeps session inspection surfaces readable", async ({
   page,
 }) => {
+  const expectReadable = async (selector: string) => {
+    const results = await new AxeBuilder({ page }).include(selector).analyze();
+    expect(
+      results.violations.filter((violation) =>
+        ["critical", "serious"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
+  };
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Global", exact: true }).click();
@@ -607,7 +615,7 @@ test("light theme keeps session inspection surfaces readable", async ({
   await page.getByRole("button", { name: "Topology", exact: true }).click();
   await expect(page.locator(".session-map-stage")).toHaveCSS(
     "background-color",
-    "rgb(255, 255, 255)",
+    "rgb(240, 244, 248)",
   );
   await expect(page.locator(".session-map-family").first()).toHaveCSS(
     "background-color",
@@ -617,12 +625,14 @@ test("light theme keeps session inspection surfaces readable", async ({
   await page.getByRole("button", { name: "Snapshots", exact: true }).click();
   await expect(
     page.locator(".session-snapshot-list article").first(),
-  ).toHaveCSS("background-color", "rgb(247, 249, 252)");
+  ).toBeVisible();
+  await expectReadable(".session-resource-view");
 
   await page.getByRole("button", { name: "Resources", exact: true }).click();
   await expect(
     page.locator(".session-resource-groups > button").first(),
-  ).toHaveCSS("background-color", "rgb(247, 249, 252)");
+  ).toBeVisible();
+  await expectReadable(".session-resource-view");
 
   const detailsTrigger = page.getByRole("button", {
     name: "Open tools",
@@ -639,14 +649,7 @@ test("light theme keeps session inspection surfaces readable", async ({
     "rgb(247, 249, 252)",
   );
 
-  const results = await new AxeBuilder({ page })
-    .include(".thread-details-panel")
-    .analyze();
-  expect(
-    results.violations.filter((violation) =>
-      ["critical", "serious"].includes(violation.impact ?? ""),
-    ),
-  ).toEqual([]);
+  await expectReadable(".thread-details-panel");
 
   await details.getByRole("button", { name: /All resources/u }).click();
   await expect(details).toHaveCount(0);
@@ -1960,6 +1963,9 @@ test("session snapshots and every durable record family are listable and inspect
     scrollHeight: element.scrollHeight,
   }));
   expect(previewHeight.clientHeight).toBeLessThan(previewHeight.scrollHeight);
+  await page.screenshot({
+    path: "output/playwright/session-snapshots-populated.png",
+  });
   await page.getByRole("button", { name: "View snapshot" }).first().click();
   const details = page.getByLabel("Thread details", { exact: true });
   await expect(
@@ -2004,6 +2010,9 @@ test("session snapshots and every durable record family are listable and inspect
   ]) {
     await expect(resources.getByText(label, { exact: true })).toBeVisible();
   }
+  await page.screenshot({
+    path: "output/playwright/session-resources-populated.png",
+  });
   await resources.getByText("Key decisions", { exact: true }).click();
   await resources
     .getByRole("button", { name: /Keep execution boundary unchanged/u })
@@ -2291,6 +2300,9 @@ test("plan titles open the rendered plan and previews do not leak Markdown synta
     card.getByRole("heading", { name: "Desktop Plan workflow" }),
   ).toBeVisible();
   await expect(card).not.toContainText("## Desktop Plan workflow");
+  await page.screenshot({
+    path: "output/playwright/session-plans-populated.png",
+  });
 
   await card
     .getByRole("button", { name: "Plan the Desktop release workflow" })
@@ -2376,6 +2388,38 @@ test("Session Map keeps its root visible without horizontal overflow at compact 
   const stage = page.locator(".session-map-stage");
   const primary = page.locator(".session-map-primary");
   await expect(primary).toBeVisible();
+  const layers = page.getByRole("button", { name: "Layers", exact: true });
+  await layers.focus();
+  await layers.press("Enter");
+  const layerOptions = page.getByRole("dialog", {
+    name: "Session map layers",
+    exact: true,
+  });
+  await expect(layerOptions).toBeVisible();
+  for (const name of ["Agents", "Work", "Context", "Research", "Outputs"]) {
+    await expect(
+      layerOptions.getByRole("switch", { name, exact: true }),
+    ).toBeChecked();
+  }
+  await page.screenshot({
+    path: "output/playwright/session-map-layers-compact.png",
+  });
+  const outputs = layerOptions.getByRole("switch", {
+    name: "Outputs",
+    exact: true,
+  });
+  await outputs.focus();
+  await outputs.press("Space");
+  await expect(stage.getByRole("button", { name: /^Artifacts /u })).toHaveCount(
+    0,
+  );
+  await outputs.press("Space");
+  await expect(stage.getByRole("button", { name: /^Artifacts /u })).toHaveCount(
+    1,
+  );
+  await page.keyboard.press("Escape");
+  await expect(layerOptions).toBeHidden();
+  await expect(layers).toBeFocused();
   await expect
     .poll(() =>
       stage.evaluate((element) => element.scrollWidth - element.clientWidth),

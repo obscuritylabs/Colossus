@@ -91,6 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             statement_timeout_ms: 15000,
         },
         local_development: true,
+        chat: None,
         auth_key_variable: Some("COLOSSUS_CLOUD_AUTH_KEY".into()),
         maintenance: Default::default(),
     };

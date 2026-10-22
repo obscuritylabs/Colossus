@@ -2,6 +2,42 @@ use super::*;
 use colossus_cloud_protocol::{ResourceOperation, ResourceReply};
 
 #[tokio::test]
+async fn model_catalog_rechecks_execute_permission_before_releasing_a_reply() {
+    let (repo, executor, node) = fixture().await;
+    let store = repo.storage();
+    let lease = store
+        .claim_lease(&node.project_id, &node.node_id, "replica", 100, 30)
+        .await
+        .unwrap();
+    store.resource_connect(&lease, true).await.unwrap();
+    let id = store
+        .resource_submit(&executor, &lease, ResourceOperation::ModelCatalog {}, 101)
+        .await
+        .unwrap();
+    assert_eq!(store.resource_take(&lease, 102).await.unwrap().len(), 1);
+    store
+        .resource_complete(
+            &lease,
+            &id,
+            ResourceReply::Result {
+                value: serde_json::json!({"model_profiles":[{"profile":"configured"}]}),
+            },
+            103,
+        )
+        .await
+        .unwrap();
+    let viewer = caller("project-a", &[CloudPermission::Read]);
+    assert!(matches!(
+        store.resource_read(&viewer, &id).await,
+        Err(CloudError::PermissionDenied)
+    ));
+    assert!(matches!(
+        store.resource_read(&executor, &id).await.unwrap(),
+        Some(ResourceReply::Result { .. })
+    ));
+}
+
+#[tokio::test]
 async fn resources_are_user_project_and_generation_bound_without_replay() {
     let (repo, caller, node) = fixture().await;
     let store = repo.storage();
@@ -103,6 +139,12 @@ async fn resources_enforce_separate_permissions_budgets_and_revocation() {
         .unwrap();
     store.resource_connect(&lease, true).await.unwrap();
     let viewer = caller("project-a", &[CloudPermission::Read]);
+    assert_eq!(
+        store
+            .resource_submit(&viewer, &lease, ResourceOperation::ModelCatalog {}, 101)
+            .await,
+        Err(CloudError::PermissionDenied)
+    );
     let write = ResourceOperation::SetScheduleEnabled {
         request: colossus_sdk::SetWorkflowScheduleEnabledRequest {
             schedule_id: "schedule".into(),

@@ -80,6 +80,7 @@ async fn message_authors_resolve_recorded_accounts_across_independent_history_pa
 
     let mut query = storage::EntityQuery::new(storage::EntityKind::Task, "project-a".into());
     query.parent_id = Some(thread.thread_id.clone());
+    query.visible_to = Some(alice.subject().into());
     query.order = storage::EntityOrder::CreatedDesc;
     let records = repo.storage().list(&query).await.unwrap();
     // Move the task cursor past both turns while keeping the message cursor at its head.

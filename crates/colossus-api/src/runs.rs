@@ -31,6 +31,7 @@ pub fn validate_public_command_context(
     Ok(())
 }
 const MAX_RUN_TITLE_CHARACTERS: usize = 80;
+const MAX_RUN_TITLE_BYTES: usize = 256;
 const UNTITLED_RUN: &str = "Untitled work";
 
 /// Authenticated server capability for exact-revision Plan continuation.
@@ -695,6 +696,9 @@ pub struct Run {
     pub session_id: String,
     /// Display title from the canonical session when set, otherwise the opening request.
     pub title: String,
+    /// Session-title index revision; zero denotes the unversioned opening title.
+    #[serde(default, skip_serializing_if = "zero_title_revision")]
+    pub title_revision: u64,
     /// Current lifecycle state.
     pub status: RunStatus,
     /// Requested execution mode.
@@ -890,6 +894,10 @@ fn zero_goal_iterations(value: &u32) -> bool {
     *value == 0
 }
 
+fn zero_title_revision(value: &u64) -> bool {
+    *value == 0
+}
+
 /// Encrypted durable coordinator input captured when a run is accepted.
 ///
 /// This record is trusted runtime input, not part of the public [`Run`] projection.
@@ -963,7 +971,10 @@ impl CreateRunRequest {
                     continue;
                 }
                 let additional_characters = usize::from(needs_space) + 1;
-                if title_characters + additional_characters > MAX_RUN_TITLE_CHARACTERS {
+                if title_characters + additional_characters > MAX_RUN_TITLE_CHARACTERS
+                    || title.len() + usize::from(needs_space) + character.len_utf8()
+                        > MAX_RUN_TITLE_BYTES
+                {
                     truncated = true;
                     break 'parts;
                 }
@@ -977,6 +988,11 @@ impl CreateRunRequest {
         }
 
         if truncated && title_characters == MAX_RUN_TITLE_CHARACTERS {
+            title.pop();
+        }
+        // SDK and cloud labels have a byte budget, independent of the visible
+        // character limit. Reserve the UTF-8 ellipsis without splitting a scalar.
+        while truncated && title.len() + '…'.len_utf8() > MAX_RUN_TITLE_BYTES {
             title.pop();
         }
         let title = title.trim();

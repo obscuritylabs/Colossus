@@ -3,8 +3,6 @@ import { type AgentInboxProps } from "@colossus/ui/agent-inbox";
 import {
   IconArrowDown,
   IconFiles,
-  IconArrowsMaximize,
-  IconArrowsMinimize,
   IconBrowser,
   IconFolderOpen,
   IconTerminal2,
@@ -16,7 +14,6 @@ import {
   IconPlugConnected,
   IconRefresh,
   IconShieldLock,
-  IconX,
 } from "@tabler/icons-react";
 import {
   lazy,
@@ -34,6 +31,9 @@ import { useShellSessions, shellIsActive } from "../shellSessions";
 
 import { WorkWelcome } from "@colossus/ui";
 import { WorkSurfaceHeader } from "@colossus/ui/conversation";
+import { WorkspacePaneHeader } from "@colossus/ui/components/WorkspacePaneHeader";
+import { useWorkspaceComposerAlignment } from "@colossus/ui/hooks/useWorkspaceComposerAlignment";
+import "@colossus/ui/styles/workspace-pane.css";
 import {
   MIN_ASIDE_PANE_WIDTH,
   clampAsidePaneWidth,
@@ -218,8 +218,8 @@ export function WorkSurface({
   runLoadError,
   actionError,
   participants,
-  sessionMap,
-  sessionMapLoading,
+  sessionMap: releasedSessionMap,
+  sessionMapLoading: loadingSessionMap,
   sessionMapError,
   selectedParticipantId,
   delegateView,
@@ -287,6 +287,13 @@ export function WorkSurface({
   onRespondAside,
   onCloseAside,
 }: WorkSurfaceProps) {
+  // A previous session's map can be retained while the host loads a new selection.
+  // Keep every session view and its counts bound to the currently selected session.
+  const mapFromAnotherSession =
+    releasedSessionMap !== null &&
+    releasedSessionMap.sessionId !== view?.run.sessionId;
+  const sessionMap = mapFromAnotherSession ? null : releasedSessionMap;
+  const sessionMapLoading = loadingSessionMap || mapFromAnotherSession;
   const [sessionWorkspaceView, setSessionWorkspaceView] =
     useState<SessionWorkspaceView>(initialSessionWorkspaceView);
   const changeSessionWorkspaceView = useCallback(
@@ -308,12 +315,20 @@ export function WorkSurface({
   const [activeDrawer, setActiveDrawer] = useState<WorkTool | null>(() =>
     window.matchMedia("(min-width: 1200px)").matches ? "details" : null,
   );
+  const [openedTools, setOpenedTools] = useState<readonly WorkTool[]>([]);
+  useEffect(() => {
+    if (activeDrawer !== null) {
+      setOpenedTools((current) =>
+        current.includes(activeDrawer) ? current : [...current, activeDrawer],
+      );
+    }
+  }, [activeDrawer]);
   const toolsTriggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (terminalRequest) setActiveDrawer("terminal");
   }, [terminalRequest]);
   const [asideDraft, setAsideDraft] = useState<AsideDraft | null>(null);
-  const [browserExpanded, setBrowserExpanded] = useState(false);
+  const [paneExpanded, setPaneExpanded] = useState(false);
   const browser = useBrowser(
     browserScope,
     activeDrawer === "browser",
@@ -359,7 +374,6 @@ export function WorkSurface({
   const [asidePaneMaximum, setAsidePaneMaximum] =
     useState(MIN_ASIDE_PANE_WIDTH);
   const [filesPaneWidth, setFilesPaneWidth] = useState<number | null>(null);
-  const [filesExpanded, setFilesExpanded] = useState(false);
   const [gitPaneWidth, setGitPaneWidth] = useState<number | null>(null);
   const asidePaneWidth =
     activeDrawer === "terminal"
@@ -382,6 +396,10 @@ export function WorkSurface({
             ? setBrowserPaneWidth
             : setSavedAsideWidth;
   const workLayoutRef = useRef<HTMLDivElement>(null);
+  useWorkspaceComposerAlignment(
+    workLayoutRef,
+    activeDrawer === "aside" && !compactLayout && !paneExpanded,
+  );
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const stableFeedPositionRef = useRef({ top: 0, left: 0 });
   const stableFeedPositionTimerRef = useRef<number | null>(null);
@@ -800,11 +818,6 @@ export function WorkSurface({
 
   function closeDrawer() {
     const trigger = lastDrawerTriggerRef.current;
-    if (activeDrawer === "details") {
-      setSelectedPlanId(null);
-      setSelectedSessionResource(null);
-      onBackToThreadDetails();
-    }
     setActiveDrawer(null);
     requestAnimationFrame(() => trigger?.focus());
   }
@@ -828,11 +841,6 @@ export function WorkSurface({
       }
       closeDrawer();
       return;
-    }
-    if (activeDrawer === "details") {
-      setSelectedPlanId(null);
-      setSelectedSessionResource(null);
-      onBackToThreadDetails();
     }
     onCloseWorkNavigation();
     if (drawer === "files") {
@@ -861,7 +869,7 @@ export function WorkSurface({
     lastDrawerTriggerRef.current = filesTriggerRef.current;
     setFilesDrawerMounted(true);
     setActiveDrawer("files");
-    if (diff) setFilesExpanded(true);
+    if (diff) setPaneExpanded(true);
     onOpenWorkspaceFile(path, diff);
   }
 
@@ -1103,137 +1111,47 @@ export function WorkSurface({
         ]
       : []),
   ];
-  const expandableTool =
-    activeDrawer === "browser" ||
-    activeDrawer === "terminal" ||
-    activeDrawer === "files";
-  const toolExpanded =
-    activeDrawer === "files" ? filesExpanded : browserExpanded;
+  const openedTabs = [
+    ...openedTools,
+    ...(activeDrawer === null ? [] : [activeDrawer]),
+  ]
+    .filter((tool, index, tools) => tools.indexOf(tool) === index)
+    .flatMap((tool) => {
+      const option = toolOptions.find((candidate) => candidate.id === tool);
+      return option === undefined || option.disabled
+        ? []
+        : [
+            {
+              id: tool,
+              label:
+                tool === "details" && selectedPlan !== null
+                  ? "Plan"
+                  : option.label,
+            },
+          ];
+    });
+
+  function closeToolTab(tool: string) {
+    const remaining = openedTabs.filter((tab) => tab.id !== tool);
+    setOpenedTools(remaining.map((tab) => tab.id));
+    if (activeDrawer === tool) {
+      if (tool === "details") {
+        setSelectedPlanId(null);
+        setSelectedSessionResource(null);
+        onBackToThreadDetails();
+      }
+      setActiveDrawer(remaining.at(-1)?.id ?? null);
+      if (remaining.length === 0) {
+        requestAnimationFrame(() => toolsTriggerRef.current?.focus());
+      }
+    }
+  }
   const content = (
     <main
       className={`work-surface${view === undefined ? " is-new-work" : ""}`}
       id="primary-workspace"
       tabIndex={-1}
     >
-      <WorkSurfaceHeader
-        title={title}
-        statusLabel={forkDraft ? "Fork draft" : (status?.label ?? "New work")}
-        status={status ?? undefined}
-        startedLabel={startedLabel}
-        modeLabel={run ? `${runModeLabel(run.mode)} mode` : undefined}
-        breadcrumbTrailing={!composerVisible ? gitControl : null}
-        actions={
-          <>
-            <button
-              ref={workNavigationTriggerRef}
-              className="button secondary compact work-navigation-button"
-              type="button"
-              aria-label="Open work navigation"
-              aria-controls="work-navigation"
-              aria-expanded={workNavigationOpen}
-              onClick={onOpenWorkNavigation}
-            >
-              <IconMenu2 size={16} stroke={1.8} aria-hidden="true" />
-              <span className="compact-action-copy">Work</span>
-            </button>
-            <span
-              className={`connection-badge connection-${connection.state}`}
-              title={connection.message}
-            >
-              <IconPlugConnected size={15} stroke={1.8} aria-hidden="true" />
-              {connection.state === "connected"
-                ? "Agent online"
-                : "Disconnected"}
-            </span>
-            <div className="work-tool-shortcuts" aria-label="Quick tools">
-              {filesAvailable ? (
-                <button
-                  ref={filesTriggerRef}
-                  type="button"
-                  className="icon-button"
-                  title="Files"
-                  aria-label={
-                    activeDrawer === "files"
-                      ? "Close files panel"
-                      : "Open files panel"
-                  }
-                  aria-controls="work-side-drawer"
-                  aria-expanded={activeDrawer === "files"}
-                  onClick={() => toggleDrawer("files")}
-                >
-                  <IconFiles size={18} aria-hidden="true" />
-                </button>
-              ) : null}
-              {browser.snapshot.available ? (
-                <button
-                  ref={browserTriggerRef}
-                  type="button"
-                  className="icon-button"
-                  title="Browser"
-                  aria-label="Open browser"
-                  aria-controls="work-side-drawer"
-                  aria-expanded={activeDrawer === "browser"}
-                  onClick={() => toggleDrawer("browser")}
-                >
-                  <IconBrowser size={18} aria-hidden="true" />
-                </button>
-              ) : null}
-              {browserScope &&
-              !shells.error &&
-              !shells.loading &&
-              shells.sessions.some((session) =>
-                shellIsActive(session.status),
-              ) ? (
-                <button
-                  type="button"
-                  className="icon-button"
-                  title="Active shells"
-                  aria-label={`Open active shells (${shells.sessions.filter((session) => shellIsActive(session.status)).length})`}
-                  aria-expanded={activeDrawer === "shells"}
-                  aria-controls="work-side-drawer"
-                  onClick={() => toggleDrawer("shells")}
-                >
-                  <IconTerminal2 size={16} aria-hidden="true" />
-                  <span className="tool-count">
-                    {
-                      shells.sessions.filter((session) =>
-                        shellIsActive(session.status),
-                      ).length
-                    }
-                  </span>
-                </button>
-              ) : null}
-              {terminalSupported ? (
-                <button
-                  type="button"
-                  className="icon-button"
-                  title="Terminal"
-                  aria-label="Open terminal"
-                  aria-controls="work-side-drawer"
-                  aria-expanded={activeDrawer === "terminal"}
-                  onClick={() => toggleDrawer("terminal")}
-                >
-                  <IconTerminal2 size={18} aria-hidden="true" />
-                </button>
-              ) : null}
-              <ToolSwitcher
-                options={toolOptions}
-                active={activeDrawer}
-                onSelect={(tool) => toggleDrawer(tool, true)}
-                triggerRef={toolsTriggerRef}
-              />
-            </div>
-          </>
-        }
-      />
-
-      {view === undefined ? null : (
-        <SessionWorkspaceTabs
-          active={sessionWorkspaceView}
-          onChange={changeSessionWorkspaceView}
-        />
-      )}
-
       {selectionLauncher !== null ? (
         <button
           className="aside-selection-launcher"
@@ -1258,7 +1176,7 @@ export function WorkSurface({
 
       <div
         ref={workLayoutRef}
-        className={`work-layout${activeDrawer === "files" && filesExpanded ? " is-files-expanded" : ""}${activeDrawer !== null ? " is-work-drawer-open" : ""}${resizableDrawer ? " is-aside-open" : ""}${activeDrawer === "browser" ? " is-browser-open" : ""}${(activeDrawer === "browser" || activeDrawer === "terminal") && browserExpanded ? " is-browser-expanded" : ""}`}
+        className={`work-layout${activeDrawer !== null ? " is-work-drawer-open" : ""}${resizableDrawer ? " is-aside-open" : ""}${activeDrawer === "browser" ? " is-browser-open" : ""}${activeDrawer !== null && paneExpanded && !compactLayout ? " is-tool-expanded" : ""}`}
         style={
           asidePaneWidth === null
             ? undefined
@@ -1271,6 +1189,130 @@ export function WorkSurface({
           className={`work-thread${sessionWorkspaceView === "topology" ? " is-topology-view" : ""}${sessionWorkspaceView === "activity" ? " is-activity-view" : ""}${sessionWorkspaceView === "inboxes" ? " is-inboxes-view" : ""}`}
           aria-label="Work conversation"
         >
+          <WorkSurfaceHeader
+            variant="compact"
+            title={title}
+            statusLabel={
+              forkDraft ? "Fork draft" : (status?.label ?? "New work")
+            }
+            status={status ?? undefined}
+            startedLabel={startedLabel}
+            modeLabel={run ? `${runModeLabel(run.mode)} mode` : undefined}
+            details={
+              <span
+                className={`connection-badge connection-${connection.state}`}
+                title={connection.message}
+              >
+                <IconPlugConnected size={15} stroke={1.8} aria-hidden="true" />
+                {connection.state === "connected"
+                  ? "Agent online"
+                  : "Disconnected"}
+              </span>
+            }
+            actions={
+              <>
+                {!composerVisible ? gitControl : null}
+                <button
+                  ref={workNavigationTriggerRef}
+                  className="button secondary compact work-navigation-button"
+                  type="button"
+                  aria-label="Open work navigation"
+                  aria-controls="work-navigation"
+                  aria-expanded={workNavigationOpen}
+                  onClick={onOpenWorkNavigation}
+                >
+                  <IconMenu2 size={16} stroke={1.8} aria-hidden="true" />
+                  <span className="compact-action-copy">Work</span>
+                </button>
+                <div className="work-tool-shortcuts" aria-label="Quick tools">
+                  {filesAvailable ? (
+                    <button
+                      ref={filesTriggerRef}
+                      type="button"
+                      className="icon-button"
+                      title="Files"
+                      aria-label={
+                        activeDrawer === "files"
+                          ? "Close files panel"
+                          : "Open files panel"
+                      }
+                      aria-controls="work-side-drawer"
+                      aria-expanded={activeDrawer === "files"}
+                      onClick={() => toggleDrawer("files")}
+                    >
+                      <IconFiles size={18} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                  {browser.snapshot.available ? (
+                    <button
+                      ref={browserTriggerRef}
+                      type="button"
+                      className="icon-button"
+                      title="Browser"
+                      aria-label="Open browser"
+                      aria-controls="work-side-drawer"
+                      aria-expanded={activeDrawer === "browser"}
+                      onClick={() => toggleDrawer("browser")}
+                    >
+                      <IconBrowser size={18} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                  {browserScope &&
+                  !shells.error &&
+                  !shells.loading &&
+                  shells.sessions.some((session) =>
+                    shellIsActive(session.status),
+                  ) ? (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title="Active shells"
+                      aria-label={`Open active shells (${shells.sessions.filter((session) => shellIsActive(session.status)).length})`}
+                      aria-expanded={activeDrawer === "shells"}
+                      aria-controls="work-side-drawer"
+                      onClick={() => toggleDrawer("shells")}
+                    >
+                      <IconTerminal2 size={16} aria-hidden="true" />
+                      <span className="tool-count">
+                        {
+                          shells.sessions.filter((session) =>
+                            shellIsActive(session.status),
+                          ).length
+                        }
+                      </span>
+                    </button>
+                  ) : null}
+                  {terminalSupported ? (
+                    <button
+                      type="button"
+                      className="icon-button"
+                      title="Terminal"
+                      aria-label="Open terminal"
+                      aria-controls="work-side-drawer"
+                      aria-expanded={activeDrawer === "terminal"}
+                      onClick={() => toggleDrawer("terminal")}
+                    >
+                      <IconTerminal2 size={18} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                  <ToolSwitcher
+                    options={toolOptions}
+                    active={activeDrawer}
+                    onSelect={(tool) => toggleDrawer(tool, true)}
+                    triggerRef={toolsTriggerRef}
+                  />
+                </div>
+              </>
+            }
+          />
+
+          {view === undefined ? null : (
+            <SessionWorkspaceTabs
+              active={sessionWorkspaceView}
+              onChange={changeSessionWorkspaceView}
+            />
+          )}
+
           <div className="work-feed-frame">
             <div
               ref={feedScrollRef}
@@ -1486,7 +1528,9 @@ export function WorkSurface({
                   ))}
                 </div>
               ) : null}
-              {composer(gitControl)}
+              <div className="work-composer-input" data-workspace-composer-dock>
+                {composer(gitControl)}
+              </div>
             </div>
           )}
         </section>
@@ -1649,45 +1693,32 @@ export function WorkSurface({
             }
           >
             {activeDrawer !== null ? (
-              <header className="work-tools-header">
-                <ToolSwitcher
-                  pane
-                  options={toolOptions}
-                  active={activeDrawer}
-                  onSelect={(tool) => toggleDrawer(tool, true)}
-                />
-                <div className="work-tools-actions">
-                  {expandableTool && !compactLayout ? (
-                    <button
-                      type="button"
-                      className="icon-button"
-                      aria-label={
-                        toolExpanded ? "Restore tool pane" : "Expand tool pane"
-                      }
-                      onClick={() =>
-                        activeDrawer === "files"
-                          ? setFilesExpanded((value) => !value)
-                          : setBrowserExpanded((value) => !value)
-                      }
-                    >
-                      {toolExpanded ? (
-                        <IconArrowsMinimize size={16} />
-                      ) : (
-                        <IconArrowsMaximize size={16} />
-                      )}
-                    </button>
-                  ) : null}
-                  <button
-                    ref={drawerCloseRef}
-                    type="button"
-                    className="icon-button"
-                    aria-label="Close tool pane"
-                    onClick={closeDrawer}
-                  >
-                    <IconX size={17} />
-                  </button>
-                </div>
-              </header>
+              <WorkspacePaneHeader
+                tabs={openedTabs}
+                activeTab={activeDrawer}
+                onTabChange={(tool) => toggleDrawer(tool as WorkTool, true)}
+                onTabClose={closeToolTab}
+                title="Workspace tools"
+                expandLabel="Expand tool pane"
+                restoreLabel="Restore tool pane"
+                closeLabel="Close tool pane"
+                actions={
+                  <ToolSwitcher
+                    pane
+                    options={toolOptions}
+                    active={activeDrawer}
+                    onSelect={(tool) => toggleDrawer(tool, true)}
+                  />
+                }
+                expanded={paneExpanded}
+                onToggleExpanded={
+                  compactLayout
+                    ? undefined
+                    : () => setPaneExpanded((value) => !value)
+                }
+                closeRef={drawerCloseRef}
+                onClose={closeDrawer}
+              />
             ) : null}
             {activeDrawer === "shells" && shellScope ? (
               <ActiveShells
@@ -1736,8 +1767,8 @@ export function WorkSurface({
                   }
                   onUseConversation={onUseBrowserConversation}
                   docked
-                  expanded={browserExpanded}
-                  onExpand={() => setBrowserExpanded((expanded) => !expanded)}
+                  expanded={paneExpanded}
+                  onExpand={() => setPaneExpanded((expanded) => !expanded)}
                   onClose={closeDrawer}
                 />
               </Suspense>

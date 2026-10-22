@@ -63,6 +63,7 @@ The following identities must all be the same stable `X.Y.Z` value:
 - the npm package and lockfile;
 - the Python distribution;
 - TypeScript, Python, and Go SDK user-agent versions;
+- the Control Plane Helm chart's `version` and `appVersion`;
 - the generated `CHANGELOG.md` release section; and
 - the requested `vX.Y.Z` tag.
 
@@ -340,6 +341,10 @@ The native Linux release jobs build the pinned `deploy/control-plane/Dockerfile`
 smoke its actual non-root image with a read-only filesystem and no network, and package
 matching server/web bytes plus an offline `docker load` archive. Both architectures
 are retained in the successful tag run's Actions artifacts and attached to the release.
+The server image and native bundle include both `colossus-control-plane` and
+`colossus-chat-anchor`; release smoke checks execute each binary's help and version.
+An independent Hosted anchor deployment reuses the Control Plane image with its
+entrypoint overridden, separate credentials, and its own configuration.
 
 Publishing the reviewed release starts `Publish Control Plane image`. It uses the
 protected-main publisher, verifies the annotated tag's ancestry and successful tag
@@ -421,7 +426,7 @@ docker --config "$documentation_auth" pull \
 rm -r "$documentation_auth"
 ```
 
-See [documentation hosting](../admin/documentation-hosting.md) for the portable `/docs/`
+See [documentation hosting](../cloud/deployment/documentation.md) for the portable `/docs/`
 mount, Kubernetes deployment, and browser/agent search. The canonical GitHub Pages
 publication continues independently.
 

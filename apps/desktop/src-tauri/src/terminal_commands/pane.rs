@@ -226,6 +226,7 @@ pub(crate) async fn terminal_pane_viewport(
         return Err(unavailable());
     }
     let visible = visible_window
+        && !crate::client_identity_review::is_active(&app)
         && data.scope == scope
         && state.terminal_enabled()
         && state.terminal_context_is_current(data.context);

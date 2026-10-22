@@ -1287,14 +1287,17 @@ type Run struct {
 	Terminal isRun_Terminal `protobuf_oneof:"terminal"`
 	// etag is an opaque optimistic-concurrency token.
 	Etag string `protobuf:"bytes,15,opt,name=etag,proto3" json:"etag,omitempty"`
-	// title is a bounded deterministic display label derived from the opening request.
+	// title follows the canonical session title when set, otherwise the opening request.
 	Title string `protobuf:"bytes,17,opt,name=title,proto3" json:"title,omitempty"`
 	// archived is true when the containing thread is hidden from normal listings.
 	Archived bool `protobuf:"varint,18,opt,name=archived,proto3" json:"archived,omitempty"`
 	// plugin_skill_ids are the selected qualified Agent Plugin skills, not tool grants.
 	PluginSkillIds []string `protobuf:"bytes,19,rep,name=plugin_skill_ids,json=pluginSkillIds,proto3" json:"plugin_skill_ids,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// title_revision orders title changes within session_id independently of last_sequence.
+	// Zero denotes the opening title or a legacy server without title revisions.
+	TitleRevision uint64 `protobuf:"varint,20,opt,name=title_revision,json=titleRevision,proto3" json:"title_revision,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Run) Reset() {
@@ -1464,6 +1467,13 @@ func (x *Run) GetPluginSkillIds() []string {
 		return x.PluginSkillIds
 	}
 	return nil
+}
+
+func (x *Run) GetTitleRevision() uint64 {
+	if x != nil {
+		return x.TitleRevision
+	}
+	return 0
 }
 
 type isRun_Terminal interface {
@@ -5824,7 +5834,7 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\b_plan_idB\x10\n" +
 	"\x0e_plan_revisionB\n" +
 	"\n" +
-	"\b_goal_id\"\xe8\x06\n" +
+	"\b_goal_id\"\x8f\a\n" +
 	"\x03Run\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
@@ -5849,7 +5859,8 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\x04etag\x18\x0f \x01(\tR\x04etag\x12\x14\n" +
 	"\x05title\x18\x11 \x01(\tR\x05title\x12\x1a\n" +
 	"\barchived\x18\x12 \x01(\bR\barchived\x12(\n" +
-	"\x10plugin_skill_ids\x18\x13 \x03(\tR\x0epluginSkillIdsB\n" +
+	"\x10plugin_skill_ids\x18\x13 \x03(\tR\x0epluginSkillIds\x12%\n" +
+	"\x0etitle_revision\x18\x14 \x01(\x04R\rtitleRevisionB\n" +
 	"\n" +
 	"\bterminalJ\x04\b\x10\x10\x11R\x0fselected_skills\"\xd8\x06\n" +
 	"\x10CreateRunRequest\x128\n" +

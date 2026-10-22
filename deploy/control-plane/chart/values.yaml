@@ -147,6 +147,21 @@ classification:
   tone: neutral
   position: top_and_bottom
 
+# Optional shared SQL hosted execution; keys and anchor authority remain external.
+chat:
+  enabled: false
+  existingSecret: "" # journal-key, signing-key, wrapping-key, anchor-token
+  providerKey: provider-key # Optional shared provider key; empty for personal credentials.
+  maxActiveRuntimes: 4
+  idleSeconds: 300
+  cacheSizeLimit: 4Gi
+  anchor:
+    endpoint: "" # Independent HTTPS checkpoint authority, ending in /v1/anchors.
+    existingCaSecret: ""
+    caKey: ca.pem
+  # Native ChatProjectConfig snapshots; see examples/hosted-chat.yaml.
+  projects: {}
+
 documentation:
   enabled: true
   replicaCount: 3

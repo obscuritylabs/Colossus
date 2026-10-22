@@ -38,7 +38,7 @@ spec:
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
-      terminationGracePeriodSeconds: 45
+      terminationGracePeriodSeconds: {{ ternary 120 45 (and $server $.Values.chat.enabled) }}
       {{- with $.Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- range . }}
@@ -59,6 +59,26 @@ spec:
       {{- with $.Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if and $server $.Values.chat.enabled }}
+      initContainers:
+        - name: prepare-chat-cache
+          image: {{ include "cp.image" (dict "root" $ "image" $.Values.image) | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              umask 077
+              if [ -L /var/lib/colossus-chat/private ]; then exit 1; fi
+              mkdir -p /var/lib/colossus-chat/private
+              chmod 0700 /var/lib/colossus-chat/private
+          securityContext:
+            {{- include "cp.containerSecurityContext" $ | nindent 12 }}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          volumeMounts:
+            - {name: chat-cache, mountPath: /var/lib/colossus-chat}
       {{- end }}
       containers:
         - name: {{ $component }}
@@ -97,6 +117,19 @@ spec:
                   name: {{ include "cp.stateSecret" $ }}
                   key: {{ $.Values.auth.state.bootstrapPasswordKey }}
             {{- end }}
+            {{- if $.Values.chat.enabled }}
+            {{- $chatKeys := dict "JOURNAL_KEY" "journal-key" "SIGNING_KEY" "signing-key" "WRAPPING_KEY" "wrapping-key" "ANCHOR_TOKEN" "anchor-token" }}
+            {{- if $.Values.chat.providerKey }}
+              {{- $_ := set $chatKeys "PROVIDER_KEY" $.Values.chat.providerKey }}
+            {{- end }}
+            {{- range $variable, $key := $chatKeys }}
+            - name: COLOSSUS_CHAT_{{ $variable }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.chat.existingSecret }}
+                  key: {{ $key }}
+            {{- end }}
+            {{- end }}
           startupProbe:
             httpGet: {path: /health/ready, port: http}
             periodSeconds: 2
@@ -115,6 +148,12 @@ spec:
             {{- if $server }}
             - {name: config, mountPath: /etc/colossus/control-plane.json, subPath: control-plane.json, readOnly: true}
             - {name: tls, mountPath: /etc/colossus/tls, readOnly: true}
+            {{- if $.Values.chat.enabled }}
+            - {name: chat-cache, mountPath: /var/lib/colossus-chat}
+            {{- if $.Values.chat.anchor.existingCaSecret }}
+            - {name: chat-anchor-ca, mountPath: /etc/colossus/chat-anchor, readOnly: true}
+            {{- end }}
+            {{- end }}
             {{- if and $.Values.auth.oidc.enabled (or $.Values.auth.oidc.existingSecret $.Values.auth.oidc.clientSecret) }}
             - {name: oidc, mountPath: /etc/colossus/oidc, readOnly: true}
             {{- end }}
@@ -126,6 +165,19 @@ spec:
         - name: temporary
           emptyDir: {sizeLimit: 64Mi}
         {{- if $server }}
+        {{- if $.Values.chat.enabled }}
+        - name: chat-cache
+          emptyDir:
+            sizeLimit: {{ $.Values.chat.cacheSizeLimit }}
+        {{- if $.Values.chat.anchor.existingCaSecret }}
+        - name: chat-anchor-ca
+          secret:
+            secretName: {{ $.Values.chat.anchor.existingCaSecret }}
+            defaultMode: 288
+            items:
+              - {key: {{ $.Values.chat.anchor.caKey }}, path: ca.pem}
+        {{- end }}
+        {{- end }}
         - name: config
           configMap:
             name: {{ include "cp.fullname" $ }}-config

@@ -2301,7 +2301,7 @@ fn field_descriptors() -> Vec<FieldDescriptorDto> {
             "medium",
             "number",
             true,
-            json!(30000),
+            json!(colossus_contracts::DEFAULT_SANDBOX_TIMEOUT_MS),
             Some(100),
             Some(3_600_000),
             vec![],

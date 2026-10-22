@@ -1,7 +1,8 @@
 # Legacy Colossus documentation route manifest, version 1.
 # legacy_path	target_path	known_fragment_map
 # Unknown fragments are preserved. A known_fragment_map is a comma-separated
-# list of old=new anchors; an empty new anchor intentionally drops the fragment.
+# list of old=new anchors or old=/directory/#anchor destinations for split pages;
+# an empty new anchor intentionally drops the fragment.
 /README.html	/
 /GETTING_STARTED.html	/get-started/quickstart/
 /INSTALLATION.html	/get-started/install/
@@ -28,3 +29,5 @@
 /RUST_ACCEPTANCE_MATRIX.html	/develop/setup-testing/
 /RELEASE.html	/get-started/upgrade-compatibility/
 /SUMMARY.html	/
+/admin/cloud-control-plane/index.html	/cloud/	deploy-on-kubernetes=/cloud/deployment/kubernetes/,sign-in-and-project-administration=/cloud/administration/,enable-personal-hosted-chat=/cloud/work/#start-a-hosted-conversation,scale-hosted-chat-across-replicas=/cloud/deployment/hosted-chat/,configure-and-verify-the-shared-deployment=/cloud/deployment/hosted-chat/#enable-and-verify,configure-deployment-markings-and-monitor-policy=/cloud/administration/,initialize-cloud-storage=/cloud/deployment/configuration/#use-an-external-database,enroll-a-cli-daemon=/cloud/connect-runtimes/#enroll-a-cli-daemon,enroll-desktop=/cloud/connect-runtimes/#enroll-desktop,operate-hosts-threads-and-tasks=/cloud/work/#work-with-a-connected-agent,install-and-supervise-runtime-connections=/cloud/connect-runtimes/#run-unattended,use-an-explicit-headless-authority=/cloud/connect-runtimes/#run-unattended,back-up-and-restore-the-cloud-database=/cloud/deployment/operations/,verify-and-recover=/cloud/deployment/operations/#diagnose-an-interruption
+/admin/documentation-hosting/index.html	/cloud/deployment/documentation/	deploy-with-the-control-plane=choose-the-matching-release,browse-and-search=verify-navigation-and-search,verify-and-update=update-or-use-a-separate-origin

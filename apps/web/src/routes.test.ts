@@ -1,17 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
   agentHref,
+  chatThreadHref,
+  chatConnectionsHref,
   globalHref,
   hostHref,
+  hostedAgentHref,
   parseRoute,
   projectHref,
+  projectCreateHref,
   safeReturnPath,
+  routeSurface,
   taskHref,
   threadHref,
 } from "./routes";
 const origin = "https://control.example";
 describe("Control Plane permalinks", () => {
   it("round-trips major pages and encoded, exact scoped resource identifiers", () => {
+    expect(parseRoute(projectCreateHref(), origin)).toEqual({
+      kind: "project-create",
+    });
+    expect(parseRoute("/projects/new?project=other", origin).kind).toBe(
+      "invalid",
+    );
     expect(parseRoute(globalHref("fleet", "project:a"), origin)).toEqual({
       kind: "global",
       surface: "fleet",
@@ -49,6 +60,34 @@ describe("Control Plane permalinks", () => {
       project: "project:a",
       host: "host:b",
     });
+    expect(parseRoute(globalHref("hosted", "project:a"), origin)).toEqual({
+      kind: "global",
+      surface: "hosted",
+      project: "project:a",
+    });
+    const hosted = parseRoute(hostedAgentHref("project:a", "chat:b"), origin);
+    expect(hosted).toEqual({
+      kind: "hosted-agent",
+      project: "project:a",
+      node: "chat:b",
+    });
+    expect(routeSurface(hosted)).toBe("hosted");
+    expect(parseRoute(globalHref("chat", "project:a"), origin)).toEqual({
+      kind: "global",
+      surface: "chat",
+      project: "project:a",
+    });
+    expect(
+      parseRoute(chatThreadHref("project:a", "personal:c"), origin),
+    ).toEqual({
+      kind: "chat",
+      project: "project:a",
+      thread: "personal:c",
+    });
+    expect(parseRoute(chatConnectionsHref("project:a"), origin)).toEqual({
+      kind: "chat-connections",
+      project: "project:a",
+    });
   });
   it("rejects malformed, ambiguous, oversized, and cross-origin destinations", () => {
     for (const href of [
@@ -59,6 +98,12 @@ describe("Control Plane permalinks", () => {
       "/projects/p/threads/",
       "/fleet?project=p&project=q",
       "/fleet?permissions=execute",
+      "/chat?project=p&user=other",
+      "/projects/p/chat/%2Fsecret",
+      "/projects/p/chat/t?node_id=other",
+      "/hosted?owner=other",
+      "/projects/p/hosted/%2Fsecret",
+      "/projects/p/hosted/n?owner=other",
       "/projects/p/agents/n/policy?compose=0",
       `/projects/p/threads/${"x".repeat(257)}`,
       `/fleet?${"x".repeat(2048)}`,

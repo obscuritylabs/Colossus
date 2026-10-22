@@ -1,0 +1,118 @@
+.provider-editor-section {
+  padding: 16px 18px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.provider-editor-section-heading {
+  margin-bottom: 13px;
+}
+
+.provider-editor-section-heading h5 {
+  font-size: var(--font-size-body);
+}
+
+.provider-editor-grid,
+.provider-auth-grid {
+  display: grid;
+  min-width: 0;
+  align-items: start;
+  gap: 12px;
+}
+
+.provider-editor-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.provider-connection-grid {
+  grid-template-columns: minmax(220px, 0.7fr) minmax(300px, 1.3fr);
+}
+
+.provider-auth-grid {
+  grid-template-columns: minmax(280px, 1fr) minmax(260px, 0.8fr);
+}
+
+.provider-credential-control {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: var(--space-3, 12px);
+}
+
+.provider-credential-control > label {
+  width: 100%;
+}
+
+.provider-editor label > small,
+.provider-auth-note small {
+  color: var(--faint);
+  font-size: var(--font-size-caption);
+  line-height: 1.35;
+}
+
+.provider-auth-note {
+  display: flex;
+  min-height: 70px;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--green-border);
+  border-radius: 7px;
+  background: var(--green-soft);
+  color: var(--green-text);
+}
+
+.provider-auth-note > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.provider-auth-note strong,
+.provider-auth-note small {
+  display: block;
+}
+
+.provider-auth-note strong {
+  color: var(--text);
+  font-size: var(--font-size-body-sm);
+}
+
+.provider-auth-note small {
+  margin-top: 3px;
+  color: var(--text);
+}
+
+.provider-runtime-control {
+  width: min(100%, 380px);
+}
+
+.provider-editor-section {
+  container-type: inline-size;
+}
+.provider-editor-section-heading h5 {
+  margin: 0;
+  color: var(--text-strong);
+}
+.provider-editor-section-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+.provider-editor-section label,
+label.provider-preset-control {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.provider-editor-section input,
+.provider-editor-section .app-select {
+  width: 100%;
+  min-width: 0;
+}
+@container (max-width: 580px) {
+  .provider-editor-grid,
+  .provider-auth-grid,
+  .provider-connection-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

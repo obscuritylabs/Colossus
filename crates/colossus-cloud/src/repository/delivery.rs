@@ -19,7 +19,7 @@ impl CloudRepository {
     ) -> CloudResult<PendingCommand> {
         caller.require(CloudPermission::Read)?;
         crate::validate_identifier(command_id)?;
-        let task = self.task(caller.project_id(), task_id).await?;
+        let task = self.task_for_caller(caller, task_id).await?;
         let (command, _) = self
             .read::<PendingCommand>(&tasks::command_stream(
                 caller.project_id(),
@@ -57,6 +57,7 @@ impl CloudRepository {
                 query: None,
                 status: Some("pending".into()),
                 archived: None,
+                visible_to: None,
                 order: EntityOrder::IdAsc,
             })
             .await?
@@ -135,6 +136,8 @@ impl CloudRepository {
                 if task.run_id.as_ref().is_some_and(|id| id != &run.run.run_id) {
                     return Err(CloudError::Conflict);
                 }
+                task.run_id = Some(run.run.run_id.clone());
+                task.snapshot = Some((**run).clone());
                 if let Some(thread_id) = &task.thread_id {
                     let mut thread = self.thread(&node.project_id, thread_id).await?;
                     if thread
@@ -163,6 +166,7 @@ impl CloudRepository {
                     let revision = thread.revision;
                     thread.revision += 1;
                     thread.session_id = Some(run.run.session_id.clone());
+                    super::threads::apply_runtime_title(&mut thread, &task)?;
                     thread.updated_at = super::threads::timestamp()?;
                     events.push(self.event(
                         &node.node_id,
@@ -172,8 +176,6 @@ impl CloudRepository {
                         &thread,
                     )?);
                 }
-                task.run_id = Some(run.run.run_id.clone());
-                task.snapshot = Some((**run).clone());
                 let version = task.revision;
                 task.revision += 1;
                 events.push(self.event(
@@ -300,10 +302,7 @@ impl CloudRepository {
         snapshot: GetRunResponse,
     ) -> CloudResult<()> {
         self.live_node(node).await?;
-        let mut task = self.task(&node.project_id, task_id).await?;
-        if task.node_id != node.node_id || task.run_id.as_deref() != Some(&snapshot.run.run_id) {
-            return Err(CloudError::PermissionDenied);
-        }
+        super::threads::valid_title(&snapshot.run.title)?;
         if snapshot
             .pending_interactions
             .iter()
@@ -311,28 +310,55 @@ impl CloudRepository {
         {
             return Err(CloudError::InvalidArgument);
         }
-        if task
-            .snapshot
-            .as_ref()
-            .is_some_and(|current| current.run.last_sequence > snapshot.run.last_sequence)
-        {
-            return Err(CloudError::Conflict);
+        for _ in 0..8 {
+            let mut task = self.task(&node.project_id, task_id).await?;
+            if task.node_id != node.node_id
+                || task.run_id.as_deref() != Some(&snapshot.run.run_id)
+                || task
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|current| current.run.session_id != snapshot.run.session_id)
+            {
+                return Err(CloudError::PermissionDenied);
+            }
+            if task
+                .snapshot
+                .as_ref()
+                .is_some_and(|current| current.run.last_sequence > snapshot.run.last_sequence)
+            {
+                return Err(CloudError::Conflict);
+            }
+            if let Some(previous) = &task.snapshot {
+                super::threads::validate_runtime_title_transition(&previous.run, &snapshot.run)?;
+            }
+            let mut writes = Vec::new();
+            if task.snapshot.as_ref() != Some(&snapshot) {
+                let revision = task.revision;
+                task.revision += 1;
+                task.snapshot = Some(snapshot.clone());
+                writes.push(self.event(
+                    &node.node_id,
+                    tasks::stream(&node.project_id, task_id),
+                    revision,
+                    "cloud.task.snapshot.v1",
+                    &task,
+                )?);
+            }
+            if let Some(write) = self.runtime_title_write(&task).await? {
+                writes.push(write);
+            }
+            if writes.is_empty() {
+                return self.refresh_thread_progress(&task).await;
+            }
+            // The snapshot and its title projection share one transaction. A
+            // concurrent human rename forces a reread of its durable preference.
+            match self.commit(writes).await {
+                Ok(()) => return self.refresh_thread_progress(&task).await,
+                Err(colossus_ports::StoreError::Conflict { .. }) => continue,
+                Err(error) => return Err(error.into()),
+            }
         }
-        if task.snapshot.as_ref() == Some(&snapshot) {
-            return self.refresh_thread_progress(&task).await;
-        }
-        let revision = task.revision;
-        task.revision += 1;
-        task.snapshot = Some(snapshot);
-        self.append(
-            &node.node_id,
-            tasks::stream(&node.project_id, task_id),
-            revision,
-            "cloud.task.snapshot.v1",
-            &task,
-        )
-        .await?;
-        self.refresh_thread_progress(&task).await
+        Err(CloudError::Conflict)
     }
 
     /// Commit one caller-released event before acknowledging it. Reject gaps and
@@ -500,7 +526,7 @@ impl CloudRepository {
         limit: usize,
     ) -> CloudResult<Vec<RunUpdate>> {
         caller.require(CloudPermission::Read)?;
-        let task = self.task(caller.project_id(), task_id).await?;
+        let task = self.task_for_caller(caller, task_id).await?;
         if after > task.last_sequence {
             return Err(CloudError::Conflict);
         }
@@ -548,6 +574,7 @@ impl CloudRepository {
                 query: None,
                 status: None,
                 archived: None,
+                visible_to: None,
                 order: EntityOrder::IdAsc,
             })
             .await?

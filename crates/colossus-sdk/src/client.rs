@@ -94,10 +94,18 @@ impl Colossus {
     pub fn connector_capabilities(&self) -> ServerCapabilities {
         self.backend.connector_capabilities()
     }
+    /// Return configured choices authenticated using the dedicated cloud grant.
+    pub fn connector_model_profiles(&self) -> Vec<crate::ConfiguredModelProfile> {
+        self.backend.connector_model_profiles()
+    }
 
     /// Return authenticated optional behaviors cached during connection setup.
     pub fn capabilities(&self) -> ServerCapabilities {
         self.backend.capabilities()
+    }
+    /// Return credential-free model choices captured from authenticated server info.
+    pub fn model_profiles(&self) -> Vec<crate::ConfiguredModelProfile> {
+        self.backend.model_profiles()
     }
 
     /// Return the caller-bound artifact service when advertised.

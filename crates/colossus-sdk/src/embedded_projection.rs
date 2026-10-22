@@ -412,6 +412,7 @@ fn run(value: core::Run) -> ApiResult<Run> {
         run_id: value.id,
         session_id: value.session_id,
         title: value.title,
+        title_revision: value.title_revision,
         role: value.role,
         mode: match value.mode {
             core::RunMode::Execute => RunMode::Execute,

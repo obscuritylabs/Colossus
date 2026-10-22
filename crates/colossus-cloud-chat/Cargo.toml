@@ -1,0 +1,35 @@
+[package]
+name = "colossus-cloud-chat"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+colossus-api.workspace = true
+colossus-api-runtime.workspace = true
+colossus-contracts.workspace = true
+colossus-credentials.workspace = true
+colossus-home.workspace = true
+colossus-journal-redb.workspace = true
+colossus-network.workspace = true
+colossus-policy.workspace = true
+colossus-ports.workspace = true
+colossus-runtime.workspace = true
+colossus-sdk = { workspace = true, features = ["embedded", "serialization"] }
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+base64.workspace = true
+hmac.workspace = true
+zeroize.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

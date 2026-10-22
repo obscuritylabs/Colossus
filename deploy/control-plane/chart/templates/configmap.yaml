@@ -18,6 +18,10 @@
   "auth_key_variable" "COLOSSUS_CONTROL_PLANE_AUTH_KEY"
   "database" (dict "connectionVariable" "COLOSSUS_CONTROL_PLANE_DATABASE" "schema" .Values.database.schema "tls" $dbTls "maxConnections" .Values.database.maxConnections "connectionTimeoutMs" .Values.database.connectionTimeoutMs "statementTimeoutMs" .Values.database.statementTimeoutMs)
   "maintenance" .Values.maintenance "classification" .Values.classification -}}
+{{- if .Values.chat.enabled -}}
+  {{- $keys := dict "journal_variable" "COLOSSUS_CHAT_JOURNAL_KEY" "signing_variable" "COLOSSUS_CHAT_SIGNING_KEY" "anchor_endpoint" .Values.chat.anchor.endpoint "anchor_bearer_variable" "COLOSSUS_CHAT_ANCHOR_TOKEN" "allow_loopback_http" false "anchor_ca_pem_path" (ternary "/etc/colossus/chat-anchor/ca.pem" nil (ne .Values.chat.anchor.existingCaSecret "")) -}}
+  {{- $_ := set $config "chat" (dict "home" "/var/lib/colossus-chat/private" "wrapping_key_variable" "COLOSSUS_CHAT_WRAPPING_KEY" "max_active_runtimes" .Values.chat.maxActiveRuntimes "idle_seconds" .Values.chat.idleSeconds "shared" (dict "keys" $keys) "projects" .Values.chat.projects) -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:

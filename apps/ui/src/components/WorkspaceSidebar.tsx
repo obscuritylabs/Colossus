@@ -32,6 +32,8 @@ export function WorkspaceSidebarSearch({
   shortcut,
   className = "",
   maxLength,
+  label = "Search threads",
+  placeholder,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -39,6 +41,8 @@ export function WorkspaceSidebarSearch({
   shortcut?: ReactNode;
   className?: string;
   maxLength?: number;
+  label?: string;
+  placeholder?: string;
 }) {
   return (
     <div className={`shared-workspace-search ${className}`}>
@@ -46,8 +50,8 @@ export function WorkspaceSidebarSearch({
       <Input
         ref={inputRef}
         type="search"
-        aria-label="Search threads"
-        placeholder="Search threads"
+        aria-label={label}
+        placeholder={placeholder ?? label}
         value={value}
         maxLength={maxLength}
         onChange={(event) => onChange(event.target.value)}
@@ -139,14 +143,18 @@ export function WorkspaceSidebarThreadContent({
   title,
   metadata,
   status,
+  compact = false,
 }: {
   title: string;
   metadata: ReactNode;
   status?: ReactNode;
+  compact?: boolean;
 }) {
   return (
     <>
-      <span className="shared-workspace-thread-copy">
+      <span
+        className={`shared-workspace-thread-copy${compact ? " is-compact" : ""}`}
+      >
         <strong>{title}</strong>
         <span>{metadata}</span>
       </span>

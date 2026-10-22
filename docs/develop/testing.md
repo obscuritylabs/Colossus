@@ -37,7 +37,9 @@ protects a current boundary; it does not mean every future assertion is permanen
 | `colossus-api` | Keep server composition and public API lifecycle tests. |
 | `colossus-audit` | Keep journal export, retry, recovery, and live WORM acceptance tests. |
 | `colossus-cli` | Keep command-level smoke suites because they exercise public parsing and embedded/worker boundaries; remove a suite only when its command or contract is removed. |
-| `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Keep project/placement/receipt/cursor/renewal invariants and the signed OIDC-to-runtime transport acceptance; run the operator-owned PostgreSQL variant described in [cloud development](cloud-control-plane.md). |
+| `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Keep project/personal ownership, placement, receipt, cursor, renewal and resource-admission invariants and the signed OIDC-to-runtime transport acceptance; run the operator-owned PostgreSQL variants described in [cloud development](cloud-control-plane.md). |
+| `colossus-cloud-chat` | Keep credential purpose/project/user/generation/destination binding, personal/shared separation, controlled runtime composition and private-state identity tests; server acceptance owns browser authentication and supervised connector integration. |
+| `colossus-control-plane-client` | Keep origin and route confinement, cookie custody, permission/expiry distinctions, logout/server switching, bounded reads, redirect rejection and single-attempt mutation tests. Server transport acceptance verifies the shared native client against the authenticated HTTP edge. |
 | `colossus-codex-auth` | Keep OAuth/device-flow parsing, storage, and redaction tests. |
 | `colossus-context` | Keep compaction budgets, snapshots, and deterministic fallback unit tests. |
 | `colossus-contracts` | Keep serialization, validation, and stable contract-shape tests. |
@@ -553,7 +555,7 @@ from verified key custody and does not claim signed installed PKI acceptance.
 Linux unattended provisioning uses a separate owned NSS store; real CEF acceptance
 of that path is independent of this operator-driven OS-store tier.
 
-Windows ordinary-user source preview also has an automated native-dialog tier.
+Windows ordinary-user source preview also has an authenticated native-review tier.
 Build the local TLS server and the explicit native test executable:
 
 ```powershell
@@ -572,10 +574,12 @@ Run this explicitly as the ordinary user with OpenSSL and Python's `cryptography
 package available. The runner creates an owner-private fixture directory, unique
 nonexportable user CNG signing keys, and fixture-only CurrentUser ROOT/MY entries.
 It records exact certificate and public-key digests before changing the stores.
-The local server advertises only the fixture CA, and the dialog driver accepts
-only that component process, exact fixture origin and generated public identity.
-It verifies actual server-observed mTLS login, alternate identity rejection,
-default cancellation, changed-origin denial, run cancellation and TLS failures.
+The local server advertises only the fixture CA. The native review driver uses the
+exact supervised request and accepts only generated public fixture identities. It first
+verifies automatic single-identity mTLS during initial navigation before a viewer lease
+exists, then provisions a second fixture identity for explicit choice. It checks actual
+server-observed login, alternate identity rejection, cancellation, changed-origin denial,
+run cancellation and TLS failures. It does not operate browser certificate-picker windows.
 Finally it removes and verifies absence of its exact certificates and key
 containers, and deletes generated private fixture files. Retain the immutable
 `store-ledger-*.json` checkpoints and `windows-pki-acceptance.json` receipt. An
@@ -588,6 +592,24 @@ printed executable to the runner with
 This source-preview acceptance establishes native selection of OS-owned keys;
 private per-profile certificate custody, contained Windows execution and signed
 installed acceptance remain separate gates.
+
+The trusted in-window picker has a separate synthetic Windows acceptance operator.
+After building the renderer and preparing the pinned Windows presenter library paths,
+run it with a fresh, nonexistent absolute home:
+
+```powershell
+$env:COLOSSUS_HOME = Join-Path $env:USERPROFILE ("ColossusIdentityReviewTest-" + [Guid]::NewGuid().ToString('N'))
+cargo run --locked --manifest-path apps/desktop/src-tauri/Cargo.toml `
+  --no-default-features --features client-identity-test-bridge `
+  --example client-identity-review-acceptance
+```
+
+This Debug-only operator creates a main test window and the real bundled review child.
+It checks native parent/bounds and resize, guest occlusion, exact-document IPC, one-use
+choice, Cancel, expiry and workspace invalidation, then exits. It uses synthetic public
+metadata, creates no certificate-store entries and proves no TLS or private-key use.
+It preserves the functional preview's prohibition on the unrelated native test-driver
+bridge. The server-observed matrix above supplies the independent real-key evidence.
 
 ### Owned browser control conformance
 

@@ -82,6 +82,7 @@ fn renders_secure_defaults_and_real_server_configuration() {
     assert!(!config.local_development);
     assert!(config.local_auth.is_some());
     assert!(config.oidc.is_none());
+    assert!(config.chat.is_none());
     assert!(matches!(
         config.database.tls,
         colossus_cloud_postgres::CloudDatabaseTls::InCluster { .. }
@@ -186,6 +187,90 @@ fn renders_secure_defaults_and_real_server_configuration() {
 
 #[test]
 #[ignore = "static Helm tier; cargo xtask check helm"]
+fn renders_shared_hosted_chat_with_private_disposable_caches() {
+    for platform in ["kubernetes", "openshift"] {
+        let documents = render(json!({
+            "platform": platform,
+            "postgres": {"enabled": false},
+            "database": {"external": {"existingSecret": "database"}},
+            "chat": {
+                "enabled": true,
+                "existingSecret": "chat-state",
+                "providerKey": "",
+                "maxActiveRuntimes": 4,
+                "idleSeconds": 600,
+                "anchor": {
+                    "endpoint": "https://anchors.example.com/v1/anchors",
+                    "existingCaSecret": "anchor-ca"
+                }
+            }
+        }));
+        let config = configuration(&documents);
+        let mut invalid = config.clone();
+        invalid.database.tls = colossus_cloud_postgres::CloudDatabaseTls::InCluster {
+            service: "postgres".into(),
+            namespace: "colossus".into(),
+        };
+        assert!(invalid.validate().is_err());
+        let chat = config.chat.unwrap();
+        assert_eq!(
+            chat.home.to_str().unwrap(),
+            "/var/lib/colossus-chat/private"
+        );
+        assert_eq!(chat.max_active_runtimes, 4);
+        assert_eq!(chat.idle_seconds, 600);
+        let shared = serde_json::to_value(chat.shared.unwrap()).unwrap();
+        assert_eq!(shared["keys"]["allow_loopback_http"], false);
+        assert_eq!(
+            shared["keys"]["anchor_ca_pem_path"],
+            "/etc/colossus/chat-anchor/ca.pem"
+        );
+        let pod = &resource(&documents, "Deployment", "server")["spec"]["template"]["spec"];
+        assert_eq!(pod["terminationGracePeriodSeconds"], 120);
+        let init = &pod["initContainers"][0];
+        assert_eq!(init["image"], pod["containers"][0]["image"]);
+        assert_eq!(init["securityContext"]["allowPrivilegeEscalation"], false);
+        assert!(init["args"][0].as_str().unwrap().contains("chmod 0700"));
+        let volumes = pod["volumes"].as_array().unwrap();
+        assert_eq!(
+            volumes.iter().find(|v| v["name"] == "chat-cache").unwrap()["emptyDir"]["sizeLimit"],
+            "4Gi"
+        );
+        assert_eq!(
+            volumes
+                .iter()
+                .find(|v| v["name"] == "chat-anchor-ca")
+                .unwrap()["secret"]["secretName"],
+            "anchor-ca"
+        );
+        let env = pod["containers"][0]["env"].as_array().unwrap();
+        for (variable, key) in [
+            ("JOURNAL_KEY", "journal-key"),
+            ("SIGNING_KEY", "signing-key"),
+            ("WRAPPING_KEY", "wrapping-key"),
+            ("ANCHOR_TOKEN", "anchor-token"),
+        ] {
+            let value = env
+                .iter()
+                .find(|v| v["name"] == format!("COLOSSUS_CHAT_{variable}"))
+                .unwrap();
+            assert_eq!(value["valueFrom"]["secretKeyRef"]["name"], "chat-state");
+            assert_eq!(value["valueFrom"]["secretKeyRef"]["key"], key);
+        }
+        assert!(
+            !env.iter()
+                .any(|v| v["name"] == "COLOSSUS_CHAT_PROVIDER_KEY")
+        );
+        assert!(
+            !documents
+                .iter()
+                .any(|v| v["kind"] == "PersistentVolumeClaim")
+        );
+    }
+}
+
+#[test]
+#[ignore = "static Helm tier; cargo xtask check helm"]
 fn renders_routing_mesh_external_database_oidc_and_offline_options() {
     for mode in ["istio", "gateway-api", "none"] {
         for mesh in ["sidecar", "ambient"] {
@@ -285,6 +370,11 @@ fn rejects_invalid_or_unsafe_chart_configuration() {
         json!({"postgres":{"replicaCount":3}}),
         json!({"browserHost":"same.example.com","connectorHost":"same.example.com"}),
         json!({"autoscaling":{"minReplicas":6,"maxReplicas":3}}),
+        json!({"chat":{"enabled":true}}),
+        json!({"chat":{"enabled":true,"existingSecret":"state"}}),
+        json!({"chat":{"enabled":true,"existingSecret":"state","anchor":{"endpoint":"http://anchors.example.com/v1/anchors"}}}),
+        json!({"chat":{"maxActiveRuntimes":65}}),
+        json!({"chat":{"enabled":true,"existingSecret":"state","anchor":{"endpoint":"https://anchors.example.com/v1/anchors"}}}),
     ] {
         let output = helm(
             &[

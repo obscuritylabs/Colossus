@@ -1071,6 +1071,7 @@ fn proto_run(value: CoreRun) -> Result<Run, Status> {
         plugin_skill_ids: value.skill_ids,
         session_id: value.session_id,
         title: value.title,
+        title_revision: value.title_revision,
         role: value.role,
         mode: mode as i32,
         status: status as i32,

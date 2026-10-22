@@ -1503,6 +1503,10 @@ impl crate::presentation::Target for Host {
         self.presentation_frame(lease)
     }
     fn revoke(&mut self) {
+        #[cfg(windows)]
+        if let Ok(mut review) = self.callbacks.identity_review.lock() {
+            review.cancel(None);
+        }
         self.revoke_human_presentation();
     }
 }

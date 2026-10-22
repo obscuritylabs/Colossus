@@ -1,0 +1,123 @@
+.shared-workspace-pane-header {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  gap: 4px;
+  box-sizing: border-box;
+  min-width: 0;
+  height: var(--workspace-header-height, var(--control-height-touch));
+  min-height: var(--workspace-header-height, var(--control-height-touch));
+  padding: 0 6px 0 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-inset);
+}
+.shared-workspace-pane-tabs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.shared-workspace-pane-tabs::-webkit-scrollbar {
+  display: none;
+}
+.shared-workspace-pane-tablist {
+  display: contents;
+}
+.shared-workspace-pane-tab {
+  flex: 0 0 auto;
+  align-self: stretch;
+  min-width: 0;
+  max-width: 230px;
+  padding: 0 12px;
+  overflow: hidden;
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.shared-workspace-pane-tab.has-close {
+  max-width: 200px;
+  border-right: 0;
+}
+.shared-workspace-pane-tab.is-active,
+.shared-workspace-tab-close.is-active {
+  border-bottom-color: var(--blue);
+  background: var(--surface);
+}
+.shared-workspace-pane-tab.is-active {
+  color: var(--text-strong);
+}
+.shared-workspace-tab-close {
+  display: grid;
+  flex: none;
+  align-self: stretch;
+  place-items: center;
+  box-sizing: border-box;
+  min-width: 30px;
+  min-height: 28px;
+  padding: 0 4px 0 0;
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.shared-workspace-tab-close > span {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+}
+.shared-workspace-pane-tab:hover,
+.shared-workspace-tab-close:hover > span {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}
+.shared-workspace-pane-tab:focus-visible,
+.shared-workspace-tab-close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -3px;
+}
+.shared-workspace-pane-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+[data-workspace-composer-dock] {
+  min-height: var(--workspace-composer-dock-height, 0px);
+  box-sizing: border-box;
+}
+@media (pointer: coarse), (max-width: 760px) {
+  .shared-workspace-pane-header {
+    height: max(
+      var(--workspace-header-height, var(--control-height-touch)),
+      calc(var(--control-height-touch) + 1px)
+    );
+    min-height: max(
+      var(--workspace-header-height, var(--control-height-touch)),
+      calc(var(--control-height-touch) + 1px)
+    );
+  }
+  .shared-workspace-pane-actions > button,
+  .shared-workspace-tab-close {
+    min-width: var(--control-height-touch);
+    min-height: var(--control-height-touch);
+  }
+  .shared-workspace-pane-tab {
+    max-width: 220px;
+  }
+  .shared-workspace-pane-tab.has-close {
+    max-width: calc(220px - var(--control-height-touch));
+  }
+}

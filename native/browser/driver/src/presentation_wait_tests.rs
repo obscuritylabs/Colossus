@@ -15,7 +15,11 @@ impl Target for MemoryHost {
         command: PresentationCommand,
     ) -> Result<PresentationReply, PresentationError> {
         let observation = matches!(command, PresentationCommand::Observe { .. });
+        let identity = matches!(command, PresentationCommand::PendingClientIdentity { .. });
         self.controls.push(command);
+        if identity {
+            return Ok(PresentationReply::ClientIdentity { challenge: None });
+        }
         if observation {
             if let Some(error) = self.read_rejection {
                 return Err(error);
@@ -74,6 +78,71 @@ fn configuration() -> Configure {
         scale_milli: 1000,
         lease_ms: 1500,
     }
+}
+
+#[tokio::test]
+async fn identity_review_is_serviced_before_attachment_during_initial_navigation() {
+    use colossus_browser_presentation::{ClientIdentityKey, ClientIdentityPolicy};
+    let (sender, receiver) = mpsc::channel(8);
+    let revoked = Arc::new(AtomicBool::new(false));
+    let mut lane = Lane::new(receiver, Arc::clone(&revoked));
+    let mut host = MemoryHost::default();
+    let mut replies = Vec::new();
+    for command in [
+        PresentationCommand::PendingClientIdentity {
+            policy: ClientIdentityPolicy::AutomaticIfUnique,
+        },
+        PresentationCommand::SelectClientIdentity {
+            key: ClientIdentityKey {
+                tab: 7,
+                generation: 1,
+                request_id: 11,
+                control_generation: 0,
+            },
+            fingerprint_sha256: None,
+        },
+    ] {
+        let (reply, receive) = oneshot::channel();
+        sender.send(Command::Control(command, reply)).await.unwrap();
+        replies.push(receive);
+    }
+    lane.service(&mut host, true);
+    assert!(matches!(
+        replies.remove(0).await.unwrap(),
+        Ok(PresentationReply::ClientIdentity { challenge: None })
+    ));
+    assert!(matches!(
+        replies.remove(0).await.unwrap(),
+        Ok(PresentationReply::Ack)
+    ));
+    assert_eq!(
+        host.controls.len(),
+        2,
+        "no Configure or viewport lease was required"
+    );
+    assert_eq!(host.frames, 0);
+    revoked.store(true, Ordering::Release);
+    let (reply, receive) = oneshot::channel();
+    sender
+        .send(Command::Control(
+            PresentationCommand::PendingClientIdentity {
+                policy: ClientIdentityPolicy::Review,
+            },
+            reply,
+        ))
+        .await
+        .unwrap();
+    lane.service(&mut host, true);
+    assert!(matches!(
+        receive.await.unwrap(),
+        Err(PresentationError::Hidden)
+    ));
+    assert_eq!(
+        host.controls.len(),
+        2,
+        "revoked private owner cannot queue key use"
+    );
+    assert_eq!(host.revoked, 1);
 }
 
 #[tokio::test]

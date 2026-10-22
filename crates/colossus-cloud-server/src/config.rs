@@ -1,7 +1,11 @@
 use colossus_cloud::CloudPermission;
 use colossus_cloud_postgres::{CloudDatabaseConfig, CloudDatabaseTls};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, net::SocketAddr, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::SocketAddr,
+    path::PathBuf,
+};
 
 /// Secret-reference-only control-plane host configuration.
 #[derive(Clone, Deserialize, Serialize)]
@@ -49,6 +53,232 @@ pub struct Config {
     /// Allow HTTP origins and plaintext state only on loopback for local acceptance.
     #[serde(default)]
     pub local_development: bool,
+    /// Optional controlled chat service. Absence never opens hosted runtime state.
+    #[serde(default)]
+    pub chat: Option<ChatConfig>,
+}
+
+/// Operator-owned hosted chat deployment; browser requests cannot deserialize this authority.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatConfig {
+    /// Absolute owner-private service directory, independent from Control Plane SQL state.
+    pub home: PathBuf,
+    /// Exact environment variable wrapping encrypted user/project credential vaults.
+    pub wrapping_key_variable: String,
+    /// Shared SQL custody and independently deployed journal-anchor authority.
+    /// Absence retains only the explicit single-process local development setup.
+    #[serde(default)]
+    pub shared: Option<ChatSharedConfig>,
+    /// Bound resident tenant runtimes per worker process, independently from browser sessions.
+    #[serde(default = "default_chat_limit")]
+    pub max_active_runtimes: usize,
+    /// Warm idle lifetime in seconds. Active work, interactions and resources pin ownership.
+    #[serde(default = "default_hosted_idle_seconds")]
+    pub idle_seconds: u64,
+    /// Initial reviewed project snapshots. Retained administrative revisions take precedence.
+    pub projects: BTreeMap<String, ChatProjectConfig>,
+}
+
+/// Operator-owned distributed chat durability. SQL uses the Control Plane's verified database.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatSharedConfig {
+    /// Externally managed encryption/signing keys and independent rollback-anchor authority.
+    pub keys: colossus_cloud_chat::SharedChatKeyConfig,
+}
+
+/// Reviewed connections and model routes beneath one project's immutable egress ceiling.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatProjectConfig {
+    /// Existing runtime configuration; controlled chat independently narrows its authority.
+    pub runtime: colossus_runtime::RuntimeConfig,
+    /// Display metadata is retained separately from runtime profiles and authority.
+    #[serde(default)]
+    pub labels: ChatSettingsLabels,
+    /// Missing entries require each user's own credential; shared identity is explicit.
+    #[serde(default)]
+    pub mcp_authentication: BTreeMap<String, colossus_cloud_chat::ChatAuthentication>,
+    /// Provider credentials follow the same personal-by-default rule.
+    #[serde(default)]
+    pub provider_authentication: BTreeMap<String, colossus_cloud_chat::ChatAuthentication>,
+    /// Credential generations change only when that connection's identity changes.
+    #[serde(default)]
+    pub provider_generations: BTreeMap<String, u64>,
+    /// Independent MCP credential generations preserve unrelated personal sign-ins.
+    #[serde(default)]
+    pub mcp_generations: BTreeMap<String, u64>,
+    /// Exact configuration generation bound into credentials and browser OAuth flows.
+    #[serde(default = "initial_chat_revision")]
+    pub revision: u64,
+    /// Optional host-pinned Codex account file, requiring explicit shared provider policy.
+    #[serde(default)]
+    pub codex_auth_path: Option<PathBuf>,
+    /// Explicit operator-selected project Codex account in encrypted shared SQL custody.
+    #[serde(default)]
+    pub codex_auth_shared: bool,
+}
+
+/// Optional human-readable labels for existing hosted provider and model profiles.
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChatSettingsLabels {
+    /// Provider profile ID to display label; missing entries use the profile ID.
+    #[serde(default)]
+    pub providers: BTreeMap<String, String>,
+    /// Model profile ID to display label; missing entries use the profile ID.
+    #[serde(default)]
+    pub models: BTreeMap<String, String>,
+}
+
+impl ChatSettingsLabels {
+    pub(crate) fn validate(
+        &self,
+        runtime: &colossus_runtime::RuntimeConfig,
+    ) -> Result<(), &'static str> {
+        for (labels, profiles) in [
+            (
+                &self.providers,
+                runtime.providers.profiles.keys().collect::<BTreeSet<_>>(),
+            ),
+            (
+                &self.models,
+                runtime.models.profiles.keys().collect::<BTreeSet<_>>(),
+            ),
+        ] {
+            if labels.len() > profiles.len()
+                || labels.iter().any(|(id, label)| {
+                    !profiles.contains(id)
+                        || label.trim().is_empty()
+                        || label.len() > 96
+                        || label.chars().any(char::is_control)
+                })
+            {
+                return Err("hosted labels require existing profiles and 1–96 bytes of text");
+            }
+        }
+        Ok(())
+    }
+}
+
+fn default_chat_limit() -> usize {
+    16
+}
+fn default_hosted_idle_seconds() -> u64 {
+    300
+}
+fn initial_chat_revision() -> u64 {
+    1
+}
+
+impl ChatConfig {
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        if let Some(shared) = &self.shared {
+            shared
+                .keys
+                .validate()
+                .map_err(|_| "invalid shared hosted key authority")?;
+        }
+        let variable = &self.wrapping_key_variable;
+        if !self.home.is_absolute()
+            || !(1..=64).contains(&self.max_active_runtimes)
+            || !(1..=86400).contains(&self.idle_seconds)
+            || variable.is_empty()
+            || variable.len() > 256
+            || !variable
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            || !variable.as_bytes()[0].is_ascii_alphabetic()
+            || self.projects.len() > 256
+        {
+            return Err("invalid hosted chat deployment");
+        }
+        for (project, configuration) in &self.projects {
+            colossus_cloud::validate_identifier(project).map_err(|_| "invalid chat project")?;
+            configuration.validate()?;
+            if self.shared.is_some() && configuration.codex_auth_path.is_some() {
+                return Err("native Codex account files are unavailable in shared hosted chat");
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ChatProjectConfig {
+    pub(crate) fn generation(
+        &self,
+        kind: colossus_cloud_chat::ChatConnectionKind,
+        id: &str,
+    ) -> u64 {
+        match kind {
+            colossus_cloud_chat::ChatConnectionKind::Provider => &self.provider_generations,
+            colossus_cloud_chat::ChatConnectionKind::Mcp => &self.mcp_generations,
+        }
+        .get(id)
+        .copied()
+        .unwrap_or(1)
+    }
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        use colossus_cloud_chat::ChatAuthentication;
+        self.labels.validate(&self.runtime)?;
+        let serialized = self
+            .runtime
+            .to_yaml()
+            .map_err(|_| "invalid hosted runtime configuration")?;
+        colossus_runtime::RuntimeConfig::from_yaml(&serialized)
+            .map_err(|_| "invalid hosted runtime configuration")?;
+        if self.revision == 0
+            || self.runtime.models.roles.len() > 32
+            || !matches!(
+                self.runtime.storage.keys,
+                colossus_runtime::KeyConfig::Environment { .. }
+            )
+        {
+            return Err("hosted chat requires a versioned configuration and headless journal keys");
+        }
+        for (name, server) in &self.runtime.mcp.servers {
+            let authentication = self
+                .mcp_authentication
+                .get(name)
+                .copied()
+                .unwrap_or_default();
+            if server.oauth.is_some() && authentication != ChatAuthentication::Personal {
+                return Err("hosted MCP OAuth requires personal authentication");
+            }
+            if server
+                .oauth
+                .as_ref()
+                .is_some_and(|oauth| oauth.client_secret_reference.is_some())
+            {
+                return Err("hosted MCP OAuth requires public PKCE client configuration");
+            }
+            if server.credential_headers.len() > 1 {
+                return Err("hosted MCP requires one credential header");
+            }
+            if authentication == ChatAuthentication::None
+                && (!server.credential_headers.is_empty() || server.oauth.is_some())
+            {
+                return Err("unauthenticated MCP cannot declare credentials");
+            }
+        }
+        if self
+            .codex_auth_path
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            return Err("hosted Codex account custody must be absolute");
+        }
+        for (name, provider) in &self.runtime.providers.profiles {
+            if provider.kind.generation_action() == "provider.openai.codex"
+                && ((!self.codex_auth_shared && self.codex_auth_path.is_none())
+                    || self.provider_authentication.get(name) != Some(&ChatAuthentication::Shared))
+            {
+                return Err("hosted Codex requires explicit shared account custody");
+            }
+        }
+        Ok(())
+    }
 }
 /// OIDC authorization-code/PKCE sign-in configuration.
 #[derive(Clone, Deserialize, Serialize)]
@@ -107,6 +337,25 @@ pub struct Membership {
 impl Config {
     /// Validate origins and namespaces before network or credential access.
     pub fn validate(&self) -> Result<(), &'static str> {
+        if let Some(chat) = &self.chat {
+            chat.validate()?;
+            if chat.shared.is_some()
+                && matches!(&self.database.tls, CloudDatabaseTls::InCluster { .. })
+            {
+                return Err("shared hosted chat requires verified database TLS");
+            }
+            if !self.local_development
+                && (chat.shared.is_none()
+                    || chat
+                        .shared
+                        .as_ref()
+                        .is_some_and(|shared| shared.keys.allow_loopback_http))
+            {
+                return Err(
+                    "production hosted chat requires shared SQL and an HTTPS anchor authority",
+                );
+            }
+        }
         let origin = url::Url::parse(&self.public_origin).map_err(|_| "invalid public origin")?;
         let endpoint = url::Url::parse(&self.grpc_endpoint).map_err(|_| "invalid gRPC endpoint")?;
         let issuer = self
@@ -255,5 +504,27 @@ impl Config {
             return Err("production requires an OIDC-flow encryption key reference");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChatProjectConfig;
+
+    #[test]
+    fn hosted_helm_example_uses_valid_project_configuration() {
+        let values: serde_json::Value = serde_saphyr::from_str(include_str!(
+            "../../../deploy/control-plane/chart/examples/hosted-chat.yaml"
+        ))
+        .expect("hosted deployment example must deserialize");
+        assert_eq!(values["chat"]["enabled"], true);
+        let projects: std::collections::BTreeMap<String, ChatProjectConfig> =
+            serde_json::from_value(values["chat"]["projects"].clone())
+                .expect("native hosted project snapshots");
+        assert!(!projects.is_empty());
+        for project in projects.values() {
+            project.validate().expect("reviewed project authority");
+            assert!(project.codex_auth_path.is_none());
+        }
     }
 }

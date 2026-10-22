@@ -1,5 +1,7 @@
 use super::*;
 
+mod fence;
+
 /// Single policy-enforcement point for all external or sensitive effects.
 pub struct EffectGateway {
     journal: Arc<dyn EventJournal>,
@@ -8,6 +10,7 @@ pub struct EffectGateway {
     risk_evaluator: RwLock<Option<Weak<dyn RiskEvaluator>>>,
     kernel: SafetyKernel,
     permit_key: [u8; 32],
+    execution_fence: Option<Arc<dyn colossus_ports::RuntimeExecutionFence>>,
 }
 
 struct StreamBridge<'a> {
@@ -272,6 +275,7 @@ impl EffectGateway {
             risk_evaluator: RwLock::new(None),
             kernel,
             permit_key,
+            execution_fence: None,
         }
     }
 
@@ -633,6 +637,7 @@ impl EffectGateway {
         executor: &dyn EffectExecutor,
         chunks_already_released: bool,
     ) -> Result<ReleasedEffectResult, GatewayError> {
+        self.verify_execution_fence()?;
         if self.journal.is_recovery_mode() {
             return Err(GatewayError::Journal(StoreError::RecoveryMode));
         }
@@ -777,14 +782,13 @@ impl EffectGateway {
             }),
         )?;
 
-        let result = match tokio::time::timeout(
-            Duration::from_millis(decision.obligations.timeout_ms),
-            executor.execute(&request, permit),
-        )
-        .await
+        self.verify_started_owner()?;
+        let result = match self
+            .execute_owned(&request, executor, permit, decision.obligations.timeout_ms)
+            .await
         {
-            Ok(Ok(result)) => result,
-            Ok(Err(ExecutionError::ProviderRejected(failure))) => {
+            Ok(result) => result,
+            Err(ExecutionError::ProviderRejected(failure)) => {
                 self.event(
                     &request,
                     "effect.failed.v1",
@@ -798,7 +802,7 @@ impl EffectGateway {
                 )?;
                 return Err(GatewayError::ProviderRejected(failure));
             }
-            Ok(Err(ExecutionError::Failed(message))) => {
+            Err(ExecutionError::Failed(message)) => {
                 self.event(
                     &request,
                     "effect.failed.v1",
@@ -807,12 +811,12 @@ impl EffectGateway {
                 )?;
                 return Err(GatewayError::Execution(message));
             }
-            Ok(Err(ExecutionError::Recoverable {
+            Err(ExecutionError::Recoverable {
                 code,
                 message,
                 http_status,
                 retry_after_ms,
-            })) => {
+            }) => {
                 self.event(
                     &request,
                     "effect.failed.v1",
@@ -832,7 +836,7 @@ impl EffectGateway {
                     retry_after_ms,
                 });
             }
-            Ok(Err(ExecutionError::HttpStatus { status, message })) => {
+            Err(ExecutionError::HttpStatus { status, message }) => {
                 self.event(
                     &request,
                     "effect.failed.v1",
@@ -845,7 +849,13 @@ impl EffectGateway {
                 )?;
                 return Err(GatewayError::HttpStatus { status, message });
             }
-            Ok(Err(ExecutionError::OutcomeUnknown(message))) => {
+            Err(ExecutionError::OutcomeUnknown(message)) => {
+                // Ownership loss must not turn an uncertain external operation into
+                // a known failure. A fenced journal may reject this terminal append;
+                // the new owner then recovers its durable start as outcome-unknown.
+                if self.verify_execution_fence().is_err() {
+                    return Err(GatewayError::OutcomeUnknown(message));
+                }
                 self.event(
                     &request,
                     "effect.outcome_unknown.v1",
@@ -854,20 +864,11 @@ impl EffectGateway {
                 )?;
                 return Err(GatewayError::OutcomeUnknown(message));
             }
-            Ok(Err(ExecutionError::ReleaseDenied(message))) => {
+            Err(ExecutionError::ReleaseDenied(message)) => {
                 return Err(GatewayError::Denied(message));
             }
-            Err(_) => {
-                let message = "adapter timed out after execution began".to_owned();
-                self.event(
-                    &request,
-                    "effect.outcome_unknown.v1",
-                    EventClassification::Effect,
-                    json!({"message": message}),
-                )?;
-                return Err(GatewayError::OutcomeUnknown(message));
-            }
         };
+        self.verify_started_owner()?;
         if result.bytes.len()
             > usize::try_from(decision.obligations.max_output_bytes).unwrap_or(usize::MAX)
         {
@@ -954,6 +955,7 @@ impl EffectGateway {
         sequence: u64,
         result: &QuarantinedEffectResult,
     ) -> Result<ReleasedEffectResult, GatewayError> {
+        self.verify_started_owner()?;
         if obligations.require_post_effect {
             let mut post_request = request.clone();
             post_request.request_id = format!("{}:post:chunk:{sequence}", request.request_id);

@@ -81,7 +81,12 @@ impl Lane {
                     );
                     let allowed = closing
                         || agent_observation
-                        || matches!(command, PresentationCommand::Renew { .. });
+                        || matches!(
+                            command,
+                            PresentationCommand::Renew { .. }
+                                | PresentationCommand::PendingClientIdentity { .. }
+                                | PresentationCommand::SelectClientIdentity { .. }
+                        );
                     let result = if self.revoked.load(Ordering::Acquire) && !closing {
                         Err(PresentationError::Hidden)
                     } else if waiting && !allowed {

@@ -205,7 +205,7 @@ fn computer_requires_enabled_host_and_bundled_skill_tracks_same_availability() {
         config.computer.enabled = enabled;
         let mut options = RuntimeOpenOptions::for_workspace(workspace.path())
             .unwrap()
-            .with_colossus_home(home.path())
+            .with_colossus_home(home.path().canonicalize().expect("canonical home"))
             .unwrap();
         if host {
             options =

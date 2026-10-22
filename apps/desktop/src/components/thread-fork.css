@@ -7,6 +7,43 @@
 .thread-actions-trigger[data-state="open"] {
   opacity: 1;
 }
+.thread-actions-content {
+  width: min(
+    18rem,
+    var(--radix-dropdown-menu-content-available-width),
+    calc(100vw - 24px)
+  );
+  min-width: 0;
+}
+.thread-actions-context {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 6px 8px;
+  font-weight: 400;
+}
+.thread-actions-context > strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.thread-actions-context > span {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+  overflow-wrap: anywhere;
+}
+.thread-actions-separator {
+  margin: 4px;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
 .thread-action-label {
   display: inline-flex;
   align-items: center;

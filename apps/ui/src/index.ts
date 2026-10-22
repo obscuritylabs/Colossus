@@ -39,6 +39,10 @@ export type {
 
 export { ControlPlaneFrame } from "./components/ControlPlaneFrame.js";
 export {
+  ControlPlaneProjectSwitcher,
+  ControlPlaneAccountMenu,
+} from "./components/ControlPlaneSidebarMenus.js";
+export {
   WorkWelcome,
   DEFAULT_WORK_STARTERS,
 } from "./components/WorkWelcome.js";
@@ -57,4 +61,5 @@ export type { WorkspaceDestinationId } from "./components/WorkspaceNavigation.js
 export { WorkspaceSurfaceHeader } from "./components/WorkspaceSurfaceHeader.js";
 
 export { ArtifactLibrary } from "./components/ArtifactLibrary.js";
+export { HostPlatformIcon } from "./components/HostPlatformIcon.js";
 export type { LibraryArtifact } from "./components/ArtifactLibrary.js";

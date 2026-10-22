@@ -53,7 +53,10 @@ mod crypto;
 use crypto::*;
 
 mod journal;
-pub use journal::PostgresEventJournal;
+use journal::PostgresJournalCore;
+mod worker;
+pub use worker::PostgresEventJournal;
+mod partition;
 
 #[cfg(test)]
 mod tests;

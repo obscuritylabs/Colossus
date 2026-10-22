@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RunView } from "../state";
-import type { Run } from "../types";
+import type { Run, SessionMap } from "../types";
+import { buildSessionMapFixture } from "../dev/operations-studio-fixture";
 import type { ArtifactViewItem } from "./ArtifactWorkspace";
 import { AppearanceProvider } from "../theme/AppearanceProvider";
 import { WorkSurface } from "./WorkSurface";
@@ -28,6 +29,7 @@ function renderSurface(
   runMode: Run["mode"] = "execute",
   processSessionsAvailable?: boolean,
   initialSessionWorkspaceView: SessionWorkspaceView = "conversation",
+  sessionMap: SessionMap | null = null,
 ): string {
   const comparisonRun: Run = {
     runId: "comparison-run",
@@ -101,7 +103,7 @@ function renderSurface(
       delegateInspection: null,
       delegateLoading: false,
       delegateError: "",
-      sessionMap: null,
+      sessionMap,
       sessionMapLoading: false,
       sessionMapError: "",
       artifacts,
@@ -157,6 +159,40 @@ function renderSurface(
 }
 
 describe("WorkSurface side panels", () => {
+  it.each(["snapshots", "resources"] as const)(
+    "keeps a previous session's map and counts out of the selected %s view",
+    (view) => {
+      const previousMap = {
+        ...buildSessionMapFixture(),
+        sessionId: "previous-session",
+      };
+      const snapshot = previousMap.contextSnapshots[0]!;
+      const markup = renderSurface(
+        [],
+        undefined,
+        false,
+        true,
+        "execute",
+        undefined,
+        view,
+        previousMap,
+      );
+      expect(markup).toContain(
+        view === "snapshots"
+          ? "Loading context snapshots"
+          : "Loading durable records",
+      );
+      expect(markup).not.toContain(snapshot.id);
+      expect(markup).not.toContain(
+        `Messages ${snapshot.sourceStartSequence}–${snapshot.sourceEndSequence}`,
+      );
+      expect(markup).not.toContain("Keep execution boundary unchanged");
+      if (view === "snapshots") {
+        expect(markup).toContain('aria-label="Snapshot count unavailable"');
+      }
+    },
+  );
+
   it("offers Active shells only when the runtime advertises process sessions", () => {
     renderSurface([], undefined, false, false, "execute", false);
     expect(offeredTools().some((tool) => tool.id === "shells")).toBe(false);

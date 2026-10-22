@@ -301,7 +301,14 @@ impl Runtime {
                         }
                     }
                 }
-                result = &mut run => return result.map_err(Into::into),
+                result = &mut run => {
+                    // A final tool call can queue children in the same poll that
+                    // completes the parent, before its notification is selected.
+                    // Keep ownership in this foreground future until those jobs settle.
+                    let result = result.map_err(RuntimeError::from);
+                    self.drain_subagents_with_events().await?;
+                    return result;
+                },
             }
         }
     }

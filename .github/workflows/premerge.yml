@@ -249,6 +249,9 @@ jobs:
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
       COLOSSUS_DESKTOP_RELEASE_CHANNEL: "validation_only"
       CARGO_INCREMENTAL: "0"
+      # Separate runtime and bridge graphs must fit on the hosted runner together.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
       # Keep Desktop native tests isolated from the root native sandbox target.
       CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target
     steps:
@@ -563,6 +566,15 @@ jobs:
           workspaces: apps/desktop/src-tauri -> apps/desktop/src-tauri/target
           key: premerge-windows-desktop-x64
           cache-targets: false
+      - name: Select the Windows Desktop C and C++ compiler
+        shell: pwsh
+        timeout-minutes: 1
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Compiler = (Get-Command clang-cl.exe -CommandType Application -ErrorAction Stop).Source
+          & $Compiler --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @("CC=$Compiler", "CXX=$Compiler") | Add-Content -LiteralPath $env:GITHUB_ENV
       - name: Prepare Windows Managed Local executables
         id: desktop_prepare
         continue-on-error: true

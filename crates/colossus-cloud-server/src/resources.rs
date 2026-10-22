@@ -48,6 +48,26 @@ async fn request(
         ResourcePermission::Execute => CloudPermission::Execute,
         ResourcePermission::Control => CloudPermission::Control,
     })?;
+    if let Some(host) = &state.hosted
+        && host.node_id(&caller)?.as_deref() == Some(node.as_str())
+        && matches!(
+            input.operation,
+            ResourceOperation::Context | ResourceOperation::ModelCatalog {}
+        )
+    {
+        let (generation, resources) = host.context(&caller).await?;
+        if input
+            .connection_id
+            .as_ref()
+            .is_some_and(|expected| expected != &generation)
+        {
+            return Err(CloudError::Conflict.into());
+        }
+        return Ok(Json(Output {
+            connection_id: generation,
+            reply: resources.execute(input.operation).await,
+        }));
+    }
     let identity = state.repo.get_node(&caller, &node).await?;
     if identity.revoked {
         return Err(CloudError::PermissionDenied.into());
@@ -120,6 +140,12 @@ async fn request(
     };
     // Recheck user membership, revocation and lease before disclosing a response.
     let caller = state.auth.caller(&headers, &project, true).await?;
+    caller.require(CloudPermission::Read)?;
+    caller.require(match input.operation.permission() {
+        ResourcePermission::Read => CloudPermission::Read,
+        ResourcePermission::Execute => CloudPermission::Execute,
+        ResourcePermission::Control => CloudPermission::Control,
+    })?;
     if state.repo.get_node(&caller, &node).await?.revoked {
         return Err(CloudError::PermissionDenied.into());
     }

@@ -1056,8 +1056,9 @@ export function WorkSidebar({
                             ) : (
                               <>
                                 <button
-                                  className="work-item"
+                                  className="work-item shared-workspace-thread-link is-compact"
                                   type="button"
+                                  title={`${item.title}\n${forkDraft ? "Draft" : item.modeLabel} · ${item.updatedLabel}`}
                                   aria-current={
                                     activeSessionId === run.sessionId
                                       ? "page"
@@ -1067,6 +1068,7 @@ export function WorkSidebar({
                                   onClick={() => onSelect(run)}
                                 >
                                   <WorkspaceSidebarThreadContent
+                                    compact
                                     title={item.title}
                                     metadata={
                                       <>

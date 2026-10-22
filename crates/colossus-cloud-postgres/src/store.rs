@@ -114,7 +114,7 @@ impl CloudPostgresStore {
             if legacy.present{return Err(TransactionError::Store(StoreError::Adapter("cloud storage requires a distinct schema from runtime journals".into())));}
             conn.batch_execute("CREATE TABLE IF NOT EXISTS cloud_schema_migrations(version BIGINT PRIMARY KEY,checksum TEXT NOT NULL,applied_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())").await?;
             #[derive(diesel::QueryableByName)]struct Applied{#[diesel(sql_type=Text)]checksum:String}
-            for (version,sql) in [(1_i64,include_str!("../migrations/00000000000001_cloud_relational/up.sql")),(2_i64,include_str!("../migrations/00000000000002_runtime_resources/up.sql"))] {
+            for (version,sql) in [(1_i64,include_str!("../migrations/00000000000001_cloud_relational/up.sql")),(2_i64,include_str!("../migrations/00000000000002_runtime_resources/up.sql")),(3_i64,include_str!("../migrations/00000000000003_personal_conversations/up.sql")),(4_i64,include_str!("../migrations/00000000000004_hosted_chat/up.sql")),(5_i64,include_str!("../migrations/00000000000005_hosted_chat_cleanup_index/up.sql")), (6_i64,include_str!("../migrations/00000000000006_hosted_execution/up.sql")), (7_i64,include_str!("../migrations/00000000000007_conversation_branches/up.sql")), (8_i64,include_str!("../migrations/00000000000008_conversation_titles/up.sql"))] {
             let checksum=entities::digest(&serde_json::Value::String(sql.into())).map_err(TransactionError::Store)?;
             match sql_query("SELECT checksum FROM cloud_schema_migrations WHERE version=$1").bind::<BigInt,_>(version).get_result::<Applied>(conn).await{
                 Ok(applied) if applied.checksum==checksum=>{},
@@ -204,7 +204,8 @@ impl CloudStore for CloudPostgresStore {
         now: u64,
         days: u16,
     ) -> CloudResult<colossus_cloud::observability::OperationalStatistics> {
-        self.operational_statistics(project, node, now, days).await
+        self.operational_statistics(project, node, None, now, days)
+            .await
     }
     async fn maintain(
         &self,
@@ -223,6 +224,17 @@ impl CloudStore for CloudPostgresStore {
             .await
             .map_err(|_| CloudError::Storage)?;
         Ok(())
+    }
+    async fn statistics_visible_to(
+        &self,
+        project: &str,
+        node: Option<&str>,
+        subject: &str,
+        now: u64,
+        days: u16,
+    ) -> CloudResult<colossus_cloud::observability::OperationalStatistics> {
+        self.operational_statistics(project, node, Some(subject), now, days)
+            .await
     }
     async fn list_projects(
         &self,
@@ -296,6 +308,7 @@ impl CloudStore for CloudPostgresStore {
         }
         conn.transaction(async |conn| {
             let administration = crate::identity_guard::begin(conn, &transaction.entities).await?;
+            crate::hosted_chat::guard_admission(conn, &transaction.entities).await?;
             if let Some(lease) = transaction.lease {
                 operational::verify(conn, &lease, None, true)
                     .await

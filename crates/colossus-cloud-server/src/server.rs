@@ -10,9 +10,9 @@ use std::{
 /// Sanitized online state; connectivity never changes a durable task's placement.
 #[derive(Clone, serde::Serialize)]
 pub struct NodePresence {
-    /// Current stream generation.
+    /// Current connected stream or Hosted configuration generation.
     pub connection_id: String,
-    /// Runtime advertised readiness.
+    /// Connected runtime readiness or Hosted configured availability.
     pub ready: bool,
     /// Bounded released capability names.
     pub capabilities: Vec<String>,
@@ -29,6 +29,7 @@ pub(crate) struct State {
     pub sse_permits: Arc<tokio::sync::Semaphore>,
     pub shutdown: tokio::sync::watch::Sender<bool>,
     pub replica_id: String,
+    pub hosted: Option<Arc<crate::hosted::HostedExecution>>,
 }
 /// Fully composed HTTP/OIDC and mutual-TLS runtime host.
 pub struct ControlPlaneServer {
@@ -90,7 +91,20 @@ impl ControlPlaneServer {
         }
         let ca = CertificateAuthority::load(&config)?;
         let auth = Authentication::with_store(config.clone(), store).await?;
-        Ok(Self {
+        let chat = if let Some(deployment) = config.chat.clone() {
+            let database = config.database.clone();
+            let repository = repo.clone();
+            Some(Arc::new(
+                tokio::task::spawn_blocking(move || {
+                    crate::hosted::HostedExecution::open(deployment, repository, database)
+                })
+                .await
+                .map_err(|_| "hosted chat startup unavailable")??,
+            ))
+        } else {
+            None
+        };
+        let server = Self {
             state: Arc::new(State {
                 config,
                 repo,
@@ -101,8 +115,15 @@ impl ControlPlaneServer {
                 sse_permits: Arc::new(tokio::sync::Semaphore::new(1024)),
                 shutdown: tokio::sync::watch::channel(false).0,
                 replica_id: uuid::Uuid::now_v7().simple().to_string(),
+                hosted: chat,
             }),
-        })
+        };
+        if let Some(hosted) = &server.state.hosted {
+            *hosted.supervisor.lock().await = Some(
+                crate::hosted::HostedExecution::start_supervisor(&server.state),
+            );
+        }
+        Ok(server)
     }
     /// Run browser HTTP and end-to-end mutual-TLS gRPC until shutdown. Ingress must
     /// preserve HTTP/2 and TLS passthrough on the connector endpoint.
@@ -170,15 +191,22 @@ impl ControlPlaneServer {
             }
         };
         tokio::pin!(upkeep);
-        tokio::select! {
-            result = &mut drain => result?,
-            _ = &mut upkeep => return Err("cloud maintenance stopped"),
+        let result = tokio::select! {
+            result = &mut drain => result,
+            _ = &mut upkeep => Err("cloud maintenance stopped"),
             _ = &mut forward => {
                 tokio::time::timeout(std::time::Duration::from_secs(30), &mut drain)
-                    .await.map_err(|_| "cloud shutdown drain deadline exceeded")??;
+                    .await.map_err(|_| "cloud shutdown drain deadline exceeded").and_then(|result|result)
             }
-        }
-        Ok(())
+        };
+        let chat_shutdown = if let Some(chat) = &self.state.hosted {
+            chat.shutdown()
+                .await
+                .map_err(|_| "hosted chat shutdown did not complete")
+        } else {
+            Ok(())
+        };
+        result.and(chat_shutdown)
     }
 }
 async fn wait_shutdown(mut receiver: tokio::sync::watch::Receiver<bool>) {

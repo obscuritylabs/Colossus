@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, TextInput } from "@colossus/ui";
+import { Button, TextInput, HostPlatformIcon } from "@colossus/ui";
 import {
   IconArrowUpRight,
   IconCheck,
   IconCopy,
-  IconDeviceDesktop,
   IconFolder,
   IconX,
 } from "@tabler/icons-react";
@@ -147,7 +146,7 @@ export function Fleet({
         cell: ({ host }) => (
           <div className="catalog-identity">
             <span className="resource-icon">
-              <IconDeviceDesktop size={18} aria-hidden="true" />
+              <HostPlatformIcon platform={host.platform} size={18} />
             </span>
             <div>
               <RouteLink

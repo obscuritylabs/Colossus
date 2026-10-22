@@ -1,7 +1,7 @@
 apiVersion: v2
 name: colossus-control-plane-chart
-version: 0.11.9
-appVersion: "0.11.9"
+version: 0.11.10
+appVersion: "0.11.10"
 kubeVersion: ">=1.34.0-0"
 description: Colossus Control Plane, public documentation, and optional PostgreSQL
 home: https://github.com/obscuritylabs/Colossus

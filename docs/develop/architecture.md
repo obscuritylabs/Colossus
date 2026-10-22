@@ -75,7 +75,9 @@ infrastructure adapters implement ports and are assembled only by the runtime.
 | Security and catalog | `colossus-access`, `colossus-policy`, `colossus-tools` | Capability metadata, decisions, permits, and strict tool schemas |
 | Infrastructure | `colossus-provider`, `colossus-codex-auth`, `colossus-credentials`, journal/projection crates, `colossus-sandbox`, `colossus-browser-bridge`, `colossus-browser-presentation`, `colossus-integrations`, `colossus-mcp`, `colossus-plugins`, `colossus-bundles`, `colossus-search` | External systems, authentication, private browser transport and presentation, plugin OCI/lifecycle, release bundles, and storage adapters |
 | Public API and SDK | `colossus-api-proto`, `colossus-api`, `colossus-api-runtime`, `colossus-grpc`, `colossus-sdk` | Version public resources, authenticate applications, host durable runs, and provide transport-neutral clients |
-| Control Plane application | `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Project authority, durable fixed-node placement, OIDC browser access, and native outbound connections through the public SDK |
+| Control Plane application | `colossus-cloud`, `colossus-cloud-protocol`, `colossus-cloud-server`, `colossus-connector` | Project and personal resource authority, durable fixed-node placement, browser access, and authenticated runtime connections through the public SDK |
+| Hosted execution composition | `colossus-cloud-chat`, server `hosted` modules | Bind an authenticated project/user to protected state, purpose-bound credentials and on-demand runtime ownership under the controlled-tools ceiling |
+| Shared Cloud execution | `colossus-cloud-executor` | Execute the closed Cloud command/resource set through caller-bound SDK clients and retain common released-output bounds for Hosted and Fleet |
 | Composition and interfaces | `colossus-runtime`, `colossus-worker-protocol`, `colossus-worker`, `colossus-cli`, `colossus-tui`, `colossus-presentation` | Narrow private transport contracts, wire services, host application contracts, and released-data rendering |
 
 ## Boundary rules
@@ -89,6 +91,54 @@ Each connector uses a dedicated native application grant; it cannot borrow the D
 primary or approval-broker credential. Cloud roles intersect that grant and never
 expand local tool, policy, or sandbox authority. The closed remote operation set does
 not expose private worker RPC, arbitrary network forwarding, or renderer credentials.
+
+Hosted Execution is an optional application composition consumed by Chat and task
+submission. `colossus-cloud-chat` opens the ordinary runtime separately for each
+authenticated project/user and exposes its caller-bound SDK. The server's `hosted`
+modules supervise bounded runtime capacity, direct SDK dispatch, idle retirement and
+shared owner-routed management. Hosted targets have an explicit placement kind, no
+client certificate and no Fleet enrollment. The existing target/namespace IDs are
+retained to preserve conversations and journals. See [ADR 0009](adr/0009-hosted-execution.md).
+
+Durable Cloud task/command records own admission and dispatch; runtime journals own
+canonical execution and effects. A process-wide supervisor discovers unfinished work,
+including after restart. Configuration/history reads do not require a loaded runtime.
+Active runs, queued work, children, management operations and pending OAuth flows
+prevent idle retirement. Waiting agent runs remain resident under the current recovery
+contract; they are not advertised as suspendable checkpoints.
+
+Managed attachments reuse the caller-owned artifact journal and never interpret a file
+name as a worker path. Controlled Hosted execution permits reviewed provider and remote
+HTTP MCP effects and runtime-owned conversation services. Filesystem/process grants,
+stdio MCP, browser/computer hosts, plugin execution and hosted workspace provisioning
+remain unavailable. Fleet continues to supply explicitly selected connected environments.
+
+Personal nodes, invitations and conversations retain immutable owner identities.
+Absent ownership preserves existing shared project history. Every human read, list,
+event stream, receipt, control and operational aggregate checks personal visibility;
+SQL filters it before pagination and counts. Project and global administration do not
+convey another user's personal history or runtime access. Internal authenticated
+connector recovery retains its separate fixed-node authority. An owner with current
+Execute and Control can answer the exact interaction in their own personal node and
+thread; shared execution keeps the independent project Approve requirement. Both paths
+still intersect the runtime application grant and one-use interaction binding.
+
+Hosted provider/MCP definitions are managed at project scope within an operator-owned
+origin ceiling. Personal authentication is the default; shared static credentials
+require an explicit project choice. Named credentials can exist independently within
+their personal/project vault. Explicit attachments bind project, user or shared project
+scope, provider/MCP purpose, connection generation and endpoint; a bare credential ID
+cannot be resolved by an agent. MCP OAuth uses
+a per-user protected vault; missing or corrupt personal custody never selects a shared
+identity. Shared hosted mode stores partitioned journals/projections, settings,
+credential envelopes, OAuth coordination and target placement in PostgreSQL. Any API replica
+can serve an account; database-clock execution leases assign one project/user runtime
+owner with monotonic fencing, and existing durable command transport routes operations
+to that owner. Local lexical indexes are disposable. External masters derive keys by
+runtime namespace/purpose; an independently administered anchor service preserves
+rollback detection outside the journal database. The compatibility single-host mode
+retains local private state and remains limited to one replica. See
+[hosted chat operation](../cloud/deployment/hosted-chat.md).
 
 Manual Desktop credentials and platform-backed MCP OAuth share the
 `colossus-credentials` adapter. `HostSecret` (64 KiB) and `VaultRecord` (1 MiB) are

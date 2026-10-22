@@ -640,6 +640,66 @@
     "postgres": {
       "type": "object",
       "description": "Values for the vendored CloudPirates PostgreSQL dependency. See its bundled README."
+    },
+    "chat": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "existingSecret": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$|^$",
+          "maxLength": 63
+        },
+        "providerKey": {
+          "type": "string",
+          "pattern": "^[-._a-zA-Z0-9]*$",
+          "maxLength": 253
+        },
+        "maxActiveRuntimes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "idleSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "cacheSizeLimit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "anchor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "pattern": "^$|^https://[^/]+/.*$"
+            },
+            "existingCaSecret": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$|^$",
+              "maxLength": 63
+            },
+            "caKey": {
+              "type": "string",
+              "pattern": "^[-._a-zA-Z0-9]+$",
+              "maxLength": 253
+            }
+          }
+        },
+        "projects": {
+          "type": "object",
+          "maxProperties": 256,
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      }
     }
   }
 }

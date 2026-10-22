@@ -21,7 +21,16 @@ const maximumJavaScriptChunkBytes = 700_000;
 // Computer access settings, released screenshot previews, and explicit browser
 // expiry recovery add 3.1 KB measured. Reserve 5 KB for platform bundler variance;
 // retain the per-chunk limit and production fixture exclusions.
-const maximumRendererBytes = 4_225_000;
+// The shared tabbed workspace, compact status disclosure and aligned Aside
+// composer add 10.4 KB measured. Reserve 11 KB for this layout migration while
+// retaining per-chunk bounds and production fixture exclusions.
+// Compact accessible chat rows and contextual action menus add 1.7 KB measured
+// after removing unused legacy row/menu styles. Reserve 2 KB for this migration.
+// Shared streaming Markdown, CSP-safe syntax highlighting and seven offline
+// Mermaid diagram types add 2.35 MB after pruning unused diagram/layout engines.
+// These renderers and grammars load on demand. Reserve 2.4 MB while preserving
+// the 700 KB per-chunk bound and production fixture exclusions.
+const maximumRendererBytes = 6_638_000;
 const forbiddenFixtureStrings = [
   "Offline dictation preview",
   "fixture-run-desktop-release",

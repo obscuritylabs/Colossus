@@ -290,7 +290,7 @@ message Run {
   // etag is an opaque optimistic-concurrency token.
   string etag = 15;
 
-  // title is a bounded deterministic display label derived from the opening request.
+  // title follows the canonical session title when set, otherwise the opening request.
   string title = 17;
 
   // archived is true when the containing thread is hidden from normal listings.
@@ -298,6 +298,10 @@ message Run {
 
   // plugin_skill_ids are the selected qualified Agent Plugin skills, not tool grants.
   repeated string plugin_skill_ids = 19;
+
+  // title_revision orders title changes within session_id independently of last_sequence.
+  // Zero denotes the opening title or a legacy server without title revisions.
+  uint64 title_revision = 20;
 }
 
 // CreateRunRequest allocates and starts one durable agent run.

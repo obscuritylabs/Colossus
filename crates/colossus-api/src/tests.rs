@@ -218,6 +218,13 @@ fn run_views_follow_the_canonical_session_title() {
     let request = create_request("title-key", "Opening request words");
     let run = create_run(&repository, &caller, &request, "run-title", "session-title");
     assert_eq!(run.title, "Opening request words");
+    assert_eq!(run.title_revision, 0);
+    assert!(
+        serde_json::to_value(&run)
+            .expect("encode unversioned run")
+            .get("title_revision")
+            .is_none()
+    );
     journal
         .append(NewEvent {
             event_version: 1,
@@ -274,6 +281,43 @@ fn run_views_follow_the_canonical_session_title() {
         )
         .expect("list");
     assert_eq!(listed.runs[0].title, "Prepare release checklist");
+    assert_eq!(listed.runs[0].title_revision, 1);
+    assert_eq!(listed.runs[0].last_sequence, run.last_sequence);
+    journal
+        .append(NewEvent {
+            event_version: 1,
+            stream_id: "session-title:session-title".into(),
+            expected_stream_version: 1,
+            classification: EventClassification::Domain,
+            event_type: "session.title.indexed.v1".into(),
+            actor: caller.actor(),
+            context: ExecutionContext {
+                correlation_id: "run-title".into(),
+                session_id: Some("session-title".into()),
+                ..ExecutionContext::default()
+            },
+            payload: serde_json::json!({"title": "Ship release checklist"}),
+        })
+        .expect("second title set");
+    let revised = repository
+        .get_run(&caller, "run-title")
+        .expect("read revised title")
+        .expect("run");
+    assert_eq!(revised.title, "Ship release checklist");
+    assert_eq!(revised.title_revision, 2);
+    assert_eq!(revised.last_sequence, run.last_sequence);
+    assert_eq!(revised.etag, run.etag);
+    let mut followup = create_request("followup-title-key", "Continue this conversation");
+    followup.session_id = Some("session-title".into());
+    let next = create_run(
+        &repository,
+        &caller,
+        &followup,
+        "run-next-title",
+        "session-title",
+    );
+    assert_eq!(next.title, "Ship release checklist");
+    assert_eq!(next.title_revision, 2);
 }
 
 #[test]
@@ -495,6 +539,45 @@ fn run_title_is_safe_bounded_and_derived_from_visible_input() {
     assert!(!run.title.contains('\u{202e}'));
     assert!(run.title.ends_with('…'));
     assert!(run.title.chars().count() <= 80);
+}
+
+#[test]
+fn unicode_opening_titles_fit_sdk_and_cloud_byte_limits_on_create_and_replay() {
+    for (prompt, expected) in [
+        ("🦀".repeat(80), format!("{}…", "🦀".repeat(63))),
+        (
+            format!("a{}", "🦀".repeat(80)),
+            format!("a{}…", "🦀".repeat(63)),
+        ),
+        ("界".repeat(80), "界".repeat(80)),
+        ("a".repeat(80), "a".repeat(80)),
+    ] {
+        let (_, repository, caller) = fixture();
+        let request = create_request("unicode-title", &prompt);
+        let run = create_run(&repository, &caller, &request, "run-title", "session-title");
+        assert_eq!(run.title, expected);
+        assert!(run.title.len() <= 256);
+        assert!(run.title.chars().count() <= 80);
+        assert_eq!(run.title_revision, 0);
+        let restored = repository
+            .get_run(&caller, &run.id)
+            .expect("read bounded title")
+            .expect("run");
+        assert_eq!(restored.title, expected);
+        let listed = repository
+            .list_runs(
+                &caller,
+                &ListRunsRequest {
+                    session_id: Some(run.session_id),
+                    statuses: Vec::new(),
+                    page_size: 10,
+                    page_token: None,
+                    include_archived: false,
+                },
+            )
+            .expect("list bounded title");
+        assert_eq!(listed.runs[0].title, expected);
+    }
 }
 
 #[test]

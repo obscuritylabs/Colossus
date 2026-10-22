@@ -1,3 +1,4 @@
+import type { ForkDraftSource } from "./ThreadBranchDraft";
 import {
   lazy,
   Suspense,
@@ -6,24 +7,26 @@ import {
   useRef,
   useState,
 } from "react";
-import { ControlPlaneFrame, Button, DropdownSelect } from "@colossus/ui";
+import {
+  ControlPlaneFrame,
+  ControlPlaneProjectSwitcher,
+  ControlPlaneAccountMenu,
+  Button,
+} from "@colossus/ui";
 
 import {
   IconHome,
+  IconMessageCircle,
   IconServer,
+  IconCloud,
   IconFolder,
   IconUsers,
   IconSettings,
-  IconLogout,
   IconRefresh,
   IconPlus,
   IconX,
 } from "@tabler/icons-react";
-import {
-  AppearanceSettings,
-  SendShortcutContext,
-  useAppearance,
-} from "./Appearance";
+import { SendShortcutContext, useAppearance } from "./Appearance";
 import {
   ApiFailure,
   request,
@@ -47,15 +50,23 @@ import { TaskDetail } from "./TaskDetail";
 import { TaskTable } from "./TaskTable";
 import { RunComposer, type RunRequest } from "./RunComposer";
 import { Home, LoadState } from "./Home";
-import { Projects } from "./Projects";
+import { Projects, CreateProject } from "./Projects";
 import { AgentSidebar, AgentWorkspace } from "./AgentScope";
 import { HostSidebar, HostOverview, useHostRoster } from "./HostScope";
 import { workspaceName } from "./workspace-navigation";
 
 import { DocumentationLink } from "./DocumentationLink";
+import { ChatHistorySidebar } from "./ChatHistorySidebar";
+import { WebSettings } from "./WebSettings";
 import { useResource } from "./resources";
 const ThreadDetail = lazy(() =>
   import("./ThreadDetail").then((module) => ({ default: module.ThreadDetail })),
+);
+const Chat = lazy(() =>
+  import("./Chat").then((module) => ({ default: module.Chat })),
+);
+const Hosted = lazy(() =>
+  import("./Hosted").then((module) => ({ default: module.Hosted })),
 );
 const Administration = lazy(() =>
   import("./Administration").then((module) => ({
@@ -63,8 +74,11 @@ const Administration = lazy(() =>
   })),
 );
 import { useNavigation, RouteLink } from "./navigation";
+import { conversationHref, isPersonalHostedChat } from "./conversation-route";
 import {
   agentHref,
+  chatConnectionsHref,
+  chatThreadHref,
   globalHref,
   hostHref,
   projectHref,
@@ -80,6 +94,8 @@ export function AuthenticatedApp({
   onSettings,
   loadMe,
   onSignOut,
+  signOutError = "",
+  signingOut = false,
 }: {
   me: Me;
   authConfig: AuthConfig | null;
@@ -87,6 +103,8 @@ export function AuthenticatedApp({
   onSettings: (value: PublicSettings) => void;
   loadMe: () => void;
   onSignOut: () => void;
+  signOutError?: string;
+  signingOut?: boolean;
 }) {
   const navigation = useNavigation(),
     { route } = navigation;
@@ -105,6 +123,18 @@ export function AuthenticatedApp({
     if (authorizedProject) setPreferredProject(project);
   }, [authorizedProject, project]);
   const surface = routeSurface(route);
+  const [settingsScope, setSettingsScope] = useState<"global" | "space">(
+    "global",
+  );
+  const [chatRefresh, setChatRefresh] = useState(0);
+  const [forkDraft, setForkDraft] = useState<ForkDraftSource | null>(null);
+  const returnToWork = useRef(globalHref("chat", project));
+  const visitedChat = useRef("");
+  const lastChat = useRef<{
+    project: string;
+    href: string;
+    thread: Thread | null;
+  }>({ project, href: globalHref("chat", project), thread: null });
   const { appearance, setAppearance } = useAppearance();
   const [nodeCache, setNodes] = useState<FleetNode[]>([]),
     [hostCache, setHosts] = useState<Host[]>([]),
@@ -134,7 +164,7 @@ export function AuthenticatedApp({
     tasks = loadedProject === project ? taskCache : [];
   const permissions = authorizedProject ? projectPermissions(me, project) : [];
   const threadResource = useResource<ThreadDetailResponse>(
-    route.kind === "thread" && authorizedProject
+    (route.kind === "thread" || route.kind === "chat") && authorizedProject
       ? `${projectPath(project)}/threads/${encodeURIComponent(route.thread)}`
       : null,
     0,
@@ -148,7 +178,7 @@ export function AuthenticatedApp({
     me.user.id,
   );
   const selectedThread =
-    route.kind === "thread" &&
+    (route.kind === "thread" || route.kind === "chat") &&
     !threadResource.error &&
     threadResource.data?.thread.project_id === project &&
     threadResource.data.thread.thread_id === route.thread
@@ -161,6 +191,44 @@ export function AuthenticatedApp({
     taskResource.data.task.task_id === route.task
       ? taskResource.data.task
       : null;
+  const redirectToChat =
+    route.kind === "thread" &&
+    selectedThread?.owner_user_id === me.user.id &&
+    isPersonalHostedChat(selectedThread)
+      ? conversationHref(selectedThread)
+      : null;
+  useEffect(() => {
+    if (redirectToChat) navigation.go(redirectToChat, true);
+  }, [redirectToChat, navigation.go]);
+  if (surface === "chat") visitedChat.current = project;
+  if (
+    surface === "chat" &&
+    route.kind !== "chat-connections" &&
+    (route.kind !== "chat" || selectedThread)
+  ) {
+    lastChat.current = {
+      project,
+      href: navigation.href,
+      thread: selectedThread,
+    };
+  }
+  const personalSelection =
+    selectedThread ??
+    (lastChat.current.project === project &&
+    (route.kind === "chat-connections" ||
+      surface === "settings" ||
+      surface === "hosted" ||
+      (route.kind === "chat" && lastChat.current.href === navigation.href))
+      ? lastChat.current.thread
+      : null);
+  function openConnections() {
+    navigation.go(chatConnectionsHref(project));
+  }
+  function openProjectSettings() {
+    returnToWork.current = navigation.href;
+    setSettingsScope("space");
+    navigation.go(globalHref("settings", project));
+  }
   const [workspaceSessions, setWorkspaceSessions] = useState<
     Record<string, string>
   >({});
@@ -351,7 +419,7 @@ export function AuthenticatedApp({
       );
   }, [nodes, node]);
   function openThread(thread: Thread) {
-    navigation.go(threadHref(thread.project_id, thread.thread_id));
+    navigation.go(conversationHref(thread));
   }
   function openTask(task: Task) {
     navigation.go(
@@ -397,7 +465,10 @@ export function AuthenticatedApp({
           ? projectHref(id)
           : route.kind === "global"
             ? globalHref(surface, id, route.view)
-            : globalHref("fleet", id),
+            : globalHref(
+                surface === "chat" || surface === "hosted" ? surface : "fleet",
+                id,
+              ),
     );
   }
   async function createTask(runRequest: RunRequest) {
@@ -527,10 +598,13 @@ export function AuthenticatedApp({
   else if (surface === "admin" && !me.user.is_admin)
     unavailable =
       "Your signed-in identity does not have Control Plane administration access.";
-  else if (route.kind === "thread" && threadResource.error)
+  else if (
+    (route.kind === "thread" || route.kind === "chat") &&
+    threadResource.error
+  )
     unavailable = threadResource.error;
   else if (
-    route.kind === "thread" &&
+    (route.kind === "thread" || route.kind === "chat") &&
     !threadResource.loading &&
     !selectedThread
   )
@@ -559,18 +633,35 @@ export function AuthenticatedApp({
         navigation={[
           {
             id: "home",
+            group: "Workspace",
             label: "Home",
             href: globalHref("home", authorizedProject ? project : undefined),
             icon: <IconHome size={21} aria-hidden="true" />,
           },
           {
+            id: "chat",
+            group: "Workspace",
+            label: "Chat",
+            href: globalHref("chat", authorizedProject ? project : undefined),
+            icon: <IconMessageCircle size={21} aria-hidden="true" />,
+          },
+          {
+            id: "hosted",
+            group: "Workspace",
+            label: "Hosted",
+            href: globalHref("hosted", authorizedProject ? project : undefined),
+            icon: <IconCloud size={21} aria-hidden="true" />,
+          },
+          {
             id: "fleet",
+            group: "Workspace",
             label: "Fleet",
             href: globalHref("fleet", authorizedProject ? project : undefined),
             icon: <IconServer size={21} aria-hidden="true" />,
           },
           {
             id: "projects",
+            group: "Administration",
             label: "Projects",
             href: globalHref(
               "projects",
@@ -582,6 +673,7 @@ export function AuthenticatedApp({
             ? [
                 {
                   id: "admin",
+                  group: "Administration",
                   label: "Administration",
                   shortLabel: "Admin",
                   href: globalHref(
@@ -594,6 +686,7 @@ export function AuthenticatedApp({
             : []),
           {
             id: "settings",
+            group: "Administration",
             label: "Settings",
             href: globalHref(
               "settings",
@@ -602,33 +695,91 @@ export function AuthenticatedApp({
             icon: <IconSettings size={21} aria-hidden="true" />,
           },
         ]}
-        onNavigate={(id) =>
+        onNavigate={(id) => {
+          if (id === "settings") {
+            returnToWork.current = navigation.href;
+            setSettingsScope("global");
+          }
           navigation.go(
             globalHref(id as Surface, authorizedProject ? project : undefined),
-          )
+          );
+        }}
+        title={
+          <span className="control-window-context">
+            <span>
+              {me.projects.find((item) => item.id === project)?.name ??
+                "Colossus"}
+            </span>
+            <span aria-hidden="true">/</span>
+            <span>
+              {surface === "chat"
+                ? route.kind === "chat-connections"
+                  ? "Connections"
+                  : "Chat"
+                : surface === "settings"
+                  ? "Settings"
+                  : surface === "home"
+                    ? "Home"
+                    : surface === "hosted"
+                      ? "Hosted"
+                      : surface === "fleet"
+                        ? "Fleet"
+                        : surface === "projects"
+                          ? "Projects"
+                          : "Administration"}
+            </span>
+          </span>
         }
         classification={settings?.classification}
         user={
-          <span className="rail-user" title={me.user.display_name}>
-            {me.user.display_name.slice(0, 2).toUpperCase()}
-          </span>
+          <ControlPlaneAccountMenu
+            name={me.user.display_name}
+            detail={me.user.email ?? "Signed in"}
+            onSettings={() => {
+              returnToWork.current = navigation.href;
+              setSettingsScope("global");
+              navigation.go(
+                globalHref("settings", authorizedProject ? project : undefined),
+              );
+            }}
+            onSignOut={onSignOut}
+            signingOut={signingOut}
+          />
         }
-        footer={
-          <>
-            <DocumentationLink />
-            <button
-              type="button"
-              className="ui-icon-button"
-              aria-label="Sign out"
-              title="Sign out"
-              onClick={onSignOut}
-            >
-              <IconLogout size={19} aria-hidden="true" />
-            </button>
-          </>
-        }
+        footer={<DocumentationLink showLabel />}
         sidebar={
-          !unavailable && host && hostId ? (
+          surface === "chat" && project && authorizedProject ? (
+            <ChatHistorySidebar
+              key={`${me.user.id}:${project}`}
+              project={project}
+              identity={me.user.id}
+              selected={personalSelection}
+              refreshKey={chatRefresh}
+              canControl={permissions.includes("control")}
+              onThreadChanged={() => {
+                threadResource.refresh();
+                setChatRefresh((value) => value + 1);
+              }}
+              onFork={
+                permissions.includes("read") && permissions.includes("execute")
+                  ? (parent, source) => {
+                      setForkDraft({
+                        parent,
+                        source,
+                        key: crypto.randomUUID(),
+                      });
+                      navigation.go(chatThreadHref(project, parent.thread_id));
+                    }
+                  : undefined
+              }
+              onConnections={openConnections}
+              onProjectSettings={
+                permissions.includes("administer")
+                  ? openProjectSettings
+                  : undefined
+              }
+            />
+          ) : !unavailable && host && hostId ? (
             <HostSidebar
               key={`${me.user.id}:${project}:${hostId}`}
               project={project}
@@ -686,30 +837,29 @@ export function AuthenticatedApp({
             />
           ) : undefined
         }
+        sidebarHeader={
+          <ControlPlaneProjectSwitcher
+            projects={me.projects.map((item) => ({
+              id: item.id,
+              name: item.name + (item.archived ? " · Archived" : ""),
+            }))}
+            value={authorizedProject ? project : ""}
+            onValueChange={selectProject}
+            onManageProjects={() =>
+              navigation.go(
+                globalHref("projects", authorizedProject ? project : undefined),
+              )
+            }
+          />
+        }
         header={
           <>
-            <label className="header-project">
-              <span className="sr-only">Project scope</span>
-              <DropdownSelect
-                aria-label="Select project"
-                value={authorizedProject ? project : ""}
-                onChange={(event) => selectProject(event.target.value)}
-              >
-                {!authorizedProject ? (
-                  <option value="">Select an authorized project</option>
-                ) : null}
-                {me.projects.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                    {item.archived ? " · Archived" : ""}
-                  </option>
-                ))}
-              </DropdownSelect>
-            </label>
-            <span className="connection-indicator">
-              <span className={`dot ${live ? "live" : ""}`} />
-              {live} online
-            </span>
+            {surface !== "chat" ? (
+              <span className="connection-indicator">
+                <span className={`dot ${live ? "live" : ""}`} />
+                {live} online
+              </span>
+            ) : null}
             <button
               type="button"
               className="ui-icon-button"
@@ -727,6 +877,14 @@ export function AuthenticatedApp({
           </>
         }
       >
+        {signOutError ? (
+          <div role="alert" className="alert project-alert">
+            <span>{signOutError}</span>
+            <Button disabled={signingOut} onClick={onSignOut}>
+              Retry sign out
+            </Button>
+          </div>
+        ) : null}
         {error && !unavailable ? (
           <div role="alert" className="alert project-alert">
             {error}
@@ -748,6 +906,58 @@ export function AuthenticatedApp({
             </p>
           }
         >
+          {!unavailable &&
+          authorizedProject &&
+          project &&
+          (surface === "chat" ||
+            ((surface === "settings" || surface === "hosted") &&
+              visitedChat.current === project)) ? (
+            <div
+              className="chat-preserved-workspace"
+              hidden={surface !== "chat"}
+            >
+              <Chat
+                key={`${me.user.id}:${project}`}
+                project={project}
+                identity={me.user.id}
+                permissions={permissions}
+                selected={personalSelection}
+                forkDraft={
+                  forkDraft?.parent.project_id === project &&
+                  forkDraft.parent.owner_user_id === me.user.id
+                    ? forkDraft
+                    : null
+                }
+                onCloseFork={() => setForkDraft(null)}
+                onFork={(parent, source) =>
+                  setForkDraft({ parent, source, key: crypto.randomUUID() })
+                }
+                view={
+                  route.kind === "chat-connections"
+                    ? "connections"
+                    : "conversation"
+                }
+                onConnections={openConnections}
+                onProjectSettings={
+                  permissions.includes("administer")
+                    ? openProjectSettings
+                    : undefined
+                }
+                onCloseConnections={() =>
+                  navigation.go(
+                    lastChat.current.project === project
+                      ? lastChat.current.href
+                      : globalHref("chat", project),
+                  )
+                }
+                detailLoading={threadResource.loading}
+                onChanged={() => {
+                  threadResource.refresh();
+                  setChatRefresh((value) => value + 1);
+                }}
+              />
+            </div>
+          ) : null}
           {unavailable ? (
             <section className="control-page">
               <header className="page-heading">
@@ -763,6 +973,13 @@ export function AuthenticatedApp({
                 Go Home
               </RouteLink>
             </section>
+          ) : surface === "chat" ? (
+            project ? null : (
+              <div className="empty-state">
+                <h2>No project access</h2>
+                <p>Choose an authorized project to start a chat.</p>
+              </div>
+            )
           ) : route.kind === "host" ? (
             host ? (
               <HostOverview
@@ -775,7 +992,7 @@ export function AuthenticatedApp({
               <LoadState {...hostDetail} retry={hostDetail.refresh} />
             )
           ) : route.kind === "thread" ? (
-            selectedThread ? (
+            selectedThread && !redirectToChat ? (
               <ThreadDetail
                 key={`${project}:${selectedThread.thread_id}`}
                 initial={selectedThread}
@@ -820,29 +1037,30 @@ export function AuthenticatedApp({
               }
             />
           ) : surface === "settings" ? (
-            <div className="control-page">
-              <header className="page-heading">
-                <div>
-                  <span className="eyebrow">Settings</span>
-                  <h1>Personal preferences</h1>
-                  <p>Customize the Control Plane for this browser.</p>
-                </div>
-              </header>
-              <AppearanceSettings
-                appearance={appearance}
-                onChange={setAppearance}
-              />
-              <section className="control-card">
-                <header>
-                  <h3>Signed-in identity</h3>
-                </header>
-                <p>{me.user.display_name}</p>
-                <p className="field-help">
-                  {me.user.email ?? ""}
-                  {me.user.is_admin ? " · Control Plane administrator" : ""}
-                </p>
-              </section>
-            </div>
+            <WebSettings
+              key={`${me.user.id}:${project}`}
+              project={project}
+              projectName={
+                me.projects.find((item) => item.id === project)?.name ?? ""
+              }
+              identity={me.user.id}
+              displayName={me.user.display_name}
+              email={me.user.email}
+              canAdminister={permissions.includes("administer")}
+              canConnect={
+                permissions.includes("execute") &&
+                permissions.includes("control")
+              }
+              appearance={appearance}
+              onAppearance={setAppearance}
+              initialScope={settingsScope}
+              onReturn={() => navigation.go(returnToWork.current)}
+              onConnections={openConnections}
+              onSaved={() => {
+                threadResource.refresh();
+                setChatRefresh((value) => value + 1);
+              }}
+            />
           ) : surface === "admin" ? (
             <Administration
               authConfig={authConfig}
@@ -852,6 +1070,15 @@ export function AuthenticatedApp({
               onView={(view) =>
                 navigation.go(globalHref("admin", undefined, view))
               }
+            />
+          ) : route.kind === "project-create" ? (
+            <CreateProject
+              me={me}
+              onCancel={() => navigation.go(globalHref("projects"))}
+              onSaved={() => {
+                loadMe();
+                navigation.go(globalHref("projects"));
+              }}
             />
           ) : surface === "projects" ? (
             <Projects
@@ -870,6 +1097,20 @@ export function AuthenticatedApp({
               <h2>No project access</h2>
               <p>Ask your administrator for membership in a project.</p>
             </div>
+          ) : surface === "hosted" ? (
+            <Hosted
+              key={`${me.user.id}:${project}:${route.kind === "hosted-agent" ? route.node : "inventory"}`}
+              project={project}
+              identity={me.user.id}
+              permissions={permissions}
+              node={route.kind === "hosted-agent" ? route.node : undefined}
+              chatHref={
+                lastChat.current.project === project
+                  ? lastChat.current.href
+                  : globalHref("chat", project)
+              }
+              onProjectSettings={openProjectSettings}
+            />
           ) : route.kind === "agent" ? (
             <AgentWorkspace
               key={`${me.user.id}:${project}:${agentId}`}

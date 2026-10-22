@@ -20,7 +20,12 @@ import {
 import { errorMessage, useResource } from "./resources";
 import { AnalyticsPanel, LoadState } from "./Home";
 import { RouteLink } from "./navigation";
-import { globalHref, projectHref, type ProjectView } from "./routes";
+import {
+  globalHref,
+  projectHref,
+  projectCreateHref,
+  type ProjectView,
+} from "./routes";
 export function SectionTabs({
   items,
   current,
@@ -79,13 +84,9 @@ export function Projects({
   onView?: (value: ProjectView) => void;
 }) {
   const [localTab, setTab] = useState("overview"),
-    [editing, setEditing] = useState(false),
     [visibility, setVisibility] = useState("active");
   const tab = view ?? localTab;
   const project = me.projects.find((item) => item.id === selected);
-  useEffect(() => {
-    setEditing(false);
-  }, [selected]);
   return (
     <section className="control-page">
       {project ? (
@@ -123,23 +124,16 @@ export function Projects({
             </label>
           ) : null}
           {me.user.is_admin ? (
-            <Button onClick={() => setEditing(true)}>
+            <RouteLink
+              href={projectCreateHref()}
+              className="ui-button ui-button--primary"
+            >
               <IconPlus size={16} aria-hidden="true" />
               New project
-            </Button>
+            </RouteLink>
           ) : null}
         </div>
       </header>
-      {editing ? (
-        <ProjectEditor
-          projects={me.projects}
-          onSaved={() => {
-            setEditing(false);
-            onRefresh();
-          }}
-          onCancel={() => setEditing(false)}
-        />
-      ) : null}
       {project ? (
         <>
           <div className="project-context">
@@ -386,18 +380,59 @@ function ProjectDirectory({
     </section>
   );
 }
+export function CreateProject({
+  me,
+  onSaved,
+  onCancel,
+}: {
+  me: Me;
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <section className="control-page">
+      <RouteLink
+        href={globalHref("projects")}
+        className="ui-button ui-button--tertiary back"
+      >
+        All projects
+      </RouteLink>
+      <header className="page-heading">
+        <div>
+          <span className="eyebrow">Projects</span>
+          <h1>Create project</h1>
+          <p>Name the project and choose where it belongs.</p>
+        </div>
+      </header>
+      {me.user.is_admin ? (
+        <ProjectEditor
+          projects={me.projects}
+          onSaved={onSaved}
+          onCancel={onCancel}
+          showHeading={false}
+        />
+      ) : (
+        <p role="alert">
+          Administrator access is required to create a project.
+        </p>
+      )}
+    </section>
+  );
+}
 export function ProjectEditor({
   project,
   projects,
   onSaved,
   onCancel,
   allowHierarchy = true,
+  showHeading = true,
 }: {
   project?: Project;
   projects: Project[];
   onSaved: () => void;
   onCancel?: () => void;
   allowHierarchy?: boolean;
+  showHeading?: boolean;
 }) {
   const [name, setName] = useState(project?.name ?? ""),
     [description, setDescription] = useState(project?.description ?? ""),
@@ -406,6 +441,14 @@ export function ProjectEditor({
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const creationId = useRef(crypto.randomUUID().replaceAll("-", ""));
+  const alive = useRef(true);
+  const pending = useRef(false);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
   const candidates = projects.filter((item) => {
     let cursor: Project | undefined = item;
     const seen = new Set<string>();
@@ -417,6 +460,8 @@ export function ProjectEditor({
     return true;
   });
   async function save() {
+    if (pending.current || !name.trim()) return;
+    pending.current = true;
     setBusy(true);
     setError("");
     try {
@@ -433,22 +478,26 @@ export function ProjectEditor({
         undefined,
         project ? "PATCH" : undefined,
       );
-      onSaved();
+      if (alive.current) onSaved();
     } catch (e) {
-      setError(errorMessage(e));
+      if (alive.current) setError(errorMessage(e));
     } finally {
-      setBusy(false);
+      pending.current = false;
+      if (alive.current) setBusy(false);
     }
   }
   return (
     <form
       className="management-form"
+      aria-label={project ? "Edit project" : "Create project"}
       onSubmit={(event) => {
         event.preventDefault();
         void save();
       }}
     >
-      <h3>{project ? "Edit project" : "Create project"}</h3>
+      {showHeading ? (
+        <h3>{project ? "Edit project" : "Create project"}</h3>
+      ) : null}
       {error ? (
         <div className="alert" role="alert">
           {error}
@@ -458,6 +507,7 @@ export function ProjectEditor({
         <span>Name</span>
         <TextInput
           required
+          disabled={busy}
           maxLength={200}
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -468,6 +518,7 @@ export function ProjectEditor({
         <textarea
           className="ui-input"
           rows={3}
+          disabled={busy}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           maxLength={2000}
@@ -476,7 +527,7 @@ export function ProjectEditor({
       <label>
         <span>Parent project</span>
         <DropdownSelect
-          disabled={!allowHierarchy}
+          disabled={busy || !allowHierarchy}
           value={parent}
           onChange={(e) => setParent(e.target.value)}
         >
@@ -496,6 +547,7 @@ export function ProjectEditor({
         <label className="checkbox-field">
           <input
             type="checkbox"
+            disabled={busy}
             checked={archived}
             onChange={(e) => setArchived(e.target.checked)}
           />
@@ -506,7 +558,11 @@ export function ProjectEditor({
         <Button type="submit" variant="primary" disabled={busy || !name.trim()}>
           {busy ? "Saving…" : "Save project"}
         </Button>
-        {onCancel ? <Button onClick={onCancel}>Cancel</Button> : null}
+        {onCancel ? (
+          <Button disabled={busy} onClick={onCancel}>
+            Cancel
+          </Button>
+        ) : null}
       </div>
     </form>
   );

@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 /// Capability gates the additive envelopes; old peers cannot silently ignore mutations.
 pub const RESOURCE_CAPABILITY: &str = "runtime.resources.v1";
+/// Additive configured-model read; clients discover this before sending the new operation.
+pub const MODEL_CATALOG_CAPABILITY: &str = "runtime.model_catalog.v1";
 /// Independent unary management admission, leaving run watches unaffected.
 pub const MAX_RESOURCE_REQUESTS: usize = 4;
 /// Definition and immutable-input request budget, including the JSON envelope.
@@ -19,6 +21,8 @@ pub const MAX_RESOURCE_REQUEST_BYTES: usize = 256 * 1024;
 #[allow(missing_docs)]
 pub enum ResourceOperation {
     Context,
+    /// Credential-free configured choices from this application's authenticated SDK.
+    ModelCatalog {},
     ListWorkflows {
         after: Option<String>,
     },
@@ -75,7 +79,7 @@ impl ResourceOperation {
     /// Additional cloud authority required beyond project read permission.
     pub fn permission(&self) -> ResourcePermission {
         match self {
-            Self::CreateSchedule { .. } | Self::StartWorkflowRun { .. } => {
+            Self::ModelCatalog {} | Self::CreateSchedule { .. } | Self::StartWorkflowRun { .. } => {
                 ResourcePermission::Execute
             }
             Self::RegisterWorkflow { .. }
@@ -94,7 +98,7 @@ impl ResourceOperation {
         };
         let yaml = |s: &str| !s.trim().is_empty() && s.len() <= 192 * 1024;
         match self {
-            Self::Context | Self::ListPlugins => true,
+            Self::Context | Self::ModelCatalog {} | Self::ListPlugins => true,
             Self::ListWorkflows { after } | Self::ListSchedules { after } => cursor(after),
             Self::GetWorkflow { id: value }
             | Self::GetSchedule { id: value }

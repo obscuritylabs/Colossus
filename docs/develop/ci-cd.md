@@ -238,6 +238,15 @@ and 880×640 layout checks. Desktop packaging independently builds the bundled s
 CLI, and Tauri application in a non-incremental release tree, then verifies its bundle
 structure. Neither Desktop job waits for the other, and neither transfers its build tree.
 Each Desktop job allows 75 minutes for a cold build when the compiler cache is unavailable.
+
+The Windows Desktop pre-merge job resolves the runner's
+[`clang-cl`](https://clang.llvm.org/docs/UsersManual.html#clang-cl) executable and checks
+its version before the first Cargo build, then sets that exact path as `CC` and `CXX`
+for this job. This avoids MSVC compiler stdout interleaving with Cargo instructions
+during inkjet's parallel parser builds while retaining compiler diagnostics. The Rust
+MSVC target and native CEF Visual Studio toolset remain unchanged. This CI selection
+does not change local or release compiler configuration.
+
 All acceptance and packaging checks remain required.
 The native job exercises the otherwise-ignored real sidecar
 bootstrap/pinned-gRPC/guardian lifecycle and sandbox acceptance. Together they prove the

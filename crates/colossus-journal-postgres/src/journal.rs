@@ -1,8 +1,9 @@
 use super::*;
 
 /// Canonical PostgreSQL journal adapter.
-pub struct PostgresEventJournal {
-    config: PostgresJournalConfig,
+pub(super) struct PostgresJournalCore {
+    pub(super) config: PostgresJournalConfig,
+    pub(super) fence: Option<PostgresJournalFence>,
     tls_connector: Option<MakeRustlsConnect>,
     payload_protection: JournalPayloadProtection,
     keys: Arc<dyn KeyProvider>,
@@ -13,42 +14,14 @@ pub struct PostgresEventJournal {
     startup_report: Mutex<StartupVerificationReport>,
 }
 
-impl PostgresEventJournal {
-    /// Connect, create the isolated schema, migrate idempotently, and verify before writes.
-    pub fn open(
-        config: PostgresJournalConfig,
-        keys: Arc<dyn KeyProvider>,
-        signer: Arc<dyn CheckpointSigner>,
-    ) -> Result<Self, StoreError> {
-        Self::open_with_tls_roots(config, keys, signer, &AdditionalRootCertificates::default())
-    }
-
-    /// Open the journal while augmenting the default WebPKI policy with runtime-wide roots.
-    ///
-    /// An explicit `custom_ca` storage policy remains exclusive and does not inherit
-    /// runtime-wide roots.
-    pub fn open_with_tls_roots(
-        config: PostgresJournalConfig,
-        keys: Arc<dyn KeyProvider>,
-        signer: Arc<dyn CheckpointSigner>,
-        tls_roots: &AdditionalRootCertificates,
-    ) -> Result<Self, StoreError> {
-        Self::open_with_tls_roots_and_startup_verification(
-            config,
-            keys,
-            signer,
-            tls_roots,
-            StartupVerificationMode::Incremental,
-        )
-    }
-
-    /// Open with augmented TLS roots and one explicit startup verification policy.
-    pub fn open_with_tls_roots_and_startup_verification(
+impl PostgresJournalCore {
+    pub(super) fn open_internal(
         config: PostgresJournalConfig,
         keys: Arc<dyn KeyProvider>,
         signer: Arc<dyn CheckpointSigner>,
         tls_roots: &AdditionalRootCertificates,
         mode: StartupVerificationMode,
+        fence: Option<PostgresJournalFence>,
     ) -> Result<Self, StoreError> {
         config.validate()?;
         let tls_connector = match &config.tls {
@@ -58,6 +31,7 @@ impl PostgresEventJournal {
         let payload_protection = keys.payload_protection();
         let journal = Self {
             config,
+            fence,
             tls_connector,
             payload_protection,
             keys,
@@ -74,12 +48,19 @@ impl PostgresEventJournal {
                 anchor_format_version: None,
             }),
         };
+        // An expired owner must not initialize or recover canonical state.
+        if journal.fence.is_some() {
+            journal.verify_open_fence()?;
+        }
         journal.migrate()?;
         journal.initialize_payload_protection()?;
         let startup = journal.quarantine_result(journal.verify_startup(mode));
         if let Err(error) = startup {
             journal.recovery_mode.store(true, Ordering::Release);
             *journal.recovery_reason.lock().map_err(adapter_error)? = Some(error.to_string());
+        }
+        if journal.fence.is_some() {
+            journal.verify_open_fence()?;
         }
         Ok(journal)
     }
@@ -97,9 +78,11 @@ impl PostgresEventJournal {
     fn initialize_payload_protection(&self) -> Result<(), StoreError> {
         let mut client = self.connect()?;
         let mut transaction = client.transaction().map_err(database_error)?;
+        self.verify_transaction_fence(&mut transaction)?;
+        transaction.execute("INSERT INTO journal_metadata(singleton,last_sequence,last_hash) VALUES(TRUE,0,$1) ON CONFLICT(runtime_namespace,singleton) DO NOTHING", &[&ZERO_HASH]).map_err(database_error)?;
         let row = transaction
             .query_one(
-                "SELECT last_sequence, payload_protection, EXISTS (SELECT 1 FROM journal_events) FROM journal_metadata WHERE singleton = TRUE FOR UPDATE",
+                "SELECT last_sequence, payload_protection, EXISTS (SELECT 1 FROM journal_events WHERE runtime_namespace = current_setting('colossus.runtime_namespace')) FROM journal_metadata WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND singleton = TRUE FOR UPDATE",
                 &[],
             )
             .map_err(database_error)?;
@@ -127,7 +110,7 @@ impl PostgresEventJournal {
         if marker.is_none() {
             transaction
                 .execute(
-                    "UPDATE journal_metadata SET payload_protection = $1 WHERE singleton = TRUE",
+                    "UPDATE journal_metadata SET payload_protection = $1 WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND singleton = TRUE",
                     &[&self.payload_protection.as_str()],
                 )
                 .map_err(database_error)?;
@@ -207,7 +190,7 @@ impl PostgresEventJournal {
         let mut transaction = client.transaction().map_err(database_error)?;
         let metadata = transaction
             .query_one(
-                "SELECT last_sequence, last_hash, latest_checkpoint FROM journal_metadata WHERE singleton = TRUE FOR SHARE",
+                "SELECT last_sequence, last_hash, latest_checkpoint FROM journal_metadata WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND singleton = TRUE FOR SHARE",
                 &[],
             )
             .map_err(database_error)?;
@@ -225,13 +208,13 @@ impl PostgresEventJournal {
         // of `startupVerification: full`.
         let event_bounds = transaction
             .query_one(
-                "SELECT (SELECT global_sequence FROM journal_events ORDER BY global_sequence LIMIT 1), (SELECT global_sequence FROM journal_events ORDER BY global_sequence DESC LIMIT 1)",
+                "SELECT (SELECT global_sequence FROM journal_events WHERE runtime_namespace = current_setting('colossus.runtime_namespace') ORDER BY global_sequence LIMIT 1), (SELECT global_sequence FROM journal_events WHERE runtime_namespace = current_setting('colossus.runtime_namespace') ORDER BY global_sequence DESC LIMIT 1)",
                 &[],
             )
             .map_err(database_error)?;
         let outbox_bounds = transaction
             .query_one(
-                "SELECT (SELECT global_sequence FROM projection_outbox ORDER BY global_sequence LIMIT 1), (SELECT global_sequence FROM projection_outbox ORDER BY global_sequence DESC LIMIT 1)",
+                "SELECT (SELECT global_sequence FROM projection_outbox WHERE runtime_namespace = current_setting('colossus.runtime_namespace') ORDER BY global_sequence LIMIT 1), (SELECT global_sequence FROM projection_outbox WHERE runtime_namespace = current_setting('colossus.runtime_namespace') ORDER BY global_sequence DESC LIMIT 1)",
                 &[],
             )
             .map_err(database_error)?;
@@ -247,7 +230,7 @@ impl PostgresEventJournal {
         }
         let row = transaction
             .query_one(
-                "SELECT e.envelope, o.event_id FROM journal_events e JOIN projection_outbox o USING (global_sequence) WHERE e.global_sequence = $1",
+                "SELECT e.envelope, o.event_id FROM journal_events e JOIN projection_outbox o USING (runtime_namespace, global_sequence) WHERE e.runtime_namespace = current_setting('colossus.runtime_namespace') AND e.global_sequence = $1",
                 &[&expected_head],
             )
             .map_err(database_error)?;
@@ -266,7 +249,7 @@ impl PostgresEventJournal {
         self.verify_persisted_event(&envelope, &persisted)?;
         let stream_version = transaction
             .query_one(
-                "SELECT stream_version FROM journal_stream_versions WHERE stream_id = $1",
+                "SELECT stream_version FROM journal_stream_versions WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND stream_id = $1",
                 &[&envelope.stream_id],
             )
             .map_err(database_error)?;
@@ -277,7 +260,7 @@ impl PostgresEventJournal {
         }
         if transaction
             .query_opt(
-                "SELECT projection FROM projection_positions WHERE position > $1 LIMIT 1",
+                "SELECT projection FROM projection_positions WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND position > $1 LIMIT 1",
                 &[&to_i64(head_sequence, "journal head")?],
             )
             .map_err(database_error)?
@@ -306,7 +289,7 @@ impl PostgresEventJournal {
         let mut transaction = client.transaction().map_err(database_error)?;
         let metadata = transaction
             .query_one(
-                "SELECT last_sequence, last_hash, latest_checkpoint FROM journal_metadata WHERE singleton = TRUE FOR SHARE",
+                "SELECT last_sequence, last_hash, latest_checkpoint FROM journal_metadata WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND singleton = TRUE FOR SHARE",
                 &[],
             )
             .map_err(database_error)?;
@@ -330,7 +313,7 @@ impl PostgresEventJournal {
         self.verify_checkpoint_signature(&checkpoint)?;
         let rows = transaction
             .query(
-                "SELECT global_sequence, envelope FROM journal_events WHERE global_sequence >= $1 ORDER BY global_sequence",
+                "SELECT global_sequence, envelope FROM journal_events WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND global_sequence >= $1 ORDER BY global_sequence",
                 &[&to_i64(checkpoint.global_sequence, "checkpoint sequence")?],
             )
             .map_err(database_error)?;
@@ -359,7 +342,7 @@ impl PostgresEventJournal {
                 }
                 let queued = transaction
                     .query_opt(
-                        "SELECT event_id FROM projection_outbox WHERE global_sequence = $1",
+                        "SELECT event_id FROM projection_outbox WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND global_sequence = $1",
                         &[&to_i64(sequence, "outbox sequence")?],
                     )
                     .map_err(database_error)?
@@ -395,7 +378,7 @@ impl PostgresEventJournal {
             self.verify_persisted_event(&envelope, &persisted)?;
             let queued = transaction
                 .query_opt(
-                    "SELECT event_id FROM projection_outbox WHERE global_sequence = $1",
+                    "SELECT event_id FROM projection_outbox WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND global_sequence = $1",
                     &[&to_i64(sequence, "outbox sequence")?],
                 )
                 .map_err(database_error)?
@@ -426,7 +409,7 @@ impl PostgresEventJournal {
         for (stream_id, version) in touched_streams {
             let stored = transaction
                 .query_opt(
-                    "SELECT stream_version FROM journal_stream_versions WHERE stream_id = $1",
+                    "SELECT stream_version FROM journal_stream_versions WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND stream_id = $1",
                     &[&stream_id],
                 )
                 .map_err(database_error)?
@@ -439,7 +422,7 @@ impl PostgresEventJournal {
             }
         }
         for row in transaction
-            .query("SELECT projection, position FROM projection_positions", &[])
+            .query("SELECT projection, position FROM projection_positions WHERE runtime_namespace = current_setting('colossus.runtime_namespace')", &[])
             .map_err(database_error)?
         {
             let projection = row.get::<_, String>(0);
@@ -495,6 +478,9 @@ impl PostgresEventJournal {
             ))
         })?;
         config.application_name("colossus-journal");
+        config.connect_timeout(Duration::from_millis(
+            self.config.statement_timeout_ms.min(5_000),
+        ));
         match &self.config.tls {
             PostgresTlsConfig::Disabled => {
                 config.ssl_mode(SslMode::Disable);
@@ -522,7 +508,7 @@ impl PostgresEventJournal {
         Ok(config)
     }
 
-    fn connect(&self) -> Result<Client, StoreError> {
+    pub(super) fn connect(&self) -> Result<Client, StoreError> {
         let config = self.pg_config()?;
         let mut client = match &self.config.tls {
             PostgresTlsConfig::Disabled => config.connect(NoTls).map_err(database_error)?,
@@ -538,6 +524,12 @@ impl PostgresEventJournal {
             )
             .map_err(database_error)?;
         client
+            .execute(
+                "SELECT set_config('colossus.runtime_namespace', $1, false)",
+                &[&self.config.runtime_namespace],
+            )
+            .map_err(database_error)?;
+        client
             .batch_execute(&format!("SET search_path TO \"{}\"", self.config.schema))
             .map_err(database_error)?;
         Ok(client)
@@ -550,12 +542,29 @@ impl PostgresEventJournal {
                 .connect(self.required_tls_connector()?)
                 .map_err(database_error),
         })?;
-        client
+        let timeout = self.config.statement_timeout_ms.to_string();
+        client.execute("SELECT set_config('statement_timeout',$1,false), set_config('lock_timeout',$1,false)", &[&timeout]).map_err(database_error)?;
+        let migrated: bool = client.query_one("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=$1 AND table_name='journal_metadata' AND column_name='runtime_namespace')", &[&self.config.schema]).map_err(database_error)?.get(0);
+        if migrated {
+            return Ok(());
+        }
+        let mut transaction = client.transaction().map_err(database_error)?;
+        // Serialize schema installation once, not each user's journal operations.
+        transaction
+            .query_one(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+                &[&self.config.schema],
+            )
+            .map_err(database_error)?;
+        self.verify_transaction_fence(&mut transaction)?;
+        transaction
             .batch_execute(&format!(
                 "CREATE SCHEMA IF NOT EXISTS \"{}\"; SET search_path TO \"{}\"; {TABLES}",
                 self.config.schema, self.config.schema
             ))
-            .map_err(database_error)
+            .map_err(database_error)?;
+        self.migrate_partitions(&mut transaction)?;
+        transaction.commit().map_err(commit_error)
     }
 
     fn required_tls_connector(&self) -> Result<MakeRustlsConnect, StoreError> {
@@ -732,9 +741,10 @@ impl PostgresEventJournal {
         }
         let mut client = self.connect()?;
         let mut transaction = client.transaction().map_err(database_error)?;
+        self.verify_transaction_fence(&mut transaction)?;
         let head = transaction
             .query_one(
-                "SELECT last_sequence, last_hash FROM journal_metadata WHERE singleton = TRUE FOR UPDATE",
+                "SELECT last_sequence, last_hash FROM journal_metadata WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND singleton = TRUE FOR UPDATE",
                 &[],
             )
             .map_err(database_error)?;
@@ -749,7 +759,7 @@ impl PostgresEventJournal {
             } else {
                 transaction
                     .query_opt(
-                        "SELECT stream_version FROM journal_stream_versions WHERE stream_id = $1",
+                        "SELECT stream_version FROM journal_stream_versions WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND stream_id = $1",
                         &[&event.stream_id],
                     )
                     .map_err(database_error)?
@@ -809,7 +819,7 @@ impl PostgresEventJournal {
                 .map_err(database_error)?;
             transaction
                 .execute(
-                    "INSERT INTO journal_stream_versions (stream_id, stream_version) VALUES ($1, $2) ON CONFLICT (stream_id) DO UPDATE SET stream_version = EXCLUDED.stream_version",
+                    "INSERT INTO journal_stream_versions (stream_id, stream_version) VALUES ($1, $2) ON CONFLICT (runtime_namespace, stream_id) DO UPDATE SET stream_version = EXCLUDED.stream_version",
                     &[&envelope.stream_id, &to_i64(stream_version, "stream version")?],
                 )
                 .map_err(database_error)?;
@@ -824,7 +834,7 @@ impl PostgresEventJournal {
         }
         transaction
             .execute(
-                "UPDATE journal_metadata SET last_sequence = $1, last_hash = $2 WHERE singleton = TRUE",
+                "UPDATE journal_metadata SET last_sequence = $1, last_hash = $2 WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND singleton = TRUE",
                 &[&to_i64(sequence, "global sequence")?, &previous_hash],
             )
             .map_err(database_error)?;
@@ -840,7 +850,7 @@ impl PostgresEventJournal {
         let mut client = self.connect()?;
         let bytes = client
             .query_opt(
-                "SELECT envelope FROM journal_events WHERE global_sequence = $1",
+                "SELECT envelope FROM journal_events WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND global_sequence = $1",
                 &[&to_i64(event.global_sequence, "global sequence")?],
             )
             .map_err(database_error)?
@@ -865,7 +875,7 @@ impl PostgresEventJournal {
         let mut client = self.connect()?;
         client
             .query_one(
-                "SELECT latest_checkpoint FROM journal_metadata WHERE singleton = TRUE",
+                "SELECT latest_checkpoint FROM journal_metadata WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND singleton = TRUE",
                 &[],
             )
             .map_err(database_error)?
@@ -945,7 +955,7 @@ impl PostgresEventJournal {
     fn durable_stream_version(client: &mut Client, stream_id: &str) -> Result<u64, StoreError> {
         client
             .query_opt(
-                "SELECT stream_version FROM journal_stream_versions WHERE stream_id = $1",
+                "SELECT stream_version FROM journal_stream_versions WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND stream_id = $1",
                 &[&stream_id],
             )
             .map_err(database_error)?
@@ -955,7 +965,7 @@ impl PostgresEventJournal {
     fn journal_head_sequence(client: &mut Client) -> Result<u64, StoreError> {
         client
             .query_one(
-                "SELECT last_sequence FROM journal_metadata WHERE singleton = TRUE",
+                "SELECT last_sequence FROM journal_metadata WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND singleton = TRUE",
                 &[],
             )
             .map_err(database_error)
@@ -1031,7 +1041,7 @@ impl PostgresEventJournal {
         let mut transaction = client.transaction().map_err(database_error)?;
         let metadata = transaction
             .query_one(
-                "SELECT last_sequence, last_hash, latest_checkpoint FROM journal_metadata WHERE singleton = TRUE FOR SHARE",
+                "SELECT last_sequence, last_hash, latest_checkpoint FROM journal_metadata WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND singleton = TRUE FOR SHARE",
                 &[],
             )
             .map_err(database_error)?;
@@ -1045,7 +1055,7 @@ impl PostgresEventJournal {
 
         for row in transaction
             .query(
-                "SELECT global_sequence, envelope FROM journal_events ORDER BY global_sequence",
+                "SELECT global_sequence, envelope FROM journal_events WHERE runtime_namespace = current_setting('colossus.runtime_namespace') ORDER BY global_sequence",
                 &[],
             )
             .map_err(database_error)?
@@ -1080,7 +1090,7 @@ impl PostgresEventJournal {
             self.verify_persisted_event(&envelope, &persisted)?;
             let queued = transaction
                 .query_opt(
-                    "SELECT event_id FROM projection_outbox WHERE global_sequence = $1",
+                    "SELECT event_id FROM projection_outbox WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND global_sequence = $1",
                     &[&to_i64(sequence, "global sequence")?],
                 )
                 .map_err(database_error)?
@@ -1108,7 +1118,7 @@ impl PostgresEventJournal {
         }
         let outbox_count = to_u64(
             transaction
-                .query_one("SELECT COUNT(*) FROM projection_outbox", &[])
+                .query_one("SELECT COUNT(*) FROM projection_outbox WHERE runtime_namespace = current_setting('colossus.runtime_namespace')", &[])
                 .map_err(database_error)?
                 .get::<_, i64>(0),
             "projection outbox count",
@@ -1121,7 +1131,7 @@ impl PostgresEventJournal {
         let mut durable_stream_versions = BTreeMap::new();
         for row in transaction
             .query(
-                "SELECT stream_id, stream_version FROM journal_stream_versions ORDER BY stream_id",
+                "SELECT stream_id, stream_version FROM journal_stream_versions WHERE runtime_namespace = current_setting('colossus.runtime_namespace') ORDER BY stream_id",
                 &[],
             )
             .map_err(database_error)?
@@ -1137,7 +1147,7 @@ impl PostgresEventJournal {
             ));
         }
         for row in transaction
-            .query("SELECT projection, position FROM projection_positions", &[])
+            .query("SELECT projection, position FROM projection_positions WHERE runtime_namespace = current_setting('colossus.runtime_namespace')", &[])
             .map_err(database_error)?
         {
             let projection = row.get::<_, String>(0);
@@ -1151,7 +1161,7 @@ impl PostgresEventJournal {
         }
         for row in transaction
             .query(
-                "SELECT projection, record_key, value FROM projection_records",
+                "SELECT projection, record_key, value FROM projection_records WHERE runtime_namespace = current_setting('colossus.runtime_namespace')",
                 &[],
             )
             .map_err(database_error)?
@@ -1194,7 +1204,7 @@ impl PostgresEventJournal {
     }
 }
 
-impl EventJournal for PostgresEventJournal {
+impl EventJournal for PostgresJournalCore {
     fn append(&self, event: NewEvent) -> Result<EventEnvelope, StoreError> {
         self.append_batch(vec![event])?
             .pop()
@@ -1244,7 +1254,7 @@ impl EventJournal for PostgresEventJournal {
             let durable_version = Self::durable_stream_version(&mut client, stream_id)?;
             let events = client
                 .query(
-                "SELECT envelope FROM journal_events WHERE stream_id = $1 AND stream_version <= $2 ORDER BY stream_version",
+                "SELECT envelope FROM journal_events WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND stream_id = $1 AND stream_version <= $2 ORDER BY stream_version",
                 &[&stream_id, &to_i64(durable_version, "stream version")?],
             )
             .map_err(database_error)?
@@ -1275,7 +1285,7 @@ impl EventJournal for PostgresEventJournal {
             }
             let events = client
                 .query(
-                "SELECT envelope FROM journal_events WHERE stream_id = $1 AND stream_version > $2 AND stream_version <= $3 ORDER BY stream_version LIMIT $4",
+                "SELECT envelope FROM journal_events WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND stream_id = $1 AND stream_version > $2 AND stream_version <= $3 ORDER BY stream_version LIMIT $4",
                 &[
                     &stream_id,
                     &to_i64(after_version, "stream version")?,
@@ -1320,7 +1330,7 @@ impl EventJournal for PostgresEventJournal {
             }
             let rows = client
                 .query(
-                    "SELECT envelope FROM journal_events WHERE stream_id = $1 AND stream_version <= $2 ORDER BY stream_version DESC LIMIT $3",
+                    "SELECT envelope FROM journal_events WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND stream_id = $1 AND stream_version <= $2 ORDER BY stream_version DESC LIMIT $3",
                     &[
                         &stream_id,
                         &to_i64(last_version, "stream version")?,
@@ -1366,12 +1376,12 @@ impl EventJournal for PostgresEventJournal {
             let query_limit = limit.saturating_add(usize::from(after.is_some()));
             let rows = if let Some(end) = lexical_prefix_end(prefix) {
                 client.query(
-                    "SELECT stream_id FROM journal_stream_versions WHERE stream_id COLLATE \"C\" >= $1::TEXT COLLATE \"C\" AND stream_id COLLATE \"C\" < $2::TEXT COLLATE \"C\" ORDER BY stream_id COLLATE \"C\" LIMIT $3",
+                    "SELECT stream_id FROM journal_stream_versions WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND stream_id COLLATE \"C\" >= $1::TEXT COLLATE \"C\" AND stream_id COLLATE \"C\" < $2::TEXT COLLATE \"C\" ORDER BY stream_id COLLATE \"C\" LIMIT $3",
                     &[&start, &end, &bounded_limit(query_limit)?],
                 )
             } else {
                 client.query(
-                    "SELECT stream_id FROM journal_stream_versions WHERE stream_id COLLATE \"C\" >= $1::TEXT COLLATE \"C\" AND left(stream_id, char_length($2)) COLLATE \"C\" = $2::TEXT COLLATE \"C\" ORDER BY stream_id COLLATE \"C\" LIMIT $3",
+                    "SELECT stream_id FROM journal_stream_versions WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND stream_id COLLATE \"C\" >= $1::TEXT COLLATE \"C\" AND left(stream_id, char_length($2)) COLLATE \"C\" = $2::TEXT COLLATE \"C\" ORDER BY stream_id COLLATE \"C\" LIMIT $3",
                     &[&start, &prefix, &bounded_limit(query_limit)?],
                 )
             }
@@ -1405,7 +1415,7 @@ impl EventJournal for PostgresEventJournal {
             let mut events = Vec::with_capacity(limit.min(1024));
             for row in client
                 .query(
-                "SELECT global_sequence, envelope FROM journal_events WHERE global_sequence >= $1 AND global_sequence <= $2 ORDER BY global_sequence LIMIT $3",
+                "SELECT global_sequence, envelope FROM journal_events WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND global_sequence >= $1 AND global_sequence <= $2 ORDER BY global_sequence LIMIT $3",
                 &[
                     &to_i64(from_sequence, "global sequence")?,
                     &to_i64(head_sequence, "global sequence")?,
@@ -1454,7 +1464,7 @@ impl EventJournal for PostgresEventJournal {
             let mut work = Vec::with_capacity(limit.min(1024));
             for row in client
                 .query(
-                "SELECT global_sequence, event_id FROM projection_outbox WHERE global_sequence >= $1 AND global_sequence <= $2 ORDER BY global_sequence LIMIT $3",
+                "SELECT global_sequence, event_id FROM projection_outbox WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND global_sequence >= $1 AND global_sequence <= $2 ORDER BY global_sequence LIMIT $3",
                 &[
                     &to_i64(from_sequence, "global sequence")?,
                     &to_i64(head_sequence, "global sequence")?,
@@ -1489,7 +1499,7 @@ impl EventJournal for PostgresEventJournal {
         let mut client = self.connect()?;
         let row = client
             .query_one(
-                "SELECT last_sequence, last_hash FROM journal_metadata WHERE singleton = TRUE",
+                "SELECT last_sequence, last_hash FROM journal_metadata WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND singleton = TRUE",
                 &[],
             )
             .map_err(database_error)?;
@@ -1523,9 +1533,10 @@ impl EventJournal for PostgresEventJournal {
         }
         let mut client = self.connect()?;
         let mut transaction = client.transaction().map_err(database_error)?;
+        self.verify_transaction_fence(&mut transaction)?;
         let row = transaction
             .query_one(
-                "SELECT last_sequence, last_hash FROM journal_metadata WHERE singleton = TRUE FOR UPDATE",
+                "SELECT last_sequence, last_hash FROM journal_metadata WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND singleton = TRUE FOR UPDATE",
                 &[],
             )
             .map_err(database_error)?;
@@ -1554,7 +1565,7 @@ impl EventJournal for PostgresEventJournal {
         crash_at_test_fault("after_anchor_before_checkpoint_commit");
         transaction
             .execute(
-                "UPDATE journal_metadata SET latest_checkpoint = $1 WHERE singleton = TRUE",
+                "UPDATE journal_metadata SET latest_checkpoint = $1 WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND singleton = TRUE",
                 &[&serde_json::to_vec(&checkpoint).map_err(adapter_error)?],
             )
             .map_err(database_error)?;
@@ -1564,13 +1575,13 @@ impl EventJournal for PostgresEventJournal {
     }
 }
 
-impl ProjectionStore for PostgresEventJournal {
+impl ProjectionStore for PostgresJournalCore {
     fn position(&self, projection: &str) -> Result<u64, StoreError> {
         validate_projection(projection)?;
         let mut client = self.connect()?;
         client
             .query_opt(
-                "SELECT position FROM projection_positions WHERE projection = $1",
+                "SELECT position FROM projection_positions WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND projection = $1",
                 &[&projection],
             )
             .map_err(database_error)?
@@ -1585,7 +1596,7 @@ impl ProjectionStore for PostgresEventJournal {
         let mut client = self.connect()?;
         client
             .query_opt(
-                "SELECT value FROM projection_records WHERE projection = $1 AND record_key = $2",
+                "SELECT value FROM projection_records WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND projection = $1 AND record_key = $2",
                 &[&projection, &key],
             )
             .map_err(database_error)?
@@ -1608,7 +1619,7 @@ impl ProjectionStore for PostgresEventJournal {
         let mut client = self.connect()?;
         client
             .query(
-                "SELECT record_key, value FROM projection_records WHERE projection = $1 AND left(record_key, char_length($2)) = $2 ORDER BY record_key LIMIT $3",
+                "SELECT record_key, value FROM projection_records WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND projection = $1 AND left(record_key, char_length($2)) = $2 ORDER BY record_key LIMIT $3",
                 &[&projection, &key_prefix, &bounded_limit(limit)?],
             )
             .map_err(database_error)?
@@ -1639,7 +1650,7 @@ impl ProjectionStore for PostgresEventJournal {
         let cursor = after_key.unwrap_or("");
         client
             .query(
-                "SELECT record_key, value FROM projection_records WHERE projection = $1 AND left(record_key, char_length($2)) = $2 AND record_key > $3 ORDER BY record_key LIMIT $4",
+                "SELECT record_key, value FROM projection_records WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND projection = $1 AND left(record_key, char_length($2)) = $2 AND record_key > $3 ORDER BY record_key LIMIT $4",
                 &[&projection, &key_prefix, &cursor, &bounded_limit(limit)?],
             )
             .map_err(database_error)?
@@ -1669,16 +1680,17 @@ impl ProjectionStore for PostgresEventJournal {
         }
         let mut client = self.connect()?;
         let mut transaction = client.transaction().map_err(database_error)?;
+        self.verify_transaction_fence(&mut transaction)?;
         transaction
             .execute(
-                "INSERT INTO projection_positions (projection, position) VALUES ($1, 0) ON CONFLICT (projection) DO NOTHING",
+                "INSERT INTO projection_positions (projection, position) VALUES ($1, 0) ON CONFLICT (runtime_namespace, projection) DO NOTHING",
                 &[&batch.projection],
             )
             .map_err(database_error)?;
         let actual = to_u64(
             transaction
                 .query_one(
-                    "SELECT position FROM projection_positions WHERE projection = $1 FOR UPDATE",
+                    "SELECT position FROM projection_positions WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND projection = $1 FOR UPDATE",
                     &[&batch.projection],
                 )
                 .map_err(database_error)?
@@ -1697,7 +1709,7 @@ impl ProjectionStore for PostgresEventJournal {
                 ProjectionMutation::Upsert { key, value } => {
                     transaction
                         .execute(
-                            "INSERT INTO projection_records (projection, record_key, value) VALUES ($1, $2, $3) ON CONFLICT (projection, record_key) DO UPDATE SET value = EXCLUDED.value",
+                            "INSERT INTO projection_records (projection, record_key, value) VALUES ($1, $2, $3) ON CONFLICT (runtime_namespace, projection, record_key) DO UPDATE SET value = EXCLUDED.value",
                             &[
                                 &batch.projection,
                                 &key,
@@ -1709,7 +1721,7 @@ impl ProjectionStore for PostgresEventJournal {
                 ProjectionMutation::Delete { key } => {
                     transaction
                         .execute(
-                            "DELETE FROM projection_records WHERE projection = $1 AND record_key = $2",
+                            "DELETE FROM projection_records WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND projection = $1 AND record_key = $2",
                             &[&batch.projection, &key],
                         )
                         .map_err(database_error)?;
@@ -1718,7 +1730,7 @@ impl ProjectionStore for PostgresEventJournal {
         }
         transaction
             .execute(
-                "UPDATE projection_positions SET position = $2 WHERE projection = $1",
+                "UPDATE projection_positions SET position = $2 WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND projection = $1",
                 &[
                     &batch.projection,
                     &to_i64(batch.through_sequence, "projection position")?,
@@ -1732,15 +1744,16 @@ impl ProjectionStore for PostgresEventJournal {
         validate_projection(projection)?;
         let mut client = self.connect()?;
         let mut transaction = client.transaction().map_err(database_error)?;
+        self.verify_transaction_fence(&mut transaction)?;
         transaction
             .execute(
-                "DELETE FROM projection_records WHERE projection = $1",
+                "DELETE FROM projection_records WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND projection = $1",
                 &[&projection],
             )
             .map_err(database_error)?;
         transaction
             .execute(
-                "DELETE FROM projection_positions WHERE projection = $1",
+                "DELETE FROM projection_positions WHERE runtime_namespace = current_setting('colossus.runtime_namespace') AND projection = $1",
                 &[&projection],
             )
             .map_err(database_error)?;

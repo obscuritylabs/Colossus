@@ -14,10 +14,16 @@ worker SDK, credential handling, validated message protocol, and view projection
 Shared components take presentation props and callbacks only. They cannot import a
 host bridge or transport. The web host keeps browser appearance persistence, project
 state, authentication, and control-plane requests; the Rust cloud server owns authorization and runtime connections.
+Touch reading/input surfaces use `--font-size-touch-body` and the shared
+`--control-height-touch`; mobile chrome retains the ordinary typography tokens.
+Compact mobile layouts reduce spacing independently from accessible touch targets. `DropdownSelect` accepts
+`density="touch"` to keep both its trigger and portalled options readable and at
+least 44 pixels high. Compact consumers retain their existing control geometry.
 
 The app build and lockfiles remain separate. After changing this package, refresh
-all local file dependencies with `npm ci --ignore-scripts` in `apps/desktop`,
-`apps/vscode`, and `apps/web`, then run their `check`, `build`, and affected browser
+all local file dependencies with
+`npm ci --ignore-scripts --legacy-peer-deps --install-links` in `apps/desktop`,
+`apps/vscode` and `apps/web`, then run their `check`, `build`, and affected browser
 checks. CI installs the shared source afresh and selects the host gates when
 `apps/ui` changes.
 No generated UI bundle needs committing. React is pinned to the same peer version
@@ -26,11 +32,11 @@ in all consumers so each renderer has one React instance.
 Neutral dark is the VS Code default. Desktop keeps Colossus blue by default and
 offers neutral dark, Black, and Hacker in Global → Appearance → Dark palette. Desktop keeps saved
 custom palette colors while a preset palette is selected. Black uses shadcn’s near-black neutral surfaces
-with Colossus accents; it is available in all three apps. Hacker translates
+with Colossus accents; it is available in all hosts. Hacker translates
 the TUI palette from `crates/colossus-presentation/src/palette.rs`: green prompts
 and success, pale-green messages, cyan tools, amber warnings, and red errors.
 The shared CSS adds near-black graphical surfaces and retains Colossus typography
-and branding. It is selectable in all three apps; preferences remain local to each host.
+and branding. It is selectable in all hosts; preferences remain local to each host.
 Light and high contrast keep their respective token families. The native activity bar, left workspace view, and
 right chat view stay owned by VS Code.
 
@@ -80,7 +86,9 @@ license is in `assets/shadcn-LICENSE.txt` and accompanies renderer builds.
 Import conversation components from `@colossus/ui/conversation` to keep Markdown
 parser dependencies outside unrelated settings bundles. `ConversationEntry` owns
 message geometry, avatar, typography, timestamps, and bounded Markdown rendering.
-`ConversationTimeline` provides a common feed container. Hosts supply only released
+`ConversationTimeline` provides a common feed container. `ReleasedRunActivity` renders
+released tool lifecycle details, previews, and reasoning summaries for Web;
+hosts bind each update to its exact task/run before passing it to the shared renderer. Hosts supply only released
 content and retain event cursors, ordering, scrolling, tools, and interaction authority.
 
 `ConversationComposer` is a controlled composer with context, controls, queue, notice,
@@ -89,6 +97,21 @@ host inputs and controls without replacing attachments, dictation, workspace sta
 or submission logic. Buttons inside a composer form must declare their intended type.
 The shared frame never selects models, grants capabilities, invokes tools, or persists
 a draft. Send shortcuts and autosizing reuse the existing shared composer behavior.
+`ComposerStopButton` is shared by Desktop and Web. Hosts distinguish a running response
+from a pending submission, retain cancellation receipts, and decide whether a draft can
+be queued. Stop remains inside the composer while a response is running.
+
+Provider and model settings use the complete shared `ProviderSettingsEditor` and
+`ModelSettingsEditor` surfaces, with the same `CatalogInventory`, branded provider
+icons, model cards, token limits and four Off/Auto/On feature controls.
+`ModelRoleRouting` and the lazy `ModelRoutingOverview` share the seven role selectors,
+primary fallback and interactive routing inspector. Hosts supply controlled drafts,
+presets, authenticated catalog loading, credential controls and save callbacks.
+Desktop keeps native setup-package imports and account integration; Web keeps
+project definitions, private user connections and encrypted SQL persistence.
+Sharing presentation does not copy Desktop's local configuration into a cloud project.
+`CredentialForm` clears its write-only input on submission and scope changes; the host
+owns the reviewed binding and encrypted persistence.
 
 `ModelPicker` from `@colossus/ui/model-picker` combines a searchable model list and
 discrete reasoning slider in one shadcn popover. Hosts supply configured profiles,
@@ -102,16 +125,39 @@ can supply a `linkComponent` that validates navigation through their own authori
 Desktop uses its browser controller. VS Code keeps generated links inert. Shared
 styles respond to the same palette and text-size preferences as settings controls.
 
-`ControlPlaneFrame` uses owned shadcn sidebar, menu, sheet, tooltip, collapsible,
-and resizable foundations. Import `styles/control-plane.css` in the web host; its
+Markdown uses Streamdown for incomplete streaming content. Pass `isStreaming` only
+while the host is receiving that message. The parser keeps one bounded message block
+so character, node and depth limits apply across the whole response. Code blocks share
+a language header, explicit copy action, keyboard scrolling and wrapping. Shiki loads
+only supported grammars on demand and emits semantic CSS classes, preserving each
+host's content security policy without inline token styles. Unknown languages remain
+readable plain text. Mermaid previews load on demand for completed, bounded offline
+flow, sequence, state, class, ER, Gantt and pie diagrams. Configuration directives,
+interactive links, embedded HTML and remote media are unavailable in previews; source
+remains accessible and copyable. Generated SVG is copied through a bounded geometry
+and text allowlist into React, never inserted as HTML.
+
+`ConversationEntry` owns the common message copy action and optional reported usage
+footer. Hosts supply counts only from released updates bound to that run; missing
+counts remain unavailable. The footer labels this as reported run usage and shows it
+once on the final assistant message rather than attributing it to every message.
+
+`ControlPlaneFrame` uses the owned shadcn sidebar, menu, sheet and tooltip
+foundations. Import `styles/control-plane.css` in the web host; its
 workbench styles stay out of Desktop and editor bundles. Shared controls retain
 native behavior and the existing palette and text-size tokens. Add future shadcn
 components to this package as they are adopted, with relative internal imports,
 exact Radix dependencies, and no persistence or transport in the foundation.
 
-`ControlPlaneFrame` supplies the web primary rail, an optional scoped sidebar, content
-header, and configurable classification banner. Navigation, authentication, projects,
-and settings remain web/server decisions. It exposes no transport or persistence.
+`ControlPlaneFrame` supplies a labeled app sidebar with project selection, a separate
+conversation navigation pane, an inset content window, and a configurable classification
+banner. App navigation collapses to an icon rail through its trigger or keyboard shortcut;
+the conversation list has an independent trigger. At narrow widths each opens its own accessible sheet.
+Hosts can group app destinations under labeled navigation sections; collapsed rails keep
+the icons and group separators.
+Navigation, authentication, projects and settings remain web/server decisions. It exposes
+no transport or persistence. Web personal and project settings
+use the same `SettingsFrame` as Desktop, with host-owned scope and section selection.
 
 ## Charts
 
@@ -162,3 +208,5 @@ support never changes the user’s requested mode into Execute.
 offer standalone Goal mode only after authenticated `goal.create` discovery, capture
 its 1–50 iteration budget in the durable run request, and retain queue, permission,
 and cancellation decisions. A Plan is not required.
+
+`HostPlatformIcon` provides shared platform decoration from host-released metadata. Hosts supply the platform and readable label; icons never establish connection state or authority. The Linux glyph uses the existing Tabler Linux-family icon.

@@ -430,8 +430,14 @@ pub struct Run {
     pub run_id: String,
     /// Durable session identity associated with the run.
     pub session_id: String,
-    /// Bounded display title derived from the opening request.
+    /// Display title from the canonical session when set, otherwise the opening request.
     pub title: String,
+    /// Session-title index revision; zero denotes an opening or legacy unversioned title.
+    #[cfg_attr(
+        feature = "serialization",
+        serde(default, skip_serializing_if = "zero_title_revision")
+    )]
+    pub title_revision: u64,
     /// Selected logical role.
     pub role: String,
     /// Requested execution mode.
@@ -1341,5 +1347,10 @@ pub type RunUpdateStream = std::pin::Pin<
 
 #[cfg(feature = "serialization")]
 fn zero_goal_iterations(value: &u32) -> bool {
+    *value == 0
+}
+
+#[cfg(feature = "serialization")]
+fn zero_title_revision(value: &u64) -> bool {
     *value == 0
 }

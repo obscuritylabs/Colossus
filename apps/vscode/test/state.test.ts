@@ -307,6 +307,60 @@ test("session restoration follows three-run pages and retains the latest 20 turn
   c.detach();
 });
 
+test("restored response usage keeps exact SDK counts and deduplicates only the bound run", async () => {
+  const c = controller();
+  const w = worker([planRun()]);
+  w.client.watch = async function* (id) {
+    for (const [sequence, runId, inputTokens, outputTokens, totalTokens] of [
+      [1n, id, 9007199254740993n, 3n, 9007199254740996n],
+      [1n, id, 9007199254740993n, 3n, 9007199254740996n],
+      [2n, "another-run", 1000n, 1000n, 2000n],
+      [3n, id, 10n, 5n, 15n],
+    ] as const) {
+      yield {
+        runId,
+        sequence,
+        value: RunUpdate.fromPartial({
+          runId,
+          sequence,
+          update: {
+            $case: "usage",
+            value: { inputTokens, outputTokens, totalTokens },
+          },
+        }),
+      };
+    }
+    yield {
+      runId: id,
+      sequence: 4n,
+      value: RunUpdate.fromPartial({
+        runId: id,
+        sequence: 4n,
+        update: { $case: "result", value: { output: "Released response" } },
+      }),
+    };
+  };
+  await c.attach(w.client, "primary", "session-1");
+  const response = c.view.messages.find(
+    (message) => message.role === "assistant",
+  );
+  assert.deepEqual(response?.usage, {
+    inputTokens: "9007199254741003",
+    outputTokens: "8",
+    totalTokens: "9007199254741011",
+  });
+  assert.equal(
+    c.view.messages.find((message) => message.role === "user")?.usage,
+    undefined,
+  );
+  await c.selectSession("session-1");
+  assert.deepEqual(
+    c.view.messages.find((message) => message.role === "assistant")?.usage,
+    response?.usage,
+  );
+  c.detach();
+});
+
 test("session pagination rejects repeating cursors and discards pages received after detaching", async () => {
   const c = controller();
   const w = worker([planRun()]);

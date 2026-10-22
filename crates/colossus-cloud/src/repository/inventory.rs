@@ -136,20 +136,58 @@ impl CloudRepository {
         limit: usize,
     ) -> CloudResult<Vec<CloudHost>> {
         caller.require(CloudPermission::Read)?;
-        self.list(
-            &format!("cloud.host:{}:", caller.project_id()),
-            after,
-            limit,
+        self.query_entities(
+            caller,
+            EntityQuery {
+                kind: EntityKind::Host,
+                status: Some("connected".into()),
+                after: after.map(str::to_owned),
+                limit,
+                ..Default::default()
+            },
         )
-        .await
+        .await?
+        .into_iter()
+        .map(|record| record.value.try_into())
+        .collect()
     }
     /// Read one native host beneath the caller's project visibility.
     pub async fn get_host(&self, caller: &CloudCaller, host_id: &str) -> CloudResult<CloudHost> {
         caller.require(CloudPermission::Read)?;
         crate::validate_identifier(host_id)?;
-        self.read(&format!("cloud.host:{}:{host_id}", caller.project_id()))
-            .await
-            .map(|(host, _)| host)
+        let host: CloudHost = self
+            .read(&format!("cloud.host:{}:{host_id}", caller.project_id()))
+            .await?
+            .0;
+        // Host labels belong to the native environment; hide groups containing only another owner's nodes.
+        let nodes = self
+            .store
+            .list(&EntityQuery {
+                kind: EntityKind::Node,
+                project_id: caller.project_id().into(),
+                host_id: Some(host_id.into()),
+                limit: 1,
+                ..Default::default()
+            })
+            .await?;
+        if !nodes.is_empty()
+            && self
+                .store
+                .list(&EntityQuery {
+                    kind: EntityKind::Node,
+                    project_id: caller.project_id().into(),
+                    host_id: Some(host_id.into()),
+                    visible_to: Some(caller.subject().into()),
+                    status: Some("connected".into()),
+                    limit: 1,
+                    ..Default::default()
+                })
+                .await?
+                .is_empty()
+        {
+            return Err(CloudError::NotFound);
+        }
+        Ok(host)
     }
 
     /// Read only this project's runtime placements on one exact native host.
@@ -171,6 +209,8 @@ impl CloudRepository {
             kind: crate::storage::EntityKind::Node,
             project_id: caller.project_id().into(),
             host_id: Some(host_id.into()),
+            visible_to: Some(caller.subject().into()),
+            status: Some("connected".into()),
             after: after.map(str::to_owned),
             limit,
             ..Default::default()
@@ -197,12 +237,20 @@ impl CloudRepository {
         limit: usize,
     ) -> CloudResult<Vec<CloudWorkspace>> {
         caller.require(CloudPermission::Read)?;
-        self.list(
-            &format!("cloud.workspace:{}:", caller.project_id()),
-            after,
-            limit,
+        self.query_entities(
+            caller,
+            EntityQuery {
+                kind: EntityKind::Workspace,
+                status: Some("connected".into()),
+                after: after.map(str::to_owned),
+                limit,
+                ..Default::default()
+            },
         )
-        .await
+        .await?
+        .into_iter()
+        .map(|record| record.value.try_into())
+        .collect()
     }
     /// Upsert an authenticated bounded discovery page, preserving source placement.
     pub async fn discover_runs(
@@ -247,12 +295,16 @@ impl CloudRepository {
                 }
                 Err(CloudError::NotFound) => (
                     CloudThread {
+                        owner_user_id: current_node.owner_user_id.clone(),
+                        branch: None,
                         thread_id: thread_id.clone(),
                         project_id: node.project_id.clone(),
                         node_id: node.node_id.clone(),
                         host_id: current_node.host_id.clone(),
                         workspace_id: current_node.workspace_id.clone(),
                         title: run.title.chars().take(256).collect(),
+                        title_overridden: Some(false),
+                        runtime_title_revision: None,
                         created_at: run.created_at.clone(),
                         updated_at: run.updated_at.clone(),
                         revision: 0,
@@ -306,14 +358,22 @@ impl CloudRepository {
                     }
                     let revision = task.revision;
                     let before = task.clone();
+                    if let Some(previous) = &task.snapshot {
+                        super::threads::validate_runtime_title_transition(&previous.run, &run)?;
+                    }
                     task.thread_id = Some(thread_id.clone());
                     task.source_read_only = !discovered.controllable;
-                    if task
+                    let advanced = task
                         .snapshot
                         .as_ref()
-                        .is_none_or(|snapshot| snapshot.run.last_sequence < run.last_sequence)
-                    {
-                        if task.subject == "runtime" {
+                        .is_none_or(|snapshot| snapshot.run.last_sequence < run.last_sequence);
+                    let title_changed = task.snapshot.as_ref().is_some_and(|snapshot| {
+                        snapshot.run.last_sequence == run.last_sequence
+                            && (snapshot.run.title != run.title
+                                || snapshot.run.title_revision != run.title_revision)
+                    });
+                    if advanced || title_changed {
+                        if task.subject == "runtime" && advanced {
                             task.history_complete = false;
                         }
                         task.snapshot = Some(GetRunResponse {
@@ -420,6 +480,7 @@ impl CloudRepository {
                 )?);
             }
             thread.session_id = Some(run.session_id.clone());
+            super::threads::apply_runtime_title(&mut thread, &task)?;
             thread.can_continue = discovered.continuable;
             thread.updated_at = thread.updated_at.max(run.updated_at);
             if task.last_sequence < run.last_sequence {
@@ -488,59 +549,16 @@ impl CloudRepository {
 }
 
 impl CloudRepository {
-    /// A completed authorized discovery cycle withdraws continuation from omitted sources.
-    /// Already released cloud history stays retained for project readers.
+    /// Reconcile current sources in one phase; released history remains retained.
+    /// Streaming controllers use `begin_discovery` and `finish_discovery_snapshot`
+    /// to fence sessions created while an earlier runtime page is in flight.
     pub async fn finish_discovery(
         &self,
         node: &CloudNode,
         visible_sessions: &std::collections::BTreeMap<String, bool>,
     ) -> CloudResult<()> {
-        self.live_node(node).await?;
-        let mut after = None;
-        loop {
-            let records = self
-                .store
-                .list(&EntityQuery {
-                    kind: EntityKind::Thread,
-                    project_id: node.project_id.clone(),
-                    parent_id: None,
-                    after: after.clone(),
-                    limit: 100,
-                    node_id: Some(node.node_id.clone()),
-                    host_id: None,
-                    query: None,
-                    status: None,
-                    archived: None,
-                    order: EntityOrder::IdAsc,
-                })
-                .await?;
-            if records.is_empty() {
-                break;
-            }
-            after = records.last().map(|record| record.key.id.clone());
-            for record in records {
-                let mut thread: CloudThread = record.value.try_into()?;
-                // New cloud sessions without a receipt are not discovery omissions.
-                let Some(session) = &thread.session_id else {
-                    continue;
-                };
-                let can_continue = visible_sessions.get(session).copied().unwrap_or(false);
-                if thread.can_continue != can_continue {
-                    let revision = thread.revision;
-                    thread.revision += 1;
-                    thread.can_continue = can_continue;
-                    thread.updated_at = super::threads::timestamp()?;
-                    self.append(
-                        &node.node_id,
-                        super::threads::thread_stream(&node.project_id, &thread.thread_id),
-                        revision,
-                        "cloud.thread.visibility-reconciled.v2",
-                        &thread,
-                    )
-                    .await?;
-                }
-            }
-        }
-        Ok(())
+        let snapshot = self.begin_discovery(node).await?;
+        self.finish_discovery_snapshot(node, visible_sessions, snapshot)
+            .await
     }
 }

@@ -264,6 +264,8 @@ impl BrowserDriver for BrowserHostPool {
         let permit = Arc::clone(&self.inner.actions)
             .try_acquire_owned()
             .map_err(|_| BrowserDriverError::LimitExceeded)?;
+        let timeout_ms =
+            crate::deadline::execute_timeout_ms(&self.inner.capabilities.limits, &command.action);
         let (sender, receiver) = oneshot::channel();
         tokio::spawn(operations::execute(
             Arc::clone(&self.inner),
@@ -277,7 +279,7 @@ impl BrowserDriver for BrowserHostPool {
             entry,
             receiver,
             control,
-            self.inner.capabilities.limits.action_timeout_ms,
+            timeout_ms,
         )
         .await
     }

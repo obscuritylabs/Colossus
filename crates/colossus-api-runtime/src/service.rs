@@ -51,8 +51,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 mod posture;
 mod sharing;
+mod watch;
 
-const WATCH_PAGE_SIZE: usize = 16;
 const WATCH_CHANNEL_SIZE: usize = 8;
 const MAX_PENDING_RECOVERIES: usize = 256;
 const MAX_RENDERED_INPUT_BYTES: usize = 1_048_576;
@@ -1566,6 +1566,15 @@ impl RuntimeAgentRunApi {
         }
     }
 
+    /// Trusted host lifecycle fact, independent of public listing quotas.
+    ///
+    /// This covers process-owned executions and queued recoveries. Hosts must also
+    /// fence their durable external command queues and unresolved outcomes before
+    /// replacing a runtime or its configuration. It grants no run access or control.
+    pub fn has_pending_executions(&self) -> bool {
+        !lock(&self.execution).active.is_empty() || !lock(&self.pending_recoveries).is_empty()
+    }
+
     /// Cancel active runs and wait boundedly for their terminal durable updates.
     pub async fn shutdown_and_wait(&self, timeout: std::time::Duration) -> bool {
         self.request_shutdown();
@@ -1877,77 +1886,33 @@ impl AgentRunApi for RuntimeAgentRunApi {
             .watches
             .acquire(caller.principal().application_id())
             .map_err(|AdmissionLimitReached| capacity_error(caller))?;
-        let mut notifications = self.feeds.subscribe(&run.id, run.last_sequence);
-        let repository = Arc::clone(&self.repository);
-        let feeds = Arc::clone(&self.feeds);
+        let watch = watch::RunWatch {
+            notifications: self.feeds.subscribe(&run.id, run.last_sequence),
+            repository: Arc::clone(&self.repository),
+            feeds: Arc::clone(&self.feeds),
+            caller: source,
+            run_id: run.id,
+            cursor: request.after_sequence,
+        };
         let recipient = caller.clone();
-        let caller = source;
+        let source_application_id = watch.caller.principal().application_id().to_owned();
         let api = self.clone();
-        let run_id = run.id;
-        let mut cursor = request.after_sequence;
         let (sender, receiver) = mpsc::channel(WATCH_CHANNEL_SIZE);
         tokio::spawn(async move {
             let _watch_permit = watch_permit;
-            loop {
-                if shared
-                    && !api
-                        .workspace_share_allowed(
-                            &recipient,
-                            caller.principal().application_id(),
-                            false,
-                        )
-                        .unwrap_or(false)
-                {
-                    let _ = sender.send(Err(missing_run(&recipient))).await;
-                    return;
-                }
-                match repository.updates_after(&caller, &run_id, cursor, WATCH_PAGE_SIZE) {
-                    Ok(updates) => {
-                        let had_updates = !updates.is_empty();
-                        let terminal_update = updates
-                            .iter()
-                            .any(|update| update_is_terminal(&update.kind));
-                        for update in updates {
-                            cursor = update.sequence;
-                            if sender.send(Ok(update)).await.is_err() {
-                                return;
-                            }
-                        }
-                        if terminal_update {
-                            feeds.close(&run_id);
-                            return;
-                        }
-                        if had_updates {
-                            continue;
-                        }
+            watch
+                .run(sender, shared, || {
+                    if shared
+                        && !api
+                            .workspace_share_allowed(&recipient, &source_application_id, false)
+                            .unwrap_or(false)
+                    {
+                        Err(missing_run(&recipient))
+                    } else {
+                        Ok(())
                     }
-                    Err(error) => {
-                        let _ = sender.send(Err(error)).await;
-                        return;
-                    }
-                }
-                match repository.get_run(&caller, &run_id) {
-                    Ok(Some(current)) if current.status.is_terminal() => {
-                        feeds.close(&run_id);
-                        return;
-                    }
-                    Ok(Some(_)) => {}
-                    Ok(None) => return,
-                    Err(error) => {
-                        let _ = sender.send(Err(error)).await;
-                        return;
-                    }
-                }
-                tokio::select! {
-                    () = sender.closed() => return,
-                    changed = notifications.changed() => {
-                        if changed.is_err() {
-                            return;
-                        }
-                    }
-                    () = tokio::time::sleep(std::time::Duration::from_secs(5)), if shared => {}
-                }
-            }
+                })
+                .await;
         });
         Ok(Box::pin(ReceiverStream::new(receiver)))
     }
@@ -2889,15 +2854,6 @@ fn unknown_outcome_failure() -> RunUpdateKind {
             retry_after_ms: None,
         },
     }
-}
-
-fn update_is_terminal(kind: &RunUpdateKind) -> bool {
-    matches!(
-        kind,
-        RunUpdateKind::Result { .. }
-            | RunUpdateKind::Failure { .. }
-            | RunUpdateKind::Cancellation { .. }
-    )
 }
 
 fn public_activity(projected: &ProjectedSessionActivity) -> Result<SessionActivity, StoreError> {

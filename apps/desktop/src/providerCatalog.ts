@@ -13,20 +13,9 @@ export interface ProviderPreset {
   };
 }
 
-export interface ProviderCatalogModel {
-  id: string;
-  object?: string | null;
-  owned_by?: string | null;
-  display_name?: string;
-  description?: string;
-  context_window_tokens?: number;
-  max_output_tokens?: number;
-  tool_calls?: boolean;
-  image_inputs?: boolean;
-  streaming?: boolean;
-  server_compaction?: boolean;
-  supported_reasoning_efforts?: string[];
-}
+import type { ProviderCatalogModel } from "@colossus/ui/lib/provider-catalog";
+export type { ProviderCatalogModel } from "@colossus/ui/lib/provider-catalog";
+export { filterCatalogModels } from "@colossus/ui/lib/provider-catalog";
 
 /** Native credential labels allow at most 96 UTF-8 bytes, including the suffix. */
 export function providerCredentialLabel(provider: string): string {
@@ -121,16 +110,4 @@ export function selectCatalogModel(
   model: ProviderCatalogModel,
 ): ManagedModelConfiguration {
   return applyCatalogModel(resetModelMetadata(current), model);
-}
-
-export function filterCatalogModels(
-  models: readonly ProviderCatalogModel[],
-  query: string,
-) {
-  const needle = query.trim().toLocaleLowerCase();
-  return models.filter((model) =>
-    [model.id, model.display_name, model.owned_by].some((value) =>
-      value?.toLocaleLowerCase().includes(needle),
-    ),
-  );
 }

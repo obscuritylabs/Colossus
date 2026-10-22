@@ -108,19 +108,31 @@ export function Sidebar({
   collapsible = "offcanvas",
   className,
   children,
+  mobileTitle = "Workspaces",
+  mobileDescription = "Workspace navigation",
+  onMobileCloseAutoFocus,
   ...props
 }: React.ComponentProps<"div"> & {
   side?: "left" | "right";
   collapsible?: "offcanvas" | "icon" | "none";
+  mobileTitle?: string;
+  mobileDescription?: string;
+  onMobileCloseAutoFocus?: React.ComponentProps<
+    typeof SheetContent
+  >["onCloseAutoFocus"];
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
   if (collapsible !== "none" && isMobile)
     return (
       <Sheet open={openMobile} onOpenChange={setOpenMobile}>
-        <SheetContent side={side} className={cn("ui-sidebar-sheet", className)}>
+        <SheetContent
+          side={side}
+          className={cn("ui-sidebar-sheet", className)}
+          onCloseAutoFocus={onMobileCloseAutoFocus}
+        >
           <SheetHeader className="shared-sr-only">
-            <SheetTitle>Workspaces</SheetTitle>
-            <SheetDescription>Workspace navigation</SheetDescription>
+            <SheetTitle>{mobileTitle}</SheetTitle>
+            <SheetDescription>{mobileDescription}</SheetDescription>
           </SheetHeader>
           <div {...props}>{children}</div>
         </SheetContent>
@@ -173,6 +185,27 @@ export function SidebarInset({
     <main
       data-slot="sidebar-inset"
       className={cn("ui-sidebar-inset", className)}
+      {...props}
+    />
+  );
+}
+export function SidebarRail({
+  className,
+  onClick,
+  ...props
+}: React.ComponentProps<"button">) {
+  const { toggleSidebar } = useSidebar();
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      data-slot="sidebar-rail"
+      className={cn("ui-sidebar-rail", className)}
+      title="Toggle app sidebar"
+      onClick={(event) => {
+        onClick?.(event);
+        if (!event.defaultPrevented) toggleSidebar();
+      }}
       {...props}
     />
   );
@@ -246,7 +279,7 @@ export function SidebarMenuButton({
 }: React.ComponentProps<"button"> & {
   asChild?: boolean;
   isActive?: boolean;
-  tooltip?: string;
+  tooltip?: string | undefined;
 }) {
   const Component = asChild ? Slot : "button";
   const button = (

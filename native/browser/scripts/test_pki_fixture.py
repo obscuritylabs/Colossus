@@ -19,6 +19,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 import pki_fixture
+from run_windows_pki_probe import CASES, DEFAULT_TEST, ReviewEvidence
 from pki_fixture_proxy import FixtureProxy
 
 
@@ -242,6 +243,73 @@ class PkiFixtureTests(unittest.TestCase):
             self.assertEqual(proxy.requests, [])
         finally:
             proxy.close()
+
+
+class NativeReviewProtocolTests(unittest.TestCase):
+    """Pure evidence parsing; no fixtures, listeners, Windows stores or UI."""
+
+    def test_exact_rust_harness_prelude_can_prefix_only_the_first_record(self):
+        for test_name in (DEFAULT_TEST, "browser_tools::tests::native_windows::pki::core_authenticates_system_ca_and_reviewed_client_identity_after_policy"):
+            evidence = ReviewEvidence(test_name)
+            line = f"test {test_name} ... EVIDENCE windows-pki case={CASES[0]} stage=begin\n"
+            self.assertFalse(evidence.observe(line))
+            self.assertEqual(evidence.begun, [CASES[0]])
+            evidence.observe(f"PASS windows-pki case={CASES[0]}\n")
+            self.assertTrue(evidence.observe("EVIDENCE windows-pki stage=provision_alternate\n"))
+            for name in CASES[1:]:
+                evidence.observe(f"EVIDENCE windows-pki case={name} stage=begin\n")
+                evidence.observe(f"PASS windows-pki case={name}\n")
+            self.assertTrue(evidence.complete())
+            self.assertFalse(evidence.observe("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s\n"))
+            self.assertTrue(evidence.complete())
+
+    def test_foreign_repeated_or_misplaced_harness_preludes_are_rejected(self):
+        first = f"EVIDENCE windows-pki case={CASES[0]} stage=begin\n"
+        for line in (f"test foreign_test ... {first}", f"test {DEFAULT_TEST} ... PASS windows-pki case={CASES[0]}\n", f"test {DEFAULT_TEST} ... test {DEFAULT_TEST} ... {first}"):
+            with self.assertRaises(ValueError):
+                ReviewEvidence().observe(line)
+        for initial in (first, f"test {DEFAULT_TEST} ... {first}"):
+            evidence = ReviewEvidence()
+            evidence.observe(initial)
+            with self.assertRaises(ValueError):
+                evidence.observe(f"test {DEFAULT_TEST} ... {first}")
+
+    def test_second_identity_is_provisioned_once_only_after_unique_login(self):
+        evidence = ReviewEvidence()
+        stage = "EVIDENCE windows-pki stage=provision_alternate\n"
+        with self.assertRaises(ValueError):
+            evidence.observe(stage)
+        evidence.observe(f"EVIDENCE windows-pki case={CASES[0]} stage=begin\n")
+        with self.assertRaises(ValueError):
+            evidence.observe(stage)
+        evidence.observe(f"PASS windows-pki case={CASES[0]}\n")
+        self.assertTrue(evidence.observe(stage))
+        with self.assertRaises(ValueError):
+            evidence.observe(stage)
+
+    def test_missing_out_of_order_and_replayed_receipts_do_not_complete(self):
+        for line in (f"EVIDENCE windows-pki case={CASES[1]} stage=begin\n",
+                     f"PASS windows-pki case={CASES[0]}\n"):
+            with self.assertRaises(ValueError):
+                ReviewEvidence().observe(line)
+        evidence = ReviewEvidence()
+        evidence.observe(f"EVIDENCE windows-pki case={CASES[0]} stage=begin\n")
+        with self.assertRaises(ValueError):
+            evidence.observe(f"EVIDENCE windows-pki case={CASES[0]} stage=begin\n")
+        evidence.observe(f"PASS windows-pki case={CASES[0]}\n")
+        self.assertFalse(evidence.complete())
+        with self.assertRaises(ValueError):
+            evidence.observe(f"PASS windows-pki case={CASES[0]}\n")
+
+    def test_exact_native_and_core_case_sequences_complete(self):
+        for suffix in ("", " core_effect_gateway=true"):
+            evidence = ReviewEvidence()
+            for index, name in enumerate(CASES):
+                if index == 1:
+                    self.assertTrue(evidence.observe("EVIDENCE windows-pki stage=provision_alternate\n"))
+                evidence.observe(f"EVIDENCE windows-pki case={name} stage=begin\n")
+                evidence.observe(f"PASS windows-pki case={name}{suffix}\n")
+                self.assertEqual(evidence.complete(), index == len(CASES) - 1)
 
 
 if __name__ == "__main__":

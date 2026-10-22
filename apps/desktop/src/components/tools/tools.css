@@ -66,33 +66,19 @@
   color: var(--blue-strong);
   background: var(--surface-control);
 }
-.work-tools-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  /* Native panes reserve the first 48px for trusted application controls. */
-  flex: 0 0 48px;
-  padding: 5px 9px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+.shared-workspace-pane-actions .tool-switcher-trigger {
+  width: var(--control-height-touch);
+  min-width: var(--control-height-touch);
+  min-height: var(--control-height-touch);
+  padding: 0;
+  justify-content: center;
 }
-.work-tools-header .tool-switcher-trigger {
-  border-color: transparent;
-  background: transparent;
+
+.shared-workspace-pane-actions .tool-switcher-trigger > span,
+.shared-workspace-pane-actions .tool-switcher-trigger > svg:last-child {
+  display: none;
 }
-.work-tools-actions {
-  display: flex;
-  gap: 2px;
-}
-.work-tools-actions .icon-button {
-  width: 28px;
-  height: 28px;
-}
-.work-side-drawer:has(.work-tools-header) {
-  display: flex;
-  flex-direction: column;
-}
+
 .work-side-drawer > .work-drawer-panel:not([hidden]),
 .work-side-drawer > .browser-pane,
 .work-side-drawer > .git-pane {
@@ -135,23 +121,6 @@
   display: none;
 }
 
-.work-layout.is-browser-expanded {
-  grid-template-columns: minmax(0, 1fr) !important;
-}
-.work-layout.is-browser-expanded > .work-thread,
-.work-layout.is-browser-expanded > .aside-resize-handle {
-  display: none;
-}
-.work-side-drawer > .work-drawer-panel:not([hidden]) {
-  height: auto;
-}
-.work-tools-header
-  ~ .git-pane
-  .git-pane-header
-  button[aria-label="Close Git panel"] {
-  display: none;
-}
-
 .tool-switcher-menu .tool-option[data-disabled] {
   opacity: var(--disabled-opacity);
   cursor: default;
@@ -159,7 +128,6 @@
 
 .aside-header,
 .aside-close-confirm,
-.aside-composer,
 .aside-error {
   flex: 0 0 auto;
 }

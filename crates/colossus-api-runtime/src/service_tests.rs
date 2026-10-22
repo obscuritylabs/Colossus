@@ -1416,6 +1416,7 @@ async fn orphan_recovery_above_the_application_cap_drains_in_order(runtime: Arc<
         .expect("queue second recovery");
     assert_eq!(service.active_execution_count(), 1);
     assert_eq!(service.pending_recovery_count(), 1);
+    assert!(service.has_pending_executions());
 
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -1427,6 +1428,7 @@ async fn orphan_recovery_above_the_application_cap_drains_in_order(runtime: Arc<
     })
     .await
     .expect("queued recoveries drained");
+    assert!(!service.has_pending_executions());
 
     for run_id in [first.id, second.id] {
         let run = repository

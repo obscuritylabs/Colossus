@@ -108,7 +108,8 @@ test("prompt reflows for width and text-size changes and restores the size of an
     .poll(async () => (await prompt.boundingBox())!.height)
     .toBeGreaterThan(wideHeight + 20);
   await page
-    .getByRole("button", { name: "Close files panel", exact: true })
+    .locator("#work-side-drawer")
+    .getByRole("button", { name: "Close tool pane", exact: true })
     .click();
   await expect
     .poll(async () => (await prompt.boundingBox())!.height)

@@ -60,16 +60,47 @@ fn long_shared_paths_fit_the_existing_file_and_payload_limits() {
     let root = temporary.path().canonicalize().unwrap();
     let source = root.join("source");
     write_plugin(&source);
+    // macOS bounds whole paths, including snapshot store prefixes, to 1 KiB.
+    // Use its full file allowance to retain a manifest over 8 MiB.
+    let (depth, file_count) = if cfg!(target_os = "macos") {
+        let mut files = Vec::new();
+        crate::filesystem::collect_regular_files(&source, &source, 0, &mut files).unwrap();
+        (4, crate::MAX_FILES - files.len())
+    } else {
+        (14, 4_000)
+    };
+    let suffix = "payload".repeat(8);
+    let component = "long-directory-".repeat(12);
+    let component_bytes = if cfg!(target_os = "macos") {
+        let retained_root = root.join("store/content/sha256").join("0".repeat(64));
+        // Reserve the separator, terminating NUL, and 32 bytes of headroom for
+        // native path handling, using the longer retained root rather than source.
+        let relative_budget = 1024_usize.saturating_sub(retained_root.as_os_str().len() + 34);
+        let leaf_bytes = format!("file-{}-{suffix}", file_count - 1).len();
+        (relative_budget.saturating_sub(leaf_bytes + depth) / depth).min(component.len())
+    } else {
+        component.len()
+    };
+    assert!(component_bytes > 0);
     let mut relative = PathBuf::new();
-    for _ in 0..14 {
-        relative.push("long-directory-".repeat(12));
+    for _ in 0..depth {
+        relative.push(&component[..component_bytes]);
     }
     fs::create_dir_all(source.join(&relative)).unwrap();
-    for index in 0..4_000 {
-        fs::write(source.join(&relative).join(format!("file-{index}")), b"x").unwrap();
+    for index in 0..file_count {
+        fs::write(
+            source
+                .join(&relative)
+                .join(format!("file-{index}-{suffix}")),
+            b"x",
+        )
+        .unwrap();
     }
     let candidate = capture_workspace_plugin(&root, Path::new("source")).unwrap();
     assert!(candidate.snapshot.manifest.len() > 8 * 1024 * 1024);
+    if cfg!(target_os = "macos") {
+        assert_eq!(candidate.snapshot.files.len(), crate::MAX_FILES);
+    }
     let store = PluginStore::new(root.join("store")).unwrap();
     let installed = store
         .accept_workspace_plugin(&candidate, &BTreeSet::new(), actor())
@@ -87,7 +118,7 @@ fn long_shared_paths_fit_the_existing_file_and_payload_limits() {
         fs::read(
             Path::new(&records[0].installation.root)
                 .join(relative)
-                .join("file-3999")
+                .join(format!("file-{}-{suffix}", file_count - 1))
         )
         .unwrap(),
         b"x"

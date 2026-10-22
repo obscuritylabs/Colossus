@@ -443,6 +443,25 @@ initialization error is observed in bounded JSONL stdout. Malformed or truncated
 child exit, and the normal effect deadline terminate that hold; stdin is then closed and
 the same resource supervision and process-tree cleanup continue.
 
+### Hosted credential stores
+
+Hosted manual credentials use the existing encrypted owner/project vaults. Saving a
+named credential creates no execution authority. Only a host-composed attachment to
+the reviewed provider or MCP endpoint, purpose and generation can resolve its value.
+Personal and explicitly shared project stores remain separate; moving an identifier
+between scopes grants no access. The bounded credential catalog, values and attachment
+changes commit in one encrypted record. Mutation requires the current catalog revision
+under the existing local lifecycle lock or shared SQL edit gate. Adding an unused
+credential does not retire execution; attachment changes and rotation require idle
+execution before the host retires affected runtimes.
+
+Retained connection secrets remain compatible until their owner edits or reuses them.
+Adoption removes superseded legacy records after the named record becomes durable.
+Explicit disconnect markers prevent old values from reappearing after an interrupted
+cleanup, and corrupt named custody never falls back to a legacy value. Browser reads
+return names, types and usage only. Account OAuth flows remain separate from manual
+secret entry. See [Hosted development](cloud-control-plane.md#develop-hosted-personal-chat).
+
 ### Native credential vault
 
 Manual Desktop tokens and platform-backed MCP OAuth use separate instances of
@@ -915,16 +934,26 @@ The explicitly selected Windows Debug development composition admits functional
 automation without AppContainer/WFP containment. It retains Chromium's built-in
 sandbox, an owned Job and the authenticated boundaries above, while reporting
 `restrictive_egress: false` and no private per-profile CA/key custody. An existing
-Windows client identity can be selected only by a separate native review of the
-exact pending HTTPS origin and public certificate fingerprint. Its controls are
-read-only, Cancel is the default and the review expires after 45 seconds. One
-session-local native gate limits concurrent dialogs. CEF keeps pumping while the
-dialog runs; dispatch rechecks request, tab, writer generation, admission and run
-cancellation before consuming the native one-use request. Navigation and shutdown
-cancel outstanding reviews, and shutdown joins the dialog worker before DLL
-unload. Chromium retains OS private-key custody and can cache the selection for
-the exact origin in its temporary session. No model, renderer or runtime-YAML
-field can select a certificate or key. The contained edition still rejects this
+Windows client identity uses the exact pending HTTPS origin and Chromium's
+issuer-filtered public certificate list. Desktop's native broker explicitly permits
+automatic selection only when that list contains exactly one valid, eligible leaf.
+The capability flag alone cannot authorize automatic key use. Zero eligible identities
+deny the request; multiple identities require a choice inside the main Desktop window.
+That trusted child WebView receives only an opaque UI token, origin, labels and public
+fingerprints through its exact local document and narrow native commands. The ordinary
+renderer and browser guests cannot read or complete a review. Cancel is the default;
+the original managed request expires after 45 seconds without renewal by polling.
+
+The independently authenticated native admission channel can review an initial TLS
+handshake before a tab or viewer lease exists. Runtime resolves the original allocation,
+current application and canonical writer before submitting an exact keyed decision;
+uncertain writes are not replayed. The ordinary viewer relay rejects certificate
+commands. CEF keeps pumping during review and rechecks the request, tab, document,
+operation generation, admission, origin and run cancellation before consuming it once.
+Navigation, workspace changes, expiry and shutdown invalidate the review. Chromium
+retains OS private-key custody and can cache the selection for the exact origin in its
+temporary session. A signing failure cannot fall back to another identity. No model,
+ordinary renderer or runtime-YAML field can select a certificate or key. The contained edition still rejects this
 capability. The ordinary-user edition never
 retries a failed contained launch in this mode. Standard installation and app use
 remain non-admin; the executable requests `asInvoker`. Source acceptance cannot
@@ -1302,7 +1331,7 @@ acceptance suite.
 
 ## Bundled Control Plane database transport
 
-[ADR 0009](adr/0009-control-plane-helm-database-boundary.md) records this deployment
+[ADR 0010](adr/0010-control-plane-helm-database-boundary.md) records this deployment
 trust decision. The Helm deployment may explicitly select `database.tls.kind: in_cluster` for its
 bundled PostgreSQL Service. That mode requires one exact `SERVICE.NAMESPACE.svc` host
 and rejects host-address overrides and multiple hosts. It is an operator-selected

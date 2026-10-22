@@ -1,0 +1,149 @@
+.chat-conversation-preserved,
+.thread-branch-draft {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.thread-branch-context {
+  flex: 1;
+  min-height: 0;
+  padding: 20px 24px;
+  overflow: auto;
+}
+.thread-branch-context blockquote {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--accent-border);
+  background: var(--surface-muted);
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+}
+.thread-branch-actions {
+  padding: 0 16px 12px;
+}
+.thread-aside-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.thread-aside-history {
+  flex: none;
+  max-height: min(240px, 30%);
+  overflow: auto;
+  border-bottom: 1px solid var(--border);
+  padding: 12px 16px;
+}
+.thread-aside-history nav {
+  display: grid;
+  max-height: 180px;
+  overflow: auto;
+}
+.thread-aside-history nav button {
+  justify-content: flex-start;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.thread-aside-history nav button[aria-current="page"] {
+  background: var(--blue-soft);
+  color: var(--blue-strong);
+}
+.thread-aside-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.thread-aside-toolbar strong {
+  font-size: var(--font-size-body);
+}
+.thread-aside-conversation {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.thread-branch-draft-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 16px;
+}
+.thread-branch-draft-header h3 {
+  margin: 0;
+  font-size: var(--font-size-body);
+}
+.thread-branch-draft.is-aside .thread-branch-context {
+  padding: 0 16px 12px;
+}
+.shared-inspector-content .is-aside-detail {
+  flex: 1;
+  min-height: 0;
+}
+.is-aside-detail .chat-private-cue,
+.is-aside-detail .composer-hint,
+.is-aside-detail .composer-policy-pill {
+  display: none;
+}
+.chat-workspace .is-aside-detail .thread-conversation {
+  padding: 16px;
+}
+.chat-workspace
+  .shared-inspector-layout
+  .shared-composer-dock[data-workspace-composer-dock] {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  padding: 12px 16px;
+}
+.shared-inspector-layout
+  [data-workspace-composer-dock]
+  > .shared-conversation-composer {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+.shared-inspector-layout [data-workspace-composer-dock] .shared-composer-body {
+  flex: 1;
+}
+.shared-inspector-content .thread-plan-decision {
+  width: 100%;
+}
+.shared-inspector-content .plan-details-panel > header {
+  padding-right: 18px;
+}
+/* Container geometry follows the conversation rather than the browser viewport. */
+.shared-inspector-main {
+  container: chat-main / inline-size;
+}
+@media (hover: hover) and (pointer: fine) {
+  .thread-detail .shared-message-actions > .ui-button {
+    opacity: 0;
+  }
+  .thread-detail
+    [data-aside-message-id]:hover
+    .shared-message-actions
+    > .ui-button,
+  .thread-detail
+    [data-aside-message-id]:focus-within
+    .shared-message-actions
+    > .ui-button {
+    opacity: 1;
+  }
+}
+@media (pointer: coarse), (max-width: 760px) {
+  .thread-detail .shared-message-actions button {
+    min-height: var(--control-height-touch);
+  }
+}

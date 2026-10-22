@@ -8,6 +8,21 @@ test("tool switching preserves browser tabs and the conversation draft", async (
   const prompt = page.getByRole("textbox", { name: "Prompt", exact: true });
   await prompt.fill("Keep this draft while switching tools.");
   await page.getByRole("button", { name: "Open browser", exact: true }).click();
+  const paneTabs = page.getByRole("tablist", { name: "Workspace tabs" });
+  await expect(
+    paneTabs.getByRole("tab", { name: "Browser", exact: true }),
+  ).toBeVisible();
+  await expect(
+    paneTabs.getByRole("tab", { name: "Terminal", exact: true }),
+  ).toHaveCount(0);
+  const mainHeader = await page.locator(".work-surface-header").boundingBox();
+  const paneHeader = await page
+    .locator(".shared-workspace-pane-header")
+    .boundingBox();
+  expect(Math.abs(mainHeader!.y - paneHeader!.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(mainHeader!.height - paneHeader!.height)).toBeLessThanOrEqual(
+    1,
+  );
   const address = page.getByRole("textbox", { name: "Web address" });
   await address.fill("https://example.com/docs");
   await address.press("Enter");
@@ -16,8 +31,7 @@ test("tool switching preserves browser tabs and the conversation draft", async (
   await expect(
     page.getByRole("region", { name: "Terminal pane" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Switch pane tool" }).click();
-  await page.getByRole("menuitemradio", { name: /^Browser/ }).click();
+  await paneTabs.getByRole("tab", { name: "Browser", exact: true }).click();
   await expect(address).toHaveValue("https://example.com/docs");
   await expect(prompt).toHaveValue("Keep this draft while switching tools.");
 });
@@ -408,13 +422,29 @@ test("Aside composer stays inside the pane while long content scrolls and the wi
     });
     const composer = aside.locator(".aside-composer");
     const bounds = await aside.boundingBox();
-    const input = await composer.boundingBox();
+    const input = await aside.locator(".aside-composer-dock").boundingBox();
     expect(Math.abs(input!.x - bounds!.x)).toBeLessThanOrEqual(1);
     expect(Math.abs(input!.width - bounds!.width)).toBeLessThanOrEqual(1);
     expect(input!.y + input!.height).toBeLessThanOrEqual(
       bounds!.y + bounds!.height + 1,
     );
     expect(input!.y + input!.height).toBeLessThanOrEqual(size.height + 1);
+    if (size.width > 980) {
+      // Native required-response cards stay above the main composer; align the
+      // input cards, rather than stretching the Aside across the approval too.
+      await expect
+        .poll(async () => {
+          const mainCard = await page.locator(".work-composer").boundingBox();
+          const asideCard = await composer.boundingBox();
+          return Math.max(
+            Math.abs(mainCard!.y - asideCard!.y),
+            Math.abs(
+              mainCard!.y + mainCard!.height - asideCard!.y - asideCard!.height,
+            ),
+          );
+        })
+        .toBeLessThanOrEqual(1);
+    }
     expect(
       await aside
         .locator(".aside-scroll")
@@ -460,4 +490,50 @@ test("Tools and pane menus switch from Aside to Thread details and fit the viewp
       aside.getByRole("textbox", { name: "Aside message", exact: true }),
     ).toHaveValue("Retain this Aside draft");
   }
+});
+
+test("opened tool tabs and expansion preserve both conversation drafts", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 950 });
+  await page.goto("/?fixture=operations-studio");
+  const prompt = page.getByRole("textbox", { name: "Prompt", exact: true });
+  await prompt.fill("Retain the main conversation draft");
+  await page.getByRole("button", { name: "Open tools", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: /^Aside/ }).click();
+  const message = page.getByRole("textbox", {
+    name: "Aside message",
+    exact: true,
+  });
+  await message.fill("Retain the Aside draft");
+  await page
+    .getByRole("button", { name: "Switch pane tool", exact: true })
+    .click();
+  await page.getByRole("menuitemradio", { name: /^Thread details/ }).click();
+  const paneTabs = page.getByRole("tablist", { name: "Workspace tabs" });
+  await paneTabs.getByRole("tab", { name: "Aside", exact: true }).click();
+  await expect(message).toHaveValue("Retain the Aside draft");
+  await page
+    .getByRole("button", { name: "Expand tool pane", exact: true })
+    .click();
+  await expect(prompt).toBeHidden();
+  await expect(message).toHaveValue("Retain the Aside draft");
+  await page
+    .getByRole("button", { name: "Restore tool pane", exact: true })
+    .click();
+  await expect(prompt).toHaveValue("Retain the main conversation draft");
+  await expect(message).toHaveValue("Retain the Aside draft");
+  await expect(
+    paneTabs.getByRole("tab", { name: "Aside", exact: true }),
+  ).toBeInViewport({ ratio: 0.9 });
+  await expect
+    .poll(async () => {
+      const main = await page.locator(".work-composer").boundingBox();
+      const aside = await page.locator(".aside-composer").boundingBox();
+      return Math.abs(main!.y - aside!.y);
+    })
+    .toBeLessThanOrEqual(1);
+  await page.screenshot({
+    path: "output/playwright/desktop-workspace-aside.png",
+  });
 });

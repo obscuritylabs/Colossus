@@ -129,6 +129,7 @@ fn snapshot(index: usize, created: String) -> GetRunResponse {
             run_id: format!("run-{index}"),
             session_id: format!("session-{index}"),
             title: format!("Load fixture {index}"),
+            title_revision: 0,
             role: "primary".into(),
             mode: RunMode::Execute,
             status: RunStatus::Running,
@@ -164,6 +165,8 @@ async fn placement(
         .register_node(
             &caller,
             CloudNode {
+                execution_kind: colossus_cloud::ExecutionKind::Connected,
+                owner_user_id: None,
                 node_id: format!("node-{index}"),
                 project_id: PROJECT.into(),
                 instance_id: format!("instance-{index}"),

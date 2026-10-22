@@ -94,7 +94,7 @@ const titles = () =>
   [...container.querySelectorAll('tbody th[scope="row"]')].map(
     (node) => node.textContent,
   );
-it("shared frame preserves timeline entries and the full navigation name behind a compact caption", async () => {
+it("shared frame preserves timeline entries and shows full application navigation labels", async () => {
   await act(() =>
     root.render(
       <ControlPlaneFrame
@@ -131,7 +131,7 @@ it("shared frame preserves timeline entries and the full navigation name behind 
   const navigation = container.querySelector(
     'button[aria-label="Administration"]',
   );
-  expect(navigation?.textContent).toBe("Admin");
+  expect(navigation?.textContent).toBe("Administration");
   expect(navigation?.getAttribute("title")).toBe("Administration");
 });
 const status = () => container.querySelector('[role="status"]')!.textContent;

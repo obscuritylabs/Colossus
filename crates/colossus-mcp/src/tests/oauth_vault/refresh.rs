@@ -42,12 +42,13 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> (String, String, Ve
     )
 }
 
-async fn serve_refresh(listener: TcpListener, origin: String) -> (usize, usize) {
+async fn serve_refresh(listener: TcpListener, origin: String, operations: usize) -> (usize, usize) {
     let endpoint = format!("{origin}/mcp");
     let expected_bearer = format!("Bearer {}", "B".repeat(NEW_TOKEN_BYTES));
     let mut refreshes = 0;
     let mut authenticated_requests = 0;
-    for _ in 0..16 {
+    let mut completed = 0;
+    for _ in 0..16 * operations {
         let (mut stream, _) = listener.accept().await.unwrap();
         let (first, authorization, body) = read_request(&mut stream).await;
         let mut status = "200 OK";
@@ -108,7 +109,8 @@ async fn serve_refresh(listener: TcpListener, origin: String) -> (usize, usize) 
                 authenticated_requests += 1;
                 if first == "DELETE /mcp HTTP/1.1" {
                     status = "202 Accepted";
-                    done = true;
+                    completed += 1;
+                    done = completed == operations;
                     Value::Null
                 } else if first == "GET /mcp HTTP/1.1" {
                     status = "405 Method Not Allowed";
@@ -151,16 +153,27 @@ async fn serve_refresh(listener: TcpListener, origin: String) -> (usize, usize) 
 
 #[tokio::test]
 async fn oauth_refresh_persists_replacement_tokens_and_public_logout_clears_only_its_record() {
-    tokio::time::timeout(Duration::from_secs(15), refresh_and_logout())
+    tokio::time::timeout(Duration::from_secs(15), refresh_and_logout(false))
         .await
         .unwrap();
 }
 
-async fn refresh_and_logout() {
+#[tokio::test]
+async fn concurrent_oauth_snapshots_share_one_rotating_refresh() {
+    tokio::time::timeout(Duration::from_secs(15), refresh_and_logout(true))
+        .await
+        .unwrap();
+}
+
+async fn refresh_and_logout(concurrent: bool) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let endpoint = format!("{origin}/mcp");
-    let server = tokio::spawn(serve_refresh(listener, origin.clone()));
+    let server = tokio::spawn(serve_refresh(
+        listener,
+        origin.clone(),
+        if concurrent { 2 } else { 1 },
+    ));
     let vault = Arc::new(MemoryVault::default());
     let factory = OAuthStoreFactory::platform(vault.clone(), "repository".into());
     let store = factory.store("fixture", &endpoint);
@@ -180,14 +193,15 @@ async fn refresh_and_logout() {
         callback_port: 8765,
         scopes: vec!["openid".into()],
     });
+    let config = McpConfig {
+        servers: BTreeMap::from([
+            ("fixture".into(), configured.clone()),
+            ("other".into(), configured),
+        ]),
+        ..Default::default()
+    };
     let executor = McpExecutor::new(
-        &McpConfig {
-            servers: BTreeMap::from([
-                ("fixture".into(), configured.clone()),
-                ("other".into(), configured),
-            ]),
-            ..Default::default()
-        },
+        &config,
         Path::new("."),
         "native",
         Arc::new(McpEffectShapeExecutor {
@@ -232,7 +246,21 @@ async fn refresh_and_logout() {
             },
         )
         .unwrap();
-    let response = gateway.execute(request, &executor).await.unwrap();
+    let response = if concurrent {
+        let snapshot = executor
+            .snapshot_configuration(&config, Path::new("."), "native")
+            .unwrap();
+        let mut second = request.clone();
+        second.request_id.push_str("-second");
+        let (one, two) = tokio::join!(
+            gateway.execute(request, &executor),
+            gateway.execute(second, &snapshot)
+        );
+        two.unwrap();
+        one.unwrap()
+    } else {
+        gateway.execute(request, &executor).await.unwrap()
+    };
     assert!(
         serde_json::from_slice::<McpToolsPage>(&response.bytes)
             .unwrap()

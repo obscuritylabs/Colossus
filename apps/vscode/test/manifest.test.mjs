@@ -17,6 +17,10 @@ test("referenced webview assets and shared attribution remain in the VSIX allowl
     (match) => match[1],
   );
   assert.ok(referenced.includes("shadcn.css"));
+  assert.ok(
+    included.has("!dist/chunks/*.js"),
+    "Lazy webview modules must be included in the installed VSIX",
+  );
   for (const asset of [
     ...referenced,
     "shadcn-LICENSE.txt",

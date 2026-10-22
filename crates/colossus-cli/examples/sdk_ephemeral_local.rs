@@ -113,6 +113,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         TempDir::new_in(env::var_os("USERPROFILE").ok_or("Windows user profile is unavailable")?)?;
     #[cfg(not(windows))]
     let discovery_root = TempDir::new()?;
+    // macOS temporary roots may use /var aliases; discovery consumers require canonical paths.
+    #[cfg(unix)]
+    let discovery = fs::canonicalize(discovery_root.path())?.join("api");
+    #[cfg(not(unix))]
     let discovery = discovery_root.path().join("api");
     #[cfg(windows)]
     colossus_windows_native::create_private_directory(&discovery)?;

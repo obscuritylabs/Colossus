@@ -7,6 +7,8 @@ use colossus_contracts::*;
 use colossus_ports::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+#[path = "tests/identity.rs"]
+mod identity;
 #[path = "tests/renewed_writer.rs"]
 mod renewed_writer;
 
@@ -19,6 +21,7 @@ struct NativeData {
     controller: u64,
     docgen: u64,
     native_tab: u64,
+    identity: Option<ClientIdentityChallenge>,
 }
 #[derive(Default)]
 struct Fixture {
@@ -43,6 +46,16 @@ struct Host {
     block_fence: AtomicBool,
     fence_entered: tokio::sync::Notify,
     fence_release: tokio::sync::Notify,
+    identity_queries: AtomicUsize,
+    identity_auto: AtomicUsize,
+    identity_selected: StdMutex<Vec<(ClientIdentityKey, Option<String>)>>,
+    identity_unknown: AtomicBool,
+    block_identity: AtomicBool,
+    identity_entered: tokio::sync::Notify,
+    identity_release: tokio::sync::Notify,
+    block_identity_ack: AtomicBool,
+    identity_selected_entered: tokio::sync::Notify,
+    identity_selected_release: tokio::sync::Notify,
 }
 fn tab(data: &NativeData) -> BrowserTabSummary {
     data.current.clone().unwrap()
@@ -73,8 +86,58 @@ impl PresentationHost for Host {
             self.fence_entered.notify_one();
             self.fence_release.notified().await;
         }
+        if matches!(command, PresentationCommand::PendingClientIdentity { .. })
+            && self.block_identity.load(Ordering::SeqCst)
+        {
+            self.identity_entered.notify_one();
+            self.identity_release.notified().await;
+        }
+        if let PresentationCommand::SelectClientIdentity {
+            key,
+            fingerprint_sha256,
+        } = command
+        {
+            {
+                let mut data = self.data.lock().unwrap();
+                let pending = data.identity.as_ref().ok_or(PresentationError::Stale)?;
+                if pending.key != key
+                    || fingerprint_sha256.as_ref().is_some_and(|fingerprint| {
+                        !pending
+                            .candidates
+                            .iter()
+                            .any(|candidate| &candidate.fingerprint_sha256 == fingerprint)
+                    })
+                {
+                    return Err(PresentationError::Stale);
+                }
+                self.identity_selected
+                    .lock()
+                    .unwrap()
+                    .push((key, fingerprint_sha256));
+                if self.identity_unknown.load(Ordering::SeqCst) {
+                    // Model an accepted write whose ACK was lost. Retain the
+                    // apparent request to detect any automatic replay by Core.
+                    return Err(PresentationError::OutcomeUnknown);
+                }
+                data.identity = None;
+            }
+            if self.block_identity_ack.load(Ordering::SeqCst) {
+                self.identity_selected_entered.notify_one();
+                self.identity_selected_release.notified().await;
+            }
+            return Ok(PresentationReply::Ack);
+        }
         let mut data = self.data.lock().unwrap();
         match command {
+            PresentationCommand::PendingClientIdentity { policy } => {
+                self.identity_queries.fetch_add(1, Ordering::SeqCst);
+                if policy == ClientIdentityPolicy::AutomaticIfUnique {
+                    self.identity_auto.fetch_add(1, Ordering::SeqCst);
+                }
+                Ok(PresentationReply::ClientIdentity {
+                    challenge: data.identity.clone(),
+                })
+            }
             PresentationCommand::Configure(config) => {
                 let original = data.original.as_ref().unwrap();
                 if config.session != original.session_id

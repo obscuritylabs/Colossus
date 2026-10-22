@@ -6,10 +6,12 @@
 @import "./catalog.css";
 @import "./data-table.css";
 @import "./conversation.css";
+@import "./markdown-code.css";
 @import "./workspace-sidebar.css";
 @import "./charts.css";
 @import "./model-picker.css";
 @source "../src";
+@source "../../../streamdown/dist/*.js";
 
 @custom-variant dark (&:where(:root:not([data-theme="light"]) *));
 

@@ -1374,6 +1374,12 @@ impl ProviderExecutor {
         }
         let url = Url::parse(CODEX_TOKEN_ENDPOINT)?;
         let client = self.client_for_url(&url, permit, false).await?;
+        // Shared custody claims its CAS revision before the rotating-token exchange.
+        // Any cancellation, transport ambiguity, or rejected response leaves that
+        // claim pending; another replica must never replay the consumed token.
+        let claim = store
+            .begin_refresh(&authorization)
+            .map_err(codex_credential_error)?;
         let response = client
             .post(url)
             .json(&CodexRefreshRequest::new(&authorization))
@@ -1397,7 +1403,7 @@ impl ProviderExecutor {
             bytes.extend_from_slice(&chunk);
         }
         store
-            .apply_refresh(&authorization, &bytes)
+            .apply_claimed_refresh(&authorization, claim, &bytes)
             .map_err(codex_credential_error)
     }
 

@@ -6,6 +6,7 @@ on:
     paths:
       - deploy/control-plane/**
       - crates/colossus-cloud/**
+      - crates/colossus-cloud-chat/**
       - crates/colossus-cloud-server/**
       - crates/colossus-cloud-postgres/**
       - xtask/**

@@ -4,6 +4,7 @@ import { readFile, writeFile, mkdir, readdir, cp } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium } from "@playwright/test";
+import { build } from "esbuild";
 
 const directory = resolve("artifacts/review");
 await mkdir(directory, { recursive: true });
@@ -238,6 +239,23 @@ const settings = {
 function json(value) {
   return JSON.stringify(value).replaceAll("<", "\\u003c");
 }
+const captureBundles = new Map();
+async function captureBundle(page) {
+  if (!captureBundles.has(page)) {
+    // Standalone review files are opened with file://. Rebundle the built ESM
+    // graph only for these offline fixtures; production retains lazy chunks.
+    const result = await build({
+      entryPoints: [`dist/${page}.js`],
+      bundle: true,
+      platform: "browser",
+      target: "es2022",
+      format: "iife",
+      write: false,
+    });
+    captureBundles.set(page, result.outputFiles[0].text);
+  }
+  return captureBundles.get(page);
+}
 async function renderer(name, page, payload, light = false) {
   const css =
     page === "settings" ? "settings" : page === "webview" ? "" : "workspace";
@@ -247,10 +265,7 @@ async function renderer(name, page, payload, light = false) {
       ? await readFile("dist/settings-frame.css", "utf8")
       : "") +
     (css ? await readFile(`dist/${css}.css`, "utf8") : "");
-  const code = (await readFile(`dist/${page}.js`, "utf8")).replaceAll(
-    "</script",
-    "<\\/script",
-  );
+  const code = (await captureBundle(page)).replaceAll("</script", "<\\/script");
   const stub = `const sample=${json(payload)};window.acquireVsCodeApi=()=>({getState:()=>undefined,setState:()=>{},postMessage:action=>{if(action.type==='ready')window.postMessage(sample,'*');if(action.type==='refreshInspection')window.postMessage(sample,'*');if(action.type==='setPreference'){sample.view.preferences[action.name]=action.value;window.postMessage(sample,'*')}}});`;
   await writeFile(
     `${directory}/${name}.html`,

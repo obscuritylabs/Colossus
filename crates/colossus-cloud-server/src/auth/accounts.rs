@@ -55,6 +55,17 @@ impl Authentication {
     pub(crate) async fn user(&self, headers: &HeaderMap) -> CloudResult<CloudUser> {
         Ok(self.session(headers).await?.1.user)
     }
+    pub(crate) async fn session_binding(&self, headers: &HeaderMap) -> CloudResult<String> {
+        let (session, account) = self.session(headers).await?;
+        let bytes = serde_json::to_vec(&(
+            session.session_hash,
+            account.user.id,
+            session.security_epoch,
+            session.expires_at,
+        ))
+        .map_err(|_| CloudError::Storage)?;
+        Ok(hex::encode(Sha256::digest(bytes)))
+    }
     pub(crate) async fn admin(
         &self,
         headers: &HeaderMap,

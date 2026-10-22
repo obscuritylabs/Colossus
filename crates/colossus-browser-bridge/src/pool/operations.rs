@@ -122,9 +122,11 @@ pub(super) async fn execute(
                 state.driver.clone().ok_or(BrowserDriverError::Stale)
             }
         });
+    let timeout_ms =
+        crate::deadline::execute_timeout_ms(&inner.capabilities.limits, &command.action);
     let result = match retired.and(driver) {
         Ok(driver) => timeout(
-            Duration::from_millis(u64::from(inner.capabilities.limits.action_timeout_ms)),
+            Duration::from_millis(u64::from(timeout_ms)),
             driver.execute(
                 command,
                 &BrowserDriverControl::new(RunControl::default(), entry.authority.clone()),

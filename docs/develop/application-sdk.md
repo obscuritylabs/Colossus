@@ -382,6 +382,15 @@ Production attachment remains unavailable without an accepted Embedded superviso
 package. See [owned browser readiness](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work)
 for functional gaps and the distinct native acceptance requirements.
 
+The native client also discovers expiring client-certificate requests independently of
+an in-flight initial browser open. Review metadata contains only the native request
+reference and public certificate details. Desktop can explicitly permit one eligible
+matching identity, or display multiple candidates in its trusted in-window review.
+Runtime revalidates the current application, original allocation and canonical writer
+before a keyed selection; a lost acknowledgement never retries that request. The
+ordinary presentation relay rejects these operations. Native request references and
+sidecar incarnation snapshots stay out of renderer DTOs.
+
 Provider YAML for Managed Local contains a validated `host:<opaque-id>` reference. The
 key remains in the desktop keychain and is copied into a zeroizing, in-memory sidecar
 resolver during bootstrap. The provider adapter can resolve it only after policy has
@@ -761,6 +770,14 @@ their bounded read-only retry policy. Embedded and custom checked streams instea
 fail closed when reconciliation is unavailable or does not exactly match; a clean
 close is never accepted as silent completion.
 
+`Run.title` follows the canonical session title when one is set. Its `title_revision`
+is the session-title index stream version, independent of the run's `last_sequence`.
+Compare positive title revisions only within the same `session_id`; a lower revision
+must not replace a newer title received from another run or discovery page. Zero
+denotes the opening title or an older server without title revisions and must not
+replace a positive revision. The run-feed cursor and execution `etag` remain unchanged
+by this display metadata.
+
 When `CreateRun` omits `session_id`, the durable run receives a server-owned session
 identity. The canonical session is materialized during agent initialization if
 execution proceeds; cancellation before start can leave that identity associated only
@@ -845,6 +862,15 @@ These requests use the dedicated cloud application's SDK clients. Managed Deskto
 adapters resolve that application's transport after a restart and never fall back to
 the primary Desktop grant. The controller intersects project Read, Execute, or Control
 permission with the runtime's independently enforced scopes and ownership.
+
+Configured model choices use the additive `runtime.model_catalog.v1` capability.
+Clients first discover the selected connection's context, then request its model
+catalog only with project Execute permission and `agent_runs.model_selection` support.
+The catalog releases configured profile labels, provider names, reasoning defaults,
+and role mappings; credentials and provider configuration remain on the host.
+Per-run model and reasoning choices apply to Execute, Plan, and Goal. Research keeps
+its configured runtime routes. Missing support retains host defaults, and a reconnect
+invalidates choices until the new connection's catalog has been checked.
 
 Management is online. The controller records a short-lived request under the exact
 connection lease; any HTTP replica can admit and read it, while only that lease's

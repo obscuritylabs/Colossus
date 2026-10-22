@@ -62,6 +62,12 @@ Keep the namespace, retained Secrets and database storage. Do not delete the for
 Kustomization wholesale: it includes the namespace. Take backups and schedule a controlled
 cutover; no installation or upgrade acceptance is established by the static chart gate.
 
+The former hosted-chat overlays use `examples/hosted-chat.yaml` instead. Preserve their
+external key Secret, anchor authority, project IDs, provider/MCP origins and reviewed
+runtime configurations through `chat` values. Shared execution remains SQL-backed;
+local caches are disposable. Retain any legacy single-host state and matching keys
+until a separately supervised data migration is verified.
+
 ## Routing and meshes
 
 The chart creates routes against an installed controller; it does not deploy ingress
@@ -196,6 +202,39 @@ address. To make OIDC the only login, set `auth.local.enabled=false` and set
 across replicas. Changing issuer/client requires browser sign-in again. Providers need
 HTTPS certificates trusted by the server's existing OIDC client; database custom-CA
 configuration does not change OIDC trust.
+
+## Shared hosted chat
+
+Hosted chat is disabled by default. `examples/hosted-chat.yaml` adds the shared SQL
+composition with an external verified-TLS database (`postgres.enabled=false`). Runtime
+journals do not accept the bundled database's plaintext exception. Review its project, model,
+provider/MCP configuration and immutable network origins before enabling it. The
+example increases server resources and limits resident runtimes to four per pod;
+measure CPU, memory and database usage before increasing admission or autoscaling.
+Hosted journals and credentials add database connections beyond the controller pool
+budget above. Autoscaling an executor down may interrupt active work; configure scaling
+and disruption policies for your workload and reconcile uncertain effects.
+
+Set `chat.existingSecret` to an operator-managed Secret containing independent
+`journal-key`, `signing-key`, `wrapping-key` and `anchor-token` keys. Encode each master
+key as 64 hexadecimal characters (32 random bytes), without a trailing newline.
+The sample shared provider uses `provider-key`; change `chat.providerKey` to select
+another key or set it empty when all credentials are personal. The chart never generates these external
+master keys. All API/executor replicas must use the same retained keys and projects.
+
+Deploy the checkpoint-anchor authority independently with its own database, keys,
+administration and backups; set `chat.anchor.endpoint` to its HTTPS `/v1/anchors` URL.
+For a private CA, reference `chat.anchor.existingCaSecret` and optionally `caKey`.
+Loopback HTTP and the single-host development composition are unavailable in this chart.
+See the [operator guide](../../../docs/cloud/deployment/hosted-chat.md)
+for anchor deployment, OAuth, key custody and recovery.
+
+`chat.projects` accepts native `ChatProjectConfig` snapshots; the server validates their
+runtime configuration and authority at startup. `chat.maxActiveRuntimes` accepts 1–64
+and `chat.idleSeconds` accepts 1–86400 seconds. A restricted init container creates the
+owner-private cache root with mode `0700`; `chat.cacheSizeLimit` bounds its `emptyDir`
+(4 GiB by default). No chat PVC is used. The server image and security context also
+apply to the init container, including arbitrary OpenShift identities.
 
 ## OpenShift and disconnected installations
 

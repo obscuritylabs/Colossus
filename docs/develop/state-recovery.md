@@ -18,8 +18,11 @@ canonical history.
 Each event has stream identity/version, global sequence, actor and lineage, payload
 protection metadata, plaintext hash, previous chain hash, and current chain hash. Appends
 optimistically validate stream versions. redb commits events, chain head, outbox work,
-and local metadata atomically. PostgreSQL locks a singleton chain-head row and commits
-the equivalent records in one transaction.
+and local metadata atomically. PostgreSQL locks the chain-head row for one runtime namespace and commits
+the equivalent records in one transaction. Every event, stream, outbox, projection and
+metadata key carries that namespace; the default empty namespace preserves existing
+standalone journals. A hosted execution fence checks its lease generation inside each
+write transaction, so an expired or superseded owner cannot commit canonical state.
 
 Protected journals use authenticated encryption, signed checkpoints, and a separately
 protected secure anchor to detect record mutation and consistent tail truncation.
@@ -36,6 +39,15 @@ detected when that record is decoded and verified and by every explicit full aud
 deterministic failures quarantine the anchor and make the runtime read-only. Startup
 repairs only narrowly defined interrupted checkpoint metadata when the complete journal
 still proves the advanced anchor safe.
+
+Shared hosted runtimes receive explicit SQL storage, stable namespace identity and an
+execution fence before opening. They derive journal/signing keys from separate external
+masters and retain secure anchors in an independently administered HTTPS authority with
+its own encrypted PostgreSQL database. Runtime SQL rollback cannot roll that authority
+back. A stale owner cannot release effect output; unresolved started effects remain
+unknown after takeover. The new owner rebuilds its local lexical cache from the durable
+projection queue. Native local runtime composition retains its existing protected
+storage and local ownership contract.
 
 ## Derived state
 

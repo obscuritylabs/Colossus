@@ -29,6 +29,10 @@ pub struct PostgresJournalConfig {
     pub connection_variable: String,
     /// Dedicated PostgreSQL schema owned by this Colossus instance.
     pub schema: String,
+    /// Immutable logical runtime partition. Empty preserves the legacy instance.
+    /// Every canonical and projection key includes this namespace.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub runtime_namespace: String,
     /// TLS verification policy.
     #[serde(default)]
     pub tls: PostgresTlsConfig,
@@ -51,6 +55,7 @@ impl PostgresJournalConfig {
         let config = Self {
             connection_variable: connection_variable.into(),
             schema: schema.into(),
+            runtime_namespace: String::new(),
             tls,
             statement_timeout_ms: DEFAULT_STATEMENT_TIMEOUT_MS,
         };
@@ -80,9 +85,47 @@ impl PostgresJournalConfig {
                 "PostgreSQL schema must be a 1-63 byte ASCII identifier".into(),
             ));
         }
+        if self.runtime_namespace.len() > 256
+            || !self
+                .runtime_namespace
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        {
+            return Err(StoreError::Adapter(
+                "PostgreSQL runtime namespace is invalid".into(),
+            ));
+        }
         if !(100..=300_000).contains(&self.statement_timeout_ms) {
             return Err(StoreError::Adapter(
                 "PostgreSQL statement timeout must be between 100 and 300000 ms".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Exact hosted execution lease checked inside every journal write transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PostgresJournalFence {
+    /// Shared authority schema, in the same PostgreSQL database as the journal.
+    pub lease_schema: String,
+    /// Process-unique owner; never reuse an owner identifier after restart.
+    pub owner_id: String,
+    /// Monotonically increasing generation returned by the shared lease claim.
+    pub generation: u64,
+}
+
+impl PostgresJournalFence {
+    pub(super) fn validate(&self) -> Result<(), StoreError> {
+        if !valid_identifier(&self.lease_schema)
+            || self.owner_id.is_empty()
+            || self.owner_id.len() > 256
+            || self.owner_id.contains('\0')
+            || self.generation == 0
+            || self.generation > i64::MAX as u64
+        {
+            return Err(StoreError::Adapter(
+                "PostgreSQL execution fence is invalid".into(),
             ));
         }
         Ok(())

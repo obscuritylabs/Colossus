@@ -208,6 +208,31 @@ async function contains(text: string) {
     { timeout: 2000 },
   );
 }
+async function menuItem(triggerLabel: string, label: string) {
+  const trigger = container.querySelector<HTMLButtonElement>(
+    `button[aria-label="${triggerLabel}"]`,
+  );
+  if (!trigger) throw new Error(`Missing menu trigger: ${triggerLabel}`);
+  if (trigger.getAttribute("aria-expanded") !== "true") {
+    await act(() => {
+      trigger.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+  }
+  const item = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].find((item) => {
+    if (item.getAttribute("aria-label") === label) return true;
+    const copy = item.cloneNode(true) as HTMLElement;
+    copy
+      .querySelectorAll('[aria-hidden="true"]')
+      .forEach((node) => node.remove());
+    return copy.textContent?.trim() === label;
+  });
+  if (!item) throw new Error(`Missing menu action: ${label}`);
+  return item;
+}
 it("reopens an exact saved deep link and uses an authorized parent on direct-link Back", async () => {
   await act(() => root.render(<App />));
   await contains("Exact saved conversation");
@@ -298,12 +323,11 @@ it("defaults to an active project while preserving explicitly selected archived 
     false,
   );
 
-  await act(() => selector().click());
-  const archivedOption = [
-    ...document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
-  ].find((option) => option.textContent?.includes("Archived project"));
-  expect(archivedOption).toBeDefined();
-  await act(() => archivedOption!.click());
+  const archivedOption = await menuItem(
+    "Select project",
+    "Archived project · Archived",
+  );
+  await act(() => archivedOption.click());
   await ready();
   expect(location.search).toBe("?project=archived");
   expect(selector().textContent).toContain("Archived project");
@@ -331,12 +355,89 @@ it("preserves the authorized project through global settings navigation and relo
   );
   expect(settings).not.toBeNull();
   await act(() => settings!.click());
-  await contains("Personal preferences");
+  await contains("Personal preferences and connections");
+  expect(container.querySelector(".managed-settings-shell")).not.toBeNull();
+  expect(
+    container.querySelector('[aria-label="Settings sections"]')?.textContent,
+  ).toContain("Appearance");
   expect(location.search).toBe("?project=p");
   await act(() => root.unmount());
   root = createRoot(container);
   await act(() => root.render(<App />));
-  await contains("Personal preferences");
+  await contains("Personal preferences and connections");
   expect(container.querySelector('a[href="/fleet?project=p"]')).not.toBeNull();
   expect(paths.some((path) => path.startsWith("/api/projects/q/"))).toBe(false);
+});
+
+it("shows a rejected logout and lets the user retry without hiding the signed-in view", async () => {
+  const fetch = vi.mocked(globalThis.fetch);
+  const original = fetch.getMockImplementation()!;
+  let fail = true;
+  const pending: { resolve: ((value: Response) => void) | null } = {
+    resolve: null,
+  };
+  fetch.mockImplementation(async (input, options) => {
+    if (input === "/auth/logout") {
+      paths.push(input);
+      expect(options?.method).toBe("POST");
+      expect(options?.headers).toMatchObject({ "X-Colossus-CSRF": "1" });
+      if (fail) return response({ error: "permission_denied" }, 403);
+      return new Promise<Response>((resolve) => {
+        pending.resolve = resolve;
+      });
+    }
+    return original(input, options);
+  });
+  await act(() => root.render(<App />));
+  await contains("Retained exact-resource reply");
+  const signOut = await menuItem("Account menu", "Sign out");
+  await act(() => signOut.click());
+  await contains("Could not sign out");
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    "Reload this page",
+  );
+  expect(container.textContent).toContain("Retained exact-resource reply");
+  const availableSignOut = await menuItem("Account menu", "Sign out");
+  expect(availableSignOut.getAttribute("aria-disabled")).not.toBe("true");
+  await act(() => {
+    availableSignOut.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+  });
+
+  fail = false;
+  const retry = [...container.querySelectorAll("button")].find(
+    (button) => button.textContent === "Retry sign out",
+  );
+  expect(retry).toBeDefined();
+  await act(() => retry!.click());
+  await ready();
+  const pendingSignOut = await menuItem("Account menu", "Signing out…");
+  expect(pendingSignOut.getAttribute("aria-disabled")).toBe("true");
+  await act(() => pendingSignOut.click());
+  expect(paths.filter((path) => path === "/auth/logout")).toHaveLength(2);
+  await act(() => pending.resolve!(new Response(null, { status: 204 })));
+  await contains("Sign in to your Control Plane");
+  expect(container.textContent).not.toContain("Could not sign out");
+  expect(container.textContent).not.toContain("Retained exact-resource reply");
+});
+
+it("shows an unconfirmed logout when a gateway returns a sign-in page", async () => {
+  const fetch = vi.mocked(globalThis.fetch);
+  const original = fetch.getMockImplementation()!;
+  fetch.mockImplementation(async (input, options) =>
+    input === "/auth/logout"
+      ? new Response("<html><body>Session refresh required</body></html>", {
+          headers: { "Content-Type": "text/html" },
+        })
+      : original(input, options),
+  );
+  await act(() => root.render(<App />));
+  await contains("Retained exact-resource reply");
+  const signOut = await menuItem("Account menu", "Sign out");
+  await act(() => signOut.click());
+  await contains("Could not sign out");
+  expect(container.textContent).toContain("Reload this page");
+  expect(container.textContent).toContain("Retained exact-resource reply");
+  expect(container.textContent).not.toContain("Unexpected token");
 });

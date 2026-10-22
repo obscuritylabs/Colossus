@@ -1,0 +1,168 @@
+.shared-markdown .markdown-code-block {
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 12px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-editor);
+}
+.markdown-code-header {
+  display: flex;
+  min-height: var(--control-height-compact);
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+.markdown-code-language,
+.markdown-code-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.markdown-code-language {
+  overflow-wrap: anywhere;
+}
+.markdown-code-language > svg {
+  flex: none;
+}
+.markdown-code-actions {
+  flex: none;
+  gap: 2px;
+}
+.markdown-code-actions .ui-button {
+  min-height: var(--control-height-compact);
+  padding: 3px 7px;
+  font-size: var(--font-size-caption);
+}
+.markdown-code-actions [aria-pressed="true"] {
+  background: var(--surface-selected);
+  color: var(--accent-text);
+}
+.shared-markdown.markdown-content .markdown-code-block pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  max-height: 480px;
+  padding: 12px 14px;
+  tab-size: 4;
+}
+.shared-markdown.markdown-content .markdown-code-block pre[data-wrap="true"] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.shared-markdown.markdown-content
+  .markdown-code-block
+  pre[data-wrap="true"]
+  code {
+  overflow-wrap: anywhere;
+}
+.shared-markdown .syntax-text {
+  color: var(--text);
+}
+.shared-markdown .syntax-comment {
+  color: var(--muted);
+  font-style: italic;
+}
+.shared-markdown .syntax-keyword {
+  color: var(--blue-strong);
+}
+.shared-markdown .syntax-string {
+  color: var(--green);
+}
+.shared-markdown .syntax-constant {
+  color: var(--amber);
+}
+.shared-markdown .syntax-function {
+  color: var(--cyan);
+}
+.shared-markdown .syntax-type {
+  color: var(--accent-text);
+}
+.shared-markdown .syntax-invalid {
+  color: var(--red-text);
+  text-decoration: underline wavy;
+}
+.markdown-mermaid-preview {
+  min-width: 0;
+  max-width: 100%;
+  overflow: auto;
+  max-height: 560px;
+  padding: 16px;
+}
+.markdown-mermaid-preview:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: -2px;
+}
+.markdown-mermaid-diagram {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-inline: auto;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-body-sm);
+}
+.markdown-mermaid-diagram :is(path, line, polyline) {
+  stroke: var(--muted);
+  fill: none;
+}
+.markdown-mermaid-diagram :is(rect, circle, ellipse, polygon) {
+  stroke: var(--border-strong);
+  fill: var(--surface-raised);
+}
+.markdown-mermaid-diagram :is(text, tspan) {
+  fill: var(--text);
+  stroke: none;
+}
+.markdown-mermaid-diagram marker path {
+  fill: var(--muted);
+  stroke: var(--muted);
+}
+.markdown-mermaid-diagram .cluster rect {
+  fill: var(--surface-panel);
+}
+.markdown-mermaid-diagram .labelBkg {
+  fill: var(--surface-editor);
+}
+.shared-markdown .markdown-mermaid-notice {
+  padding: 12px 14px;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-body-sm);
+}
+@media (max-width: 560px) {
+  .markdown-code-header {
+    flex-wrap: wrap;
+  }
+  .markdown-code-actions {
+    margin-left: auto;
+  }
+}
+
+.shared-markdown.markdown-content :is(th, td)[data-align="right"] {
+  text-align: right;
+}
+.shared-markdown.markdown-content :is(th, td)[data-align="center"] {
+  text-align: center;
+}
+
+.markdown-mermaid-frame {
+  position: relative;
+  min-width: 0;
+}
+.markdown-mermaid-size-toggle {
+  display: flex;
+  margin: 6px 8px 0 auto;
+  font-size: var(--font-size-caption);
+}
+.markdown-mermaid-preview[data-size="actual"] .markdown-mermaid-diagram {
+  max-width: none;
+  margin-inline: 0;
+}

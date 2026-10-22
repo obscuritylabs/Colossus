@@ -406,10 +406,11 @@ test("Git is accessible at desktop and compact widths", async ({ page }) => {
       .analyze();
     expect(results.violations).toEqual([]);
   }
-  await page.getByRole("tab", { name: /Changes/ }).focus();
+  const pane = page.getByRole("region", { name: "Workspace Git", exact: true });
+  await pane.getByRole("tab", { name: /Changes/ }).focus();
   await page.keyboard.press("ArrowRight");
   await expect(
-    page.getByRole("tab", { name: "History", exact: true }),
+    pane.getByRole("tab", { name: "History", exact: true }),
   ).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(
