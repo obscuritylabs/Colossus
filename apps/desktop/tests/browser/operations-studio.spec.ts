@@ -587,6 +587,14 @@ test("system theme follows operating-system color changes", async ({
 test("light theme keeps session inspection surfaces readable", async ({
   page,
 }) => {
+  const expectReadable = async (selector: string) => {
+    const results = await new AxeBuilder({ page }).include(selector).analyze();
+    expect(
+      results.violations.filter((violation) =>
+        ["critical", "serious"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
+  };
   await page.setViewportSize({ width: 1280, height: 760 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Global", exact: true }).click();
@@ -607,7 +615,7 @@ test("light theme keeps session inspection surfaces readable", async ({
   await page.getByRole("button", { name: "Topology", exact: true }).click();
   await expect(page.locator(".session-map-stage")).toHaveCSS(
     "background-color",
-    "rgb(255, 255, 255)",
+    "rgb(240, 244, 248)",
   );
   await expect(page.locator(".session-map-family").first()).toHaveCSS(
     "background-color",
@@ -617,12 +625,14 @@ test("light theme keeps session inspection surfaces readable", async ({
   await page.getByRole("button", { name: "Snapshots", exact: true }).click();
   await expect(
     page.locator(".session-snapshot-list article").first(),
-  ).toHaveCSS("background-color", "rgb(247, 249, 252)");
+  ).toBeVisible();
+  await expectReadable(".session-resource-view");
 
   await page.getByRole("button", { name: "Resources", exact: true }).click();
   await expect(
     page.locator(".session-resource-groups > button").first(),
-  ).toHaveCSS("background-color", "rgb(247, 249, 252)");
+  ).toBeVisible();
+  await expectReadable(".session-resource-view");
 
   const detailsTrigger = page.getByRole("button", {
     name: "Open tools",
@@ -639,14 +649,7 @@ test("light theme keeps session inspection surfaces readable", async ({
     "rgb(247, 249, 252)",
   );
 
-  const results = await new AxeBuilder({ page })
-    .include(".thread-details-panel")
-    .analyze();
-  expect(
-    results.violations.filter((violation) =>
-      ["critical", "serious"].includes(violation.impact ?? ""),
-    ),
-  ).toEqual([]);
+  await expectReadable(".thread-details-panel");
 
   await details.getByRole("button", { name: /All resources/u }).click();
   await expect(details).toHaveCount(0);

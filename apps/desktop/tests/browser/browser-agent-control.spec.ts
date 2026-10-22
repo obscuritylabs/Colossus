@@ -3,9 +3,15 @@ import { expect, test, type Page } from "@playwright/test";
 
 async function mountAgentBrowser(page: Page) {
   await page.goto("/?fixture=operations-studio");
-  await expect(
-    page.getByRole("button", { name: "Open browser", exact: true }),
-  ).toBeVisible();
+  // Compact headers keep browser access in Tools rather than a shortcut icon.
+  const tools = page.getByRole("button", { name: "Open tools", exact: true });
+  await tools.focus();
+  await tools.press("Enter");
+  const browser = page.getByRole("menuitemradio", { name: /^Browser/ });
+  await expect(browser).toBeVisible();
+  await expect(browser).toBeEnabled();
+  await browser.press("Escape");
+  await expect(tools).toBeFocused();
   await page.evaluate(async () => {
     const resource = (name: string) =>
       performance
