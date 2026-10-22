@@ -83,10 +83,12 @@ test("sidebar works at narrow widths, retains a cancelled draft, and sanitizes m
   ).toHaveCount(0);
   const avatar = page.locator("#messages .shared-assistant-marker > img");
   await expect(page.locator("#messages img")).toHaveCount(1);
-  await expect(avatar).toHaveAttribute(
-    "src",
-    /^data:image\/svg\+xml(?:;base64)?,/u,
-  );
+  await expect(avatar).toHaveAttribute("src", "/colossus-mark.svg");
+  await expect
+    .poll(() =>
+      avatar.evaluate((image) => (image as HTMLImageElement).naturalWidth),
+    )
+    .toBeGreaterThan(0);
   await expect(avatar).toHaveCSS("width", "17px");
   await expect(avatar).toHaveCSS("height", "17px");
   expect(outbound).toEqual([]);
@@ -163,9 +165,13 @@ test("long conversations scroll above a fixed composer and honor saved editor pr
   // One shared response avatar and one host-owned tool-group mark remain.
   await expect(page.locator("#messages img")).toHaveCount(2);
   await expect(page.locator("#messages [data-brand-mark]")).toHaveCount(1);
-  await expect(
-    page.locator("#messages .shared-assistant-marker > img"),
-  ).toHaveAttribute("src", /^data:image\/svg\+xml(?:;base64)?,/u);
+  const avatar = page.locator("#messages .shared-assistant-marker > img");
+  await expect(avatar).toHaveAttribute("src", "/colossus-mark.svg");
+  await expect
+    .poll(() =>
+      avatar.evaluate((image) => (image as HTMLImageElement).naturalWidth),
+    )
+    .toBeGreaterThan(0);
   await expect(page.locator("#messages pre code")).toHaveText(
     "colossus worker",
   );
