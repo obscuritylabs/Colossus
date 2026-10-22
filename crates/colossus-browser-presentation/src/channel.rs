@@ -14,9 +14,9 @@ use zeroize::Zeroizing;
 mod diagnostics;
 
 use crate::{
-    CONTROL_HEADER_BYTES, Configure, ControlCodec, Frame, FrameCodec, HEADER_BYTES,
-    HumanFenceReceipt, Input, Lease, PageState, PresentationCommand, PresentationError,
-    PresentationReply, Role,
+    CONTROL_HEADER_BYTES, ClientIdentityChallenge, ClientIdentityKey, ClientIdentityPolicy,
+    Configure, ControlCodec, Frame, FrameCodec, HEADER_BYTES, HumanFenceReceipt, Input, Lease,
+    PageState, PresentationCommand, PresentationError, PresentationReply, Role,
 };
 
 // A Retina BGRA paint can cross the native host and worker relay before the
@@ -241,6 +241,12 @@ pub async fn serve_presentation(
                     if let PresentationReply::Fenced(receipt) = &reply {
                         receipt.validate()?;
                     }
+                    if let PresentationReply::ClientIdentity {
+                        challenge: Some(challenge),
+                    } = &reply
+                    {
+                        challenge.validate()?;
+                    }
                     write_control(channel.writer.as_mut(), &mut outgoing, &reply).await?;
                     if matches!(
                         reply,
@@ -291,6 +297,12 @@ fn valid_reply(command: &PresentationCommand, reply: &PresentationReply) -> bool
             value.accepts(*lease)
         }
         (PresentationCommand::Observe { .. }, PresentationReply::State(_)) => true,
+        (
+            PresentationCommand::PendingClientIdentity { .. },
+            PresentationReply::ClientIdentity { challenge },
+        ) => challenge
+            .as_ref()
+            .is_none_or(|value| value.validate().is_ok()),
         (PresentationCommand::FenceHuman { lease }, PresentationReply::Fenced(receipt)) => {
             lease == &receipt.prior_lease && receipt.validate().is_ok()
         }
@@ -301,7 +313,8 @@ fn valid_reply(command: &PresentationCommand, reply: &PresentationReply) -> bool
             | PresentationCommand::Focus { .. }
             | PresentationCommand::Hide { .. }
             | PresentationCommand::Renew { .. }
-            | PresentationCommand::Human { .. },
+            | PresentationCommand::Human { .. }
+            | PresentationCommand::SelectClientIdentity { .. },
             PresentationReply::Ack,
         ) => true,
         _ => false,
@@ -372,8 +385,14 @@ impl PresentationClient {
                     continue;
                 }
                 let read_only_frame = matches!(&call.command, PresentationCommand::Poll { .. });
-                let read_only =
-                    read_only_frame || matches!(&call.command, PresentationCommand::Observe { .. });
+                let read_only = read_only_frame
+                    || matches!(
+                        &call.command,
+                        PresentationCommand::Observe { .. }
+                            | PresentationCommand::PendingClientIdentity {
+                                policy: ClientIdentityPolicy::Review,
+                            }
+                    );
                 let budget = operation_timeout(&call.command);
                 #[cfg(all(windows, debug_assertions))]
                 let mut read_trace = worker_diagnostics.begin_read(&call.command);
@@ -446,6 +465,12 @@ impl PresentationClient {
                     if let PresentationReply::Fenced(receipt) = &reply {
                         receipt.validate()?;
                     }
+                    if let PresentationReply::ClientIdentity {
+                        challenge: Some(challenge),
+                    } = &reply
+                    {
+                        challenge.validate()?;
+                    }
                     #[cfg(all(windows, debug_assertions))]
                     diagnostics::read_stage(&mut read_trace, "read_complete");
                     if let PresentationReply::Error(error) = reply {
@@ -457,11 +482,11 @@ impl PresentationClient {
                     Ok((reply, frame))
                 };
                 let result = tokio::select! {
-                    // A UI snapshot can expire while Observe is already dispatched,
-                    // or while a frame is being transferred. Neither read changes
-                    // authority. Finish validating its bounded reply before taking
-                    // the next call; abandoning it mid-frame would desynchronize the
-                    // stream and unnecessarily kill an otherwise healthy viewer.
+                    // A UI snapshot or native Review lookup can expire after
+                    // dispatch, or during a frame transfer. These reads cannot
+                    // select a key or change authority. Drain their bounded replies
+                    // before the next call to preserve authenticated framing.
+                    // AutomaticIfUnique remains effectful and closes on abandon.
                     _ = call.response.closed(), if !read_only => {
                         #[cfg(all(windows, debug_assertions))]
                         diagnostics::emit(call.trace, "response_dropped", None);
@@ -591,6 +616,46 @@ impl PresentationClient {
     pub async fn configure(&self, value: Configure) -> Result<Lease, PresentationError> {
         match self.call(PresentationCommand::Configure(value)).await?.0 {
             PresentationReply::Configured(lease) => Ok(lease),
+            _ => {
+                self.disconnect();
+                Err(PresentationError::OutcomeUnknown)
+            }
+        }
+    }
+    /// Obtain public metadata for the current native TLS request before view attachment.
+    /// An automatic policy may queue key use; a lost reply must never be retried blindly.
+    pub async fn pending_client_identity(
+        &self,
+        policy: ClientIdentityPolicy,
+    ) -> Result<Option<ClientIdentityChallenge>, PresentationError> {
+        match self
+            .call(PresentationCommand::PendingClientIdentity { policy })
+            .await?
+            .0
+        {
+            PresentationReply::ClientIdentity { challenge } => Ok(challenge),
+            _ => {
+                self.disconnect();
+                Err(PresentationError::OutcomeUnknown)
+            }
+        }
+    }
+    /// Submit an offered fingerprint or cancel the exact native one-use request.
+    /// The host validates again on its CEF thread; ACK is not authentication proof.
+    pub async fn select_client_identity(
+        &self,
+        key: ClientIdentityKey,
+        fingerprint_sha256: Option<String>,
+    ) -> Result<(), PresentationError> {
+        match self
+            .call(PresentationCommand::SelectClientIdentity {
+                key,
+                fingerprint_sha256,
+            })
+            .await?
+            .0
+        {
+            PresentationReply::Ack => Ok(()),
             _ => {
                 self.disconnect();
                 Err(PresentationError::OutcomeUnknown)

@@ -6,6 +6,7 @@
   "webviews": ["main"],
   "permissions": [
     "allow-report-renderer-failure",
+    "allow-sync-client-identity-appearance",
     "allow-workflow-context",
     "allow-list-registered-workflows",
     "allow-get-registered-workflow",

@@ -75,16 +75,42 @@ pub(crate) fn run() -> i32 {
     let completed = Arc::new(AtomicBool::new(false));
     let completion = completed.clone();
     let application = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .register_uri_scheme_protocol(
+            crate::client_identity_review::protocol::SCHEME,
+            |context, request| crate::client_identity_review::protocol::respond(&context, &request),
+        )
         .manage(AppState::default())
+        .manage(crate::client_identity_review::ClientIdentityReviewState::default())
+        .manage(crate::terminal_commands::pane::TerminalPaneState::default())
         .invoke_handler(tauri::generate_handler![
             crate::browser::commands::browser_context,
             crate::browser::commands::browser_command,
-            crate::browser::commands::browser_viewport
+            crate::browser::commands::browser_viewport,
+            crate::browser::certificates::browser_certificates,
+            crate::client_identity_review::client_identity_review_context,
+            crate::client_identity_review::finish_client_identity_review,
+            crate::client_identity_review::sync_client_identity_appearance
         ])
+        .on_page_load(|view, payload| {
+            if view.label() == "main"
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
+            {
+                crate::client_identity_review::controller_loading(view.app_handle());
+                view.state::<AppState>().browser.controller_loading();
+                crate::terminal_commands::pane::hide(view.app_handle(), true);
+            }
+        })
+        .on_window_event(|window, event| {
+            super::handle_window_event(window, event);
+            crate::client_identity_review::handle_window_event(window, event);
+        })
         .setup(move |app| {
             println!("Native app initialized");
             super::bootstrap::start_pump(app.handle())?;
             super::start_watchdog(app.handle().clone());
+            #[cfg(all(windows, feature = "windows-browser-development"))]
+            super::client_identity_broker::start(app.handle());
             #[cfg(any(
                 feature = "macos-contained-browser-diagnostic",
                 feature = "windows-browser-development"

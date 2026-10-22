@@ -48,6 +48,19 @@ fn teardown_hide_result(result: Result<(), engine::BrowserError>) -> Result<(), 
 }
 
 impl BrowserManager {
+    #[cfg(all(
+        windows,
+        any(
+            feature = "windows-browser-development",
+            feature = "windows-browser-functional-preview"
+        )
+    ))]
+    // Advisory native mirror only. A genuine AppState selection lease is still
+    // required before certificate use or review; this snapshot cannot grant it.
+    pub(crate) fn scope_snapshot(&self) -> Option<String> {
+        self.data.lock().ok()?.scope.clone()
+    }
+
     pub(super) fn require_open(&self) -> Result<(), CommandErrorDto> {
         if self.lock()?.draining {
             return Err(error(DRAINING_MESSAGE));

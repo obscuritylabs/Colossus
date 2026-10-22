@@ -4,6 +4,17 @@
 pub(crate) mod acceptance;
 pub(crate) mod bootstrap;
 pub(crate) mod certificates;
+#[cfg(all(windows, feature = "client-identity-test-bridge"))]
+#[path = "acceptance/client_identity.rs"]
+pub(crate) mod client_identity_acceptance;
+#[cfg(all(
+    windows,
+    any(
+        feature = "windows-browser-development",
+        feature = "windows-browser-functional-preview"
+    )
+))]
+pub(crate) mod client_identity_broker;
 pub(crate) mod commands;
 #[cfg(any(
     feature = "embedded-chromium-preview",

@@ -58,11 +58,13 @@ impl BrowserManager {
                 ));
             }
             let selected = state.selected.get(&scope).cloned();
+            let review_active = crate::client_identity_review::is_active(app);
             state
                 .tabs
                 .iter_mut()
                 .map(|tab| {
                     let visible = visible_window
+                        && !review_active
                         && tab.scope == scope
                         && Some(&tab.dto.id) == request.tab_id.as_ref()
                         && request.tab_id == selected

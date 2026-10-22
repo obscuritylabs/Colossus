@@ -58,6 +58,7 @@ fn web_address_allowed(url: &Url) -> bool {
                 | "asset.localhost"
                 | "colossus-terminal.localhost"
                 | "colossus-approval.localhost"
+                | "colossus-client-identity.localhost"
         )
         && !(is_loopback(url) && url.port_or_known_default() == Some(1420))
 }
@@ -142,6 +143,8 @@ mod tests {
             "http://tauri.localhost./",
             "http://localhost.:1420/",
             "http://colossus-approval.localhost",
+            "http://colossus-client-identity.localhost",
+            "https://colossus-client-identity.localhost./index.html?surface=client-identity-review",
             "http://127.0.0.1:1420",
             "https://example.com\\@localhost",
             "https://example.com/\nx",

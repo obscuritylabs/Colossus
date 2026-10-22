@@ -3,6 +3,7 @@ mod allocation;
 pub(super) mod driver;
 mod expiry;
 mod handoff;
+mod identity;
 pub(super) mod lifecycle;
 pub(super) mod selection;
 mod types;

@@ -3,6 +3,8 @@
     any(not(windows), not(target_arch = "x86_64"))
 ))]
 compile_error!("Windows browser functional preview supports Windows x64 only");
+#[cfg(all(feature = "client-identity-test-bridge", not(debug_assertions)))]
+compile_error!("synthetic client identity review acceptance is Debug-only");
 #[cfg(all(
     feature = "windows-browser-functional-preview",
     any(
@@ -50,6 +52,7 @@ mod approval_adapter;
 mod browser;
 mod bundle;
 mod capability_inventory;
+mod client_identity_review;
 mod codex_auth;
 mod command_review;
 mod command_review_protocol;
@@ -114,6 +117,13 @@ mod workspace_search;
 #[must_use]
 pub fn run_browser_acceptance() -> i32 {
     browser::acceptance::run()
+}
+
+/// Exercise only the synthetic Windows certificate-review child, with no key use.
+#[cfg(all(windows, feature = "client-identity-test-bridge"))]
+#[must_use]
+pub fn run_client_identity_review_acceptance() -> i32 {
+    browser::client_identity_acceptance::run()
 }
 
 use browser::certificates::browser_certificates;
@@ -224,6 +234,10 @@ pub fn run() {
     #[cfg(windows)]
     let application = application.plugin(desktop_instance::plugin());
     let application = application
+        .register_uri_scheme_protocol(
+            client_identity_review::protocol::SCHEME,
+            |context, request| client_identity_review::protocol::respond(&context, &request),
+        )
         .register_uri_scheme_protocol(command_review_protocol::SCHEME, |context, request| {
             command_review_protocol::respond(&context, &request)
         })
@@ -239,11 +253,20 @@ pub fn run() {
         .manage(status_bar::StatusBarState::default())
         .manage(setup_package::SetupReviewState::default())
         .manage(command_review::CommandReviewState::default())
+        .manage(client_identity_review::ClientIdentityReviewState::default())
         .manage(workspace_git::commands::GitState::default())
         .manage(workspace_search::SearchState::default())
         .setup(|app| {
             status_bar::setup(app)?;
             browser::start_watchdog(app.handle().clone());
+            #[cfg(all(
+                windows,
+                any(
+                    feature = "windows-browser-development",
+                    feature = "windows-browser-functional-preview"
+                )
+            ))]
+            browser::client_identity_broker::start(app.handle());
             browser::bootstrap::start_pump(app.handle())?;
             #[cfg(any(
                 feature = "embedded-chromium-preview",
@@ -263,6 +286,7 @@ pub fn run() {
             {
                 use tauri::Manager as _;
                 view.state::<dictation::DictationState>().cancel();
+                client_identity_review::controller_loading(view.app_handle());
                 view.state::<state::AppState>().browser.controller_loading();
                 terminal_commands::pane::hide(view.app_handle(), true);
             }
@@ -278,10 +302,14 @@ pub fn run() {
                 window.state::<dictation::DictationState>().cancel();
             }
             browser::handle_window_event(window, event);
+            client_identity_review::handle_window_event(window, event);
             status_bar::handle_window_event(window, event);
         })
         .invoke_handler(tauri::generate_handler![
             logging::report_renderer_failure,
+            client_identity_review::sync_client_identity_appearance,
+            client_identity_review::client_identity_review_context,
+            client_identity_review::finish_client_identity_review,
             dictation_status,
             get_dictation_settings,
             download_dictation_model,

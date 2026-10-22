@@ -212,6 +212,11 @@ impl BrowserDriver for Registrar {
             .lock()
             .map_err(|_| BrowserDriverError::OutcomeUnknown)?
             .remove(s);
+        self.0
+            .identity_attempts
+            .lock()
+            .map_err(|_| BrowserDriverError::OutcomeUnknown)?
+            .remove(s);
         Ok(())
     }
 }
