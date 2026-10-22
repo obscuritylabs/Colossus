@@ -4,6 +4,7 @@ import { Button } from "@colossus/ui/components/ui/button";
 import { Input } from "@colossus/ui/components/ui/input";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
@@ -20,6 +21,7 @@ import {
   IconGitFork,
   IconLock,
   IconPencil,
+  IconPin,
 } from "@tabler/icons-react";
 import {
   ApiFailure,
@@ -51,6 +53,8 @@ export function ChatHistorySidebarRow({
   onRemovedFocus,
   onRefresh,
   onFork,
+  pinned = false,
+  onPin,
 }: {
   thread: Thread;
   project: string;
@@ -63,6 +67,8 @@ export function ChatHistorySidebarRow({
   onRemovedFocus: () => void;
   onRefresh: () => void;
   onFork: ((thread: Thread, source: Task) => void) | undefined;
+  pinned?: boolean;
+  onPin?: ((pinned: boolean) => void) | undefined;
 }) {
   const menu = useSidebarDropdown();
   const [bound, setBound] = useState(thread);
@@ -88,7 +94,9 @@ export function ChatHistorySidebarRow({
   const allowed = canControl && owned;
   const showActions =
     owned &&
-    (canControl || Boolean(onFork && !thread.archived && thread.can_continue));
+    (canControl ||
+      Boolean(onPin && (!thread.archived || pinned)) ||
+      Boolean(onFork && !thread.archived && thread.can_continue));
   const title = thread.title || "Untitled chat";
   const updated = chatUpdatedTime(thread.updated_at, now);
   const state =
@@ -227,6 +235,7 @@ export function ChatHistorySidebarRow({
     <div
       className="chat-history-entry"
       ref={rowRef}
+      data-chat-row={thread.thread_id}
       aria-busy={busy || undefined}
     >
       {editing ? (
@@ -285,6 +294,7 @@ export function ChatHistorySidebarRow({
                   {updated.dateTime ? "Updated " : ""}
                   {updated.label}
                 </time>
+                {pinned ? <span>Pinned</span> : null}
                 {state ? (
                   <span className="chat-history-row-state">
                     {state === "Pending work" ? (
@@ -296,15 +306,16 @@ export function ChatHistorySidebarRow({
               </span>
             }
             status={
-              state ? (
+              state || pinned ? (
                 <span className="chat-history-row-indicator" aria-hidden="true">
+                  {pinned ? <IconPin size={14} /> : null}
                   {state === "Pending work" ? (
                     <IconClock size={14} />
                   ) : state === "Read only" ? (
                     <IconLock size={14} />
-                  ) : (
+                  ) : state ? (
                     <IconAlertCircle size={14} />
-                  )}
+                  ) : null}
                 </span>
               ) : undefined
             }
@@ -391,6 +402,20 @@ export function ChatHistorySidebarRow({
                     </p>
                   ) : null}
                 </>
+              ) : null}
+              {onPin && (!bound.archived || pinned) ? (
+                <DropdownMenuCheckboxItem
+                  className="control-sidebar-dropdown-item"
+                  checked={pinned}
+                  aria-label={`${pinned ? "Unpin" : "Pin"} ${title}`}
+                  onSelect={() => {
+                    skipMenuFocus.current = true;
+                    onPin(!pinned);
+                  }}
+                >
+                  <IconPin size={16} aria-hidden="true" />
+                  {pinned ? "Unpin" : "Pin"}
+                </DropdownMenuCheckboxItem>
               ) : null}
             </DropdownMenuGroup>
             {allowed ? (

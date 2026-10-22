@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Button, RadioGroup, WorkspaceSidebarSearch } from "@colossus/ui";
 import { Button as FoundationButton } from "@colossus/ui/components/ui/button";
 import {
@@ -12,6 +12,7 @@ import {
   IconDots,
   IconLock,
   IconMessageCircle,
+  IconPin,
   IconPlus,
   IconPlugConnected,
   IconRefresh,
@@ -24,6 +25,8 @@ import { useResource } from "./resources";
 import { LoadState } from "./Home";
 import { groupChatHistory } from "./chat-history-presentation";
 import { ChatHistorySidebarRow } from "./ChatHistorySidebarRow";
+import { useChatPins } from "./chat-pins";
+import { usePinnedChats } from "./usePinnedChats";
 import "./chat-workspace.css";
 import "./chat-history.css";
 
@@ -50,6 +53,7 @@ export function ChatHistorySidebar({
   onFork?: ((thread: Thread, source: Task) => void) | undefined;
 }) {
   const [query, setQuery] = useState("");
+  const pins = useChatPins(identity, project);
   const [{ search, archive, cursors }, setView] = useState({
     search: "",
     archive: "false",
@@ -73,6 +77,16 @@ export function ChatHistorySidebar({
     threads: Thread[];
     next_cursor?: string | null;
   }>(projectPath(project) + "/chat/threads?" + params, 3000, identity);
+  const pinnedHistory = usePinnedChats(
+    identity,
+    project,
+    archive === "false" ? pins.ids : [],
+    refreshKey,
+  );
+  const refresh = () => {
+    history.refresh();
+    pinnedHistory.refresh();
+  };
   const previousRefresh = useRef(refreshKey);
   useEffect(() => {
     if (previousRefresh.current !== refreshKey) {
@@ -82,9 +96,68 @@ export function ChatHistorySidebar({
   }, [refreshKey, history.refresh]);
   const menu = useSidebarDropdown();
   const sidebarRef = useRef<HTMLElement>(null);
+  const pinFocus = useRef<string | null>(null);
+  const [pinFocusVersion, setPinFocusVersion] = useState(0);
+  const changePin = (id: string, pinned: boolean) => {
+    pinFocus.current = id;
+    pins.setPinned(id, pinned);
+    setPinFocusVersion((value) => value + 1);
+  };
+  useLayoutEffect(() => {
+    if (!pinFocus.current) return;
+    const row = [
+      ...(sidebarRef.current?.querySelectorAll<HTMLElement>(
+        "[data-chat-row]",
+      ) ?? []),
+    ].find((row) => row.dataset.chatRow === pinFocus.current);
+    pinFocus.current = null;
+    const target =
+      row?.querySelector<HTMLButtonElement>(
+        '[aria-label^="Chat actions for"]',
+      ) ??
+      sidebarRef.current?.querySelector<HTMLAnchorElement>(
+        '[aria-label="New chat"]',
+      );
+    target?.focus();
+  }, [pins.ids, pinFocusVersion]);
   const metadataId = useId();
   const now = new Date();
-  const groups = groupChatHistory(history.data?.threads ?? [], now);
+  const pinIds = new Set(pins.ids);
+  const releasedPins = new Map(
+    pinnedHistory.threads.map((thread) => [thread.thread_id, thread]),
+  );
+  for (const thread of history.data?.threads ?? []) {
+    if (
+      pinIds.has(thread.thread_id) &&
+      thread.project_id === project &&
+      thread.owner_user_id === identity &&
+      thread.source === "cloud" &&
+      (releasedPins.get(thread.thread_id)?.revision ?? -1) <= thread.revision
+    )
+      releasedPins.set(thread.thread_id, thread);
+  }
+  const pinnedThreads =
+    archive === "false"
+      ? pins.ids.flatMap((id) => {
+          const thread = releasedPins.get(id);
+          return thread &&
+            !thread.archived &&
+            thread.title.toLowerCase().includes(search.toLowerCase())
+            ? [thread]
+            : [];
+        })
+      : [];
+  const groups = groupChatHistory(
+    (history.data?.threads ?? []).filter(
+      (thread) => archive !== "false" || !pinIds.has(thread.thread_id),
+    ),
+    now,
+  );
+  if (pinnedThreads.length)
+    groups.unshift({ label: "Pinned", threads: pinnedThreads });
+  const unavailablePins = pinnedHistory.unavailable.filter(
+    (id) => !releasedPins.has(id),
+  );
   const hasPrevious = cursors.length > 1;
   const hasNext = Boolean(history.data?.next_cursor);
   return (
@@ -138,7 +211,7 @@ export function ChatHistorySidebar({
             >
               <DropdownMenuItem
                 className="control-sidebar-dropdown-item"
-                onSelect={history.refresh}
+                onSelect={refresh}
               >
                 <IconRefresh size={16} aria-hidden="true" /> Refresh chats
               </DropdownMenuItem>
@@ -189,16 +262,30 @@ export function ChatHistorySidebar({
           />
         </div>
       </div>
+      {pins.notice ? (
+        <p className="chat-history-pin-notice" role="status">
+          {pins.notice}
+        </p>
+      ) : null}
       <div className="chat-history-scroll">
         <LoadState {...history} retry={history.refresh} />
         <nav className="chat-history-list" aria-label="Your chat history">
           {groups.map((group) => (
             <section
-              key={group.label + ":" + group.threads[0]?.thread_id}
+              key={
+                group.label === "Pinned"
+                  ? "Pinned"
+                  : group.label + ":" + group.threads[0]?.thread_id
+              }
               className="chat-history-group"
               aria-label={group.label}
             >
-              <h3 className="chat-history-group-heading">{group.label}</h3>
+              <h3 className="chat-history-group-heading">
+                {group.label === "Pinned" ? (
+                  <IconPin size={13} aria-hidden="true" />
+                ) : null}
+                {group.label}
+              </h3>
               {group.threads.map((thread) => (
                 <ChatHistorySidebarRow
                   key={JSON.stringify([
@@ -215,11 +302,20 @@ export function ChatHistorySidebar({
                   now={now}
                   metadataId={metadataId + "-" + thread.thread_id}
                   identity={identity}
+                  pinned={pinIds.has(thread.thread_id)}
+                  onPin={(pinned) => {
+                    if (
+                      thread.project_id === project &&
+                      thread.owner_user_id === identity
+                    ) {
+                      changePin(thread.thread_id, pinned);
+                    }
+                  }}
                   canControl={canControl}
                   onFork={onFork}
-                  onRefresh={history.refresh}
+                  onRefresh={refresh}
                   onChanged={(value) => {
-                    history.refresh();
+                    refresh();
                     onThreadChanged?.(value);
                   }}
                   onRemovedFocus={() => {
@@ -234,7 +330,32 @@ export function ChatHistorySidebar({
             </section>
           ))}
         </nav>
-        {!history.loading && !history.error && !groups.length ? (
+        {!search &&
+        archive === "false" &&
+        pinnedHistory.loading &&
+        pins.ids.length ? (
+          <p className="chat-history-pin-notice" role="status">
+            Loading pinned chats…
+          </p>
+        ) : null}
+        {!search && archive === "false"
+          ? unavailablePins.map((id) => (
+              <div className="chat-history-pin-unavailable" key={id}>
+                Pinned chat unavailable.
+                <Button variant="tertiary" onClick={() => changePin(id, false)}>
+                  Remove pin
+                </Button>
+              </div>
+            ))
+          : null}
+        {!history.loading &&
+        !history.error &&
+        !groups.length &&
+        !(
+          archive === "false" &&
+          !search &&
+          (pinnedHistory.loading || unavailablePins.length)
+        ) ? (
           <div className="chat-history-empty">
             <IconMessageCircle size={24} aria-hidden="true" />
             <strong>

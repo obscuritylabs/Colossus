@@ -32,6 +32,7 @@ mod managed;
 mod native;
 mod resources;
 mod retained;
+mod thread_metadata;
 
 #[derive(Default)]
 struct TestKeys(Mutex<HashMap<String, Zeroizing<Vec<u8>>>>);

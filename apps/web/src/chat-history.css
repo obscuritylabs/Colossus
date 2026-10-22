@@ -145,6 +145,9 @@
   gap: 2px;
 }
 .chat-history-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   padding: 8px 10px 4px;
   color: var(--muted);
@@ -186,8 +189,12 @@
   line-height: var(--line-height-body);
   overflow-wrap: anywhere;
 }
-.chat-history-row-menu [role="menuitem"] {
+.chat-history-row-menu :is([role="menuitem"], [role="menuitemcheckbox"]) {
   justify-content: flex-start;
+}
+.chat-history-row-menu [role="menuitemcheckbox"] > span {
+  display: inline-flex;
+  margin-inline-start: auto;
 }
 .chat-history-menu-context {
   display: grid;
@@ -271,9 +278,24 @@
   content: "";
 }
 .chat-history-row-indicator {
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--muted);
+}
+.chat-history-pin-notice,
+.chat-history-pin-unavailable {
+  margin: 0;
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+  overflow-wrap: anywhere;
+}
+.chat-history-pin-unavailable .ui-button {
+  margin-inline-start: 4px;
+  min-height: var(--control-height-touch);
+  font-size: inherit;
 }
 .chat-history-row .chat-history-meta {
   display: flex;
@@ -372,7 +394,15 @@
 :root[data-text-size="large"] .chat-history-rename-actions .ui-button {
   min-height: var(--control-height-touch);
 }
+:root[data-text-size="large"]
+  .chat-history-row-menu
+  :is([role="menuitem"], [role="menuitemcheckbox"]) {
+  min-height: var(--control-height-touch);
+}
 @media (pointer: coarse), (max-width: 760px) {
+  .chat-history-row-menu :is([role="menuitem"], [role="menuitemcheckbox"]) {
+    min-height: var(--control-height-touch);
+  }
   .chat-history-entry {
     --chat-history-action-size: var(--control-height-touch);
   }

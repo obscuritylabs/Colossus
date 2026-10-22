@@ -24,6 +24,8 @@ mod personal_roles;
 mod plans;
 #[path = "tests/resources.rs"]
 mod resources;
+#[path = "tests/thread_metadata.rs"]
+mod thread_metadata;
 #[path = "tests/titles.rs"]
 mod titles;
 

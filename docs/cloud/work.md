@@ -44,6 +44,20 @@ conversations and managed files; new work loads execution again.
 Personal conversations and execution belong to your account in that project.
 Other users, including global administrators, cannot read or control them.
 
+## Keep hosted chats close
+
+Open a chat's actions menu and choose **Pin** to keep it in **Pinned** above
+recent history. Pinning does not open the chat or interrupt running work. Choose
+**Unpin** from the same menu to return it to its date group.
+
+Pins stay visible when you page through older chats, and title search filters them
+along with recent history. Archived chats leave the open list; restoring a pinned
+chat returns it to **Pinned**. You can also unpin it from the archived list.
+
+Each account can pin up to 32 chats per project. Pins are saved in this browser,
+independently of other accounts and projects. Clearing browser storage removes
+them; if storage is unavailable, they last only for the current browser session.
+
 ## Work with a connected agent
 
 1. Open **Fleet**, choose a host, then a workspace.
