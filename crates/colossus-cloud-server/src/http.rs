@@ -404,7 +404,9 @@ async fn create(
 ) -> Result<Json<serde_json::Value>> {
     let caller = state.auth.caller(&headers, &project, true).await?;
     let _hosted_admission = if let Some(hosted) = &state.hosted {
-        hosted.admission(&caller, &input.node_id).await?
+        hosted
+            .admission(&caller, &input.node_id, &input.request)
+            .await?
     } else {
         None
     };
@@ -782,7 +784,9 @@ async fn create_thread(
 ) -> Result<Json<serde_json::Value>> {
     let caller = state.auth.caller(&headers, &project, true).await?;
     let _hosted_admission = if let Some(hosted) = &state.hosted {
-        hosted.admission(&caller, &input.node_id).await?
+        hosted
+            .admission(&caller, &input.node_id, &input.request)
+            .await?
     } else {
         None
     };
@@ -832,7 +836,9 @@ async fn send_message(
     let caller = state.auth.caller(&headers, &project, true).await?;
     let _hosted_admission = if let Some(hosted) = &state.hosted {
         let thread = state.repo.get_thread(&caller, &id).await?;
-        hosted.admission(&caller, &thread.thread.node_id).await?
+        hosted
+            .admission(&caller, &thread.thread.node_id, &input.request)
+            .await?
     } else {
         None
     };

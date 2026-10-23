@@ -162,6 +162,7 @@ async fn hosted_chat_child() {
         .unwrap(),
     );
     let project = ChatProjectConfig {
+        connection_network_policy: Default::default(),
         labels: Default::default(),
         codex_auth_shared: false,
         runtime,

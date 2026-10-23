@@ -18,7 +18,7 @@ use colossus_contracts::{
     ProviderUsage, QuarantinedEffectResult, ReasoningEffort, ResourceAuthority,
     validate_model_message_content, validate_model_transcript,
 };
-use colossus_network::AdditionalRootCertificates;
+use colossus_network::{AdditionalRootCertificates, parse_host_ip};
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
     QuarantinedEffectObserver, StreamingEffectExecutor, http_transport_authority_match,
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     sync::Arc,
     time::Duration,
 };

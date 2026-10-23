@@ -97,10 +97,9 @@ pub(super) fn prepare_config(
                 && (options.oauth_credential_vault.is_none()
                     || config.mcp.oauth_credential_store != McpOAuthCredentialStoreKind::Platform))
             || server.allowed_tools.is_empty()
-            || server.allowed_tools.iter().any(|tool| tool.contains('*'))
         {
             return Err(reject(
-                "MCP requires remote HTTP, exact tool names, and host-bound credentials",
+                "MCP requires remote HTTP, valid tool selectors, and host-bound credentials",
             ));
         }
         let origin = server

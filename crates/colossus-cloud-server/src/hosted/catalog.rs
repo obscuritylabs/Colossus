@@ -55,52 +55,18 @@ fn preset_availability(
     let Some(endpoint) = preset.base_url else {
         return PresetAvailability {
             status: PresetStatus::ConfigureEndpoint,
-            reason: "Enter an HTTPS endpoint allowed by this deployment, then configure its authentication.",
+            reason: "Enter an HTTPS endpoint, then configure its authentication. Project Network access controls whether the connection can be used.",
         };
     };
     if crate::chat_settings::allowed_endpoint(endpoint, ceiling, false).is_ok() {
         return PresetAvailability {
             status: PresetStatus::Available,
-            reason: "This preset endpoint is allowed by the deployment. Configure its authentication before use.",
+            reason: "This preset can be configured. Project Network access controls whether the connection can be used.",
         };
     }
-    let action = match preset.protocol {
-        ProviderSetupProtocol::ChatCompletions => "provider.openai.chat",
-        ProviderSetupProtocol::Responses => "provider.openai.responses",
-        ProviderSetupProtocol::AnthropicMessages => "provider.anthropic.messages",
-        ProviderSetupProtocol::Codex => unreachable!(),
-    };
-    let existing = current
-        .runtime
-        .providers
-        .profiles
-        .iter()
-        .any(|(id, profile)| {
-            profile.kind.generation_action() == action
-                && profile.base_url.as_deref() == Some(endpoint)
-                && ceiling
-                    .runtime
-                    .providers
-                    .profiles
-                    .get(id)
-                    .is_some_and(|seed| {
-                        seed.kind == profile.kind && seed.base_url == profile.base_url
-                    })
-                && crate::chat_settings::allowed_endpoint(endpoint, ceiling, true).is_ok()
-        });
     PresetAvailability {
-        status: if existing {
-            PresetStatus::ExistingOnly
-        } else {
-            PresetStatus::DeploymentRequired
-        },
-        reason: if existing {
-            "An existing deployment-managed local connection can be edited. New local endpoints must be configured by a deployment administrator and refer to the server, not your browser device."
-        } else if endpoint.starts_with("http:") {
-            "A deployment administrator must configure this local endpoint. Local addresses refer to the server, not your browser device."
-        } else {
-            "A deployment administrator must allow this provider endpoint before it can be saved. You can choose a custom endpoint already allowed by the deployment."
-        },
+        status: PresetStatus::DeploymentRequired,
+        reason: "Remote connections require HTTPS. HTTP is available only for loopback connections on the Control Plane host.",
     }
 }
 
@@ -210,6 +176,13 @@ impl HostedExecution {
             .contains_key(profile)
         {
             return Err(CloudError::NotFound);
+        }
+        if !crate::global_settings::network::connection_enabled(
+            &configuration,
+            colossus_cloud_chat::ChatConnectionKind::Provider,
+            profile,
+        ) {
+            return Err(CloudError::PermissionDenied);
         }
         Ok(())
     }

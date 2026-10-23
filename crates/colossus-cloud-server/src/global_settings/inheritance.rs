@@ -59,9 +59,13 @@ fn authentication<T>(
 pub(crate) fn resolve(
     raw: &ChatProjectConfig,
     global: &HostedCatalog,
-    ceiling: &ChatProjectConfig,
+    _ceiling: &ChatProjectConfig,
 ) -> CloudResult<ChatProjectConfig> {
-    crate::chat_settings::review_effective(&definitions(raw, global), ceiling)
+    raw.connection_network_policy.validate()?;
+    // Retained local definitions and the instance catalog were intrinsically reviewed
+    // at their respective commits. A later catalog deletion or project restriction
+    // changes availability, never the readability of the full settings projection.
+    Ok(definitions(raw, global))
 }
 
 /// Read-only catalog projection for a Cloud project without an operator runtime seed.
@@ -273,7 +277,7 @@ pub(crate) fn equal<T: Serialize>(left: &T, right: &T) -> CloudResult<bool> {
 }
 
 pub(super) fn review_catalog(
-    host: &HostedExecution,
+    _host: &HostedExecution,
     current: &HostedCatalog,
     next: &mut HostedCatalog,
 ) -> CloudResult<()> {
@@ -385,59 +389,6 @@ pub(super) fn review_catalog(
         &current.search_generations,
         &["kind", "endpoint", "authHeader"],
     )?;
-    // Every consuming project's immutable policy is checked; a definition cannot add origins.
-    for (project, ceiling) in &host.deployment.projects {
-        // Validate every catalog row even when a legacy local row currently shadows it.
-        let mut definitions = ceiling.clone();
-        definitions
-            .runtime
-            .providers
-            .profiles
-            .extend(next.providers.profiles.clone());
-        definitions
-            .runtime
-            .models
-            .profiles
-            .extend(next.models.profiles.clone());
-        definitions
-            .runtime
-            .models
-            .roles
-            .extend(next.models.roles.clone());
-        definitions
-            .runtime
-            .mcp
-            .servers
-            .extend(next.mcp.servers.clone());
-        definitions
-            .runtime
-            .search
-            .profiles
-            .extend(next.search.profiles.clone());
-        definitions
-            .runtime
-            .search
-            .roles
-            .extend(next.search.roles.clone());
-        definitions
-            .provider_authentication
-            .extend(next.provider_authentication.clone());
-        definitions
-            .mcp_authentication
-            .extend(next.mcp_authentication.clone());
-        definitions
-            .search_authentication
-            .extend(next.search_authentication.clone());
-        definitions
-            .labels
-            .providers
-            .extend(next.labels.providers.clone());
-        definitions.labels.models.extend(next.labels.models.clone());
-        definitions.labels.search.extend(next.labels.search.clone());
-        crate::chat_settings::review_effective(&definitions, ceiling)?;
-        let raw = crate::chat_settings::retained_configuration(host, project, ceiling)?;
-        resolve(&raw, next, ceiling)?;
-    }
     Ok(())
 }
 pub(super) fn normalize_search(catalog: &mut HostedCatalog) -> CloudResult<()> {

@@ -10,6 +10,7 @@ impl Runtime {
         role: &str,
         options: &WorkflowAgentOptions,
     ) -> Result<ModelRoute, RuntimeError> {
+        self.providers.require_role_available(role)?;
         let model = match &options.model_profile {
             Some(profile) if !profile.is_empty() && profile.len() <= 128 => {
                 self.providers.model(profile)?

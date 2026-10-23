@@ -74,6 +74,9 @@ pub(super) fn connections(
         ),
     ] {
         for id in ids {
+            if !crate::global_settings::network::connection_enabled(config, kind, id) {
+                continue;
+            }
             let (authentication, endpoint, eligible, label) = match kind {
                 ChatConnectionKind::Provider => {
                     let value = &config.runtime.providers.profiles[id];

@@ -139,9 +139,7 @@ pub(super) fn normalize_endpoint(
     }
     let loopback = url.host_str().is_some_and(|host| {
         host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<IpAddr>()
-                .is_ok_and(|address| address.is_loopback())
+            || parse_host_ip(host).is_some_and(|address| address.is_loopback())
     });
     if resource_authority != ResourceAuthority::Ambient && url.scheme() != "https" && !loopback {
         return Err(SearchAdapterError::Configuration(
@@ -187,7 +185,7 @@ pub(super) fn url_host_is_non_public_literal(value: &str) -> Result<bool, Search
     let url = Url::parse(value)?;
     Ok(url
         .host_str()
-        .and_then(|host| host.parse::<IpAddr>().ok())
+        .and_then(parse_host_ip)
         .is_some_and(non_public_network_address))
 }
 

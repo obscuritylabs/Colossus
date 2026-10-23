@@ -88,6 +88,13 @@ inherited configuration list to reset an override or enable a removed global def
 Saving requires the revision that was reviewed; reload if another administrator has
 changed it. Settings updates wait for hosted work to be idle.
 
+Deployment-seeded definitions and model routes are explicit project overrides,
+including the primary model. To adopt a published instance route, reset that
+project override in the inherited configuration list. Review **Model routing**
+before inviting users: its primary route should point to the intended inherited
+or project model. Users then supply their private credentials, or use a shared
+credential already assigned by an administrator.
+
 Connection definitions do not grant access to credentials. Choose personal authentication
 when each user supplies their own key, shared authentication when an administrator will
 attach a shared key, or no authentication for an anonymous service. Users manage their
@@ -108,15 +115,46 @@ configuration and are not automatically injected into runtime environments.
 
 Under **Search**, configure SearXNG or SerpAPI and select the agent and research routes.
 Search uses the same explicit personal or shared credential assignments as other
-connections. Definitions and project overrides remain subject to the deployment's
-allowed origins.
+connections.
 
-Deployment owners configure the immutable network ceiling and external keys in
-[hosted chat deployment](deployment/hosted-chat.md).
+### Control project network access
+
+Open **Project Admin → Network access** to review the project's connection policy.
+**Allow all configured connections** is the default for existing and new projects.
+This permits the origins required by configured providers, MCP servers, and Search
+connections. It does not expose additional tools, grant arbitrary network effects,
+or supply credentials.
+
+To restrict a project, choose **Configure network access**, select **Restrict to an
+origin list**, and enter canonical origins, one per line, such as `https://api.example.com`
+or `https://search.example.com:8443`. Include any separate OAuth metadata and token
+server origins required by your MCP connections. Do not include paths, queries,
+fragments, or wildcards. An empty list blocks all network connections. After saving,
+review unavailable connections and model roles on the Network access page. The change
+uses the same revision and idle-work checks as other project settings.
+
+Blocked definitions remain visible for review and editing. Models and roles that
+depend on a blocked provider are unavailable for execution; an explicitly blocked
+role does not silently use the primary model. Changing the policy does not copy or
+grant access to a credential.
+
+Control Plane catalog publication is independent of these project policies. A global
+administrator can publish a connection even when a project blocks its origin. Each
+project applies its own policy when resolving executable connections.
+
+OAuth requests still require known exact origins. With the default connection policy,
+an MCP server can authenticate on its own origin or through additional authentication
+origins supplied by the deployment operator. For a separate identity service, configure
+the service and its authentication origins in the project's explicit allow list or ask
+the operator to provision them. Discovering an unknown identity-service URL does not
+automatically authorize it.
+
+Deployment owners still provision the runtime, protected storage, external keys, and
+other execution authority in [hosted chat deployment](deployment/hosted-chat.md).
 
 A newly created project can review inherited definitions before Hosted execution is
 configured. Those settings remain read-only until a deployment operator supplies that
-project's runtime and allowed origins. Creating a child project does not copy its
+project's runtime. Creating a child project does not copy its
 parent's execution authority or credentials. Secrets, personal variables, and connected
 accounts show the same setup requirement; they cannot be edited or connected through
 an unconfigured project.

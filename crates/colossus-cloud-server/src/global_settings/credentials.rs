@@ -128,6 +128,9 @@ async fn destinations(
         ),
     ] {
         for id in profiles {
+            if !super::network::connection_enabled(&config, kind, id) {
+                continue;
+            }
             if authentication.get(id).copied().unwrap_or_default() != ChatAuthentication::Shared {
                 continue;
             }

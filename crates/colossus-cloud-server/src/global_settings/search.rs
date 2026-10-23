@@ -91,7 +91,9 @@ pub(crate) fn review_search(
     if search.profiles.len() > 64
         || search.roles.len() > 2
         || search.roles.iter().any(|(role, profile)| {
-            !matches!(role.as_str(), "agent" | "research") || !search.profiles.contains_key(profile)
+            !matches!(role.as_str(), "agent" | "research")
+                || (!search.profiles.contains_key(profile)
+                    && current.runtime.search.roles.get(role) != Some(profile))
         })
         || updated
             .search_authentication
@@ -193,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn search_updates_require_ceiling_routes_and_purpose_bound_credentials() {
+    fn search_updates_admit_new_origins_but_keep_routes_and_credentials_purpose_bound() {
         let current = configuration();
         let mut next = current.clone();
         next.runtime.search = search("https://search.example/search", None);
@@ -203,10 +205,7 @@ mod tests {
         assert_eq!(reference(&next.runtime.search.profiles["web"]), None);
         assert_eq!(next.search_generations["web"], 2);
         next.runtime.search = search("https://foreign.example/search", None);
-        assert_eq!(
-            review_search(&current, &mut next, &current),
-            Err(CloudError::InvalidArgument)
-        );
+        review_search(&current, &mut next, &current).unwrap();
         next.runtime.search = search("https://search.example/search", Some("env:UNREVIEWED"));
         next.search_authentication
             .insert("web".into(), ChatAuthentication::Shared);

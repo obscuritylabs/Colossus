@@ -7,7 +7,7 @@ use colossus_contracts::{
     CredentialReference, EffectRequest, QuarantinedEffectResult, ResourceAuthority,
     SearchProfileSummary, SearchRequest, SearchResponse, SearchResult,
 };
-use colossus_network::AdditionalRootCertificates;
+use colossus_network::{AdditionalRootCertificates, parse_host_ip};
 use colossus_policy::{
     EffectExecutor, ExecutionError, ExecutionPermit, NetworkDestinationMatch,
     http_transport_authority_match, non_public_network_address,
@@ -17,12 +17,7 @@ use futures::StreamExt as _;
 use reqwest::{Client, Url, redirect::Policy as RedirectPolicy};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    collections::BTreeMap,
-    net::{IpAddr, SocketAddr},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::BTreeMap, net::SocketAddr, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::net::lookup_host;
 

@@ -87,7 +87,16 @@ impl ChatConnectionBinding {
             return Err(ChatError::InvalidConfiguration);
         }
         let url = url::Url::parse(endpoint).map_err(|_| ChatError::InvalidConfiguration)?;
-        if url.scheme() != "https"
+        // Match declared Core connections: plaintext transport is confined to
+        // explicit loopback endpoints on the Control Plane host.
+        let loopback = url.scheme() == "http"
+            && match url.host() {
+                Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+                Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                None => false,
+            };
+        if (url.scheme() != "https" && !loopback)
             || url.host_str().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
@@ -283,6 +292,84 @@ mod purpose_tests {
     use super::*;
 
     #[test]
+    fn declared_loopback_connections_support_every_credential_scope_and_purpose() {
+        for endpoint in [
+            "https://api.example/v1",
+            "http://localhost:8080/v1",
+            "http://127.0.0.1:8080/v1",
+            "http://127.42.9.3:8080/v1",
+            "http://[::1]:8080/v1",
+        ] {
+            for kind in [
+                ChatConnectionKind::Provider,
+                ChatConnectionKind::Mcp,
+                ChatConnectionKind::Search,
+            ] {
+                for authentication in [
+                    ChatAuthentication::None,
+                    ChatAuthentication::Personal,
+                    ChatAuthentication::Shared,
+                ] {
+                    let result = ChatConnectionBinding::new(
+                        "project",
+                        "alice",
+                        kind,
+                        "connection",
+                        1,
+                        endpoint,
+                        authentication,
+                    )
+                    .unwrap();
+                    assert_eq!(result.is_some(), authentication != ChatAuthentication::None);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn loopback_credentials_remain_bound_to_exact_destination_user_and_purpose() {
+        let record = |user, kind, endpoint| {
+            ChatConnectionBinding::new(
+                "project",
+                user,
+                kind,
+                "connection",
+                1,
+                endpoint,
+                ChatAuthentication::Personal,
+            )
+            .unwrap()
+            .unwrap()
+            .record_id()
+        };
+        let first = record(
+            "alice",
+            ChatConnectionKind::Provider,
+            "http://127.0.0.1:8080/v1",
+        );
+        for candidate in [
+            record(
+                "bob",
+                ChatConnectionKind::Provider,
+                "http://127.0.0.1:8080/v1",
+            ),
+            record("alice", ChatConnectionKind::Mcp, "http://127.0.0.1:8080/v1"),
+            record(
+                "alice",
+                ChatConnectionKind::Provider,
+                "http://127.0.0.1:8081/v1",
+            ),
+            record(
+                "alice",
+                ChatConnectionKind::Provider,
+                "http://127.0.0.1:8080/v2",
+            ),
+        ] {
+            assert_ne!(first, candidate);
+        }
+    }
+
+    #[test]
     fn provider_and_mcp_authentication_never_share_the_same_record() {
         let record = |kind| {
             ChatConnectionBinding::new(
@@ -308,6 +395,15 @@ mod purpose_tests {
     fn credential_binding_rejects_unsafe_destinations_and_invalid_tenant_ids() {
         for endpoint in [
             "http://api.example/",
+            "http://192.168.1.1/",
+            "http://localhost.example/",
+            "http://127.0.0.1.example/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://user:secret@localhost/",
+            "http://localhost/?key=secret",
+            "http://localhost/?",
+            "http://localhost/#fragment",
+            "http://localhost/#",
             "https://user:secret@api.example/",
             "https://api.example/?key=secret",
             "https://api.example/#fragment",

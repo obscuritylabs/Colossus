@@ -13,6 +13,7 @@ fn configuration() -> ChatProjectConfig {
     ];
     runtime.mcp = serde_json::from_value(json!({"oauthCredentialStore":"platform","servers":{"docs":{"transport":"streamable_http","url":"https://mcp.example/api","allowedTools":["search"],"oauth":{"clientId":"client","callbackPort":8787,"scopes":["read"]}}}})).unwrap();
     ChatProjectConfig {
+        connection_network_policy: Default::default(),
         labels: Default::default(),
         codex_auth_shared: false,
         runtime,
@@ -145,7 +146,7 @@ fn display_labels_reject_unknown_profiles_control_characters_and_oversized_value
 }
 
 #[test]
-fn model_edits_preserve_reviewed_loopback_mcp_but_cannot_add_http_destinations() {
+fn project_admins_can_add_loopback_http_connections_but_external_http_is_rejected() {
     let mut current = configuration();
     current
         .runtime
@@ -162,7 +163,18 @@ fn model_edits_preserve_reviewed_loopback_mcp_but_cannot_add_http_destinations()
         current.runtime.mcp.servers["docs"].url
     );
     let mut input = public_configuration(current.clone()).configuration;
-    input.mcp.servers.get_mut("docs").unwrap().url = Some("http://127.0.0.1:18999/changed".into());
+    input.mcp.servers.get_mut("docs").unwrap().url = Some("http://127.0.0.1:19000/changed".into());
+    let changed = reviewed_configuration(&current, input, &current).unwrap();
+    assert!(
+        crate::global_settings::network::execution(&changed)
+            .unwrap()
+            .runtime
+            .sandbox
+            .network_destinations
+            .contains(&"http://127.0.0.1:19000".into())
+    );
+    let mut input = public_configuration(current.clone()).configuration;
+    input.mcp.servers.get_mut("docs").unwrap().url = Some("http://remote.example/mcp".into());
     assert!(matches!(
         reviewed_configuration(&current, input, &current),
         Err(CloudError::InvalidArgument)
@@ -235,7 +247,7 @@ fn endpoint_and_scope_changes_retire_old_bindings_without_reusing_keys() {
 }
 
 #[test]
-fn browser_settings_cannot_nominate_host_credentials_processes_or_new_origins() {
+fn browser_settings_admit_connections_without_host_credential_or_process_authority() {
     let current = configuration();
     let mut input = public_configuration(current.clone()).configuration;
     input
@@ -251,20 +263,151 @@ fn browser_settings_cannot_nominate_host_credentials_processes_or_new_origins() 
     let mut input = public_configuration(current.clone()).configuration;
     input.providers.profiles.get_mut("main").unwrap().base_url =
         Some("https://unreviewed.example/v1".into());
-    assert!(matches!(
-        reviewed_configuration(&current, input, &current),
-        Err(CloudError::InvalidArgument)
-    ));
+    let updated = reviewed_configuration(&current, input, &current).unwrap();
+    assert_eq!(
+        updated.runtime.sandbox.network_destinations,
+        current.runtime.sandbox.network_destinations
+    );
+    assert!(
+        crate::global_settings::network::execution(&updated)
+            .unwrap()
+            .runtime
+            .sandbox
+            .network_destinations
+            .contains(&"https://unreviewed.example".into())
+    );
     let mut input = public_configuration(current.clone()).configuration;
     input.mcp.servers.get_mut("docs").unwrap().transport = McpTransportKind::Stdio;
     assert!(matches!(
         reviewed_configuration(&current, input, &current),
         Err(CloudError::InvalidArgument)
     ));
+}
+
+#[test]
+fn mcp_tool_selectors_preserve_credentials_and_operator_authority() {
+    let mut current = configuration();
+    let server = current.runtime.mcp.servers.get_mut("docs").unwrap();
+    server.oauth = None;
+    server.credential_headers = serde_json::from_value(json!({
+        "Authorization":{"scheme":"Bearer","reference":"host:private-mcp-binding"}
+    }))
+    .unwrap();
+    current
+        .mcp_authentication
+        .insert("docs".into(), ChatAuthentication::Shared);
+    current.mcp_generations.insert("docs".into(), 7);
+    let selections: Vec<Vec<String>> = vec![
+        vec!["*".into()],
+        vec!["get_*".into(), "*_search".into(), "echo".into()],
+        vec!["a".repeat(128)],
+    ];
+    for selectors in selections {
+        let mut input = public_configuration(current.clone()).configuration;
+        input.mcp.servers.get_mut("docs").unwrap().allowed_tools = selectors.clone();
+        let next = reviewed_configuration(&current, input, &current).unwrap();
+        assert_eq!(next.runtime.mcp.servers["docs"].allowed_tools, selectors);
+        assert_eq!(next.mcp_authentication["docs"], ChatAuthentication::Shared);
+        assert_eq!(next.generation(ChatConnectionKind::Mcp, "docs"), 7);
+        validate_retained(&next, &current).unwrap();
+        let mut runtime = next.runtime.clone();
+        runtime.mcp.servers.get_mut("docs").unwrap().allowed_tools =
+            current.runtime.mcp.servers["docs"].allowed_tools.clone();
+        assert_eq!(
+            serde_json::to_value(runtime).unwrap(),
+            serde_json::to_value(&current.runtime).unwrap(),
+            "selectors cannot change credential custody, sandbox, storage, or policy"
+        );
+        let projection = serde_json::to_string(&public_configuration(next)).unwrap();
+        assert!(!projection.contains("private-mcp-binding"));
+    }
+}
+
+#[test]
+fn mcp_tool_selectors_retain_core_syntax_and_list_bounds() {
+    let current = configuration();
+    let mut invalid: Vec<Vec<String>> = [
+        vec![],
+        vec!["*", "read"],
+        vec!["get_*", "get_*"],
+        vec!["get_**"],
+        vec!["^get_.*$"],
+        vec!["get_?"],
+        vec!["get_[ab]"],
+        vec!["get_\\*"],
+        vec!["gét_*"],
+        vec!["with space"],
+        vec!["read\n"],
+    ]
+    .into_iter()
+    .map(|tools| tools.into_iter().map(str::to_owned).collect())
+    .collect();
+    invalid.push(vec!["a".repeat(129)]);
+    invalid.push((0..1025).map(|index| format!("read_{index}")).collect());
+    for selectors in invalid {
+        let mut input = public_configuration(current.clone()).configuration;
+        input.mcp.servers.get_mut("docs").unwrap().allowed_tools = selectors.clone();
+        assert!(
+            matches!(
+                reviewed_configuration(&current, input, &current),
+                Err(CloudError::InvalidArgument)
+            ),
+            "unsupported selectors were accepted: {selectors:?}"
+        );
+    }
+}
+
+#[test]
+fn mcp_tool_selectors_cannot_bypass_browser_connection_boundaries() {
+    let current = configuration();
+    for forbidden in [
+        json!({"transport":"stdio"}),
+        json!({"command":"/usr/bin/mcp-server"}),
+        json!({"environment":{"TOKEN":"env:PRIVATE_MCP_KEY"}}),
+        json!({"credentialHeaders":{"Authorization":{"reference":"env:PRIVATE_MCP_KEY"}}}),
+    ] {
+        let mut input =
+            serde_json::to_value(public_configuration(current.clone()).configuration).unwrap();
+        let server = input["mcp"]["servers"]["docs"].as_object_mut().unwrap();
+        server.insert("allowedTools".into(), json!(["*"]));
+        server.extend(forbidden.as_object().unwrap().clone());
+        assert!(matches!(
+            reviewed_configuration(&current, serde_json::from_value(input).unwrap(), &current),
+            Err(CloudError::InvalidArgument)
+        ));
+    }
+}
+
+#[test]
+fn project_network_policy_uses_revision_cas_and_never_edits_seed_runtime_authority() {
+    let current = configuration();
     let mut input = public_configuration(current.clone()).configuration;
-    input.mcp.servers.get_mut("docs").unwrap().allowed_tools = vec!["*".into()];
+    input.connection_network_policy = Some(
+        serde_json::from_value(
+            json!({"mode":"allow_list","allowed_origins":["https://models.example"]}),
+        )
+        .unwrap(),
+    );
+    let next = reviewed_configuration(&current, input.clone(), &current).unwrap();
+    assert_eq!(next.revision, 2);
+    assert_eq!(
+        next.runtime.sandbox.network_destinations,
+        current.runtime.sandbox.network_destinations
+    );
+    assert!(!crate::global_settings::network::assess(&next).mcp["docs"].enabled);
+    validate_retained(&next, &current).unwrap();
     assert!(matches!(
-        reviewed_configuration(&current, input, &current),
-        Err(CloudError::InvalidArgument)
+        reviewed_configuration(&next, input, &current),
+        Err(CloudError::Conflict)
     ));
+    let mut omitted = public_configuration(next.clone()).configuration;
+    omitted.connection_network_policy = None;
+    let preserved = reviewed_configuration(&next, omitted, &current).unwrap();
+    assert!(preserved.connection_network_policy == next.connection_network_policy);
+    let mut forged = serde_json::to_value(public_configuration(next.clone())).unwrap();
+    forged.as_object_mut().unwrap().remove("credential_status");
+    forged["connection_availability"]["mcp"]["docs"] = json!({"enabled":true});
+    let reviewed =
+        reviewed_configuration(&next, serde_json::from_value(forged).unwrap(), &current).unwrap();
+    assert!(!crate::global_settings::network::assess(&reviewed).mcp["docs"].enabled);
 }

@@ -149,6 +149,9 @@ async fn create_thread(
     service(&state)?
         .require_live_submission(&caller, &node_id)
         .await?;
+    service(&state)?
+        .require_request(&caller, &input.request)
+        .await?;
     let (thread, task) = state
         .repo
         .create_personal_thread(&caller, &node_id, None, input.request)

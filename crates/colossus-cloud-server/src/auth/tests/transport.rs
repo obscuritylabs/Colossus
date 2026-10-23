@@ -33,6 +33,7 @@ mod managed;
 mod native;
 mod resources;
 mod retained;
+mod settings_matrix;
 mod telemetry;
 mod thread_metadata;
 mod user_inventory;

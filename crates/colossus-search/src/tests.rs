@@ -23,6 +23,40 @@ struct CountingCredentialResolver {
 }
 
 #[test]
+fn search_user_agents_reject_header_controls_at_configuration_time() {
+    for kind in [SearchKind::Searxng, SearchKind::SerpApi] {
+        let make = |user_agent: String| {
+            SearchProfile::new(
+                "search",
+                kind,
+                "https://search.example/search",
+                (kind == SearchKind::SerpApi).then(|| "host:search-key".into()),
+                None,
+                user_agent,
+                1000,
+            )
+        };
+        for byte in (0_u8..=31).chain([127]) {
+            let value = format!("Colossus/1.0{}suffix", char::from(byte));
+            assert!(
+                matches!(make(value), Err(SearchAdapterError::Configuration(_))),
+                "{kind:?} must reject ASCII control {byte}"
+            );
+        }
+        for value in [String::new(), " ".into(), "x".repeat(257), "é".repeat(129)] {
+            assert!(make(value).is_err());
+        }
+        for value in [
+            "Colossus/1.0 (search; x86_64)".into(),
+            "x".repeat(256),
+            "é".repeat(128),
+        ] {
+            assert!(make(value).is_ok());
+        }
+    }
+}
+
+#[test]
 fn ambient_search_profiles_allow_non_loopback_http_only_explicitly() {
     assert!(
         SearchProfile::new(
@@ -118,6 +152,14 @@ async fn one_response_server(
     body: Value,
 ) -> (String, tokio::task::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    one_response_server_on(listener, status, body).await
+}
+
+async fn one_response_server_on(
+    listener: TcpListener,
+    status: u16,
+    body: Value,
+) -> (String, tokio::task::JoinHandle<String>) {
     let address = listener.local_addr().expect("address");
     let task = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.expect("accept");
@@ -139,6 +181,91 @@ async fn one_response_server(
         String::from_utf8_lossy(&request).into_owned()
     });
     (format!("http://{address}/search"), task)
+}
+
+#[test]
+fn search_endpoints_classify_bracketed_ipv6_without_remote_http_authority() {
+    for endpoint in [
+        "http://localhost:8080/search",
+        "http://127.1.2.3:8080/search",
+        "http://[::1]:8080/search",
+        "https://search.example/search",
+    ] {
+        assert!(
+            normalize_endpoint(SearchKind::Searxng, endpoint, ResourceAuthority::Declared).is_ok(),
+            "{endpoint}"
+        );
+    }
+    for endpoint in [
+        "http://search.example/search",
+        "http://10.0.0.1/search",
+        "http://[fd00::1]/search",
+        "http://[::ffff:127.0.0.1]/search",
+    ] {
+        assert!(
+            normalize_endpoint(SearchKind::Searxng, endpoint, ResourceAuthority::Declared).is_err(),
+            "{endpoint}"
+        );
+    }
+    assert!(url_host_is_non_public_literal("https://[::1]/search").unwrap());
+    assert!(url_host_is_non_public_literal("https://[fd00::1]/search").unwrap());
+    assert!(!url_host_is_non_public_literal("https://[2606:4700:4700::1111]/search").unwrap());
+}
+
+#[tokio::test]
+async fn ipv6_loopback_search_calls_require_exact_origin_and_release_real_response() {
+    let listener = match TcpListener::bind("[::1]:0").await {
+        Ok(listener) => listener,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::Unsupported
+            ) =>
+        {
+            eprintln!("IPv6 loopback unavailable: {error}");
+            return;
+        }
+        Err(error) => panic!("bind IPv6 search fixture: {error}"),
+    };
+    let (endpoint,server)=one_response_server_on(listener,200,json!({"results":[{"title":"IPv6 evidence","url":"https://example.com/a","content":"ipv6-search-result"}]})).await;
+    let profile = SearchProfile::new(
+        "ipv6",
+        SearchKind::Searxng,
+        endpoint,
+        Some("env:UNIT_SEARCH_KEY".into()),
+        Some("Authorization".into()),
+        "matrix-search",
+        5000,
+    )
+    .unwrap();
+    let origin = profile.network_origin().unwrap();
+    let credentials = Arc::new(CountingCredentialResolver {
+        calls: AtomicUsize::new(0),
+        secret: "Bearer unit-ipv6-search-secret".into(),
+    });
+    let executor = SearchExecutor::with_credentials(profile.clone(), credentials.clone());
+    assert!(
+        allow_gateway("*")
+            .execute(search_request(&profile, "matrix", 1), &executor)
+            .await
+            .is_err()
+    );
+    assert_eq!(credentials.calls.load(Ordering::Acquire), 0);
+    let released = allow_gateway(&origin)
+        .execute(search_request(&profile, "matrix", 1), &executor)
+        .await
+        .unwrap();
+    let result: SearchResponse = serde_json::from_slice(&released.bytes).unwrap();
+    assert_eq!(result.results[0].snippet, "ipv6-search-result");
+    let request = server.await.unwrap();
+    assert!(request.starts_with("GET /search?"));
+    assert!(request.contains("user-agent: matrix-search"));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer unit-ipv6-search-secret")
+    );
+    assert_eq!(credentials.calls.load(Ordering::Acquire), 1);
 }
 
 fn allow_gateway(origin: &str) -> EffectGateway {

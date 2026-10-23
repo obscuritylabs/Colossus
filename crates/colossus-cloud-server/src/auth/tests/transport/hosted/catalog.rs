@@ -19,8 +19,12 @@ pub(super) async fn acceptance(
         json!(colossus_contracts::provider_presets())
     );
     assert_eq!(presets["availability"].as_object().unwrap().len(), 12);
-    for id in ["codex", "openai", "anthropic", "ollama", "lmstudio"] {
-        assert_eq!(presets["availability"][id]["status"], "deployment_required");
+    assert_eq!(
+        presets["availability"]["codex"]["status"],
+        "deployment_required"
+    );
+    for id in ["openai", "anthropic", "ollama", "lmstudio"] {
+        assert_eq!(presets["availability"][id]["status"], "available");
         assert!(
             presets["availability"][id]["reason"]
                 .as_str()

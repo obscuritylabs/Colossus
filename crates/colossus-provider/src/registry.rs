@@ -9,6 +9,7 @@ pub struct ProviderRegistry {
     profiles: BTreeMap<String, Arc<ProviderExecutor>>,
     models: BTreeMap<String, ModelProfile>,
     roles: BTreeMap<String, String>,
+    unavailable_roles: BTreeSet<String>,
     observations: std::sync::Mutex<FeatureObservations>,
 }
 
@@ -59,6 +60,7 @@ impl ProviderRegistry {
             profiles: indexed,
             models: indexed_models,
             roles,
+            unavailable_roles: BTreeSet::new(),
             observations: Default::default(),
         })
     }
@@ -78,8 +80,27 @@ impl ProviderRegistry {
         Ok(self)
     }
 
-    /// Resolve a role, falling back to `primary` for an unconfigured specialized role.
+    /// Retain host-denied roles after unavailable profiles are removed from a catalog.
+    /// These denials only narrow routing and take precedence over Primary fallback.
+    #[must_use]
+    pub fn with_unavailable_roles(mut self, roles: BTreeSet<String>) -> Self {
+        self.unavailable_roles.extend(roles);
+        self
+    }
+
+    /// Require one logical role to remain available under trusted host policy.
+    pub fn require_role_available(&self, role: &str) -> Result<(), ProviderError> {
+        if self.unavailable_roles.contains(role) {
+            return Err(ProviderError::Configuration(format!(
+                "model role {role} is unavailable under host policy"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Resolve a role, falling back to `primary` only for an unconfigured, available role.
     pub fn resolve(&self, role: &str) -> Result<ResolvedModel, ProviderError> {
+        self.require_role_available(role)?;
         let model_name = self
             .roles
             .get(role)

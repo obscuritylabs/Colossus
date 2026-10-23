@@ -80,7 +80,8 @@ pub(super) fn normalize_base_url(
         ));
     }
     let loopback = url.host_str().is_some_and(|host| {
-        host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback())
+        host.eq_ignore_ascii_case("localhost")
+            || parse_host_ip(host).is_some_and(|ip| ip.is_loopback())
     });
     if resource_authority != ResourceAuthority::Ambient && url.scheme() != "https" && !loopback {
         return Err(ProviderError::Configuration(

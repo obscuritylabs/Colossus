@@ -88,12 +88,15 @@ pub struct ChatSharedConfig {
     pub keys: colossus_cloud_chat::SharedChatKeyConfig,
 }
 
-/// Reviewed connections and model routes beneath one project's immutable egress ceiling.
+/// Reviewed connections and model routes with a separate project connection policy.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChatProjectConfig {
     /// Existing runtime configuration; controlled chat independently narrows its authority.
     pub runtime: colossus_runtime::RuntimeConfig,
+    /// Project-admin connection origins; missing policy allows configured connections.
+    #[serde(default)]
+    pub(crate) connection_network_policy: crate::global_settings::network::ConnectionNetworkPolicy,
     /// Display metadata is retained separately from runtime profiles and authority.
     #[serde(default)]
     pub labels: ChatSettingsLabels,
@@ -228,11 +231,12 @@ impl ChatConfig {
 }
 
 impl ChatProjectConfig {
-    /// Create an operator seed with private connection custody and no catalog overrides.
+    /// Create an operator seed with private connection custody and default inheritance state.
     /// Deployment validation still reviews the supplied runtime before it can execute.
     pub fn new(runtime: colossus_runtime::RuntimeConfig) -> Self {
         Self {
             runtime,
+            connection_network_policy: Default::default(),
             labels: Default::default(),
             mcp_authentication: BTreeMap::new(),
             search_authentication: BTreeMap::new(),
@@ -264,6 +268,9 @@ impl ChatProjectConfig {
     }
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         use colossus_cloud_chat::ChatAuthentication;
+        self.connection_network_policy
+            .validate()
+            .map_err(|_| "invalid hosted connection network policy")?;
         self.labels.validate(&self.runtime)?;
         let serialized = self
             .runtime

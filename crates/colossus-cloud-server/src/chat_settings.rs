@@ -31,6 +31,8 @@ mod credentials;
 pub(crate) struct SettingsInput {
     revision: u64,
     #[serde(default)]
+    connection_network_policy: Option<crate::global_settings::network::ConnectionNetworkPolicy>,
+    #[serde(default)]
     labels: Option<ChatSettingsLabels>,
     providers: ProvidersConfig,
     models: ModelsConfig,
@@ -56,6 +58,8 @@ pub(crate) struct SettingsInput {
     _telemetry: Option<serde_json::Value>,
     #[serde(default, skip_serializing, rename = "execution")]
     _execution: Option<serde_json::Value>,
+    #[serde(default, skip_serializing, rename = "connection_availability")]
+    _connection_availability: Option<serde_json::Value>,
 }
 #[derive(Serialize)]
 struct SettingsOutput {
@@ -64,6 +68,7 @@ struct SettingsOutput {
     credential_status: CredentialStatus,
     inheritance: crate::global_settings::types::Inheritance,
     execution: availability::ExecutionAvailability,
+    connection_availability: crate::global_settings::network::ConnectionAvailabilities,
     #[serde(skip_serializing_if = "Option::is_none")]
     telemetry: Option<crate::telemetry_host::TelemetryStatus>,
 }
@@ -166,7 +171,11 @@ async fn settings(
             .get(id)
             .copied()
             .unwrap_or_default();
-        let configured = if authentication != ChatAuthentication::Shared
+        let configured = if !crate::global_settings::network::connection_enabled(
+            &configuration,
+            ChatConnectionKind::Provider,
+            id,
+        ) || authentication != ChatAuthentication::Shared
             || profile.kind.generation_action() == "provider.echo"
         {
             false
@@ -198,7 +207,12 @@ async fn settings(
             .get(id)
             .copied()
             .unwrap_or_default();
-        let configured = if authentication != ChatAuthentication::Shared {
+        let configured = if !crate::global_settings::network::connection_enabled(
+            &configuration,
+            ChatConnectionKind::Mcp,
+            id,
+        ) || authentication != ChatAuthentication::Shared
+        {
             false
         } else if let Some(binding) =
             host.connection_binding(&caller, &configuration, ChatConnectionKind::Mcp, id)?
@@ -218,7 +232,11 @@ async fn settings(
         output.credential_status.mcp.insert(id.clone(), configured);
     }
     for (id, profile) in &configuration.runtime.search.profiles {
-        let configured = if crate::global_settings::search::authentication(&configuration, id)
+        let configured = if !crate::global_settings::network::connection_enabled(
+            &configuration,
+            ChatConnectionKind::Search,
+            id,
+        ) || crate::global_settings::search::authentication(&configuration, id)
             != ChatAuthentication::Shared
         {
             false
@@ -261,6 +279,7 @@ fn shared_credential_configured(
 }
 
 fn public_configuration(configuration: ChatProjectConfig) -> SettingsOutput {
+    let connection_availability = crate::global_settings::network::assess(&configuration);
     let mut providers = configuration.runtime.providers.clone();
     let mut mcp = configuration.runtime.mcp.clone();
     let mut credential_status = CredentialStatus::default();
@@ -288,6 +307,7 @@ fn public_configuration(configuration: ChatProjectConfig) -> SettingsOutput {
     SettingsOutput {
         configuration: SettingsInput {
             revision: configuration.revision,
+            connection_network_policy: Some(configuration.connection_network_policy),
             labels: Some(configuration.labels),
             providers,
             models: configuration.runtime.models,
@@ -304,8 +324,10 @@ fn public_configuration(configuration: ChatProjectConfig) -> SettingsOutput {
             global_revision: None,
             _telemetry: None,
             _execution: None,
+            _connection_availability: None,
         },
         credential_status,
+        connection_availability,
         inheritance: configuration.inheritance,
         execution: availability::ExecutionAvailability::enabled(),
         telemetry: None,
@@ -435,6 +457,10 @@ fn reviewed_configuration(
         return Err(CloudError::InvalidArgument);
     }
     let mut updated = current.clone();
+    if let Some(policy) = input.connection_network_policy {
+        policy.validate()?;
+        updated.connection_network_policy = policy;
+    }
     updated.revision = current
         .revision
         .checked_add(1)
@@ -541,11 +567,20 @@ fn reviewed_configuration(
     }
     for (name, model) in &updated.runtime.models.profiles {
         colossus_cloud::validate_identifier(name)?;
-        if !updated
+        let missing_provider = !updated
             .runtime
             .providers
             .profiles
-            .contains_key(&model.provider_profile)
+            .contains_key(&model.provider_profile);
+        let retained_missing = current
+            .runtime
+            .models
+            .profiles
+            .get(name)
+            .map(|prior| crate::global_settings::inheritance::equal(prior, model))
+            .transpose()?
+            .unwrap_or(false);
+        if (missing_provider && !retained_missing)
             || model.model.trim().is_empty()
             || model.model.len() > 1024
             || model.model.chars().any(char::is_control)
@@ -558,7 +593,9 @@ fn reviewed_configuration(
     }
     for (role, profile) in &updated.runtime.models.roles {
         colossus_cloud::validate_identifier(role)?;
-        if !updated.runtime.models.profiles.contains_key(profile) {
+        if !updated.runtime.models.profiles.contains_key(profile)
+            && current.runtime.models.roles.get(role) != Some(profile)
+        {
             return Err(CloudError::InvalidArgument);
         }
     }
@@ -572,10 +609,7 @@ fn reviewed_configuration(
             || server.allowed_tools.is_empty()
             || server.allowed_tools.len() > 1024
             || server.allowed_tools.iter().any(|tool| {
-                tool.is_empty()
-                    || tool.len() > 256
-                    || tool.contains('*')
-                    || tool.chars().any(char::is_control)
+                tool.is_empty() || tool.len() > 256 || tool.chars().any(char::is_control)
             })
         {
             return Err(CloudError::InvalidArgument);
@@ -664,13 +698,57 @@ fn reviewed_configuration(
         }
     }
     crate::global_settings::search::review_search(current, &mut updated, ceiling)?;
-    let serialized = updated
+    // A previously valid local dependency may have been removed from the global
+    // catalog. Preserve that unavailable definition during unrelated edits. The
+    // validation-only copy supplies references so Core still checks every field;
+    // these substitutions never enter persistence or execution.
+    let mut validation = updated.clone();
+    let provider = validation
         .runtime
-        .to_yaml()
-        .map_err(|_| CloudError::InvalidArgument)?;
-    updated.runtime = colossus_runtime::RuntimeConfig::from_yaml(&serialized)
-        .map_err(|_| CloudError::InvalidArgument)?;
-    updated
+        .providers
+        .profiles
+        .keys()
+        .next()
+        .cloned()
+        .ok_or(CloudError::InvalidArgument)?;
+    for model in validation.runtime.models.profiles.values_mut() {
+        if !validation
+            .runtime
+            .providers
+            .profiles
+            .contains_key(&model.provider_profile)
+        {
+            model.provider_profile = provider.clone();
+        }
+    }
+    let model = validation
+        .runtime
+        .models
+        .profiles
+        .keys()
+        .next()
+        .cloned()
+        .ok_or(CloudError::InvalidArgument)?;
+    for profile in validation.runtime.models.roles.values_mut() {
+        if !validation.runtime.models.profiles.contains_key(profile) {
+            *profile = model.clone();
+        }
+    }
+    validation
+        .runtime
+        .search
+        .roles
+        .retain(|_, profile| validation.runtime.search.profiles.contains_key(profile));
+    let origins = crate::global_settings::network::configured_origins(&validation);
+    let mut destinations = validation
+        .runtime
+        .sandbox
+        .network_destinations
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    destinations.extend(origins);
+    validation.runtime.sandbox.network_destinations = destinations.into_iter().collect();
+    validation
         .validate()
         .map_err(|_| CloudError::InvalidArgument)?;
     Ok(updated)
@@ -941,29 +1019,23 @@ fn oauth_identity(oauth: Option<&colossus_mcp::McpOAuthConfig>) -> Option<(&str,
 }
 pub(crate) fn allowed_endpoint(
     endpoint: &str,
-    ceiling: &ChatProjectConfig,
-    retained_operator_endpoint: bool,
+    _ceiling: &ChatProjectConfig,
+    _retained_operator_endpoint: bool,
 ) -> std::result::Result<(), CloudError> {
     let parsed = url::Url::parse(endpoint).map_err(|_| CloudError::InvalidArgument)?;
-    let retained_loopback = retained_operator_endpoint
-        && parsed.scheme() == "http"
+    let loopback = parsed.scheme() == "http"
         && match parsed.host() {
             Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
             Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
             Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
             None => false,
         };
-    if (parsed.scheme() != "https" && !retained_loopback)
+    if (parsed.scheme() != "https" && !loopback)
         || !parsed.username().is_empty()
         || parsed.password().is_some()
         || parsed.host_str().is_none()
         || parsed.query().is_some()
         || parsed.fragment().is_some()
-        || !ceiling
-            .runtime
-            .sandbox
-            .network_destinations
-            .contains(&parsed.origin().ascii_serialization())
     {
         return Err(CloudError::InvalidArgument);
     }

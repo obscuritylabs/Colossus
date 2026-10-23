@@ -20,6 +20,7 @@ use std::{
 };
 use tokio::sync::{Mutex, RwLock, watch};
 
+mod admission;
 pub(crate) mod catalog;
 mod context;
 mod credentials;

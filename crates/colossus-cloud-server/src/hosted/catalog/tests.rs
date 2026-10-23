@@ -3,6 +3,7 @@ use serde_json::json;
 
 fn configuration() -> ChatProjectConfig {
     ChatProjectConfig {
+        connection_network_policy: Default::default(),
         runtime: colossus_runtime::RuntimeConfig::controlled_chat_template("/private/catalog.redb"),
         labels: Default::default(),
         mcp_authentication: BTreeMap::new(),
@@ -34,22 +35,13 @@ fn complete_provider_inventory_reports_availability_without_releasing_host_confi
     );
     assert_eq!(value["availability"].as_object().unwrap().len(), 12);
     assert_eq!(value["availability"]["openai"]["status"], "available");
-    assert_eq!(
-        value["availability"]["anthropic"]["status"],
-        "deployment_required"
-    );
+    assert_eq!(value["availability"]["anthropic"]["status"], "available");
     assert_eq!(
         value["availability"]["codex"]["status"],
         "deployment_required"
     );
-    assert_eq!(
-        value["availability"]["ollama"]["status"],
-        "deployment_required"
-    );
-    assert_eq!(
-        value["availability"]["lmstudio"]["status"],
-        "deployment_required"
-    );
+    assert_eq!(value["availability"]["ollama"]["status"], "available");
+    assert_eq!(value["availability"]["lmstudio"]["status"], "available");
     assert_eq!(
         value["availability"]["custom-chat"]["status"],
         "configure_endpoint"
@@ -85,7 +77,7 @@ fn configured_codex_is_editable_but_never_advertises_new_account_enrollment() {
 }
 
 #[test]
-fn local_presets_require_retained_operator_connection_and_exact_network_policy() {
+fn local_presets_are_configurable_independently_of_seed_origin_declarations() {
     let mut current = configuration();
     current.runtime.sandbox.network_destinations = vec!["http://localhost:11434".into()];
     current.runtime.providers.profiles.insert(
@@ -98,17 +90,17 @@ fn local_presets_require_retained_operator_connection_and_exact_network_policy()
     let mut ceiling = current.clone();
     assert_eq!(
         preset_catalog(&current, &ceiling)["availability"]["ollama"]["status"],
-        "existing_only"
+        "available"
     );
     ceiling.runtime.providers.profiles.remove("local");
     assert_eq!(
         preset_catalog(&current, &ceiling)["availability"]["ollama"]["status"],
-        "deployment_required"
+        "available"
     );
     ceiling.runtime.providers = current.runtime.providers.clone();
     ceiling.runtime.sandbox.network_destinations.clear();
     assert_eq!(
         preset_catalog(&current, &ceiling)["availability"]["ollama"]["status"],
-        "deployment_required"
+        "available"
     );
 }
