@@ -171,6 +171,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Verify Control Plane bundle inputs
+        run: node --test scripts/ci/control-plane-assets.test.mjs
+
       - name: Prepare exact-path AppArmor profile for readiness tests
         run: |
           install_dir="/colossus-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -1351,6 +1354,7 @@ jobs:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
         run: |
+          test -f deploy/control-plane/BUNDLE-README.md
           docker build --file deploy/control-plane/Dockerfile \
             --label org.opencontainers.image.source=https://github.com/obscuritylabs/Colossus \
             --label "org.opencontainers.image.revision=$SOURCE_COMMIT" \
@@ -1380,7 +1384,7 @@ jobs:
           docker cp "$container:/opt/colossus/web/." "$stage/web/"
           cp -R deploy/control-plane/. "$stage/deploy/"
           cp LICENSE "$stage/"
-          cp docs/admin/cloud-control-plane.md "$stage/README.md"
+          cp deploy/control-plane/BUNDLE-README.md "$stage/README.md"
           archive="Colossus-Control-Plane-${RELEASE_TAG}-${TARGET}.tar.gz"
           tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner -czf "$output/$archive" -C "$stage" .
           image="Colossus-Control-Plane-${RELEASE_TAG}-${TARGET}.docker.tar.gz"

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, readFile, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { test } from "node:test";
 import { serverTargets, validateRequest, verifyControlPlaneAssets, savedImageConfigPath,
   verifySavedImageConfig, verifyExecutableManifest, executableDescriptorDigest } from "./verify-control-plane-assets.mjs";
@@ -18,6 +18,32 @@ test("release images and offline bundles retain both Hosted service executables"
   }
   for (const flag of ["--version", "--help"]) {
     assert.ok(server.includes(`--entrypoint colossus-chat-anchor colossus-control-plane:release ${flag}`), `The actual non-root image must execute the anchor's ${flag}`);
+  }
+});
+
+test("offline bundle README uses a current source and archive-valid links", async () => {
+  const workflow = await readFile(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8");
+  const server = workflow.split("  control_plane:\n")[1]?.split("  vscode:\n")[0];
+  assert.ok(server, "Control Plane must remain a required release candidate");
+  const copies = [...server.matchAll(/^\s+cp ([A-Za-z0-9_./-]+) "\$stage\/README\.md"\s*$/gmu)];
+  assert.equal(copies.length, 1, "The bundle must copy exactly one repository source as its root README");
+  const source = copies[0][1];
+  const sourceUrl = new URL(`../../${source}`, import.meta.url);
+  const metadata = await lstat(sourceUrl);
+  assert.ok(metadata.isFile() && metadata.size > 0, `${source} must be a nonempty regular file`);
+  const readme = await readFile(sourceUrl, "utf8");
+  assert.ok(readme.trim(), `${source} must contain operator guidance`);
+  for (const [, target] of readme.matchAll(/\[[^\]]*\]\(([^\s)]+)\)/gu)) {
+    if (target.startsWith("https://")) {
+      assert.equal(new URL(target).protocol, "https:");
+      continue;
+    }
+    if (target.startsWith("#")) continue;
+    const path = posix.normalize(decodeURIComponent(target.split(/[?#]/u)[0]));
+    assert.ok(path.startsWith("deploy/"), `${target} must resolve inside the archive's packaged deployment tree`);
+    assert.ok(server.includes('cp -R deploy/control-plane/. "$stage/deploy/"'), "The linked deployment tree must be retained in the bundle");
+    const linked = new URL(`../../deploy/control-plane/${path.slice("deploy/".length)}`, import.meta.url);
+    assert.ok((await lstat(linked)).isFile(), `${target} must identify a packaged file`);
   }
 });
 
