@@ -29,7 +29,7 @@ required-features = ["native-test-driver"]
 [dependencies]
 colossus-contracts = { version = "=0.11.11-preview.2", path = "../../../crates/colossus-contracts" }
 tauri = { version = "=2.12.4", features = [] }
-tokio = { version = "1.49.0", features = ["sync"] }
+tokio = { version = "1.53.3", features = ["sync"] }
 zeroize = "1.8.2"
 
 [target.'cfg(windows)'.dependencies]

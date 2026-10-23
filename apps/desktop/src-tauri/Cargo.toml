@@ -99,7 +99,7 @@ tauri = { version = "=2.12.4", features = ["unstable"] }
 tauri-plugin-dialog = "2.7.2"
 # Shipped Windows updates are signed raw NSIS installers; legacy ZIP extraction is disabled.
 tauri-plugin-updater = { version = "=2.9.0", default-features = false, features = ["rustls-tls"] }
-tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio = { version = "1.53.3", features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tracing = "0.1.44"
 tempfile = "3.23.0"
 url = "2.5.8"

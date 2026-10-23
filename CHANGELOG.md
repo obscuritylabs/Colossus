@@ -23,6 +23,7 @@ include breaking changes while the public API is still settling.
 - Hosted runtimes can stop and reload across replicas without rejoining a completed worker.
 - Control Plane server bundles include archive-specific guidance, with packaging inputs checked before release builds.
 - Update ctutils to 0.4.4 to address RUSTSEC-2026-0385.
+- Update Tokio to 1.53.3 across application and native build graphs to address RUSTSEC-2026-0386.
 - Update the Web and Desktop test runner to Vitest 4.1.12 for the current development-server security fixes.
 
 <!-- colossus:release-notes base=v0.11.10 -->

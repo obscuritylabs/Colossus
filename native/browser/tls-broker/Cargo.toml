@@ -52,7 +52,7 @@ sha2 = "0.10.9"
 socket2 = "0.6.4"
 subtle = "2.6.1"
 time = "0.3.53"
-tokio = { version = "1.49.0", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.53.3", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
 url = "2.5.8"
 zeroize = "1.8.2"
