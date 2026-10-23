@@ -145,6 +145,8 @@ fn candidate() -> ProviderContinuation {
             tool_calls: vec![],
         },
         hidden_reasoning: items,
+        replay_request: None,
+        route_binding: String::new(),
     }
 }
 
@@ -274,4 +276,181 @@ fn responses_protected_repository_reopens_and_retirement_prevents_stale_reuse() 
     let mut invalid = candidate();
     invalid.view.bytes += 1;
     assert!(repository.stage(invalid).is_err());
+}
+
+#[test]
+fn released_replay_admission_and_settlement_share_the_session_transactions() {
+    use colossus_contracts::{ModelToolCall, PendingSessionToolTurn, SessionMessageAppend};
+    use colossus_ports::SessionRepository;
+    use colossus_session::EventSourcedSessionRepository;
+
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let sessions = EventSourcedSessionRepository::new(journal.clone());
+    let actor = Actor {
+        actor_type: ActorType::System,
+        id: "test".into(),
+    };
+    sessions
+        .create_session("session", None, actor.clone())
+        .unwrap();
+    let repository = EventSourcedProviderContinuations::new(journal.clone(), true);
+    let mut state = anthropic_candidate();
+    let context = ExecutionContext {
+        session_id: Some("session".into()),
+        run_id: Some("run".into()),
+        ..Default::default()
+    };
+    let pending = PendingSessionToolTurn {
+        run_id: "run".into(),
+        turn: 1,
+        call_ids: vec!["call-1".into()],
+    };
+    repository.stage(state.clone()).unwrap();
+    let admission = repository
+        .admission_events("session", "candidate", &context)
+        .unwrap();
+    assert!(
+        EventSourcedProviderContinuations::new(journal.clone(), true)
+            .candidate("session", "candidate")
+            .unwrap()
+            .is_none()
+    );
+    let mut conflicting_admission = admission.clone();
+    conflicting_admission[0].expected_stream_version += 1;
+    assert!(
+        sessions
+            .begin_tool_turn_with_events(
+                "session",
+                pending.clone(),
+                actor.clone(),
+                conflicting_admission
+            )
+            .is_err()
+    );
+    assert!(
+        sessions.pending_tool_turn("session").unwrap().is_none(),
+        "failed private admission must not leave a marker"
+    );
+    sessions
+        .begin_tool_turn_with_events("session", pending.clone(), actor.clone(), admission)
+        .unwrap();
+    let reopened = EventSourcedProviderContinuations::new(journal.clone(), true);
+    assert!(
+        reopened
+            .candidate("session", "candidate")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        reopened.load("session").unwrap().is_none(),
+        "admitted state is not yet reusable"
+    );
+    state.settled_hash = "0".repeat(64);
+    let settlement = reopened.settlement_events(&state, &context).unwrap();
+    let assistant = ModelMessage {
+        agent_message_origin: None,
+        role: ModelMessageRole::Assistant,
+        content: "".into(),
+        tool_call_id: None,
+        tool_calls: vec![ModelToolCall {
+            call_id: "call-1".into(),
+            name: "test.lookup".into(),
+            arguments: json!({}),
+        }],
+    };
+    let result = ModelMessage {
+        agent_message_origin: None,
+        role: ModelMessageRole::Tool,
+        content: "done".into(),
+        tool_call_id: Some("call-1".into()),
+        tool_calls: vec![],
+    };
+    let appends = vec![
+        SessionMessageAppend {
+            message: assistant,
+            actor: actor.clone(),
+        },
+        SessionMessageAppend {
+            message: result,
+            actor: actor.clone(),
+        },
+    ];
+    let mut conflicting_settlement = settlement.clone();
+    conflicting_settlement[0].expected_stream_version += 1;
+    assert!(
+        sessions
+            .complete_tool_turn_with_events(
+                "session",
+                &pending,
+                appends.clone(),
+                actor.clone(),
+                conflicting_settlement
+            )
+            .is_err()
+    );
+    assert!(
+        sessions.list_messages("session").unwrap().is_empty(),
+        "failed private settlement must not expose an incomplete transcript"
+    );
+    assert_eq!(
+        sessions.pending_tool_turn("session").unwrap(),
+        Some(pending.clone())
+    );
+    sessions
+        .complete_tool_turn_with_events("session", &pending, appends, actor, settlement)
+        .unwrap();
+    assert!(sessions.pending_tool_turn("session").unwrap().is_none());
+    assert_eq!(sessions.list_messages("session").unwrap().len(), 2);
+    assert!(reopened.load("session").unwrap().is_some());
+    assert!(
+        reopened
+            .candidate("session", "candidate")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn keyless_admission_never_writes_private_state_and_legacy_retirement_is_explicit() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let keyless = EventSourcedProviderContinuations::new(journal.clone(), false);
+    let mut state = anthropic_candidate();
+    keyless.stage(state.clone()).unwrap();
+    assert!(
+        keyless
+            .admission_events("session", "candidate", &ExecutionContext::default())
+            .unwrap()
+            .is_empty()
+    );
+    state.settled_hash = "0".repeat(64);
+    assert!(
+        keyless
+            .settlement_events(&state, &ExecutionContext::default())
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(journal.head().unwrap().0, 0);
+    let protected = EventSourcedProviderContinuations::new(journal, true);
+    protected.save(state, &ExecutionContext::default()).unwrap();
+    protected
+        .clear("session", &ExecutionContext::default())
+        .unwrap();
+    assert!(protected.load("session").unwrap().is_none());
+    assert!(protected.retired_replay("session").unwrap().is_some());
+}
+
+#[test]
+fn replay_request_has_its_own_existing_request_budget() {
+    let repository =
+        EventSourcedProviderContinuations::new(Arc::new(InMemoryEventJournal::default()), false);
+    let mut state = anthropic_candidate();
+    state.replay_request = Some(ModelRequest {
+        instructions: "x".repeat(700 * 1024),
+        messages: Vec::new(),
+        tools: Vec::new(),
+        max_output_tokens: None,
+    });
+    repository.stage(state.clone()).unwrap();
+    state.replay_request.as_mut().unwrap().instructions = "x".repeat(896 * 1024);
+    assert!(repository.stage(state).is_err());
 }

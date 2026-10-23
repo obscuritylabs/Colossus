@@ -1154,7 +1154,7 @@ fn malformed_tool_arguments_fail_closed() {
         &ProviderToolNames::default(),
     )
     .expect_err("non-object arguments must fail");
-    assert!(matches!(error, ProviderError::Malformed(_)));
+    assert!(matches!(error, ProviderError::InvalidToolArguments(_)));
 }
 
 #[test]

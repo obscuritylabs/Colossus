@@ -1318,6 +1318,12 @@ effect begins, the session records a pending-turn marker with the exact provider
 pre-effect validation rejects duplicate or reused IDs. The atomic message batch also settles
 that marker. A crash or uncertain batch commit therefore leaves a durable replay guard that
 blocks later provider dispatch until an operator reconciles the turn from effect evidence.
+Required native provider replay joins these same transactions: a released private
+candidate is admitted with the pending marker, and settled replay commits with the
+complete transcript. Quarantined candidates remain process-local until release.
+Provider errors and cancellation abandon unused output without retiring replay
+required by committed history. Same-session continuation validates the frozen prefix
+and reuses terminal tool observations through a new gateway-authorized provider call.
 Denial, cancellation, calls skipped after an earlier terminal error, and outcome-unknown
 execution use distinct non-retryable results; an uncertain external effect remains explicitly
 `outcome_unknown`. Session continuation and both OpenAI-compatible request projections

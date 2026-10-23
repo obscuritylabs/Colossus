@@ -7,6 +7,7 @@ pub struct AgentService {
     pub(super) tools: Arc<dyn ToolRegistry>,
     pub(super) executor: Arc<dyn ToolExecutor>,
     pub(super) sessions: Arc<dyn SessionRepository>,
+    pub(super) work: Option<Arc<dyn colossus_ports::WorkRepository>>,
     pub(super) context_preparer: Option<Arc<dyn ContextPreparer>>,
     pub(super) lifecycle: Option<Arc<dyn colossus_ports::AgentRunLifecycle>>,
     pub(super) inbox: Option<Arc<dyn colossus_ports::AgentInbox>>,
@@ -28,11 +29,19 @@ impl AgentService {
             tools,
             executor,
             sessions,
+            work: None,
             context_preparer: None,
             provenance: None,
             lifecycle: None,
             inbox: None,
         }
+    }
+
+    /// Attach canonical Plan reads used to continue an interrupted, already-written draft.
+    #[must_use]
+    pub fn with_work_repository(mut self, work: Arc<dyn colossus_ports::WorkRepository>) -> Self {
+        self.work = Some(work);
+        self
     }
 
     /// Attach the shared durable context boundary used before every provider turn.

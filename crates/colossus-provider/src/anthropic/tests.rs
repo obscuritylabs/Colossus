@@ -403,6 +403,139 @@ fn incomplete_or_erroneous_streams_do_not_complete() {
     );
 }
 
+fn tool_argument_stream(
+    input: Value,
+    partial: Option<&str>,
+    stop: Option<&str>,
+) -> AnthropicStream {
+    let mut state = AnthropicStream::new(ProviderToolNames::from_request(&request()).unwrap());
+    for event in [
+        json!({"type":"message_start","message":{"id":"msg-arguments","type":"message","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call-1","name":"test_lookup","input":input}}),
+    ] {
+        assert!(state.ingest(event).unwrap().is_empty());
+    }
+    if let Some(partial) = partial {
+        assert!(
+            state
+                .ingest(json!({"type":"content_block_delta","index":0,
+            "delta":{"type":"input_json_delta","partial_json":partial}}))
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(
+        state
+            .ingest(json!({"type":"content_block_stop","index":0}))
+            .unwrap()
+            .is_empty()
+    );
+    if let Some(stop) = stop {
+        for event in [
+            json!({"type":"message_delta","delta":{"stop_reason":stop},"usage":{"output_tokens":2}}),
+            json!({"type":"message_stop"}),
+        ] {
+            assert!(state.ingest(event).unwrap().is_empty());
+        }
+    }
+    state
+}
+
+#[test]
+fn empty_tool_json_deltas_preserve_the_initial_object() {
+    for initial in [json!({}), json!({"id":"initial"})] {
+        for partial in [None, Some("")] {
+            let mut state = tool_argument_stream(initial.clone(), partial, Some("tool_use"));
+            let events = state.finish().unwrap();
+            assert!(
+                matches!(&events[0], ProviderEvent::ToolCallRequested { arguments, .. }
+                if *arguments == initial)
+            );
+            assert_eq!(state.blocks()[0]["input"], initial);
+        }
+    }
+}
+
+#[test]
+fn complete_invalid_messages_arguments_are_typed_without_releasing_fragments() {
+    for partial in ["{\"id\":\"PRIVATE_ARGUMENT", "{}{}", "[]", "null", "7"] {
+        let mut state = tool_argument_stream(json!({}), Some(partial), Some("tool_use"));
+        let error = state.finish().unwrap_err();
+        assert!(matches!(&error, ProviderError::InvalidToolArguments(_)));
+        assert!(!error.to_string().contains("PRIVATE_ARGUMENT"));
+        assert!(matches!(crate::executor::provider_execution_error(error),
+            ExecutionError::Recoverable { code, .. } if code == "provider.invalid_tool_arguments"));
+    }
+}
+
+#[test]
+fn messages_output_limit_precedes_incomplete_argument_json() {
+    let mut state = tool_argument_stream(json!({}), Some("{\"id\":"), Some("max_tokens"));
+    assert!(
+        matches!(state.finish(), Err(ProviderError::Rejected(failure))
+        if failure.reason == colossus_contracts::ProviderFailureReason::OutputLimitExceeded)
+    );
+    let mut state = tool_argument_stream(json!({}), Some("{\"id\":"), Some("end_turn"));
+    assert!(matches!(state.finish(), Err(ProviderError::Malformed(_))));
+}
+
+#[test]
+fn unfinished_messages_arguments_remain_an_unknown_transport_outcome() {
+    for partial in ["{\"id\":", "{\"id\":\"valid\"}"] {
+        let mut state = tool_argument_stream(json!({}), Some(partial), None);
+        let error = state.finish().unwrap_err();
+        assert!(matches!(&error, ProviderError::Transport(_)));
+        assert!(matches!(
+            crate::executor::provider_execution_error(error),
+            ExecutionError::OutcomeUnknown(_)
+        ));
+    }
+}
+
+#[test]
+fn buffered_messages_nonobject_arguments_use_the_same_typed_classification() {
+    let names = ProviderToolNames::from_request(&request()).unwrap();
+    for stop in ["tool_use", "max_tokens"] {
+        let native = response(
+            json!([{"type":"tool_use","id":"call-1",
+            "name":"test_lookup","input":"PRIVATE_ARGUMENT"}]),
+            stop,
+        );
+        let error = normalize(
+            &profile(),
+            "primary",
+            "test-model",
+            &serde_json::to_vec(&native).unwrap(),
+            &names,
+        )
+        .unwrap_err();
+        if stop == "tool_use" {
+            assert!(matches!(&error, ProviderError::InvalidToolArguments(_)));
+        } else {
+            assert!(matches!(&error, ProviderError::Rejected(failure)
+                if failure.reason == colossus_contracts::ProviderFailureReason::OutputLimitExceeded));
+        }
+        assert!(!error.to_string().contains("PRIVATE_ARGUMENT"));
+    }
+    let native = response(
+        json!([
+            {"type":"tool_use","id":"same","name":"test_lookup","input":{}},
+            {"type":"tool_use","id":"same","name":"test_lookup","input":{}}
+        ]),
+        "tool_use",
+    );
+    assert!(matches!(
+        normalize(
+            &profile(),
+            "primary",
+            "test-model",
+            &serde_json::to_vec(&native).unwrap(),
+            &names
+        ),
+        Err(ProviderError::Malformed(_))
+    ));
+}
+
 #[test]
 fn unsupported_effort_is_an_explicit_error() {
     let request = request();

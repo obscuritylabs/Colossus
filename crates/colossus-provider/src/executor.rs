@@ -418,6 +418,7 @@ pub(super) fn provider_execution_error(error: ProviderError) -> ExecutionError {
         ProviderError::Rejected(failure) => failure.reason.code(),
         ProviderError::Status { .. } => "http_status",
         ProviderError::Malformed(_) => "malformed_response",
+        ProviderError::InvalidToolArguments(_) => "invalid_tool_arguments",
     };
     tracing::debug!(target: "colossus.provider", event_name = "provider.adapter_error", error_type = category);
     match error {
@@ -441,14 +442,12 @@ pub(super) fn provider_execution_error(error: ProviderError) -> ExecutionError {
             status,
             message: format!("provider endpoint returned HTTP {status}"),
         },
-        ProviderError::Malformed(message) if invalid_tool_argument_message(&message) => {
-            ExecutionError::Recoverable {
-                code: "provider.invalid_tool_arguments".into(),
-                message,
-                http_status: None,
-                retry_after_ms: None,
-            }
-        }
+        ProviderError::InvalidToolArguments(message) => ExecutionError::Recoverable {
+            code: "provider.invalid_tool_arguments".into(),
+            message,
+            http_status: None,
+            retry_after_ms: None,
+        },
         error => ExecutionError::Failed(error.to_string()),
     }
 }

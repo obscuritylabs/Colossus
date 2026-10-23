@@ -91,7 +91,42 @@ pub trait ModelProvider: Send + Sync {
     fn settle_continuation(&self, _context: &ExecutionContext) -> Result<(), ModelProviderError> {
         Ok(())
     }
-    /// Retire private state after a failed or uncertain turn.
+    /// Private released-candidate writes to commit with the pending tool marker.
+    fn tool_turn_admission_events(
+        &self,
+        _context: &ExecutionContext,
+    ) -> Result<Vec<NewEvent>, ModelProviderError> {
+        Ok(Vec::new())
+    }
+    /// Private settlement writes to commit with the complete canonical tool transcript.
+    fn tool_turn_settlement_events(
+        &self,
+        _context: &ExecutionContext,
+        _canonical_after: &[ModelMessage],
+    ) -> Result<Vec<NewEvent>, ModelProviderError> {
+        Ok(Vec::new())
+    }
+    /// Finalize process-local candidate custody after the tool transaction commits.
+    fn tool_turn_committed(&self, context: &ExecutionContext) -> Result<(), ModelProviderError> {
+        self.settle_continuation(context)
+    }
+    /// Release only process-local candidates owned by a finished or dropped run.
+    /// Durable admitted effects and canonical continuation state remain intact.
+    fn finish_run_candidates(&self, _run_id: &str) {}
+    /// Rebuild an unfinished provider exchange with newly appended human guidance.
+    fn replay_request_with_options(
+        &self,
+        _role: &str,
+        _request: &ModelRequest,
+        _context: &ExecutionContext,
+        _options: &colossus_contracts::WorkflowAgentOptions,
+    ) -> Result<
+        Option<(ModelRequest, colossus_contracts::ProviderContinuationPlan)>,
+        ModelProviderError,
+    > {
+        Ok(None)
+    }
+    /// Abandon uncommitted output after failure, retaining required canonical replay.
     fn discard_continuation(&self, _context: &ExecutionContext) -> Result<(), ModelProviderError> {
         Ok(())
     }

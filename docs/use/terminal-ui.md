@@ -97,6 +97,14 @@ available alongside the theme picker.
 
 You can continue typing while a run is active. Colossus queues up to eight future
 turns; after a failure or cancellation, it pauses the queue for your decision.
+
+After a known provider failure, an inline **Retry** and **Dismiss** notice appears
+above the composer. Tab selects an action and Enter activates it; ordinary slash
+completion keeps priority. Retry sends **Continue** in the same session and keeps
+your draft. You can also type your own continuation with additional guidance.
+Completed tools keep their recorded results. A retry does not repeat their effects.
+Uncertain tool outcomes require reconciliation and do not offer this action.
+
 Use Ctrl-R to open full-screen prompt history. Type to filter, use Up/Down to
 choose, and press Enter to place a prompt in your draft. Esc keeps the draft you
 had before opening history. To include a supported image, use `/attach PATH`,

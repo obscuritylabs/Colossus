@@ -213,6 +213,35 @@ pub fn project_model_tool_observations(messages: &[ModelMessage]) -> Vec<ModelMe
     project_history(messages, true)
 }
 
+/// Check an exact replay without rewriting observations or expiring prior images.
+/// Signed exchanges must fail closed when normal projection would need to reduce
+/// an already protected observation or exceed the shared provider image envelope.
+pub fn model_tool_observations_within_bounds(messages: &[ModelMessage]) -> bool {
+    let mut turn_bytes = 0_usize;
+    let mut image_count = 0_usize;
+    let mut image_bytes = 0_u64;
+    for message in messages {
+        if message.begins_user_turn() {
+            turn_bytes = 0;
+        }
+        if message.role == ModelMessageRole::Tool {
+            let bytes = serialized_message_bytes(message);
+            turn_bytes = turn_bytes.saturating_add(bytes);
+            if bytes > MAX_MODEL_TOOL_MESSAGE_BYTES || turn_bytes > MAX_MODEL_TOOL_TURN_BYTES {
+                return false;
+            }
+        }
+        for image in message.content.images() {
+            image_count = image_count.saturating_add(1);
+            image_bytes = image_bytes.saturating_add(image.size_bytes);
+            if image_count > 16 || image_bytes > 32 * 1_048_576 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Bound observations while preserving the current human turn for exact provider replay.
 ///
 /// Signed provider exchanges may require the original current-turn tool results.

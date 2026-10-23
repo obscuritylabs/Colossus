@@ -24,6 +24,7 @@ uuid.workspace = true
 colossus-communication.workspace = true
 colossus-testkit.workspace = true
 colossus-session.workspace = true
+colossus-work.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tracing-opentelemetry.workspace = true

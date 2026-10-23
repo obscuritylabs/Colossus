@@ -594,13 +594,13 @@ impl ChatStreamState {
                     &partial.arguments
                 };
                 let arguments: Value = serde_json::from_str(arguments_text).map_err(|error| {
-                    ProviderError::Malformed(format!(
+                    ProviderError::InvalidToolArguments(format!(
                         "tool call arguments are invalid JSON; call_id={call_id} tool={name} position={}",
                         error.column()
                     ))
                 })?;
                 if !arguments.is_object() {
-                    return Err(ProviderError::Malformed(format!(
+                    return Err(ProviderError::InvalidToolArguments(format!(
                         "tool call arguments are not an object; call_id={call_id} tool={name}"
                     )));
                 }

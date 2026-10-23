@@ -173,6 +173,8 @@ fn responses_continuation_preserves_tool_ids_without_duplicate_assistant_calls()
             selected: None,
         },
         settled_hash: "settled".into(),
+        replay_request: None,
+        route_binding: String::new(),
         assistant: ModelMessage {
             agent_message_origin: None,
             role: ModelMessageRole::Assistant,

@@ -1110,6 +1110,7 @@ impl Runtime {
                 tool_executor,
                 Arc::clone(&sessions),
             )
+            .with_work_repository(Arc::clone(&work))
             .with_context_preparer(Arc::clone(&context) as Arc<dyn ContextPreparer>)
             .with_inbox(Arc::clone(&communication) as Arc<dyn colossus_ports::AgentInbox>)
             .with_run_provenance(Arc::new(CatalogRunProvenance))

@@ -44,6 +44,8 @@ fn text_only_tool_parts_preserve_scalar_output_on_every_provider_wire() {
             selected: None,
         },
         settled_hash: "settled".into(),
+        replay_request: None,
+        route_binding: String::new(),
         assistant: assistant.clone(),
         hidden_reasoning: vec![json!({"message":assistant,"content":[{
             "type":"tool_use","id":"read","name":"filesystem_read",
@@ -241,6 +243,8 @@ fn viewed_images_and_browser_screenshots_keep_pairing_on_all_provider_wires() {
             selected: None,
         },
         settled_hash: "settled".into(),
+        replay_request: None,
+        route_binding: String::new(),
         assistant: assistant.clone(),
         hidden_reasoning: vec![json!({"message": assistant, "content": [
             {"type": "tool_use", "id": "view", "name": "image_view", "input": {"paths": ["diagram.png"]}},
