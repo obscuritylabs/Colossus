@@ -155,12 +155,15 @@ impl Terminal {
     pub(crate) fn resize(&self, rows: u16, cols: u16) {
         self.resize_frame(rows, cols);
         // A truncated old frame can still contain every plugin name. Require
-        // the closing border at the new width before sending any more input.
+        // the closing border at the new chat width before sending more input.
+        // A wide viewport reserves 28 columns when the status rail is present.
         self.wait_until_visual_rows("resized composer border", |_, rows| {
             rows.iter().any(|line| {
                 (line.starts_with("┌ Message") || line.starts_with("┌ Execute"))
-                    && line.ends_with('┐')
-                    && line.chars().count() == usize::from(cols)
+                    && ((line.ends_with('┐') && line.chars().count() == usize::from(cols))
+                        || (cols >= 92
+                            && line.chars().nth(usize::from(cols - 29)) == Some('┐')
+                            && line.chars().nth(usize::from(cols - 28)) == Some('│')))
             })
         });
     }
@@ -189,7 +192,13 @@ fn composer_contents(rows: &[String]) -> Option<String> {
     Some(
         lines
             .take_while(|line| !line.starts_with('└'))
-            .map(|line| line.trim_matches('│').trim())
+            // The adjacent composer and status-rail borders bound the draft.
+            .map(|line| {
+                line.split_once("││")
+                    .map_or(line.as_str(), |(chat, _)| chat)
+                    .trim_matches('│')
+                    .trim()
+            })
             .collect(),
     )
 }
