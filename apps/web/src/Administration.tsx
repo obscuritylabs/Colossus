@@ -16,7 +16,8 @@ import { LoadState } from "./Home";
 import {
   adminUserHref,
   projectHref,
-  connectionSettingsSections,
+  globalConnectionSettingsSections,
+  connectionSettingsLabels,
   type ConnectionSettingsSection,
   type AdminView,
   type AdminUserView,
@@ -113,7 +114,7 @@ export function Administration({
                   ? "Project hierarchy"
                   : tab === "announcements"
                     ? "Announcements"
-                    : `Control Plane ${tab}`}
+                    : `Control Plane ${connectionSettingsLabels[tab as ConnectionSettingsSection] ?? tab}`}
         </h1>
       </header>
       {tab === "users" ? (
@@ -135,7 +136,9 @@ export function Administration({
           </header>
           <EnvironmentAppearance onSaved={onSettings} />
         </>
-      ) : (connectionSettingsSections as readonly string[]).includes(tab) ? (
+      ) : (globalConnectionSettingsSections as readonly string[]).includes(
+          tab,
+        ) ? (
         <GlobalConfiguration
           {...editorNavigation}
           section={tab as ConnectionSettingsSection}
@@ -399,6 +402,15 @@ function EnvironmentSettings({
       setError("Enter classification text before enabling the banner.");
       return;
     }
+    if (
+      [...draft.text].length > 160 ||
+      /[\u0000-\u001f\u007f-\u009f]/u.test(draft.text)
+    ) {
+      setError(
+        "Use at most 160 classification characters without control characters.",
+      );
+      return;
+    }
     pending.current = true;
     setBusy(true);
     markDirty(true);
@@ -530,7 +542,7 @@ function EnvironmentSettings({
                 <span>Classification text</span>
                 <TextInput
                   required={draft.enabled}
-                  maxLength={160}
+                  maxLength={320}
                   value={draft.text}
                   onChange={(e) =>
                     changeDraft({ ...draft, text: e.target.value })

@@ -26,6 +26,7 @@ export function SearchSettingsEditor<T extends SearchSettingsDraft>({
   profileReadOnly = false,
   saveDisabled = false,
   saveLabel = "Save search service",
+  endpointHelp = "Use an origin approved by your administrator.",
 }: {
   draft: T;
   busy: boolean;
@@ -36,6 +37,7 @@ export function SearchSettingsEditor<T extends SearchSettingsDraft>({
   profileReadOnly?: boolean;
   saveDisabled?: boolean;
   saveLabel?: string;
+  endpointHelp?: string;
 }) {
   const id = useId();
   return (
@@ -124,7 +126,7 @@ export function SearchSettingsEditor<T extends SearchSettingsDraft>({
               onChange({ ...draft, endpoint: event.target.value })
             }
           />
-          <small>Use an origin approved by your administrator.</small>
+          <small>{endpointHelp}</small>
         </label>
         {authentication}
       </fieldset>

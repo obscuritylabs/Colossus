@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { IconListDetails } from "@tabler/icons-react";
 import colossusMark from "../../assets/colossus-mark.svg";
 import { Button } from "./ui/button.js";
@@ -65,35 +71,62 @@ interface FrameProps {
 /** Owned shadcn presentation; hosts retain routes, records and authority. */
 export function ControlPlaneFrame(props: FrameProps) {
   const classification = props.classification;
+  const frame = useRef<HTMLDivElement>(null);
+  const bottomClassification = useRef<HTMLDivElement>(null);
+  const showBottomClassification = Boolean(
+    classification?.enabled && classification.position === "top_and_bottom",
+  );
+  useLayoutEffect(() => {
+    const strip = bottomClassification.current;
+    const measure = () => {
+      frame.current?.style.setProperty(
+        "--control-plane-bottom-classification-height",
+        `${strip?.getBoundingClientRect().height ?? 0}px`,
+      );
+    };
+    measure();
+    if (!strip) return;
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(strip);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [showBottomClassification]);
   const classificationStyle = classificationColorVariables(
     classification?.colors,
   );
-  const banner = classification?.enabled ? (
-    <div
-      className={`control-classification classification-${classification.tone}${classificationStyle ? " classification-custom-colors" : ""}`}
-      style={classificationStyle}
-      role="note"
-      aria-label="Environment classification"
-    >
-      {classification.text}
-    </div>
-  ) : null;
+  const banner = (bottom = false) =>
+    classification?.enabled ? (
+      <div
+        ref={bottom ? bottomClassification : undefined}
+        className={`control-classification classification-${classification.tone}${classificationStyle ? " classification-custom-colors" : ""}`}
+        style={classificationStyle}
+        role="note"
+        aria-label="Environment classification"
+      >
+        {classification.text}
+      </div>
+    ) : null;
   return (
     <div
+      ref={frame}
       className={`control-plane-frame ${props.sidebar || props.secondaryNavigation ? "has-scope-sidebar" : ""}`}
     >
       <a href="#control-main" className="application-skip-link">
         Skip to content
       </a>
-      {banner}
+      {banner()}
       <TooltipProvider delayDuration={300}>
         <SidebarProvider className="control-frame-layout">
           <ControlWorkbench {...props} />
         </SidebarProvider>
       </TooltipProvider>
-      {classification?.enabled && classification.position === "top_and_bottom"
-        ? banner
-        : null}
+      {showBottomClassification ? banner(true) : null}
     </div>
   );
 }

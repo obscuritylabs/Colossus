@@ -68,8 +68,15 @@ export function ChatModelSettings({
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const [pending, setPending] = useState(false);
   const provider = draft.providers.profiles[value.providerProfile];
+  const networkAvailability =
+    saved.connection_availability?.providers[value.providerProfile];
+  const primaryAvailability = saved.connection_availability?.roles.primary;
+  const catalogBlocked =
+    networkAvailability?.enabled === false ||
+    primaryAvailability?.enabled === false;
   const canLoad = Boolean(
     catalogEnabled &&
+    !catalogBlocked &&
     provider &&
     JSON.stringify(provider) ===
       JSON.stringify(saved.providers.profiles[value.providerProfile]) &&
@@ -88,13 +95,31 @@ export function ChatModelSettings({
   }
   function apply() {
     if (busy || pending) return;
+    if (!validProfile(value.profile)) {
+      setError(
+        "Use a nonreserved Profile ID of 1–128 letters, digits, hyphens, or underscores, starting with a letter or digit. Dots and slashes are allowed in Model identifier.",
+      );
+      return;
+    }
+    const label = value.label.trim();
+    const model = value.model.trim();
     if (
-      !validProfile(value.profile) ||
-      !value.label.trim() ||
-      !value.model.trim()
+      !label ||
+      new TextEncoder().encode(label).length > 96 ||
+      /[\u0000-\u001f\u007f-\u009f]/u.test(label)
     ) {
       setError(
-        "Enter a display label, valid profile ID, and model identifier.",
+        "Display label must contain 1–96 UTF-8 bytes and no control characters.",
+      );
+      return;
+    }
+    if (
+      !model ||
+      new TextEncoder().encode(model).length > 1024 ||
+      /[\u0000-\u001f\u007f-\u009f]/u.test(model)
+    ) {
+      setError(
+        "Model identifier must contain 1–1,024 UTF-8 bytes and no control characters. Dots and slashes are allowed.",
       );
       return;
     }
@@ -117,8 +142,22 @@ export function ChatModelSettings({
       setError("Token limits must be positive whole numbers.");
       return;
     }
-    if (value.maxOutputTokens > value.contextWindowTokens) {
-      setError("Output tokens must fit the context window.");
+    if (value.contextWindowTokens < 1024) {
+      setError("Context window must be at least 1,024 tokens.");
+      return;
+    }
+    if (value.maxOutputTokens >= value.contextWindowTokens) {
+      setError("Maximum output must be smaller than the context window.");
+      return;
+    }
+    const safetyMargin = Math.max(
+      Math.ceil(value.contextWindowTokens / 10),
+      512,
+    );
+    if (value.contextWindowTokens - value.maxOutputTokens <= safetyMargin) {
+      setError(
+        `Maximum output must be at most ${(value.contextWindowTokens - safetyMargin - 1).toLocaleString()} tokens to leave room for input and the ${safetyMargin.toLocaleString()} token safety reserve.`,
+      );
       return;
     }
     const next = structuredClone(draft);
@@ -126,7 +165,7 @@ export function ChatModelSettings({
     next.models.profiles[value.profile] = {
       ...original,
       providerProfile: value.providerProfile,
-      model: value.model.trim(),
+      model,
       contextWindowTokens: value.contextWindowTokens,
       maxOutputTokens: value.maxOutputTokens,
       reasoningEffort: value.reasoningEffort,
@@ -146,7 +185,7 @@ export function ChatModelSettings({
         if (next.models.roles[role] === id)
           next.models.roles[role] = value.profile;
     }
-    next.labels.models[value.profile] = value.label.trim();
+    next.labels.models[value.profile] = label;
     if (!next.models.roles.primary) next.models.roles.primary = value.profile;
     onApply(next);
   }
@@ -174,7 +213,13 @@ export function ChatModelSettings({
           !canLoad ? (
             <p>
               {catalogEnabled
-                ? "Save the provider configuration and credential before loading models."
+                ? catalogBlocked
+                  ? networkAvailability?.enabled === false
+                    ? (networkAvailability.reason ??
+                      "This provider is blocked by the project's Network access policy.")
+                    : (primaryAvailability?.reason ??
+                      "Choose an available primary model in Model routing before loading models.")
+                  : "Save the provider configuration and credential before loading models."
                 : "Configure model identifiers here. Live discovery uses the selected project's explicitly assigned credentials in Project Administration."}
             </p>
           ) : null
@@ -235,7 +280,7 @@ export function ChatModelSettings({
             label: value.label || entry.display_name || entry.id,
             profile:
               value.profile ||
-              entry.id.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 64),
+              entry.id.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 64),
           });
         }}
       />

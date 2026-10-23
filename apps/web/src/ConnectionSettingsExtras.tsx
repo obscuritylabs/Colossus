@@ -22,6 +22,7 @@ import {
 } from "./settings-editor";
 import { request } from "./api";
 import { errorMessage } from "./resources";
+import { ConnectionNetworkStatus } from "./ConnectionNetworkSettings";
 import {
   validProfile,
   validVariableName,
@@ -674,6 +675,11 @@ export function ConnectionSettingsExtras({
   const searchForm = searchEditor ? (
     <SearchSettingsEditor
       draft={searchEditor}
+      endpointHelp={
+        instanceScope
+          ? "Use HTTPS for remote services. HTTP loopback addresses connect to the Control Plane server. Each project's Network access policy controls use."
+          : "Use HTTPS for remote services. HTTP loopback addresses connect to the Control Plane server. This project's Network access policy controls use."
+      }
       busy={busy}
       onChange={(value) =>
         setSearchEditor({
@@ -710,13 +716,21 @@ export function ConnectionSettingsExtras({
       }
       onSave={() => {
         if (
-          !searchEditor.label.trim() ||
           !validProfile(searchEditor.profile) ||
           (!searchEditor.resourceId &&
             Object.hasOwn(search.profiles, searchEditor.profile))
         ) {
+          setError("Enter a unique, valid search profile ID.");
+          return;
+        }
+        const label = searchEditor.label.trim();
+        if (
+          !label ||
+          new TextEncoder().encode(label).length > 96 ||
+          /[\u0000-\u001f\u007f-\u009f]/u.test(label)
+        ) {
           setError(
-            "Enter a display label and a unique, valid search profile ID.",
+            "Display label must contain 1–96 UTF-8 bytes and no control characters.",
           );
           return;
         }
@@ -735,12 +749,58 @@ export function ConnectionSettingsExtras({
             !["http:", "https:"].includes(endpoint.protocol) ||
             endpoint.username ||
             endpoint.password ||
-            endpoint.hash
+            !endpoint.hostname ||
+            searchEditor.endpoint.includes("?") ||
+            searchEditor.endpoint.includes("#")
           )
             throw new Error();
         } catch {
           setError(
-            "Enter an HTTP or HTTPS search endpoint without embedded credentials or a fragment.",
+            "Enter an HTTP or HTTPS search endpoint without embedded credentials, a query, or a fragment.",
+          );
+          return;
+        }
+        const endpoint = new URL(searchEditor.endpoint.trim());
+        const loopback =
+          endpoint.hostname === "localhost" ||
+          endpoint.hostname === "[::1]" ||
+          /^127(?:\.\d{1,3}){3}$/u.test(endpoint.hostname);
+        if (endpoint.protocol === "http:" && !loopback) {
+          setError(
+            "Use HTTPS for remote search endpoints. HTTP is available only for loopback destinations on the Control Plane server.",
+          );
+          return;
+        }
+        if (!(
+          endpoint.pathname.endsWith("/search") ||
+          (searchEditor.kind === "serp_api" &&
+            endpoint.pathname.endsWith("/search.json"))
+        )) {
+          setError(
+            searchEditor.kind === "serp_api"
+              ? "Use a SerpAPI endpoint whose path ends in /search or /search.json."
+              : "Use a SearXNG endpoint whose path ends in /search.",
+          );
+          return;
+        }
+        const userAgent = searchEditor.userAgent ?? "colossus";
+        if (
+          !userAgent.trim() ||
+          new TextEncoder().encode(userAgent).length > 256 ||
+          /[\u0000-\u001f\u007f]/u.test(userAgent)
+        ) {
+          setError(
+            "User agent must contain 1–256 UTF-8 bytes without ASCII control characters.",
+          );
+          return;
+        }
+        const authHeader = searchEditor.authHeader || "X-Searxng-Key";
+        if (
+          searchEditor.kind === "searxng" &&
+          !/^[!#$%&'*+\-.^_`|~A-Za-z0-9]{1,128}$/u.test(authHeader)
+        ) {
+          setError(
+            "Authentication header must contain 1–128 ASCII HTTP header-name characters without spaces or control characters.",
           );
           return;
         }
@@ -761,10 +821,10 @@ export function ConnectionSettingsExtras({
           timeoutMs: searchEditor.timeoutMs,
           credentialReference:
             searchEditor.authentication === "none" ? null : "host:managed",
+          userAgent,
           ...(searchEditor.kind === "searxng"
             ? {
-                authHeader: searchEditor.authHeader || "X-Searxng-Key",
-                userAgent: searchEditor.userAgent || "colossus",
+                authHeader,
               }
             : {}),
         };
@@ -774,7 +834,7 @@ export function ConnectionSettingsExtras({
             ...(draft.labels ?? { providers: {}, models: {} }),
             search: {
               ...draft.labels?.search,
-              [searchEditor.profile]: searchEditor.label.trim(),
+              [searchEditor.profile]: label,
             },
           },
           search: {
@@ -876,10 +936,18 @@ export function ConnectionSettingsExtras({
           name: draft.labels?.search?.[id] ?? id,
           description: value.endpoint ?? "SerpAPI",
           searchText: `${id} ${draft.labels?.search?.[id] ?? ""} ${value.endpoint ?? ""}`,
-          connection:
-            effectiveSearchAuthentication(draft, id, value) === "none"
-              ? "No authentication"
-              : "Explicit credential",
+          connection: (
+            <span className="catalog-connection-copy">
+              <span>
+                {effectiveSearchAuthentication(draft, id, value) === "none"
+                  ? "No authentication"
+                  : "Explicit credential"}
+              </span>
+              <ConnectionNetworkStatus
+                value={saved.connection_availability?.search[id]}
+              />
+            </span>
+          ),
           usage:
             Object.entries(search.roles)
               .filter(([, profile]) => profile === id)

@@ -46,6 +46,25 @@
   color: var(--muted);
 }
 
+.catalog-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.catalog-toolbar > .catalog-search {
+  flex: 1 1 14rem;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.catalog-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .catalog-search:focus-within {
   outline: 2px solid var(--cyan);
   outline-offset: 2px;

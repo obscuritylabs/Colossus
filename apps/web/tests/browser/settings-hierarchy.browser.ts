@@ -171,6 +171,71 @@ async function editVariable(page: Page, name: string, value: string) {
     .click();
 }
 
+test("project network policy uses a shareable editor and canonical saved revision", async ({
+  page,
+}) => {
+  const fixture = await hierarchyFixture(page);
+  await selectAppearance(page, appearanceCases[1]);
+  await page.goto(`/projects/${project}/settings/network`);
+  await expect(
+    page.getByRole("region", { name: "Saved network policy" }),
+  ).toContainText("Allow all configured connections");
+  await page
+    .getByRole("button", { name: "Configure network access", exact: true })
+    .click();
+  await expect(page).toHaveURL(
+    new RegExp(`/projects/${project}/settings/network/edit$`, "u"),
+  );
+  await page.reload();
+  await choose(page, "Connection access mode", "Restrict to an origin list");
+  const origins = page.getByRole("textbox", {
+    name: "Allowed connection origins",
+    exact: true,
+  });
+  await origins.fill("https://models.example\nhttps://tools.example");
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await origins.scrollIntoViewIfNeeded();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: `output/playwright/settings-network-large-${width}.png`,
+      fullPage: true,
+    });
+  }
+  const save = page.getByRole("button", {
+    name: "Save network access",
+    exact: true,
+  });
+  await save.press("Enter");
+  await expect.poll(() => fixture.writes.length).toBe(1);
+  expect(fixture.writes[0]).toMatchObject({
+    path: projectSettings,
+    body: {
+      revision: 2,
+      connection_network_policy: {
+        mode: "allow_list",
+        allowed_origins: ["https://models.example", "https://tools.example"],
+      },
+    },
+  });
+  await expect(page).toHaveURL(
+    new RegExp(`/projects/${project}/settings/network$`, "u"),
+  );
+  await expect(
+    page.getByRole("region", { name: "Settings notifications", exact: true }),
+  ).toContainText("Connection network policy saved.");
+  await page.reload();
+  const saved = page.getByRole("region", { name: "Saved network policy" });
+  await expect(saved).toContainText("Restricted origins");
+  await expect(saved).toContainText("https://tools.example");
+  expect(fixture.writes).toHaveLength(1);
+  fixture.verify();
+});
+
 test("global variables publish, project overrides reset and disabled inheritance can be restored", async ({
   page,
 }) => {
@@ -1164,6 +1229,64 @@ test("personal variables use their own revisioned endpoint and readers cannot ed
 });
 
 for (const appearance of appearanceCases) {
+  test(`MCP form controls stay aligned in Large ${appearance.label} layouts`, async ({
+    page,
+  }) => {
+    const fixture = await hierarchyFixture(page);
+    await selectAppearance(page, appearance);
+    await page.goto("/admin/mcp/new");
+    const form = page.getByRole("form", { name: "MCP connection settings" });
+    const profile = form.getByRole("textbox", {
+      name: "Profile ID",
+      exact: true,
+    });
+    const endpoint = form.getByRole("textbox", {
+      name: "MCP server URL",
+      exact: true,
+    });
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await profile.scrollIntoViewIfNeeded();
+      const profileBounds = await profile.boundingBox();
+      const endpointBounds = await endpoint.boundingBox();
+      expect(profileBounds).not.toBeNull();
+      expect(endpointBounds).not.toBeNull();
+      expect(
+        Math.abs(profileBounds!.height - endpointBounds!.height),
+      ).toBeLessThan(1);
+      if (width === 1440)
+        expect(Math.abs(profileBounds!.y - endpointBounds!.y)).toBeLessThan(1);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBe(true);
+      await page.screenshot({
+        path: `output/playwright/settings-mcp-${appearance.id}-large-${width}.png`,
+        fullPage: true,
+      });
+      const patternHelp = form.getByText("Pattern matching", { exact: true });
+      await patternHelp.focus();
+      await page.keyboard.press("Enter");
+      await expect(
+        form.getByText(/Regex and consecutive stars are unsupported/u),
+      ).toBeVisible();
+      await page.keyboard.press("Enter");
+      const submit = form.getByRole("button", {
+        name: "Add MCP connection",
+        exact: true,
+      });
+      await submit.scrollIntoViewIfNeeded();
+      await expect(submit).toBeInViewport();
+      await page.screenshot({
+        path: `output/playwright/settings-mcp-${appearance.id}-large-${width}-footer.png`,
+        fullPage: true,
+      });
+    }
+    expect(fixture.writes).toHaveLength(0);
+    fixture.verify();
+  });
+
   test(`new settings editors fit Large desktop and compact ${appearance.label} layouts`, async ({
     page,
   }) => {

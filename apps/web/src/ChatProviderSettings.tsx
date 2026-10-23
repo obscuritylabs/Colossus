@@ -101,6 +101,7 @@ export function ChatProviderSettings({
       (!id ||
         value.kind !== original?.kind ||
         value.baseUrl !== (original?.baseUrl ?? "")));
+  const availabilityReason = availability?.reason;
   // Only saved, unchanged destinations may open a credential write.
   const destinationSaved = Boolean(
     id &&
@@ -116,8 +117,19 @@ export function ChatProviderSettings({
   );
   function apply(continueToCredential = false) {
     if (busy) return;
-    if (!validProfile(value.profile) || !value.label.trim()) {
-      setError("Enter a display label and a valid profile ID.");
+    if (!validProfile(value.profile)) {
+      setError("Enter a valid profile ID.");
+      return;
+    }
+    const label = value.label.trim();
+    if (
+      !label ||
+      new TextEncoder().encode(label).length > 96 ||
+      /[\u0000-\u001f\u007f-\u009f]/u.test(label)
+    ) {
+      setError(
+        "Display label must contain 1–96 UTF-8 bytes and no control characters.",
+      );
       return;
     }
     if (!id && Object.hasOwn(draft.providers.profiles, value.profile)) {
@@ -131,12 +143,24 @@ export function ChatProviderSettings({
           !["http:", "https:"].includes(endpoint.protocol) ||
           endpoint.username ||
           endpoint.password ||
-          endpoint.hash
+          value.baseUrl.includes("?") ||
+          value.baseUrl.includes("#")
         )
           throw new Error();
       } catch {
         setError(
-          "Enter an HTTP or HTTPS endpoint without embedded credentials or a fragment.",
+          "Enter an HTTP or HTTPS endpoint without embedded credentials, a query, or a fragment.",
+        );
+        return;
+      }
+      const endpoint = new URL(value.baseUrl.trim());
+      const loopback =
+        endpoint.hostname === "localhost" ||
+        endpoint.hostname === "[::1]" ||
+        /^127\./.test(endpoint.hostname);
+      if (endpoint.protocol === "http:" && !loopback) {
+        setError(
+          "Use HTTPS for remote provider endpoints. HTTP is available only for loopback destinations on the Control Plane server.",
         );
         return;
       }
@@ -152,7 +176,7 @@ export function ChatProviderSettings({
     }
     if (unavailable) {
       setError(
-        availability?.reason ??
+        availabilityReason ??
           "This connection requires deployment configuration.",
       );
       return;
@@ -171,7 +195,7 @@ export function ChatProviderSettings({
     next.provider_authentication[value.profile] =
       value.kind === "echo" ? "none" : auth;
     next.labels ??= { providers: {}, models: {} };
-    next.labels.providers[value.profile] = value.label.trim();
+    next.labels.providers[value.profile] = label;
     onApply(
       next,
       continueToCredential && auth !== "none"
@@ -187,6 +211,7 @@ export function ChatProviderSettings({
       {error ? <p role="alert">{error}</p> : null}
       <ProviderSettingsEditor
         draft={value}
+        endpointHelp="Use HTTPS for remote services. HTTP loopback addresses connect to the Control Plane server."
         busy={busy}
         profileReadOnly={Boolean(id)}
         onChange={(next) => {
@@ -235,9 +260,9 @@ export function ChatProviderSettings({
                 Reload providers
               </Button>
             ) : null}
-            {availability?.reason ? (
+            {availabilityReason ? (
               <p className="field-help" role="status">
-                {availability.reason}
+                {availabilityReason}
               </p>
             ) : null}
           </>

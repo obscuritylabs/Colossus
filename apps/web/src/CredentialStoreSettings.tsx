@@ -6,6 +6,7 @@ import {
 } from "./settings-editor";
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type ComponentProps,
@@ -19,7 +20,11 @@ import {
 } from "@colossus/ui";
 import { CredentialEditor } from "@colossus/ui/components/CredentialEditor";
 import { CredentialForm } from "@colossus/ui/components/CredentialForm";
-import { IconLock } from "@tabler/icons-react";
+import { IconLock, IconRefresh } from "@tabler/icons-react";
+import {
+  ToastRegion,
+  useToastQueue,
+} from "@colossus/ui/components/ToastRegion";
 import { request } from "./api";
 import { useResource, errorMessage } from "./resources";
 import { LoadState } from "./Home";
@@ -128,10 +133,19 @@ export function CredentialStoreSettings({
   );
   const [id, setId] = useState("");
   const [label, setLabel] = useState("");
+  const labelHelp = useId();
+  const savedLabel = label.trim();
+  const labelError = !savedLabel
+    ? "Enter a display label."
+    : new TextEncoder().encode(savedLabel).length > 160 ||
+        /[\u0000-\u001f\u007f-\u009f]/u.test(savedLabel)
+      ? "Display label must contain 1–160 UTF-8 bytes and no control characters."
+      : "";
   const [kind, setKind] = useState<Kind>("api_key");
   const [target, setTarget] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const { toasts, pushToast, dismissToast, clearToasts } = useToastQueue();
   const [saving, setSaving] = useState(false);
   const [waitingRevision, setWaitingRevision] = useState(0);
   const [dirty, setDirty] = useState(false);
@@ -159,6 +173,7 @@ export function CredentialStoreSettings({
     setTarget("");
     setError("");
     setNotice("");
+    clearToasts();
     setSaving(false);
     setWaitingRevision(0);
     setDirty(false);
@@ -166,7 +181,7 @@ export function CredentialStoreSettings({
     setReadyRoute("");
     reviewed.current = null;
     opened.current = "";
-  }, [scope]);
+  }, [scope, clearToasts]);
   useEffect(
     () => () => {
       currentScope.current = "";
@@ -334,7 +349,7 @@ export function CredentialStoreSettings({
       setDirty(false);
       reviewed.current = null;
       onDirtyChange?.(false);
-      setNotice("Credential changes saved.");
+      if (!routed) pushToast("Credential changes saved.");
       if (routed) onCloseEditor?.();
       onSaved();
     } catch (e) {
@@ -413,15 +428,26 @@ export function CredentialStoreSettings({
           <label>
             <span>Display label</span>
             <TextInput
+              aria-label="Display label"
               value={label}
               maxLength={160}
               disabled={busy}
+              aria-describedby={labelHelp}
+              aria-invalid={Boolean(labelError && dirty)}
               onChange={(event) => {
                 setLabel(event.target.value);
                 setDirty(true);
               }}
               placeholder="For example, GitHub workspace token"
             />
+            <small
+              id={labelHelp}
+              role={labelError && dirty ? "alert" : undefined}
+            >
+              {labelError && dirty
+                ? labelError
+                : "Use 1–160 UTF-8 bytes without control characters."}
+            </small>
           </label>
           <label>
             <span>Credential type</span>
@@ -497,7 +523,8 @@ export function CredentialStoreSettings({
                   ? "Existing credential assignments"
                   : "Not attached to a connection")
               }
-              disabled={busy || !label.trim()}
+              disabled={busy}
+              submitDisabled={Boolean(labelError)}
               description={
                 connection
                   ? "Saving attaches this credential to the destination shown above."
@@ -508,7 +535,7 @@ export function CredentialStoreSettings({
               onSave={async (secret) =>
                 mutate(id ? `${path}/${encodeURIComponent(id)}` : path, {
                   revision: (reviewed.current ?? data)!.revision,
-                  label: label.trim(),
+                  label: savedLabel,
                   kind,
                   secret,
                   ...(connection
@@ -702,6 +729,11 @@ export function CredentialStoreSettings({
       <LoadState {...resource} retry={resource.refresh} />
       {error ? <p role="alert">{error}</p> : null}
       {notice ? <p role="status">{notice}</p> : null}
+      <ToastRegion
+        toasts={toasts}
+        onDismiss={dismissToast}
+        placement="bottom"
+      />
       {executionUnavailable ? <p role="status">{executionReason}</p> : null}
       <CatalogInventory
         key={scope}
@@ -713,6 +745,44 @@ export function CredentialStoreSettings({
         busy={busy}
         editing={Boolean(editor)}
         onAdd={() => edit()}
+        addInToolbar
+        toolbarActions={
+          <>
+            <Button
+              disabled={
+                busy ||
+                Boolean(editor) ||
+                !data?.credentials.length ||
+                !data?.connections.length
+              }
+              onClick={() => {
+                reviewed.current = data;
+                setId("");
+                setTarget("");
+                setEditor("attach");
+              }}
+            >
+              Attach existing credential
+            </Button>
+            <Button
+              className="ui-icon-button"
+              aria-label="Reload credentials"
+              title="Reload credentials"
+              disabled={
+                saving || resource.loading || (Boolean(editor) && !mustReload)
+              }
+              onClick={() => {
+                setEditor(null);
+                setDirty(false);
+                setMustReload(false);
+                reviewed.current = null;
+                resource.refresh();
+              }}
+            >
+              <IconRefresh size={16} aria-hidden="true" />
+            </Button>
+          </>
+        }
         emptyDescription="Save an API key or token now. You can configure its connection later."
         rows={(data?.credentials ?? []).map((row) => ({
           id: row.id,
@@ -801,36 +871,6 @@ export function CredentialStoreSettings({
           {assignmentContext}
         </section>
       ) : null}
-      <div className="chat-settings-actions">
-        <Button
-          disabled={
-            busy ||
-            Boolean(editor) ||
-            !data?.credentials.length ||
-            !data?.connections.length
-          }
-          onClick={() => {
-            reviewed.current = data;
-            setId("");
-            setTarget("");
-            setEditor("attach");
-          }}
-        >
-          Attach existing credential
-        </Button>
-        <Button
-          disabled={saving}
-          onClick={() => {
-            setEditor(null);
-            setDirty(false);
-            setMustReload(false);
-            reviewed.current = null;
-            resource.refresh();
-          }}
-        >
-          Reload credentials
-        </Button>
-      </div>
     </section>
   );
 }

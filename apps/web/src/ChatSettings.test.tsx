@@ -15,6 +15,7 @@ let pendingRead: ((response: Response) => void) | null;
 let pendingCatalog: ((response: Response) => void) | null;
 let delaySettingsRead: boolean;
 let credentialRevision: number;
+let providerPresets: unknown;
 const onCredentials = vi.fn(),
   onPersonalCredentials = vi.fn();
 const onSaved = vi.fn();
@@ -31,6 +32,7 @@ beforeEach(() => {
   pendingRead = null;
   pendingCatalog = null;
   delaySettingsRead = false;
+  providerPresets = { presets: [] };
   settings = {
     revision: 7,
     providers: {
@@ -98,7 +100,7 @@ beforeEach(() => {
             credentials: [],
             connections: [],
           });
-        if (path.endsWith("/provider-presets")) return json({ presets: [] });
+        if (path.endsWith("/provider-presets")) return json(providerPresets);
         if (delaySettingsRead)
           return new Promise<Response>((resolve) => {
             pendingRead = resolve;
@@ -288,6 +290,33 @@ it("locks new edits until the saved revision is read back and then saves against
   await act(() => pendingSave!(json({ revision: 9 })));
 });
 
+it.each(["provider", "primary"] as const)(
+  "explains an unavailable %s before model discovery while retaining definition edits",
+  async (blocked) => {
+    const reason = `${blocked} blocked by the project's Network access policy.`;
+    settings.connection_availability = {
+      providers: { company: { enabled: blocked !== "provider", reason } },
+      models: {},
+      mcp: {},
+      search: {},
+      roles: { primary: { enabled: blocked !== "primary", reason } },
+    };
+    await render(true, "admin", "models");
+    await act(() => button("Edit careful").click());
+    expect(button("Load models").disabled).toBe(true);
+    expect(container.textContent).toContain(reason);
+    expect(pendingCatalog).toBeNull();
+    expect(writes).toHaveLength(0);
+    await input("Model identifier", "configured-model-6.1");
+    await apply();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]!.body).toMatchObject({
+      models: { profiles: { careful: { model: "configured-model-6.1" } } },
+    });
+    await act(() => pendingSave!(json({ revision: 8 })));
+  },
+);
+
 it("locks conflicting model mutations while discovery is pending and retains the draft across sections", async () => {
   await render(true, "admin", "models");
   await act(() => button("Edit careful").click());
@@ -453,6 +482,46 @@ it("saves a new connection and reconciles its revision before opening credential
   expect(JSON.stringify(writes[0]!.body)).not.toContain("secret");
 });
 
+it("keeps global catalog presets available independently of a project's origin policy", async () => {
+  providerPresets = {
+    presets: [
+      {
+        id: "openrouter",
+        label: "OpenRouter",
+        protocol: "chat_completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        credentialEnv: "OPENROUTER_API_KEY",
+      },
+    ],
+    availability: {
+      openrouter: {
+        status: "available",
+        reason: "Available catalog definition.",
+      },
+    },
+  };
+  await render(true, "admin", "providers", {
+    instanceScope: true,
+    editorLocation: { action: "new" },
+  });
+  await act(() => button("Provider").click());
+  const openRouter = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+  ].find((option) => option.textContent?.trim() === "OpenRouter");
+  expect(openRouter).toBeDefined();
+  await act(() => openRouter!.click());
+  expect(field("Endpoint URL")?.value).toBe("https://openrouter.ai/api/v1");
+  expect(button("Authentication").textContent).toContain(
+    "Personal account (each user)",
+  );
+  expect(button("Add provider").disabled).toBe(false);
+  expect(container.textContent).toContain("Available catalog definition.");
+  expect(container.textContent).not.toContain(
+    "At least one project's operator network policy does not permit this endpoint.",
+  );
+  expect(writes).toEqual([]);
+});
+
 it("opens a provider form from its complete location and returns only after revision readback", async () => {
   const onCloseEditor = vi.fn(),
     onDirtyChange = vi.fn();
@@ -551,6 +620,177 @@ it("rejects non-positive model limits even when form submission is programmatic"
   await apply();
   expect(writes).toEqual([]);
   expect(container.textContent).toContain("positive whole numbers");
+});
+
+it("rejects dotted model Profile IDs before writing while retaining the provider model identifier", async () => {
+  await render(true, "admin", "models", {
+    editorLocation: { action: "new" },
+  });
+  await input("Display label", "Reasoner");
+  await input("Profile ID", "gpt-6.1-sol");
+  await input("Model identifier", "vendor/gpt-6.1-sol");
+  await apply();
+  expect(writes).toEqual([]);
+  expect(container.textContent).toContain(
+    "Profile ID of 1–128 letters, digits, hyphens, or underscores",
+  );
+  expect(container.textContent).toContain(
+    "Dots and slashes are allowed in Model identifier.",
+  );
+  expect(field("Model identifier")?.value).toBe("vendor/gpt-6.1-sol");
+});
+
+it.each([
+  { model: "gpt-6.1-sol", profile: "gpt-6-1-sol" },
+  { model: "vendor/gpt-6.1-sol", profile: "vendor-gpt-6-1-sol" },
+])(
+  "creates a cloud-safe catalog profile for $model without altering its model identifier",
+  async ({ model, profile }) => {
+    await render(true, "admin", "models", {
+      editorLocation: { action: "new" },
+    });
+    await act(() => button("Load models").click());
+    await act(() =>
+      pendingCatalog!(
+        json({
+          models: [
+            {
+              id: model,
+              display_name: "Catalog reasoner",
+              context_window_tokens: 128000,
+              max_output_tokens: 16000,
+            },
+          ],
+        }),
+      ),
+    );
+    await act(() =>
+      container
+        .querySelector<HTMLButtonElement>(".provider-model-card")!
+        .click(),
+    );
+    expect(field("Profile ID")?.value).toBe(profile);
+    expect(field("Model identifier")?.value).toBe(model);
+    await apply();
+    const updates = writes.filter((write) => write.method === "PUT");
+    expect(updates).toHaveLength(1);
+    expect(updates[0]!.body).toMatchObject({
+      models: {
+        profiles: {
+          [profile]: { providerProfile: "company", model },
+        },
+      },
+    });
+    await act(() => pendingSave!(json({ revision: 8 })));
+  },
+);
+
+it("rejects maximum output equal to the model's context window before writing", async () => {
+  await render(true, "admin", "models", {
+    editorLocation: { action: "edit", id: "careful" },
+  });
+  await input("Context window (tokens)", "32768");
+  await input("Maximum output (tokens)", "32768");
+  await apply();
+  expect(writes).toEqual([]);
+  expect(container.textContent).toContain(
+    "Maximum output must be smaller than the context window.",
+  );
+});
+
+it.each([
+  { context: 1024, output: 512, maximum: 511, reserve: "512" },
+  { context: 32768, output: 29491, maximum: 29490, reserve: "3,277" },
+])(
+  "requires input space beyond the safety reserve for a $context token context",
+  async ({ context, output, maximum, reserve }) => {
+    await render(true, "admin", "models", {
+      editorLocation: { action: "edit", id: "careful" },
+    });
+    await input("Context window (tokens)", String(context));
+    await input("Maximum output (tokens)", String(output));
+    await apply();
+    expect(writes).toEqual([]);
+    expect(container.textContent).toContain(`${reserve} token safety reserve`);
+    await input("Maximum output (tokens)", String(maximum));
+    await apply();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]!.body).toMatchObject({
+      models: {
+        profiles: {
+          careful: { contextWindowTokens: context, maxOutputTokens: maximum },
+        },
+      },
+    });
+    await act(() => pendingSave!(json({ revision: 8 })));
+  },
+);
+
+it("rejects a context below the server minimum during programmatic submission", async () => {
+  await render(true, "admin", "models", {
+    editorLocation: { action: "edit", id: "careful" },
+  });
+  await input("Context window (tokens)", "1023");
+  await input("Maximum output (tokens)", "128");
+  await apply();
+  expect(writes).toEqual([]);
+  expect(container.textContent).toContain(
+    "Context window must be at least 1,024 tokens.",
+  );
+});
+
+it.each([
+  { name: "more than 96 UTF-8 bytes", label: "é".repeat(49) },
+  { name: "a control character", label: "Reasoner\u0007label" },
+])(
+  "rejects a model label containing $name before writing",
+  async ({ label }) => {
+    await render(true, "admin", "models", {
+      editorLocation: { action: "edit", id: "careful" },
+    });
+    await input("Display label", label);
+    await apply();
+    expect(writes).toEqual([]);
+    expect(container.textContent).toContain(
+      "Display label must contain 1–96 UTF-8 bytes and no control characters.",
+    );
+  },
+);
+
+it.each([
+  { name: "more than 1,024 UTF-8 bytes", model: "é".repeat(513) },
+  { name: "a control character", model: "vendor/model\u0085suffix" },
+])(
+  "rejects a model identifier containing $name before writing",
+  async ({ model }) => {
+    await render(true, "admin", "models", {
+      editorLocation: { action: "edit", id: "careful" },
+    });
+    await input("Model identifier", model);
+    await apply();
+    expect(writes).toEqual([]);
+    expect(container.textContent).toContain(
+      "Model identifier must contain 1–1,024 UTF-8 bytes and no control characters.",
+    );
+  },
+);
+
+it("accepts model text at the UTF-8 limits while preserving model identifier punctuation", async () => {
+  await render(true, "admin", "models", {
+    editorLocation: { action: "edit", id: "careful" },
+  });
+  const label = "é".repeat(48);
+  const model = "vendor/gpt-6.1-" + "m".repeat(1009);
+  expect(new TextEncoder().encode(model)).toHaveLength(1024);
+  await input("Display label", label);
+  await input("Model identifier", model);
+  await apply();
+  expect(writes).toHaveLength(1);
+  expect(writes[0]!.body).toMatchObject({
+    labels: { models: { careful: label } },
+    models: { profiles: { careful: { model } } },
+  });
+  await act(() => pendingSave!(json({ revision: 8 })));
 });
 
 it("reconstructs direct search and variable editors with inherited scope metadata", async () => {
@@ -689,12 +929,12 @@ it("retains a dirty routed search form when its guarded Cancel navigation is rej
     onDirtyChange,
   });
   expect(onDirtyChange).toHaveBeenLastCalledWith(false);
-  await input("Endpoint URL", "https://search.example/new-search");
+  await input("Endpoint URL", "https://search.example/new/search");
   expect(onDirtyChange).toHaveBeenLastCalledWith(true);
   await act(() => button("Cancel").click());
   expect(onCloseEditor).toHaveBeenCalledOnce();
   expect(field("Endpoint URL")?.value).toBe(
-    "https://search.example/new-search",
+    "https://search.example/new/search",
   );
   expect(onDirtyChange).toHaveBeenLastCalledWith(true);
   expect(writes).toEqual([]);

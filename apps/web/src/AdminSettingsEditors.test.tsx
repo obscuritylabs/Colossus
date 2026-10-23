@@ -111,12 +111,13 @@ afterEach(async () => {
 async function renderAdmin(
   editorLocation?: SettingsEditorLocation,
   view: "users" | "settings" = "users",
+  configuration: AuthConfig = authConfig,
 ) {
   await act(() =>
     root.render(
       <NavigationProvider>
         <Administration
-          authConfig={authConfig}
+          authConfig={configuration}
           onRefresh={onSaved}
           onSettings={onSaved}
           view={view}
@@ -282,6 +283,112 @@ it("validates a new local user's password even on a direct submit", async () => 
   );
   expect(writes).toEqual([]);
 });
+it.each([
+  ["Display name", "é".repeat(129), "display name"],
+  ["Display name", "Invalid\u0000name", "display name"],
+  ["Email · optional", "x".repeat(309) + "@example.test", "email address"],
+  ["Local username", "x", "local username"],
+  ["Local username", "has space", "local username"],
+  ["Local password", "🙂".repeat(8), "15 characters"],
+  ["Local password", "界".repeat(342), "1,024 UTF-8 bytes"],
+])("explains invalid user %s before a write", async (label, value, message) => {
+  await renderAdmin({ action: "new" });
+  await change("Display name", "New operator");
+  await change("Local username", "new-operator");
+  await change("Local password", "Synthetic-only-password");
+  await change(label, value);
+  await submit("Create user");
+  expect(writes).toEqual([]);
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    message,
+  );
+});
+it.each(["LOCAL\u0000MARKING", "x".repeat(161)])(
+  "explains invalid classification markings before publishing",
+  async (value) => {
+    await renderAdmin(undefined, "settings");
+    await change("Classification text", value);
+    await submit();
+    expect(writes).toEqual([]);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "160 classification characters without control characters",
+    );
+  },
+);
+
+it.each(["local", "oidc", "both"] as const)(
+  "accepts bounded user metadata with %s login identities and preserves exact OIDC subjects",
+  async (kind) => {
+    const configuration: AuthConfig = {
+      local_enabled: kind !== "oidc",
+      oidc:
+        kind !== "local"
+          ? { label: "Organization", login_url: "/api/auth/oidc/login" }
+          : null,
+    };
+    const subject = " " + "é".repeat(127) + " ";
+    const name = "n".repeat(256);
+    await renderAdmin({ action: "new" }, "users", configuration);
+    expect(field("Display name").maxLength).toBe(256);
+    await change("Display name", name);
+    if (kind !== "oidc") {
+      await change("Local username", "new-operator");
+      await change("Local password", "Synthetic-only-password");
+    }
+    if (kind !== "local") await change("OIDC subject", subject);
+    await submit("Create user");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]!.body).toMatchObject({ display_name: name });
+    if (kind === "oidc") {
+      expect(writes[0]!.body).not.toHaveProperty("username");
+      expect(writes[0]!.body).not.toHaveProperty("password");
+    } else
+      expect(writes[0]!.body).toMatchObject({
+        username: "new-operator",
+        password: "Synthetic-only-password",
+      });
+    if (kind === "local")
+      expect(writes[0]!.body).not.toHaveProperty("oidc_subject");
+    else expect(writes[0]!.body.oidc_subject).toBe(subject);
+    await act(() => writes[0]!.resolve(json({ user })));
+  },
+);
+
+it.each(["é".repeat(129), "invalid\u0000subject", "invalid\u0085subject"])(
+  "explains invalid OIDC subjects before a write",
+  async (subject) => {
+    await renderAdmin({ action: "new" }, "users", {
+      local_enabled: false,
+      oidc: { label: "Organization", login_url: "/api/auth/oidc/login" },
+    });
+    await change("Display name", "OIDC operator");
+    await change("OIDC subject", subject);
+    await submit("Create user");
+    expect(writes).toEqual([]);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "exact OIDC subject of 1–256 UTF-8 bytes without control characters",
+    );
+  },
+);
+
+it("accepts 160 Unicode classification characters without a UTF-16 truncation cap", async () => {
+  await renderAdmin(undefined, "settings");
+  const text = "🙂".repeat(160);
+  expect(field("Classification text").maxLength).toBe(320);
+  await change("Classification text", text);
+  await submit();
+  expect(writes).toHaveLength(1);
+  expect(writes[0]!.body.classification).toMatchObject({ text });
+  await act(() =>
+    writes[0]!.resolve(
+      json({
+        ...settings,
+        classification: { ...settings.classification, text },
+      }),
+    ),
+  );
+});
+
 it("loads a linked announcement independently of the first inventory page", async () => {
   await renderAnnouncement();
   expect(gets).toContain(`/api/admin/announcements/${announcement.id}`);

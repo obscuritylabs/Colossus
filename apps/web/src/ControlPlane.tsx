@@ -48,6 +48,7 @@ import { DocumentationLink } from "./DocumentationLink";
 import { ChatHistorySidebar } from "./ChatHistorySidebar";
 import { WebSettings } from "./WebSettings";
 import { useResource } from "./resources";
+import { ToastRegion } from "@colossus/ui/components/ToastRegion";
 import { useInstanceAnnouncements } from "./InstanceAnnouncements";
 import { controlNavigation } from "./control-navigation";
 const ThreadDetail = lazy(() =>
@@ -132,9 +133,14 @@ export function AuthenticatedApp({
           : "/settings";
   const settingsScope = `${me.user.id}:${settingsBase}`;
   const [savedSettingsNotice, setSavedSettingsNotice] = useState<{
+    id: number;
     scope: string;
     message: string;
   } | null>(null);
+  const nextSettingsNotice = useRef(0);
+  const dismissSettingsNotice = useCallback((id: number) => {
+    setSavedSettingsNotice((notice) => (notice?.id === id ? null : notice));
+  }, []);
   useEffect(() => setSavedSettingsNotice(null), [settingsScope]);
   const settingsEditorNavigation = {
     editorLocation:
@@ -913,11 +919,23 @@ export function AuthenticatedApp({
             </button>
           </div>
         ) : null}
-        {savedSettingsNotice?.scope === settingsScope &&
-        (surface === "settings" || surface === "admin") ? (
-          <p role="status" className="sync-notice">
-            {savedSettingsNotice.message}
-          </p>
+        {surface === "settings" || surface === "admin" ? (
+          <ToastRegion
+            placement="bottom"
+            label="Settings notifications"
+            toasts={
+              savedSettingsNotice?.scope === settingsScope
+                ? [
+                    {
+                      id: savedSettingsNotice.id,
+                      message: savedSettingsNotice.message,
+                      tone: "success",
+                    },
+                  ]
+                : []
+            }
+            onDismiss={dismissSettingsNotice}
+          />
         ) : null}
         <Suspense
           key={me.user.id}
@@ -1118,12 +1136,15 @@ export function AuthenticatedApp({
               onSaved={() => {
                 if (settingsEditorNavigation.editorLocation)
                   setSavedSettingsNotice({
+                    id: ++nextSettingsNotice.current,
                     scope: settingsScope,
                     message:
                       route.kind === "project-settings"
                         ? route.section === "credentials"
                           ? "Project credential saved."
-                          : "Project configuration saved."
+                          : route.section === "network"
+                            ? "Connection network policy saved."
+                            : "Project configuration saved."
                         : route.kind === "global" &&
                             route.section === "credentials"
                           ? "Credential changes saved."
@@ -1132,6 +1153,7 @@ export function AuthenticatedApp({
                             ? "Your project variables were saved."
                             : "Settings saved.",
                   });
+                else setSavedSettingsNotice(null);
                 threadResource.refresh();
                 setChatRefresh((value) => value + 1);
               }}
@@ -1154,16 +1176,19 @@ export function AuthenticatedApp({
                 if (
                   route.kind === "global" &&
                   route.editor &&
-                  route.view !== "credentials" &&
                   (connectionSettingsSections as readonly string[]).includes(
                     route.view ?? "",
                   )
                 )
                   setSavedSettingsNotice({
+                    id: ++nextSettingsNotice.current,
                     scope: settingsScope,
                     message:
-                      "Control Plane defaults published. Projects inherit these definitions; credentials remain explicitly assigned.",
+                      route.view === "credentials"
+                        ? "Credential changes saved."
+                        : "Control Plane defaults published. Projects inherit these definitions; credentials remain explicitly assigned.",
                   });
+                else setSavedSettingsNotice(null);
               }}
               onSettings={onSettings}
               currentUserId={me.user.id}

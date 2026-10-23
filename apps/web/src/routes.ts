@@ -20,12 +20,29 @@ export const connectionSettingsSections = [
   "mcp",
   "routing",
   "search",
+  "network",
   "telemetry",
   "credentials",
   "variables",
 ] as const;
 export type ConnectionSettingsSection =
   (typeof connectionSettingsSections)[number];
+export const connectionSettingsLabels: Record<
+  ConnectionSettingsSection,
+  string
+> = {
+  providers: "Providers",
+  models: "Models",
+  mcp: "MCP servers",
+  routing: "Model routing",
+  search: "Search",
+  network: "Network access",
+  telemetry: "Telemetry",
+  credentials: "Secrets",
+  variables: "Variables",
+};
+export const globalConnectionSettingsSections =
+  connectionSettingsSections.filter((section) => section !== "network");
 export type PersonalSettingsSection =
   "appearance" | "account" | "credentials" | "connections" | "variables";
 export type AdminUserView = "overview" | "projects" | "workspaces" | "chats";
@@ -35,7 +52,7 @@ export type AdminView =
   | "settings"
   | "announcements"
   | "appearance"
-  | ConnectionSettingsSection;
+  | Exclude<ConnectionSettingsSection, "network">;
 export type Route =
   | {
       kind: "global";
@@ -95,7 +112,7 @@ const adminViews = new Set([
   "settings",
   "announcements",
   "appearance",
-  ...connectionSettingsSections,
+  ...globalConnectionSettingsSections,
 ]);
 const adminUserViews = new Set(["overview", "projects", "workspaces", "chats"]);
 const personalSettingsSections = new Set([
@@ -225,7 +242,7 @@ export function parseRoute(href: string, origin: string): Route {
     const editorTail = first === "projects" ? parts.slice(4) : parts.slice(2);
     const editable =
       first === "admin"
-        ? ["users", "announcements", ...connectionSettingsSections]
+        ? ["users", "announcements", ...globalConnectionSettingsSections]
         : first === "settings"
           ? ["credentials", "variables"]
           : connectionSettingsSections;
@@ -234,7 +251,9 @@ export function parseRoute(href: string, origin: string): Route {
       (editable as readonly string[]).includes(editorSection) &&
       editorTail.length
     ) {
-      const singleton = ["routing", "telemetry"].includes(editorSection);
+      const singleton = ["routing", "telemetry", "network"].includes(
+        editorSection,
+      );
       const editor: SettingsEditorLocation | null =
         editorSection === "search" &&
         editorTail.length === 1 &&

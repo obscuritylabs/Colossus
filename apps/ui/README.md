@@ -112,6 +112,13 @@ project definitions, private user connections and encrypted SQL persistence.
 Sharing presentation does not copy Desktop's local configuration into a cloud project.
 `CredentialForm` clears its write-only input on submission and scope changes; the host
 owns the reviewed binding and encrypted persistence.
+Its optional `submitDisabled` guard preserves an entered token while the host corrects
+other form fields; `disabled` still clears the token when authority becomes unavailable.
+
+`ToastRegion` shares Desktop and Web's accessible, dismissible notifications. Hosts own
+the queue and clear it when the authenticated settings scope changes. Successful notices
+expire after six seconds; errors remain until dismissed. `CatalogInventory` can place
+its add action and optional compact actions beside search without changing other inventories.
 
 `ModelPicker` from `@colossus/ui/model-picker` combines a searchable model list and
 discrete reasoning slider in one shadcn popover. Hosts supply configured profiles,

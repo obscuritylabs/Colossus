@@ -50,3 +50,29 @@ fieldset.chat-settings-fields {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+.mcp-settings-editor.shared-provider-settings-editor {
+  padding: 0;
+}
+.mcp-settings-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.mcp-settings-editor > [role="alert"] {
+  margin: var(--settings-section-gap);
+}
+.mcp-pattern-help {
+  margin-block-start: 8px;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+.mcp-pattern-help summary {
+  cursor: pointer;
+}
+.mcp-pattern-help p {
+  margin-block: 8px 0;
+  max-width: var(--settings-content-max);
+}

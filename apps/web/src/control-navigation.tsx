@@ -46,6 +46,7 @@ export const configurationSections: ReadonlyArray<{
     icon: <IconAdjustments size={19} />,
   },
   { id: "search", label: "Search", icon: <IconSearch size={19} /> },
+  { id: "network", label: "Network access", icon: <IconShield size={19} /> },
   {
     id: "telemetry",
     label: "Telemetry",
@@ -184,8 +185,10 @@ export function controlNavigation(me: Me, route: Route, project: string) {
     const sections: ControlPlaneNavigation[] = [
       admin("users", "Users", <IconUsers size={19} />),
       admin("projects", "Projects", <IconFolder size={19} />),
-      ...configurationSections.map((section) =>
-        admin(section.id, section.label, section.icon),
+      ...configurationSections.flatMap((section) =>
+        section.id === "network"
+          ? []
+          : [admin(section.id, section.label, section.icon)],
       ),
       admin("announcements", "Announcements", <IconBell size={19} />),
       admin("appearance", "Appearance", <IconPalette size={19} />),

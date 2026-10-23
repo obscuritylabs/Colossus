@@ -61,9 +61,44 @@ export function UserEditor({
     if (pending.current || needsReload) return;
     if (
       !reset &&
-      (!name.trim() || new TextEncoder().encode(name.trim()).length > 256)
+      (!name.trim() ||
+        new TextEncoder().encode(name.trim()).length > 256 ||
+        /[\u0000-\u001f\u007f-\u009f]/u.test(name.trim()))
     ) {
-      setError("Enter a display name of at most 256 UTF-8 bytes.");
+      setError(
+        "Enter a display name of at most 256 UTF-8 bytes without control characters.",
+      );
+      return;
+    }
+    if (
+      !user &&
+      (new TextEncoder().encode(email.trim()).length > 320 ||
+        /[\u0000-\u001f\u007f-\u009f]/u.test(email.trim()))
+    ) {
+      setError(
+        "Use an email address of at most 320 UTF-8 bytes without control characters.",
+      );
+      return;
+    }
+    if (
+      !user &&
+      username.trim() &&
+      !/^[A-Za-z0-9_.@-]{3,128}$/u.test(username.trim())
+    ) {
+      setError(
+        "Use a local username of 3–128 letters, digits, dots, underscores, hyphens, or @ characters.",
+      );
+      return;
+    }
+    if (
+      !user &&
+      subject &&
+      (new TextEncoder().encode(subject).length > 256 ||
+        /[\u0000-\u001f\u007f-\u009f]/u.test(subject))
+    ) {
+      setError(
+        "Use an exact OIDC subject of 1–256 UTF-8 bytes without control characters.",
+      );
       return;
     }
     if (
@@ -76,13 +111,19 @@ export function UserEditor({
     if (
       !user &&
       !(authConfig?.local_enabled && username.trim()) &&
-      !(authConfig?.oidc && subject.trim())
+      !(authConfig?.oidc && subject)
     ) {
       setError("Provide at least one enabled login identity.");
       return;
     }
-    if ((reset || (!user && username.trim())) && password.length < 15) {
-      setError("Use at least 15 characters for the password.");
+    if (
+      (reset || (!user && username.trim())) &&
+      ([...password].length < 15 ||
+        new TextEncoder().encode(password).length > 1024)
+    ) {
+      setError(
+        "Use at least 15 characters and at most 1,024 UTF-8 bytes for the password.",
+      );
       return;
     }
     const submittedPassword = password;
@@ -115,7 +156,7 @@ export function UserEditor({
                 ...(username.trim()
                   ? { username: username.trim(), password: submittedPassword }
                   : {}),
-                ...(subject.trim() ? { oidc_subject: subject.trim() } : {}),
+                ...(subject ? { oidc_subject: subject } : {}),
               },
           undefined,
           user && !reset ? "PATCH" : undefined,
@@ -214,7 +255,7 @@ export function UserEditor({
               <span>Display name</span>
               <TextInput
                 required
-                maxLength={200}
+                maxLength={256}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
@@ -258,6 +299,7 @@ export function UserEditor({
                     <span>OIDC subject</span>
                     <TextInput
                       value={subject}
+                      maxLength={256}
                       onChange={(e) => setSubject(e.target.value)}
                       autoComplete="off"
                     />
@@ -305,7 +347,7 @@ export function UserEditor({
             busy ||
             needsReload ||
             (!reset && !name.trim()) ||
-            (!user && !username.trim() && !subject.trim())
+            (!user && !username.trim() && !subject)
           }
         >
           {busy ? "Saving…" : reset ? "Reset password" : "Save user"}
