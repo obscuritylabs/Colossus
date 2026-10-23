@@ -267,6 +267,33 @@ fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
 }
 
 #[test]
+fn interactive_shell_preserves_exact_source_and_session_without_accepting_authority_fields() {
+    let command = "source ./env.sh && printf '%s\\n' 'two  spaces'\nprintf done";
+    let operation = WorkerOperation::RunInteractive {
+        model_options: None,
+        request: InteractiveWorkerRequest::ShellRun {
+            session_id: "session-1".into(),
+            command: command.into(),
+        },
+        approval_mode: Some(WorkerApprovalMode::Ask),
+        sandbox_boundary_acknowledgement: None,
+    };
+    assert_eq!(operation_name(&operation), "run_interactive.shell_run");
+    let mut encoded = serde_json::to_value(operation).expect("encode shell request");
+    assert_eq!(encoded["request"]["kind"], "shell_run");
+    assert!(matches!(
+        serde_json::from_value::<WorkerOperation>(encoded.clone()).expect("decode shell request"),
+        WorkerOperation::RunInteractive {
+            request: InteractiveWorkerRequest::ShellRun { session_id, command: source },
+            approval_mode: Some(WorkerApprovalMode::Ask),
+            ..
+        } if session_id == "session-1" && source == command
+    ));
+    encoded["request"]["approved"] = json!(true);
+    assert!(serde_json::from_value::<WorkerOperation>(encoded).is_err());
+}
+
+#[test]
 fn interactive_presentation_requests_bind_the_acknowledged_session() {
     let history = WorkerOperation::RunInteractive {
         model_options: None,
@@ -1872,7 +1899,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 24);
+    assert_eq!(PROTOCOL_VERSION, 25);
     let key = [13_u8; 32];
     let mut frame =
         signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);

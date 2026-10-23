@@ -270,6 +270,10 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
             ),
             PresentationBlock::KeyValue(vec![
                 (
+                    "Shell".into(),
+                    "!command runs in the workspace without a model turn; !source script && command shares shell state within one invocation".into(),
+                ),
+                (
                     "Send".into(),
                     "Enter; Ctrl/Alt+Enter or Ctrl+D in /multiline on".into(),
                 ),
@@ -280,6 +284,10 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                 (
                     "Scroll".into(),
                     "Mouse wheel or PageUp/PageDown scroll the full-screen transcript; --no-alt-screen uses native scrollback".into(),
+                ),
+                (
+                    "Agents".into(),
+                    "The right sidebar shows open tasks, goals, retained memory count, configured MCP servers and subagents. A green MCP bubble means successful use in this session. Wheel over it or Alt+PageUp/PageDown to scroll; /tasks, /goals and /agents show full lists.".into(),
                 ),
                 (
                     "Complete".into(),
@@ -293,6 +301,10 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                     "Cancel".into(),
                     "Ctrl-C clears a draft; when empty, it cancels an active run or exits"
                         .into(),
+                ),
+                (
+                    "Select text".into(),
+                    "Drag the mouse to highlight; Ctrl+C copies using the terminal clipboard; Esc clears. F6 freezes the view for native terminal selection; inline mode uses native selection.".into(),
                 ),
             ]),
             PresentationBlock::Markdown("## Command families".into()),
@@ -466,6 +478,7 @@ pub(super) fn preferences_document(preferences: &TerminalPreferences) -> Present
 
 pub(super) fn runtime_command_name(command: &RuntimeCommand) -> &str {
     match command {
+        RuntimeCommand::Shell { .. } => "shell",
         RuntimeCommand::Known { name, .. } => name,
         RuntimeCommand::Permissions(_) => "permissions",
         RuntimeCommand::Plan(_) => "plan",

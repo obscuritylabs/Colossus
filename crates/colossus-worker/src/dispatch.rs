@@ -474,6 +474,10 @@ async fn dispatch_general(
         WorkerOperation::AgentRequeue { job_id } => Ok(serde_json::to_value(
             runtime.requeue_subagent(&job_id).await?,
         )?),
+        WorkerOperation::MemoryCount => {
+            let (count, capped) = runtime.memory_record_count()?;
+            Ok(json!({"count": count, "capped": capped}))
+        }
         WorkerOperation::MemoryList { status, limit } => Ok(serde_json::to_value(
             runtime.list_memories(status, limit.clamp(1, 1_000)).await?,
         )?),

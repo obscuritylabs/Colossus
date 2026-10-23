@@ -25,6 +25,14 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 
+#[path = "pty_history/agents.rs"]
+mod agents;
+#[path = "pty_history/selection.rs"]
+#[cfg(unix)] // This fixture injects SGR mouse input; Windows uses console input records.
+mod selection;
+#[path = "pty_history/status.rs"]
+mod status;
+
 // ConPTY decodes this Win32-input-mode record into a real Ctrl+J key event.
 // A bare LF is translated into Enter before crossterm's Windows backend reads it.
 #[cfg(windows)]
@@ -72,6 +80,66 @@ impl colossus_tui::LocalDictation for FixtureDictation {
 
 #[async_trait]
 impl InteractiveHost for FixtureHost {
+    async fn sidebar_status(
+        &self,
+        _: &str,
+    ) -> Result<Option<colossus_tui::SidebarSnapshot>, String> {
+        use colossus_contracts::{GoalStatus, TaskStatus};
+        if std::env::var_os("COLOSSUS_TUI_STATUS_FIXTURE").is_none() {
+            return Ok(None);
+        }
+        Ok(Some(colossus_tui::SidebarSnapshot {
+            tasks: vec![("Review runtime".into(), TaskStatus::InProgress)],
+            open_task_count: 1,
+            goals: vec![("Ship release".into(), GoalStatus::Active)],
+            goal_count: 1,
+            memory_count: Some((24, false)),
+            plan_count: 2,
+            mcp_servers: vec![("atlas".into(), true), ("offline".into(), false)],
+        }))
+    }
+
+    async fn subagents(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<colossus_contracts::SubagentJob>, String> {
+        use colossus_contracts::{SubagentJob, SubagentStatus};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        if std::env::var_os("COLOSSUS_TUI_AGENTS_FIXTURE").is_none() {
+            return Ok(Vec::new());
+        }
+        static READS: AtomicUsize = AtomicUsize::new(0);
+        let complete = READS.fetch_add(1, Ordering::Relaxed) > 1;
+        Ok([
+            ("review", SubagentStatus::Running),
+            ("checks", SubagentStatus::Queued),
+        ]
+        .into_iter()
+        .map(|(id, status)| SubagentJob {
+            id: id.into(),
+            session_id: session_id.into(),
+            parent_run_id: "parent-run".into(),
+            parent_call_id: format!("call-{id}"),
+            task: id.into(),
+            role: "subagent_default".into(),
+            allowed_tools: None,
+            status: if complete {
+                SubagentStatus::Completed
+            } else {
+                status
+            },
+            child_session_id: format!("child-{id}"),
+            child_run_id: None,
+            final_output: String::new(),
+            error: String::new(),
+            created_at: "2026-10-23T18:00:00Z".into(),
+            updated_at: "2026-10-23T18:00:01Z".into(),
+            started_at: None,
+            completed_at: None,
+        })
+        .collect())
+    }
+
     async fn bootstrap(&self, _request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
         let inline = std::env::var("COLOSSUS_TUI_MODE").as_deref() == Ok("inline");
         let empty = std::env::var_os("COLOSSUS_TUI_EMPTY").is_some();
@@ -179,6 +247,13 @@ impl InteractiveHost for FixtureHost {
         events: mpsc::Sender<HostEvent>,
         _control: RunControl,
     ) -> Result<HostCommandResult, String> {
+        if let RuntimeCommand::Shell { command } = &command {
+            return Ok(HostCommandResult::document(
+                PresentationDocument::from_block(PresentationBlock::Verbatim(format!(
+                    "Shell fixture received: {command}"
+                ))),
+            ));
+        }
         if matches!(
             command,
             RuntimeCommand::Known { ref name, .. } if name == "resume"
@@ -289,10 +364,20 @@ impl InteractiveHost for FixtureHost {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
+        let status_fixture = std::env::var_os("COLOSSUS_TUI_STATUS_FIXTURE").is_some();
         let call = ToolCall {
             call_id: "call-scrollback".into(),
-            name: "filesystem.search".into(),
-            arguments: serde_json::json!({"query": "Runtime"}),
+            name: if status_fixture {
+                "mcp.call"
+            } else {
+                "filesystem.search"
+            }
+            .into(),
+            arguments: if status_fixture {
+                serde_json::json!({"server":"atlas", "tool":"search", "arguments":{}})
+            } else {
+                serde_json::json!({"query": "Runtime"})
+            },
         };
         events
             .send(HostEvent::Run(RunEventEnvelope {

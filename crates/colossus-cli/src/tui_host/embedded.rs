@@ -1155,6 +1155,37 @@ impl EmbeddedInteractiveHost {
 
 #[async_trait]
 impl InteractiveHost for EmbeddedInteractiveHost {
+    async fn sidebar_status(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<colossus_tui::SidebarSnapshot>, String> {
+        let work = self
+            .runtime
+            .work_state(session_id)
+            .map_err(|error| error.to_string())?;
+        let servers = self
+            .runtime
+            .mcp_servers()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|server| (server.name, server.available))
+            .collect();
+        Ok(Some(super::sidebar::sidebar_snapshot(
+            work,
+            self.runtime.memory_record_count().ok(),
+            servers,
+        )))
+    }
+
+    async fn subagents(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<colossus_contracts::SubagentJob>, String> {
+        self.runtime
+            .list_subagents(Some(session_id), None, 100)
+            .map_err(|error| error.to_string())
+    }
+
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
         let fresh_session = request.session_id.is_none() && !request.resume_latest;
         let session = if let Some(session_id) = request.session_id {
@@ -1259,6 +1290,12 @@ impl InteractiveHost for EmbeddedInteractiveHost {
     ) -> Result<HostCommandResult, String> {
         self.router.install(Some(events.clone()));
         let result = match command {
+            RuntimeCommand::Shell { command } => self
+                .runtime
+                .run_user_shell(session_id, &command, &control)
+                .await
+                .map(|result| HostCommandResult::document(super::shell::shell_document(&result)))
+                .map_err(|error| error.to_string()),
             RuntimeCommand::Known { name, arguments } => {
                 self.runtime
                     .with_model_selection(

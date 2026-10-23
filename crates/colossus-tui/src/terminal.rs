@@ -1,5 +1,24 @@
 use super::*;
 
+fn render_terminal_frame(
+    frame: &mut Frame<'_>,
+    state: &mut TuiState,
+    transcript_start: usize,
+    mode: ScreenMode,
+    monochrome: bool,
+) {
+    render(frame, state, transcript_start, mode);
+    if monochrome {
+        // Crossterm's disabled-color SetColors emits an empty SGR sequence,
+        // which also resets reverse/bold attributes. Avoid color commands so
+        // text selection remains visible while honoring NO_COLOR.
+        for cell in &mut frame.buffer_mut().content {
+            cell.fg = Color::Reset;
+            cell.bg = Color::Reset;
+        }
+    }
+}
+
 pub(super) struct OwnedTerminal {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     mode: ScreenMode,
@@ -11,6 +30,7 @@ pub(super) struct OwnedTerminal {
     has_native_history: bool,
     finished: bool,
     selection_frame_frozen: bool,
+    monochrome: bool,
     _guard: TerminalGuard,
 }
 
@@ -44,11 +64,18 @@ impl OwnedTerminal {
             has_native_history: false,
             finished: false,
             selection_frame_frozen: false,
+            monochrome: std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()),
             _guard: guard,
         })
     }
 
     pub(super) fn draw(&mut self, state: &mut TuiState) -> Result<(), io::Error> {
+        if let Some(text) = state.text_selection.take_copy() {
+            use base64::Engine as _;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+            write!(self.terminal.backend_mut(), "\x1b]52;c;{encoded}\x07")?;
+            Backend::flush(self.terminal.backend_mut())?;
+        }
         if state.selecting_text && self.selection_frame_frozen {
             return Ok(());
         }
@@ -60,8 +87,9 @@ impl OwnedTerminal {
 
     fn draw_current_frame(&mut self, state: &mut TuiState) -> Result<(), io::Error> {
         if self.mode == ScreenMode::Alternate {
-            self.terminal
-                .draw(|frame| render(frame, state, 0, ScreenMode::Alternate))?;
+            self.terminal.draw(|frame| {
+                render_terminal_frame(frame, state, 0, ScreenMode::Alternate, self.monochrome)
+            })?;
             return Ok(());
         }
 
@@ -90,8 +118,15 @@ impl OwnedTerminal {
                 .is_some_and(|area| viewport_height < area.height);
         self.resize_inline_viewport(screen_size, viewport_height, committing_after_live_shrink)?;
         self.commit_native_history(state, transcript_start)?;
-        self.terminal
-            .draw(|frame| render(frame, state, transcript_start, ScreenMode::Inline))?;
+        self.terminal.draw(|frame| {
+            render_terminal_frame(
+                frame,
+                state,
+                transcript_start,
+                ScreenMode::Inline,
+                self.monochrome,
+            )
+        })?;
         Ok(())
     }
 
@@ -132,8 +167,9 @@ impl OwnedTerminal {
             self.inline_transient_screen_size = Some(screen_size);
         }
         state.transcript_width = usize::from(screen_size.width).max(20);
-        self.terminal
-            .draw(|frame| render(frame, state, 0, ScreenMode::Alternate))?;
+        self.terminal.draw(|frame| {
+            render_terminal_frame(frame, state, 0, ScreenMode::Alternate, self.monochrome)
+        })?;
         Ok(())
     }
 

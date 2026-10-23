@@ -3,6 +3,7 @@ use super::*;
 mod command_approval;
 mod layout;
 mod model_picker;
+mod shell;
 
 #[test]
 fn lifecycle_observer_tracks_busy_decisions_and_session_changes() {

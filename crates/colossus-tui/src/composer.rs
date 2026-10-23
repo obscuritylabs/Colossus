@@ -64,6 +64,8 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
         "Ctrl+D sends"
     } else if state.is_busy() {
         "Enter queues"
+    } else if state.composer.draft.trim_start().starts_with('!') {
+        "Enter runs"
     } else {
         "Enter sends"
     };
@@ -80,6 +82,8 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
             | InteractivePromptKind::ModelSelection => "decision",
         };
         format!(" Message · paused for {decision} ")
+    } else if state.composer.draft.trim_start().starts_with('!') {
+        format!(" Shell · {action} ")
     } else {
         match state.mode {
             InteractiveMode::Execute if state.welcome_visible => {

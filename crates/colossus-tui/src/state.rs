@@ -403,6 +403,8 @@ pub struct TuiState {
     pub(super) preview_failures: BTreeMap<String, String>,
     pub(super) preview_transcript_size: Size,
     pub(super) active_calls: BTreeMap<String, colossus_contracts::ToolCall>,
+    pub(super) agents: crate::agents::AgentTree,
+    pub(super) sidebar: crate::sidebar::SidebarState,
     pub(super) queue: VecDeque<String>,
     pub(super) queue_paused: bool,
     pub(super) operation: Option<OperationKind>,
@@ -423,6 +425,7 @@ pub struct TuiState {
     pub(super) transcript_width: usize,
     /// Freeze the rendered view and release captured mouse input for terminal-native selection.
     pub(super) selecting_text: bool,
+    pub(super) text_selection: crate::selection::TextSelection,
     pub(super) loading_older: bool,
     pub(super) older_page_failed: bool,
     pub(super) native_history_pages_loaded: usize,
@@ -498,6 +501,8 @@ impl TuiState {
             preview_failures: BTreeMap::new(),
             preview_transcript_size: Size::new(0, 0),
             active_calls: BTreeMap::new(),
+            agents: crate::agents::AgentTree::default(),
+            sidebar: crate::sidebar::SidebarState::default(),
             queue: VecDeque::new(),
             queue_paused: false,
             operation: None,
@@ -518,6 +523,7 @@ impl TuiState {
             transcript_height: 1,
             transcript_width: 80,
             selecting_text: false,
+            text_selection: crate::selection::TextSelection::default(),
             loading_older: false,
             older_page_failed: false,
             native_history_pages_loaded: 0,
@@ -803,6 +809,7 @@ impl TuiState {
         if self.composer.completion_hidden
             || self.composer.cursor != self.composer.draft.len()
             || self.composer.draft.is_empty()
+            || self.composer.draft.trim_start().starts_with('!')
         {
             return None;
         }

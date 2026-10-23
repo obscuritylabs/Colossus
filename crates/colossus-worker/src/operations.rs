@@ -138,6 +138,13 @@ pub enum WorkerError {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractiveWorkerRequest {
+    /// Run shell source explicitly entered by the attached local terminal user.
+    ShellRun {
+        /// Exact durable session carrying this client's boundary acknowledgement.
+        session_id: String,
+        /// Bounded shell source; not a provider prompt or a capability grant.
+        command: String,
+    },
     /// Execute a typed plugin operation with connection-bound policy approvals.
     PluginManage {
         /// Exact operator request; no renderer field supplies approval evidence.
@@ -750,6 +757,8 @@ pub enum WorkerOperation {
         /// Exact job identifier.
         job_id: String,
     },
+    /// Read a bounded retained-memory identity count without loading payloads.
+    MemoryCount,
     /// List canonical memories.
     MemoryList {
         /// Optional status filter.

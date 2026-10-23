@@ -146,6 +146,7 @@ pub struct Runtime {
     pub(super) access: AccessResolution,
     pub(super) filesystem_executor: Arc<dyn EffectExecutor>,
     pub(super) process_executor: Arc<dyn EffectExecutor>,
+    pub(super) user_shell: crate::user_shell::UserShellExecutor,
     pub(super) process_sessions: Arc<ProcessSessions>,
     pub(super) browser: Option<Arc<crate::browser_tools::RuntimeBrowserTools>>,
     pub(super) computer: Option<Arc<crate::computer_tools::RuntimeComputerTools>>,
@@ -994,11 +995,11 @@ impl Runtime {
         let process_sessions = Arc::new(ProcessSessions::open(
             Arc::clone(&journal),
             Arc::clone(&gateway),
-            raw_process_executor,
+            Arc::clone(&raw_process_executor),
             Arc::clone(&workspace_lease),
         )?);
         let workflow_tools = Arc::new(std::sync::OnceLock::new());
-        let gateway_tool_executor: Arc<dyn ToolExecutor> = Arc::new(GatewayToolExecutor {
+        let shell_tools = Arc::new(GatewayToolExecutor {
             workflows: Some(Arc::clone(&workflow_tools)),
             gateway: Arc::clone(&gateway),
             filesystem: Arc::clone(&filesystem_executor),
@@ -1033,6 +1034,12 @@ impl Runtime {
                 .flatten()
                 .collect(),
         });
+        let user_shell = crate::user_shell::UserShellExecutor {
+            tools: Arc::clone(&shell_tools),
+            process: raw_process_executor,
+            identity: workspace_identity.clone(),
+        };
+        let gateway_tool_executor: Arc<dyn ToolExecutor> = shell_tools;
         let gateway_tool_executor: Arc<dyn ToolExecutor> = if let Some(computer) = &computer {
             Arc::new(crate::computer_tools::ComputerToolExecutor {
                 gateway: Arc::clone(&gateway),
@@ -1195,6 +1202,7 @@ impl Runtime {
             access,
             filesystem_executor,
             process_executor,
+            user_shell,
             process_sessions,
             browser,
             computer,
