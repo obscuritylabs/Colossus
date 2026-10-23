@@ -9,9 +9,11 @@ use std::{
         atomic::{AtomicU8, Ordering},
     },
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 const RETIRED: u8 = 255;
+const LEASE_READ_TIMEOUT: Duration = Duration::from_millis(100);
 
 use crate::OwnerDeath;
 
@@ -119,6 +121,10 @@ impl DeathFence {
             endpoints.push((OwnerDeath::Desktop, desktop));
         }
         for (cause, mut endpoint) in endpoints {
+            // Darwin can miss a read-side shutdown racing the reader's first
+            // recv. Retain that immediate wakeup, with a finite read interval
+            // so retirement never depends on the peer closing its live lease.
+            endpoint.set_read_timeout(Some(LEASE_READ_TIMEOUT))?;
             let reader_control = endpoint.try_clone()?;
             let wakeups = owner.wakeups.clone();
             let state = owner.state.clone();
@@ -127,8 +133,19 @@ impl DeathFence {
                 .spawn(move || {
                     let mut byte = [0];
                     loop {
+                        if state.check().is_err() {
+                            return;
+                        }
                         match endpoint.read(&mut byte) {
                             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                            Err(error)
+                                if matches!(
+                                    error.kind(),
+                                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                                ) =>
+                            {
+                                continue;
+                            }
                             _ => break,
                         }
                     }

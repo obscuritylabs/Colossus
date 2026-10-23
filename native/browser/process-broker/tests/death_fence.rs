@@ -265,6 +265,78 @@ fn orderly_retire_keeps_the_acknowledgement_channel_open() {
 }
 
 #[test]
+fn retirement_racing_reader_start_is_bounded_with_live_owner_leases() {
+    for _ in 0..64 {
+        let (mut client, mut server) = pair();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("acknowledgement deadline");
+        let (core_reader, _core_owner) = pair();
+        let (keeper_reader, _keeper_owner) = pair();
+        let (desktop_reader, _desktop_owner) = pair();
+        let mut watchers = DeathFence::start(
+            OwnerLeases {
+                core: core_reader,
+                keeper: keeper_reader,
+                desktop: Some(desktop_reader),
+            },
+            &server,
+        )
+        .expect("watchers");
+        let fence = watchers.creation_fence();
+        let (completed, completion) = std::sync::mpsc::sync_channel(1);
+        let retirement = thread::spawn(move || {
+            completed
+                .send(watchers.retire())
+                .expect("retirement result");
+        });
+        completion
+            .recv_timeout(Duration::from_secs(2))
+            .expect("retirement must not wait for live owners to close")
+            .expect("retire");
+        retirement.join().expect("retirement thread");
+        assert!(fence.check().is_err());
+        assert_eq!(fence.owner_death(), None);
+        server
+            .write_all(b"cleanup acknowledged")
+            .expect("acknowledgement after bounded retirement");
+        let mut bytes = [0; 20];
+        client.read_exact(&mut bytes).expect("read acknowledgement");
+        assert_eq!(&bytes, b"cleanup acknowledged");
+    }
+}
+
+#[test]
+fn idle_live_leases_do_not_revoke_authority_on_read_timeout() {
+    let (mut client, server) = pair();
+    client
+        .set_read_timeout(Some(Duration::from_millis(350)))
+        .expect("live lease observation deadline");
+    let (core_reader, _core_owner) = pair();
+    let (keeper_reader, _keeper_owner) = pair();
+    let mut watchers = DeathFence::start(
+        OwnerLeases {
+            core: core_reader,
+            keeper: keeper_reader,
+            desktop: None,
+        },
+        &server,
+    )
+    .expect("watchers");
+    let pending = client
+        .read(&mut [0])
+        .expect_err("idle live leases must not close the browser");
+    assert!(matches!(
+        pending.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    ));
+    let fence = watchers.creation_fence();
+    assert!(fence.check().is_ok());
+    assert_eq!(fence.owner_death(), None);
+    watchers.retire().expect("retire idle readers");
+}
+
+#[test]
 fn unexpected_lease_data_revokes_instead_of_renewing_authority() {
     let (mut client, server) = pair();
     client
