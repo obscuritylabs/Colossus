@@ -13,11 +13,45 @@ export type AgentView =
   | "plugins"
   | "library"
   | "connections";
-export type AdminView = "users" | "projects" | "settings" | "announcements";
+export const connectionSettingsSections = [
+  "providers",
+  "models",
+  "mcp",
+  "routing",
+  "search",
+  "telemetry",
+  "credentials",
+  "variables",
+] as const;
+export type ConnectionSettingsSection =
+  (typeof connectionSettingsSections)[number];
+export type PersonalSettingsSection =
+  "appearance" | "account" | "credentials" | "connections" | "variables";
+export type AdminUserView = "overview" | "projects" | "workspaces" | "chats";
+export type AdminView =
+  | "users"
+  | "projects"
+  | "settings"
+  | "announcements"
+  | "appearance"
+  | ConnectionSettingsSection;
 export type Route =
-  | { kind: "global"; surface: Surface; project?: string; view?: AdminView }
+  | {
+      kind: "global";
+      surface: Surface;
+      project?: string;
+      view?: AdminView;
+      user?: string;
+      userView?: AdminUserView;
+      section?: PersonalSettingsSection;
+    }
   | { kind: "project-create"; project?: undefined }
   | { kind: "project"; project: string; view: ProjectView }
+  | {
+      kind: "project-settings";
+      project: string;
+      section: ConnectionSettingsSection;
+    }
   | { kind: "host"; project: string; host: string }
   | { kind: "hosted-agent"; project: string; node: string }
   | {
@@ -52,7 +86,22 @@ const agentViews = new Set([
   "library",
   "connections",
 ]);
-const adminViews = new Set(["users", "projects", "settings", "announcements"]);
+const adminViews = new Set([
+  "users",
+  "projects",
+  "settings",
+  "announcements",
+  "appearance",
+  ...connectionSettingsSections,
+]);
+const adminUserViews = new Set(["overview", "projects", "workspaces", "chats"]);
+const personalSettingsSections = new Set([
+  "appearance",
+  "account",
+  "credentials",
+  "connections",
+  "variables",
+]);
 const invalid = (): Route => ({
   kind: "invalid",
   message:
@@ -82,9 +131,23 @@ export function globalHref(
       : `/${surface}${surface === "admin" && view ? `/${view}` : ""}`;
   return project ? `${base}?project=${id(project)}` : base;
 }
+export const adminUserHref = (
+  user: string,
+  view: AdminUserView = "overview",
+  project?: string,
+) =>
+  `/admin/users/${id(user)}${view === "overview" ? "" : `/${view}`}${project ? `?project=${id(project)}` : ""}`;
 export const projectHref = (project: string, view: ProjectView = "overview") =>
   `/projects/${id(project)}/${view}`;
 export const projectCreateHref = () => "/projects/new";
+export const projectSettingsHref = (
+  project: string,
+  section: ConnectionSettingsSection = "providers",
+) => `/projects/${id(project)}/settings/${section}`;
+export const personalSettingsHref = (
+  section: PersonalSettingsSection = "appearance",
+  project?: string,
+) => `/settings/${section}${project ? `?project=${id(project)}` : ""}`;
 export const hostHref = (project: string, host: string) =>
   `/projects/${id(project)}/hosts/${id(host)}`;
 export const hostedAgentHref = (project: string, node: string) =>
@@ -120,6 +183,39 @@ export function parseRoute(href: string, origin: string): Route {
       return invalid();
     const first = parts[0];
     if (
+      first === "admin" &&
+      parts[1] === "users" &&
+      (parts.length === 3 ||
+        (parts.length === 4 && adminUserViews.has(parts[3]!)))
+    ) {
+      if ([...query.keys()].some((key) => key !== "project")) return invalid();
+      const project = query.get("project");
+      if (project !== null && !validId(project)) return invalid();
+      return {
+        kind: "global",
+        surface: "admin",
+        view: "users",
+        user: parts[2]!,
+        userView: (parts[3] ?? "overview") as AdminUserView,
+        ...(project ? { project } : {}),
+      };
+    }
+    if (
+      first === "settings" &&
+      parts.length === 2 &&
+      personalSettingsSections.has(parts[1]!)
+    ) {
+      if ([...query.keys()].some((key) => key !== "project")) return invalid();
+      const project = query.get("project");
+      if (project !== null && !validId(project)) return invalid();
+      return {
+        kind: "global",
+        surface: "settings",
+        section: parts[1] as PersonalSettingsSection,
+        ...(project ? { project } : {}),
+      };
+    }
+    if (
       !parts.length ||
       (parts.length === 1 &&
         ["chat", "hosted", "fleet", "projects", "admin", "settings"].includes(
@@ -142,6 +238,19 @@ export function parseRoute(href: string, origin: string): Route {
     }
     if (first !== "projects" || !parts[1]) return invalid();
     const project = parts[1];
+    if (
+      parts.length === 4 &&
+      parts[2] === "settings" &&
+      (connectionSettingsSections as readonly string[]).includes(parts[3]!)
+    ) {
+      return query.size
+        ? invalid()
+        : {
+            kind: "project-settings",
+            project,
+            section: parts[3] as ConnectionSettingsSection,
+          };
+    }
     if (parts.length === 3 && projectViews.has(parts[2]!)) {
       if (query.size) return invalid();
       return { kind: "project", project, view: parts[2] as ProjectView };
@@ -191,6 +300,7 @@ export function safeReturnPath(href: string, origin: string): string | null {
 export function routeSurface(route: Route): Surface {
   if (route.kind === "global") return route.surface;
   if (route.kind === "hosted-agent") return "hosted";
+  if (route.kind === "project-settings") return "settings";
   if (route.kind === "chat" || route.kind === "chat-connections") return "chat";
   if (
     route.kind === "project" ||

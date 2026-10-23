@@ -13,6 +13,7 @@ host-exporters = [
   "local-logs",
   "dep:opentelemetry-appender-tracing",
   "dep:opentelemetry-otlp",
+  "dep:reqwest-otel",
   "dep:tracing-appender",
   "dep:tracing-subscriber",
 ]
@@ -25,6 +26,7 @@ opentelemetry.workspace = true
 opentelemetry-appender-tracing = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
 opentelemetry_sdk.workspace = true
+reqwest-otel = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

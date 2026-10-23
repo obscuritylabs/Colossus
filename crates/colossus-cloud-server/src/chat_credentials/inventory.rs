@@ -19,6 +19,7 @@ pub(super) struct Usage {
     label: String,
     endpoint: String,
     credential_binding: String,
+    credential_source: &'static str,
 }
 #[derive(Serialize)]
 pub(super) struct Credential {
@@ -55,6 +56,10 @@ pub(super) fn connections(
         (
             ChatConnectionKind::Mcp,
             config.runtime.mcp.servers.keys().collect(),
+        ),
+        (
+            ChatConnectionKind::Search,
+            config.runtime.search.profiles.keys().collect(),
         ),
     ] {
         for id in ids {
@@ -96,6 +101,16 @@ pub(super) fn connections(
                         id,
                     )
                 }
+                ChatConnectionKind::Search => {
+                    let value = &config.runtime.search.profiles[id];
+                    (
+                        crate::global_settings::search::authentication(config, id),
+                        Some(crate::global_settings::search::endpoint(value)),
+                        !crate::global_settings::search::reference(value)
+                            .is_some_and(|reference| reference.starts_with("env:")),
+                        config.labels.search.get(id).unwrap_or(id),
+                    )
+                }
             };
             if authentication != scope.authentication() || !eligible {
                 continue;
@@ -133,12 +148,19 @@ pub(super) fn snapshot(
         .collect();
     let mut destinations = Vec::new();
     for row in connections(host, caller, config, scope)? {
+        let instance_assigned = matches!(scope, Scope::Project)
+            && crate::global_settings::credentials::assigned_vault(host, &row.binding)?.is_some();
         let usage = Usage {
             id: row.id.clone(),
             kind: row.kind,
             label: row.label.clone(),
             endpoint: row.endpoint.clone(),
             credential_binding: row.binding.record_id(),
+            credential_source: if instance_assigned {
+                "global"
+            } else {
+                "project"
+            },
         };
         let id = match store.attachment(&row.binding) {
             Some(id) => id.map(str::to_owned),

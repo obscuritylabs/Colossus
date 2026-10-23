@@ -253,6 +253,30 @@ impl ChatSqlStore {
         lease: Option<&ChatLease>,
         gate: Option<(&str, &str)>,
     ) -> CloudResult<Vec<u64>> {
+        self.write_records_all(writes, lease, gate, None)
+    }
+
+    /// Commit instance custody and metadata audit under the current instance edit gate.
+    pub fn write_instance_records(
+        &self,
+        writes: &[ChatRecordWrite<'_>],
+        owner: &str,
+        actor: &str,
+        operation: &str,
+    ) -> CloudResult<Vec<u64>> {
+        validate_id(owner)?;
+        validate_id(actor)?;
+        validate_id(operation)?;
+        self.write_records_all(writes, None, None, Some((owner, actor, operation)))
+    }
+
+    fn write_records_all(
+        &self,
+        writes: &[ChatRecordWrite<'_>],
+        lease: Option<&ChatLease>,
+        gate: Option<(&str, &str)>,
+        instance: Option<(&str, &str, &str)>,
+    ) -> CloudResult<Vec<u64>> {
         if writes.is_empty() || writes.len() > 32 {
             return Err(CloudError::InvalidArgument);
         }
@@ -273,6 +297,9 @@ impl ChatSqlStore {
         }
         self.with_client(|client| {
             let mut transaction=client.transaction().map_err(|_|CloudError::Storage)?;
+            if let Some((owner,_,_))=instance {
+                transaction.query_opt(&format!("SELECT owner_id FROM hosted_chat_instance_gate WHERE singleton AND owner_id=$1 AND expires_at>{DB_NOW} FOR SHARE"), &[&owner]).map_err(|_|CloudError::Storage)?.ok_or(CloudError::Conflict)?;
+            }
             if let Some((project,owner))=gate {
                 transaction.query_opt(&format!("SELECT project_id FROM hosted_chat_project_gates WHERE project_id=$1 AND owner_id=$2 AND expires_at>{DB_NOW} FOR SHARE"), &[&project,&owner]).map_err(|_|CloudError::Storage)?.ok_or(CloudError::Conflict)?;
             }
@@ -291,9 +318,31 @@ impl ChatSqlStore {
                 }.map_err(|_|CloudError::Storage)?.ok_or(CloudError::Conflict)?;
                 revisions.push(positive(row.get(0))?);
             }
+            if let Some((_,actor,operation))=instance {
+                use sha2::{Digest as _, Sha256};
+                let mut digest=Sha256::new();
+                for write in writes {digest.update(write.namespace.as_bytes());digest.update(write.record_id.as_bytes());if let Some(bytes)=write.ciphertext {digest.update(bytes);}}
+                transaction.execute("INSERT INTO hosted_instance_audit(actor_id,operation,ciphertext_sha256) VALUES($1,$2,$3)", &[&actor,&operation,&hex::encode(digest.finalize())]).map_err(|_|CloudError::Storage)?;
+            }
             transaction.commit().map_err(|_|CloudError::Storage)?;
             Ok(revisions)
         })
+    }
+
+    /// Serialize instance administration across replicas without inventing a project scope.
+    pub fn claim_instance_gate(&self, owner: &str, ttl: u64) -> CloudResult<()> {
+        validate_id(owner)?;
+        let ttl = validate_ttl(ttl)?;
+        self.with_client(|client| {
+            client.query_opt(&format!("INSERT INTO hosted_chat_instance_gate(singleton,owner_id,expires_at) VALUES(TRUE,$1,{DB_NOW}+$2) ON CONFLICT(singleton) DO UPDATE SET owner_id=$1,expires_at={DB_NOW}+$2 WHERE hosted_chat_instance_gate.expires_at<={DB_NOW} OR hosted_chat_instance_gate.owner_id=$1 RETURNING owner_id"), &[&owner,&ttl]).map_err(|_|CloudError::Storage)?.ok_or(CloudError::Conflict)?;
+            Ok(())
+        })
+    }
+
+    /// Release only this exact instance editor; a late owner cannot release its successor.
+    pub fn release_instance_gate(&self, owner: &str) -> CloudResult<()> {
+        validate_id(owner)?;
+        self.with_client(|client| client.execute("UPDATE hosted_chat_instance_gate SET expires_at=0 WHERE singleton AND owner_id=$1", &[&owner]).map(|_|()).map_err(|_|CloudError::Storage))
     }
 
     /// Consume one exact expiring ciphertext atomically. Failed identity checks must precede this.

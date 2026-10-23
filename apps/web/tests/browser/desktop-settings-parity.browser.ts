@@ -247,7 +247,7 @@ test("provider inventory uses the full Desktop picker and persists provider disp
   });
   await expect(inventory).toContainText("Team OpenRouter");
   await page.reload();
-  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  await page.getByRole("button", { name: "Project", exact: true }).click();
   await chooseSettingsSection(page, "Providers");
   await expect(
     page.getByRole("table", { name: "Configured providers", exact: true }),

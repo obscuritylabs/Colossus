@@ -240,10 +240,14 @@ fn cursor_query_hash(query: &EntityQuery) -> CloudResult<String> {
         query.order,
     );
     // Preserve existing internal cursors while binding human pages to their account.
-    let bytes = match (&query.host_id, &query.visible_to) {
-        (host, Some(subject)) => serde_json::to_vec(&(base, host, subject)),
-        (Some(host), None) => serde_json::to_vec(&(base, host)),
-        (None, None) => serde_json::to_vec(&base),
+    let bytes = if let Some(owner) = &query.owned_by {
+        serde_json::to_vec(&(base, &query.host_id, &query.visible_to, owner))
+    } else {
+        match (&query.host_id, &query.visible_to) {
+            (host, Some(subject)) => serde_json::to_vec(&(base, host, subject)),
+            (Some(host), None) => serde_json::to_vec(&(base, host)),
+            (None, None) => serde_json::to_vec(&base),
+        }
     }
     .map_err(|_| CloudError::InvalidArgument)?;
     Ok(hex::encode(sha2::Sha256::digest(bytes)))
@@ -373,6 +377,9 @@ pub struct EntityQuery {
     /// Human account permitted to see shared and personally owned conversation data.
     /// None is reserved for trusted internal connector and maintenance queries.
     pub visible_to: Option<String>,
+    /// Exact personal owner subset for nodes, workspaces and conversations.
+    /// This filter grants no visibility; human reads must also bind `visible_to`.
+    pub owned_by: Option<String>,
     /// Deterministic ordering.
     pub order: EntityOrder,
 }
@@ -390,6 +397,7 @@ impl Default for EntityQuery {
             status: None,
             archived: None,
             visible_to: None,
+            owned_by: None,
             order: EntityOrder::IdAsc,
         }
     }
@@ -564,6 +572,13 @@ pub trait CloudStore: Send + Sync {
     async fn user_accounts(&self, user_ids: &[String]) -> CloudResult<Vec<EntityRecord>>;
     /// Read bounded explicit project memberships for an already verified OIDC subject.
     async fn memberships(&self, subject: &str) -> CloudResult<Vec<EntityRecord>>;
+    /// Page active explicit memberships by project identity before applying the limit.
+    async fn memberships_page(
+        &self,
+        subject: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> CloudResult<Vec<EntityRecord>>;
     /// Check all retained turns using an indexed incomplete-source existence query.
     async fn thread_incomplete(&self, project: &str, thread: &str) -> CloudResult<bool>;
     /// Commit all effects atomically; preserve conflicts and uncertain commit outcomes.
@@ -825,6 +840,14 @@ impl CloudStore for MemoryCloudStore {
                             &state.deleted,
                             r,
                             subject,
+                        )
+                    })
+                    && query.owned_by.as_ref().is_none_or(|owner| {
+                        crate::visibility::record_owned_by(
+                            &state.entities,
+                            &state.deleted,
+                            r,
+                            owner,
                         )
                     })
                     && query.parent_id.as_ref().is_none_or(|p| {
@@ -1187,6 +1210,30 @@ impl CloudStore for MemoryCloudStore {
                     && matches!(&r.value, EntityValue::Membership(value) if value.subject == subject)
             })
             .take(1024)
+            .cloned()
+            .collect())
+    }
+    async fn memberships_page(
+        &self,
+        subject: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> CloudResult<Vec<EntityRecord>> {
+        if !(1..=100).contains(&limit) {
+            return Err(CloudError::InvalidArgument);
+        }
+        let state = self.state.lock().await;
+        Ok(state
+            .entities
+            .values()
+            .filter(|record| {
+                !state.deleted.contains(&record.key)
+                    && record.key.kind == EntityKind::Membership
+                    && after.is_none_or(|after| record.key.project_id.as_str() > after)
+                    && matches!(&record.value, EntityValue::Membership(member)
+                    if member.user_id == subject && !member.permissions.is_empty())
+            })
+            .take(limit)
             .cloned()
             .collect())
     }

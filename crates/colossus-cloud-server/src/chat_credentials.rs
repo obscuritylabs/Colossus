@@ -233,6 +233,7 @@ async fn write(
         if row.binding.record_id() != target.credential_binding {
             return Err(CloudError::Conflict.into());
         }
+        require_project_attachment_authority(host, scope, &row.binding)?;
         store.attach(&row.binding, Some(&id)).map_err(custody)?;
     }
     if !unused_creation {
@@ -302,6 +303,7 @@ async fn attach(
     if row.binding.record_id() != input.credential_binding {
         return Err(CloudError::Conflict.into());
     }
+    require_project_attachment_authority(host, scope, &row.binding)?;
     if let Some(id) = &input.credential_id {
         adopt(&mut store, vault.as_ref(), &rows, id)?;
     }
@@ -311,6 +313,19 @@ async fn attach(
     stop_local(host, &state, &caller, scope, edit.is_some()).await?;
     store.commit(vault.as_ref()).map_err(custody)?;
     Ok(Json(serde_json::json!({"revision":store.revision()})))
+}
+
+fn require_project_attachment_authority(
+    host: &HostedExecution,
+    scope: Scope,
+    binding: &ChatConnectionBinding,
+) -> std::result::Result<(), CloudError> {
+    if matches!(scope, Scope::Project)
+        && crate::global_settings::credentials::assigned_vault(host, binding)?.is_some()
+    {
+        return Err(CloudError::PermissionDenied);
+    }
+    Ok(())
 }
 
 fn editing_vault(

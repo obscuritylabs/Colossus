@@ -16,6 +16,31 @@ pub(crate) fn require_thread(thread: &CloudThread, caller: &CloudCaller) -> Clou
     }
 }
 
+/// Match immutable personal ownership without treating shared history as account-owned.
+pub(crate) fn record_owned_by(
+    records: &BTreeMap<EntityKey, EntityRecord>,
+    deleted: &BTreeSet<EntityKey>,
+    record: &EntityRecord,
+    owner: &str,
+) -> bool {
+    match &record.value {
+        EntityValue::Node(node) => node.owner_user_id.as_deref() == Some(owner),
+        EntityValue::Thread(thread) => thread.owner_user_id.as_deref() == Some(owner),
+        EntityValue::Workspace(workspace) => {
+            let key = EntityKey {
+                kind: EntityKind::Node,
+                project_id: record.key.project_id.clone(),
+                parent_id: None,
+                id: workspace.node_id.clone(),
+            };
+            !deleted.contains(&key) && records.get(&key).is_some_and(|node| {
+                matches!(&node.value, EntityValue::Node(node) if node.owner_user_id.as_deref() == Some(owner))
+            })
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn record_visible(
     records: &BTreeMap<EntityKey, EntityRecord>,
     deleted: &BTreeSet<EntityKey>,

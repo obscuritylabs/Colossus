@@ -12,6 +12,12 @@ import { AppearanceSettings } from "./Appearance";
 import { ChatSettings } from "./ChatSettings";
 import { ChatCredentials } from "./ChatCredentials";
 import { ChatAccounts } from "./ChatAccounts";
+import { PersonalVariables } from "./PersonalVariables";
+import { IconShield } from "@tabler/icons-react";
+import type {
+  ConnectionSettingsSection,
+  PersonalSettingsSection,
+} from "./routes";
 import "./chat-workspace.css";
 
 const projectTabs = [
@@ -19,12 +25,16 @@ const projectTabs = [
   { id: "models", label: "Models", group: "Project connections" },
   { id: "mcp", label: "MCP connections", group: "Project connections" },
   { id: "routing", label: "Role routing", group: "Project connections" },
-  { id: "credentials", label: "Credentials", group: "Project connections" },
+  { id: "search", label: "Search", group: "Project services" },
+  { id: "telemetry", label: "Telemetry", group: "Project services" },
+  { id: "credentials", label: "Secrets", group: "Secrets and variables" },
+  { id: "variables", label: "Variables", group: "Secrets and variables" },
 ] as const;
 const personalTabs = [
   { id: "appearance", label: "Appearance", group: "Preferences" },
   { id: "account", label: "Account", group: "Preferences" },
   { id: "credentials", label: "Credentials", group: "Connections" },
+  { id: "variables", label: "Variables", group: "Connections" },
   { id: "connections", label: "Connected accounts", group: "Connections" },
 ] as const;
 
@@ -40,8 +50,10 @@ export function WebSettings({
   appearance,
   onAppearance,
   isGlobalAdmin = false,
-  onEnvironmentSettings,
   initialScope = "global",
+  initialSection,
+  onSectionChange,
+  onInstanceSettings,
   onReturn,
   onConnections,
   onSaved,
@@ -58,6 +70,10 @@ export function WebSettings({
   isGlobalAdmin?: boolean;
   onEnvironmentSettings?: (settings: PublicSettings) => void;
   initialScope?: "global" | "space";
+  initialSection?:
+    ConnectionSettingsSection | PersonalSettingsSection | undefined;
+  onSectionChange?: (scope: "global" | "space", section: string) => void;
+  onInstanceSettings?: () => void;
   onReturn: () => void;
   onConnections: () => void;
   onSaved: () => void;
@@ -76,9 +92,21 @@ export function WebSettings({
     connection: CredentialTarget | undefined;
     request: number;
   } | null>(null);
-  const [projectTab, setProjectTab] = useState<
-    "providers" | "models" | "mcp" | "credentials" | "routing"
-  >("providers");
+  const [projectTab, setProjectTab] =
+    useState<ConnectionSettingsSection>("providers");
+  useEffect(() => {
+    if (!initialSection) return;
+    if (
+      initialScope === "space" &&
+      projectTabs.some((tab) => tab.id === initialSection)
+    )
+      setProjectTab(initialSection as ConnectionSettingsSection);
+    else if (
+      initialScope === "global" &&
+      personalTabs.some((tab) => tab.id === initialSection)
+    )
+      setPersonalTab(initialSection);
+  }, [initialScope, initialSection]);
   const tabs = scope === "global" ? personalTabs : projectTabs;
   const frame = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -92,6 +120,7 @@ export function WebSettings({
     setQuery("");
     if (scope === "global") setPersonalTab(id);
     else setProjectTab(id as typeof projectTab);
+    onSectionChange?.(scope, id);
   }
   return (
     <div className="web-settings-window" ref={frame}>
@@ -100,9 +129,31 @@ export function WebSettings({
         onScopeChange={(value) => {
           setScope(value);
           setQuery("");
+          onSectionChange?.(
+            value,
+            value === "global" ? personalTab : projectTab,
+          );
         }}
+        globalLabel="Personal"
+        workspaceLabel="Project"
+        showWorkspaceScope={canAdminister}
         globalDescription="Personal preferences and connections"
-        workspaceDescription="Shared project connections"
+        workspaceDescription="Project definitions and explicit shared credentials"
+        additionalScopes={
+          isGlobalAdmin && onInstanceSettings ? (
+            <button
+              type="button"
+              className="sidebar-nav-item"
+              onClick={onInstanceSettings}
+            >
+              <IconShield size={17} aria-hidden="true" />
+              <span>
+                <strong>Control Plane Admin</strong>
+                <small>Instance catalogs and administration</small>
+              </span>
+            </button>
+          ) : null
+        }
         query={query}
         onQueryChange={(value) => {
           setQuery(value);
@@ -129,12 +180,27 @@ export function WebSettings({
         onReturnToWork={onReturn}
       >
         <div hidden={scope !== "global"} className="web-personal-settings">
-          {personalTab === "appearance" ? (
+          {!project &&
+          ["credentials", "connections", "variables"].includes(personalTab) ? (
+            <section className="control-card">
+              <h2>Choose a project</h2>
+              <p>
+                Your connections, secrets, and variables stay private to your
+                account in the selected project.
+              </p>
+            </section>
+          ) : personalTab === "appearance" ? (
             <AppearanceSettings
               appearance={appearance}
               onChange={onAppearance}
-              isGlobalAdmin={isGlobalAdmin}
-              {...(onEnvironmentSettings ? { onEnvironmentSettings } : {})}
+              isGlobalAdmin={false}
+            />
+          ) : personalTab === "variables" ? (
+            <PersonalVariables
+              key={`${project}:${identity}`}
+              project={project}
+              identity={identity}
+              canEdit={canConnect}
             />
           ) : personalTab === "credentials" ? (
             <ChatCredentials
@@ -142,7 +208,10 @@ export function WebSettings({
               project={project}
               identity={identity}
               canConnect={canConnect}
-              onConnections={() => setPersonalTab("connections")}
+              onConnections={() => {
+                setPersonalTab("connections");
+                onSectionChange?.("global", "connections");
+              }}
               onSaved={onSaved}
               initialConnection={
                 personalCredential?.project === project
@@ -191,6 +260,7 @@ export function WebSettings({
                 }));
                 setQuery("");
                 setProjectTab("credentials");
+                onSectionChange?.("space", "credentials");
               }}
               onPersonalCredentials={(connection) => {
                 setPersonalCredential((current) => ({
@@ -201,6 +271,7 @@ export function WebSettings({
                 setQuery("");
                 setScope("global");
                 setPersonalTab("credentials");
+                onSectionChange?.("global", "credentials");
               }}
             />
           ) : (

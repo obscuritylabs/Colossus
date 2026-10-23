@@ -16,11 +16,13 @@ import { LoadState } from "./Home";
 type Kind = "api_key" | "bearer_token" | "client_secret" | "generic_secret";
 interface Destination {
   id: string;
-  kind: "provider" | "mcp";
+  kind: "provider" | "mcp" | "search";
   label: string;
   endpoint: string;
   credential_binding: string;
   credential_id?: string | null;
+  project_id?: string;
+  credential_source?: "personal" | "project" | "global" | "none";
 }
 interface Credential {
   id: string;
@@ -48,6 +50,8 @@ export function CredentialStoreSettings({
   identity,
   canEdit,
   projectScope = false,
+  globalScope = false,
+  resourcePath = path,
   onSaved,
   initialConnection,
 }: {
@@ -55,10 +59,12 @@ export function CredentialStoreSettings({
   identity: string;
   canEdit: boolean;
   projectScope?: boolean;
+  globalScope?: boolean;
+  resourcePath?: string;
   onSaved: () => void;
   initialConnection?: CredentialTarget | undefined;
 }) {
-  const resource = useResource<CredentialSnapshot>(path, 0, identity);
+  const resource = useResource<CredentialSnapshot>(resourcePath, 0, identity);
   const [editor, setEditor] = useState<"secret" | "attach" | "remove" | null>(
     null,
   );
@@ -70,7 +76,7 @@ export function CredentialStoreSettings({
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
   const [waitingRevision, setWaitingRevision] = useState(0);
-  const scope = JSON.stringify([path, identity, canEdit]);
+  const scope = JSON.stringify([path, resourcePath, identity, canEdit]);
   const currentScope = useRef(scope);
   currentScope.current = scope;
   const opened = useRef("");
@@ -119,6 +125,12 @@ export function CredentialStoreSettings({
       (row) =>
         row.kind === initialConnection.kind && row.id === initialConnection.id,
     );
+    if (!globalScope && destination?.credential_source === "global") {
+      setNotice(
+        "This connection uses a credential assigned by a Control Plane administrator. Ask that administrator to change its assignment.",
+      );
+      return;
+    }
     const existing = data.credentials.find(
       (row) => row.id === destination?.credential_id,
     );
@@ -127,7 +139,7 @@ export function CredentialStoreSettings({
       setTarget(destinationKey(destination));
       setEditor("attach");
     } else edit(existing, destination);
-  }, [scope, initialConnection, data, canEdit]);
+  }, [scope, initialConnection, data, canEdit, globalScope]);
   async function mutate(url: string, body: object, method?: "DELETE") {
     const submitted = scope;
     setSaving(true);
@@ -159,7 +171,7 @@ export function CredentialStoreSettings({
   async function attach(value: string | null, destination: Destination) {
     if (!data) return;
     await mutate(
-      `${path}/attachments/${destination.kind}/${encodeURIComponent(destination.id)}`,
+      `${path}/attachments/${globalScope ? `${encodeURIComponent(destination.project_id ?? "")}/` : ""}${destination.kind}/${encodeURIComponent(destination.id)}`,
       {
         revision: data.revision,
         credential_id: value,
@@ -167,24 +179,44 @@ export function CredentialStoreSettings({
       },
     );
   }
-  const description = projectScope
-    ? "Shared within this project. Only explicitly attached connections may use a saved credential."
-    : "Private to your account in this project. Save a credential now and attach it to a provider or MCP server later.";
+  const description = globalScope
+    ? "Instance secrets are write-only. A Control Plane administrator must explicitly assign a secret to a shared connection in a selected project before it can be used."
+    : projectScope
+      ? "Shared within this project. Only explicitly attached connections may use a saved credential."
+      : "Private to your account in this project. Save a credential now and attach it to a provider, search service, or MCP server later.";
   const destinationOptions = (
     <>
       <option value="">
         {editor === "attach" ? "Choose a connection" : "Save without attaching"}
       </option>
       {(data?.connections ?? []).map((row) => (
-        <option key={destinationKey(row)} value={destinationKey(row)}>
-          {row.kind === "provider" ? "Provider" : "MCP"}: {row.label}
+        <option
+          key={destinationKey(row)}
+          value={destinationKey(row)}
+          disabled={!globalScope && row.credential_source === "global"}
+        >
+          {row.kind === "provider"
+            ? "Provider"
+            : row.kind === "search"
+              ? "Search"
+              : "MCP"}
+          : {row.label}
+          {!globalScope && row.credential_source === "global"
+            ? " (assigned by Control Plane)"
+            : ""}
         </option>
       ))}
     </>
   );
   return (
     <section
-      aria-label={projectScope ? "Project credentials" : "Personal credentials"}
+      aria-label={
+        globalScope
+          ? "Control Plane secrets"
+          : projectScope
+            ? "Project credentials"
+            : "Personal credentials"
+      }
     >
       <LoadState {...resource} retry={resource.refresh} />
       {error ? <p role="alert">{error}</p> : null}
@@ -213,7 +245,9 @@ export function CredentialStoreSettings({
           ),
           usage: row.used_by.length
             ? row.used_by.map((usage) => usage.label).join(", ")
-            : "Not attached",
+            : globalScope
+              ? "No assignments in selected project"
+              : "Not attached",
           actionLabel: "Rotate",
           actionAriaLabel: `Rotate credential ${row.label}`,
           mutationDisabled: Boolean(editor),
@@ -232,9 +266,11 @@ export function CredentialStoreSettings({
                   <dd>{kinds[row.kind]}</dd>
                   <dt>Access</dt>
                   <dd>
-                    {projectScope
-                      ? "Shared project credential"
-                      : "Your personal credential"}
+                    {globalScope
+                      ? "Instance secret with explicit project assignments"
+                      : projectScope
+                        ? "Shared project credential"
+                        : "Your personal credential"}
                   </dd>
                 </dl>
                 <p className="field-help">
@@ -260,7 +296,11 @@ export function CredentialStoreSettings({
                     </p>
                   ))
                 ) : (
-                  <p>Not attached. No connection can use this credential.</p>
+                  <p>
+                    {globalScope
+                      ? "No assignments in the selected project. This secret may be assigned in other projects."
+                      : "Not attached. No connection can use this credential."}
+                  </p>
                 )}
               </div>
             </>
@@ -310,7 +350,13 @@ export function CredentialStoreSettings({
                 {destinationOptions}
               </DropdownSelect>
             </label>
-            {id && credential?.used_by.length ? (
+            {id && globalScope ? (
+              <p className="field-help">
+                Rotation updates this secret for every project where it is
+                assigned. The connections shown here are limited to the selected
+                project.
+              </p>
+            ) : id && credential?.used_by.length ? (
               <p className="field-help">
                 Rotation updates every connection using this credential:{" "}
                 {credential.used_by.map((row) => row.label).join(", ")}.
@@ -337,6 +383,9 @@ export function CredentialStoreSettings({
                   ...(connection
                     ? {
                         attachment: {
+                          ...(globalScope
+                            ? { project_id: connection.project_id }
+                            : {}),
                           kind: connection.kind,
                           connection: connection.id,
                           credential_binding: connection.credential_binding,
@@ -426,9 +475,11 @@ export function CredentialStoreSettings({
             }
           >
             <p>
-              {credential.used_by.length
-                ? `These connections will need another credential: ${credential.used_by.map((row) => row.label).join(", ")}.`
-                : "This credential is not attached to a connection."}
+              {globalScope
+                ? "Removal disconnects this secret from every project where it is assigned. Those connections will need another credential."
+                : credential.used_by.length
+                  ? `These connections will need another credential: ${credential.used_by.map((row) => row.label).join(", ")}.`
+                  : "This credential is not attached to a connection."}
             </p>
           </CredentialEditor>
         ) : null}

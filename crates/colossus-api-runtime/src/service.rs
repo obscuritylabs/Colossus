@@ -48,10 +48,13 @@ use std::{
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+use tracing::Instrument as _;
 use uuid::Uuid;
 mod posture;
 mod sharing;
+mod telemetry;
 mod watch;
+use telemetry::{ExecutionSource, RunTelemetry};
 
 const WATCH_CHANNEL_SIZE: usize = 8;
 const MAX_PENDING_RECOVERIES: usize = 256;
@@ -150,6 +153,7 @@ pub struct RuntimeAgentRunApi {
     pending_recoveries: Arc<Mutex<BTreeMap<String, CallerContext>>>,
     default_role: String,
     instructions: String,
+    telemetry: RunTelemetry,
     #[cfg(test)]
     next_execution_fault: Arc<Mutex<Option<ExecutionTestFault>>>,
 }
@@ -252,9 +256,20 @@ impl RuntimeAgentRunApi {
             pending_recoveries: Arc::new(Mutex::new(BTreeMap::new())),
             default_role: default_role.into(),
             instructions: instructions.into(),
+            telemetry: RunTelemetry::default(),
             #[cfg(test)]
             next_execution_fault: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Attach an opaque project correlation label supplied by trusted host composition.
+    ///
+    /// This label never grants access or changes durable run requests. Do not derive it
+    /// from a public run payload, caller-asserted end-user ID, or generated content.
+    /// Native and unlabelled embedded hosts retain their existing telemetry behavior.
+    pub fn with_telemetry_project_id(mut self, project_id: impl Into<String>) -> ApiResult<Self> {
+        self.telemetry = RunTelemetry::for_project(project_id.into())?;
+        Ok(self)
     }
 
     #[cfg(test)]
@@ -807,7 +822,7 @@ impl RuntimeAgentRunApi {
         Ok(Some(PlanSelection { plan }))
     }
 
-    fn spawn_execution(&self, pending: PendingExecution) {
+    fn spawn_execution(&self, pending: PendingExecution, source: ExecutionSource) {
         self.active_changed.notify_waiters();
         let PendingExecution {
             caller,
@@ -832,57 +847,70 @@ impl RuntimeAgentRunApi {
             execution_fault,
             Some(ExecutionTestFault::FailTerminalAppend)
         );
-        tokio::spawn(async move {
-            let run_id = run.id.clone();
-            let task = Box::pin(service.execute(
-                caller,
-                run,
-                request,
-                create_session,
-                control,
-                Arc::clone(&writer),
-                panic_after_start,
-                fail_terminal_append,
-            ));
-            let mut terminal_persisted = match AssertUnwindSafe(task).catch_unwind().await {
-                Ok(persisted) => persisted,
-                Err(_) => writer.append(unknown_outcome_failure()).is_ok(),
-            };
-            if !terminal_persisted {
-                terminal_persisted = match writer.synchronize_durable_state() {
-                    Ok(current) if current.status.is_terminal() => true,
-                    Ok(_) => writer.append(unknown_outcome_failure()).is_ok(),
-                    Err(_) => false,
+        let execution_span = service.telemetry.execution_span(&run.id, source);
+        tokio::spawn(
+            async move {
+                let run_id = run.id.clone();
+                let started = Instant::now();
+                service.telemetry.execution_started(&run_id, source);
+                let task = Box::pin(service.execute(
+                    caller,
+                    run,
+                    request,
+                    create_session,
+                    control,
+                    Arc::clone(&writer),
+                    panic_after_start,
+                    fail_terminal_append,
+                ));
+                let mut terminal_persisted = match AssertUnwindSafe(task).catch_unwind().await {
+                    Ok(persisted) => persisted,
+                    Err(_) => writer.append(unknown_outcome_failure()).is_ok(),
                 };
+                if !terminal_persisted {
+                    terminal_persisted = match writer.synchronize_durable_state() {
+                        Ok(current) if current.status.is_terminal() => true,
+                        Ok(_) => writer.append(unknown_outcome_failure()).is_ok(),
+                        Err(_) => false,
+                    };
+                }
+                let current = writer.current_execution_run().ok().flatten();
+                if let Some(current) = current.as_ref()
+                    && service.settle_communication(current).is_err()
+                {
+                    service.feeds.close(&run_id);
+                }
+                service.interactions.cancel_run(&run_id);
+                let mut registry = lock(&service.execution);
+                let matching = registry
+                    .active
+                    .get(&run_id)
+                    .is_some_and(|active| active.generation == generation);
+                if matching {
+                    registry.active.remove(&run_id);
+                    let _ = registry
+                        .admission
+                        .release(&run_id, generation, Instant::now());
+                }
+                drop(registry);
+                if matching {
+                    service.active_changed.notify_waiters();
+                }
+                if !terminal_persisted {
+                    // Wake existing watchers so transport clients reconcile or reconnect instead
+                    // of waiting forever on a non-terminal cursor after storage failed.
+                    service.feeds.close(&run_id);
+                }
+                service.telemetry.execution_finished(
+                    &run_id,
+                    current.as_ref().map(|run| run.status),
+                    terminal_persisted,
+                    started.elapsed(),
+                );
+                service.drain_pending_recoveries();
             }
-            if let Ok(Some(current)) = writer.current_execution_run()
-                && service.settle_communication(&current).is_err()
-            {
-                service.feeds.close(&run_id);
-            }
-            service.interactions.cancel_run(&run_id);
-            let mut registry = lock(&service.execution);
-            let matching = registry
-                .active
-                .get(&run_id)
-                .is_some_and(|active| active.generation == generation);
-            if matching {
-                registry.active.remove(&run_id);
-                let _ = registry
-                    .admission
-                    .release(&run_id, generation, Instant::now());
-            }
-            drop(registry);
-            if matching {
-                service.active_changed.notify_waiters();
-            }
-            if !terminal_persisted {
-                // Wake existing watchers so transport clients reconcile or reconnect instead
-                // of waiting forever on a non-terminal cursor after storage failed.
-                service.feeds.close(&run_id);
-            }
-            service.drain_pending_recoveries();
-        });
+            .instrument(execution_span),
+        );
     }
 
     fn enqueue_pending_recovery(
@@ -926,6 +954,9 @@ impl RuntimeAgentRunApi {
                 self.remove_pending_recovery(&run_id);
                 continue;
             }
+            let recovery_span = self.telemetry.recovery_span(&run_id);
+            let _recovery_span = recovery_span.enter();
+            self.telemetry.recovery_started(&run_id, run.status);
             if run.status == RunStatus::Cancelling && run.started_at.is_none() {
                 let writer = RunWriter::new(
                     Arc::clone(&self.repository),
@@ -947,7 +978,7 @@ impl RuntimeAgentRunApi {
             match self.ensure_execution_started(caller, run, execution.request, create_session) {
                 StartDecision::Started(pending) => {
                     self.remove_pending_recovery(&run_id);
-                    self.spawn_execution(*pending);
+                    self.spawn_execution(*pending, ExecutionSource::Recovered);
                 }
                 StartDecision::AlreadyStarted => {
                     self.remove_pending_recovery(&run_id);
@@ -981,6 +1012,9 @@ impl RuntimeAgentRunApi {
             return Ok(current);
         }
         let recovered = recovered_caller(&execution, &current.id, caller)?;
+        let recovery_span = self.telemetry.recovery_span(&current.id);
+        let _recovery_span = recovery_span.enter();
+        self.telemetry.recovery_started(&current.id, current.status);
         match current.status {
             RunStatus::Queued => {
                 let create_session = execution.request.session_id.is_none();
@@ -991,7 +1025,9 @@ impl RuntimeAgentRunApi {
                     execution.request,
                     create_session,
                 ) {
-                    StartDecision::Started(pending) => self.spawn_execution(*pending),
+                    StartDecision::Started(pending) => {
+                        self.spawn_execution(*pending, ExecutionSource::Recovered)
+                    }
                     StartDecision::AlreadyStarted => {}
                     StartDecision::Limited => {
                         self.enqueue_pending_recovery(pending_caller, &current.id)
@@ -3168,7 +3204,7 @@ impl RuntimeAgentRunApi {
         };
         let run = match self.create_admitted(caller, &request, &new_run, create_session)? {
             CreateDecision::Fresh { run, pending } => {
-                self.spawn_execution(*pending);
+                self.spawn_execution(*pending, ExecutionSource::Submitted);
                 run
             }
             CreateDecision::Replay(run) => self.recover_orphan(caller, run)?,

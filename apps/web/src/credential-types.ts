@@ -1,5 +1,5 @@
 export interface CredentialTarget {
-  kind: "provider" | "mcp";
+  kind: "provider" | "mcp" | "search";
   id: string;
 }
 export interface CredentialSetup {

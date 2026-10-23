@@ -15,6 +15,7 @@ export function ChatModelSettings({
   id,
   draft,
   project,
+  catalogEnabled = true,
   saved,
   onApply,
   onCancel,
@@ -23,6 +24,7 @@ export function ChatModelSettings({
   id: string;
   draft: ChatSettingsWrite;
   project: string;
+  catalogEnabled?: boolean;
   saved: ChatSettingsSnapshot;
   onApply: (value: ChatSettingsWrite) => void;
   onCancel: () => void;
@@ -57,6 +59,7 @@ export function ChatModelSettings({
   const [pending, setPending] = useState(false);
   const provider = draft.providers.profiles[value.providerProfile];
   const canLoad = Boolean(
+    catalogEnabled &&
     provider &&
     JSON.stringify(provider) ===
       JSON.stringify(saved.providers.profiles[value.providerProfile]) &&
@@ -147,8 +150,9 @@ export function ChatModelSettings({
         catalogNotice={
           !canLoad ? (
             <p>
-              Save the provider configuration and credential before loading
-              models.
+              {catalogEnabled
+                ? "Save the provider configuration and credential before loading models."
+                : "Configure model identifiers here. Live discovery uses the selected project's explicitly assigned credentials in Project Administration."}
             </p>
           ) : null
         }

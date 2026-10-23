@@ -235,6 +235,66 @@ mod tests {
             Err(CredentialResolutionError::Unavailable)
         );
     }
+
+    #[test]
+    fn search_credentials_cannot_borrow_provider_or_mcp_identity() {
+        let make = |kind, generation, endpoint| {
+            ChatConnectionBinding::new(
+                "project",
+                "alice",
+                kind,
+                "same-id",
+                generation,
+                endpoint,
+                ChatAuthentication::Personal,
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let search = make(
+            ChatConnectionKind::Search,
+            1,
+            "https://search.example/search",
+        );
+        let vault: Arc<dyn CredentialVault> = Arc::new(Vault::default());
+        ChatCredentialResolver::save(
+            vault.as_ref(),
+            &search,
+            &HostSecret::new("search-token").unwrap(),
+        )
+        .unwrap();
+        let resolver =
+            ChatCredentialResolver::new("project", "alice", [(search.clone(), vault)]).unwrap();
+        assert_eq!(
+            resolver
+                .resolve(&ChatCredentialResolver::reference(&search))
+                .unwrap(),
+            "search-token"
+        );
+        for forbidden in [
+            make(
+                ChatConnectionKind::Provider,
+                1,
+                "https://search.example/search",
+            ),
+            make(ChatConnectionKind::Mcp, 1, "https://search.example/search"),
+            make(
+                ChatConnectionKind::Search,
+                2,
+                "https://search.example/search",
+            ),
+            make(
+                ChatConnectionKind::Search,
+                1,
+                "https://search.example/other",
+            ),
+        ] {
+            assert_eq!(
+                resolver.resolve(&ChatCredentialResolver::reference(&forbidden)),
+                Err(CredentialResolutionError::InvalidReference)
+            );
+        }
+    }
 }
 
 #[cfg(test)]

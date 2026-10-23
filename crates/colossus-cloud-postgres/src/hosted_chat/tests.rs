@@ -213,6 +213,73 @@ async fn shared_custody_cas_placement_and_at_most_once_management() {
     );
     a.create_oauth_flow("state-new", b"opaque-flow", "alice")
         .unwrap();
+    // Instance administration has real instance custody, independent of project identities.
+    a.claim_instance_gate("instance-admin-a", 30).unwrap();
+    assert_eq!(
+        b.claim_instance_gate("instance-admin-b", 30).unwrap_err(),
+        CloudError::Conflict
+    );
+    let write = [ChatRecordWrite {
+        namespace: "instance-settings",
+        record_id: "catalog",
+        expected_revision: 0,
+        ciphertext: Some(b"encrypted-instance-catalog"),
+        ttl_seconds: None,
+    }];
+    assert_eq!(
+        b.write_instance_records(&write, "wrong-owner", "alice", "instance.catalog.replace")
+            .unwrap_err(),
+        CloudError::Conflict
+    );
+    a.write_instance_records(
+        &write,
+        "instance-admin-a",
+        "alice",
+        "instance.catalog.replace",
+    )
+    .unwrap();
+    assert_eq!(
+        b.read_record("instance-settings", "catalog")
+            .unwrap()
+            .revision,
+        1
+    );
+    assert_eq!(
+        b.write_instance_records(
+            &write,
+            "instance-admin-a",
+            "alice",
+            "instance.catalog.replace"
+        )
+        .unwrap_err(),
+        CloudError::Conflict
+    );
+    a.release_instance_gate("wrong-owner").unwrap();
+    assert_eq!(
+        b.claim_instance_gate("instance-admin-b", 30).unwrap_err(),
+        CloudError::Conflict
+    );
+    a.with_client(|client| {
+        let row=client.query_one("SELECT COUNT(*),MIN(actor_id),MIN(operation),MIN(length(ciphertext_sha256)) FROM hosted_instance_audit",&[]).map_err(|_|CloudError::Storage)?;
+        assert_eq!(row.get::<_,i64>(0),1);
+        assert_eq!(row.get::<_,Option<String>>(1).as_deref(),Some("alice"));
+        assert_eq!(row.get::<_,Option<String>>(2).as_deref(),Some("instance.catalog.replace"));
+        assert_eq!(row.get::<_,Option<i32>>(3),Some(64));
+        Ok(())
+    }).unwrap();
+    a.release_instance_gate("instance-admin-a").unwrap();
+    b.claim_instance_gate("instance-admin-b", 30).unwrap();
+    assert_eq!(
+        a.write_instance_records(
+            &write,
+            "instance-admin-a",
+            "alice",
+            "instance.catalog.replace"
+        )
+        .unwrap_err(),
+        CloudError::Conflict
+    );
+    b.release_instance_gate("instance-admin-b").unwrap();
     drop(a);
     drop(b);
     let mut connection = store.pool.get().await.unwrap();

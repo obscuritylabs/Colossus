@@ -76,14 +76,15 @@ pub(crate) async fn connections(
                 false
             }
         } else if let Some(binding) = &binding {
-            let vault = host.selected_vault(&caller, authentication)?;
-            ChatCredentialResolver::contains(vault.as_ref(), binding)
-                .map_err(|_| CloudError::Storage)?
-                || (authentication == ChatAuthentication::Shared
-                    && server
-                        .credential_headers
-                        .values()
-                        .any(|header| header.reference.starts_with("env:")))
+            host.connection_credential_configured(
+                &caller,
+                binding,
+                authentication,
+                server
+                    .credential_headers
+                    .values()
+                    .any(|header| header.reference.starts_with("env:")),
+            )?
         } else {
             false
         };

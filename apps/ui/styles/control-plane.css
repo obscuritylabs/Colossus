@@ -89,6 +89,90 @@
   font-size: var(--font-size-caption);
   font-weight: 500;
 }
+.control-navigation-disclosure-heading {
+  margin: 0;
+  font: inherit;
+}
+.control-app-sidebar .control-navigation-disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-height: var(--control-height-compact);
+  margin: 0;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+  font-weight: 500;
+  text-align: start;
+  cursor: pointer;
+}
+.control-navigation-disclosure-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.control-navigation-disclosure-chevron {
+  flex: none;
+}
+.control-navigation-disclosure[aria-expanded="true"]
+  .control-navigation-disclosure-chevron {
+  transform: rotate(90deg);
+}
+.control-app-sidebar
+  .control-navigation-disclosure:is(:hover, [data-active="true"]) {
+  color: var(--text-strong);
+}
+.control-app-sidebar .control-navigation-disclosure:hover {
+  background: var(--surface-hover);
+}
+.control-app-sidebar .control-navigation-disclosure:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: -2px;
+}
+.control-navigation-disclosure-icon {
+  display: none;
+}
+.control-navigation-children[hidden] {
+  display: none;
+}
+.control-app-sidebar[data-collapsible="icon"] .control-navigation-disclosure {
+  justify-content: center;
+  padding-inline: 0;
+}
+.control-app-sidebar[data-collapsible="icon"]
+  .control-navigation-disclosure-icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+}
+.control-navigation-disclosure-icon > svg {
+  width: 16px;
+  height: 16px;
+}
+.control-app-sidebar[data-collapsible="icon"]
+  :is(
+    .control-navigation-disclosure-label,
+    .control-navigation-disclosure-chevron
+  ) {
+  display: none;
+}
+:root[data-text-size="large"]
+  .control-app-sidebar
+  .control-navigation-disclosure {
+  min-height: var(--control-height-touch);
+}
+@media (pointer: coarse), (max-width: 760px) {
+  .control-app-sidebar .control-navigation-disclosure {
+    min-height: var(--control-height-touch);
+  }
+}
 .control-app-sidebar [data-slot="sidebar-menu"] {
   list-style: none;
   margin: 0;

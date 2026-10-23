@@ -27,11 +27,18 @@ impl HostedExecution {
             vaults: std::sync::Mutex::new(BTreeMap::new()),
         };
         let mut retained = BTreeMap::new();
+        let global = crate::global_settings::catalog(&host)
+            .map_err(|_| "hosted instance catalog unavailable")?;
         for (project, seed) in &host.deployment.projects {
             retained.insert(
                 project.clone(),
-                crate::chat_settings::retained_configuration(&host, project, seed)
-                    .map_err(|_| "hosted chat retained configuration unavailable")?,
+                crate::global_settings::inheritance::resolve(
+                    &crate::chat_settings::retained_configuration(&host, project, seed)
+                        .map_err(|_| "hosted chat retained configuration unavailable")?,
+                    &global,
+                    seed,
+                )
+                .map_err(|_| "hosted inherited configuration invalid")?,
             );
         }
         host.projects = RwLock::new(retained);
@@ -53,13 +60,15 @@ impl HostedExecution {
         &self,
         project: &str,
     ) -> std::result::Result<(), CloudError> {
-        if let Some(shared) = &self.shared {
+        {
             let seed = self
                 .deployment
                 .projects
                 .get(project)
                 .ok_or(CloudError::NotFound)?;
-            let configuration = shared.configuration(project, seed)?;
+            let raw = crate::chat_settings::retained_configuration(self, project, seed)?;
+            let global = crate::global_settings::catalog(self)?;
+            let configuration = crate::global_settings::inheritance::resolve(&raw, &global, seed)?;
             self.projects
                 .write()
                 .await
@@ -276,6 +285,10 @@ impl HostedExecution {
         let mut claim = shared::LeaseClaim::new(self.shared.clone(), lease.clone());
         let (mut runtime_config, credentials) =
             self.credentials(caller, &configuration, lease.clone())?;
+        // All hosted tenants use the collector accepted at this process startup.
+        // Persisting a desired replacement does not change journal disclosure or
+        // exporter behavior underneath already resident work.
+        runtime_config.observability = state.telemetry.applied_configuration().clone();
         let shared_runtime = if let (Some(shared), Some(lease)) = (&self.shared, &lease) {
             if configuration.codex_auth_path.is_some() {
                 return Err(CloudError::InvalidArgument);

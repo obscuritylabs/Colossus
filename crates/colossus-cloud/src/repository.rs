@@ -24,6 +24,7 @@ mod projects;
 mod renewal;
 mod tasks;
 mod threads;
+mod user_inventory;
 
 /// Project-scoped application services backed by cloud-owned relational storage.
 #[derive(Clone)]

@@ -8,13 +8,13 @@ icon: lucide/users
 
 # Projects and access
 
-Use **Administration** to manage users and projects. A global administrator can
+Use **Control Plane Admin** to manage users and projects. A global administrator can
 manage the service and shared project resources; personal hosted conversations and
 execution remain private to their owners.
 
 ## Create a project and grant access
 
-1. Open **Administration → Projects** and choose **New project**.
+1. Open **Control Plane Admin → Projects** and choose **New project**.
 2. Create the project, then open its **Access** view.
 3. Add each member with the role needed for their work.
 
@@ -34,6 +34,27 @@ Approver access cannot authorize a tool the runtime has not exposed. A personal
 hosted owner with Execute and Control can answer their own exact one-use approval;
 shared execution retains the separate project Approve requirement.
 
+## Review a user
+
+Open **Control Plane Admin → Users** and select a user's name. Their page shows account
+status, administrator access, contact details, login identities, and account timestamps.
+Choose **Edit user** to change the account or reset a local password.
+
+Use **Projects** to review explicit memberships, roles, and permissions, or follow
+**Manage access** to the project's access view. Global administrator access is
+separate from these memberships; it does not manufacture an execution role.
+
+The **Workspaces** and **Chats** views have a project selector and searchable,
+sortable tables with column visibility and row pagination. Search and sorting apply
+to loaded records; choose **Load more** when another server page is available.
+Each view has its own address, so bookmarks and browser history retain the selected
+user, view, and explicit project selection.
+
+Personal resource inventories remain owner-only, including chat titles. Reviewing
+another account shows a privacy notice instead of a resource count or private rows.
+Your own profile can list your authorized personal resources; opening a chat still
+requires the ordinary project and owner checks.
+
 ## Manage sign-in
 
 Local accounts are the Helm default. Bootstrap creates the first administrator
@@ -46,22 +67,62 @@ Changing the issuer or client ID requires users to sign in again.
 
 ## Configure hosted connections
 
-Project administrators use **Chat → Settings** to configure providers, model
-profiles, and remote MCP connections within the deployment's allowed origins.
-Users manage personal accounts in **Connections**. Settings expose connection
-metadata, not credentials or host file paths.
+Global administrators configure **Providers**, **Models**, **MCP servers**, **Search**,
+and **Model routing** under **Control Plane Admin**. Projects inherit these definitions.
+Under **Project Administration**, project administrators can customize an inherited
+definition, add a project definition, or remove one from the project. Expand the
+inherited configuration list to reset an override or enable a removed global definition.
+Saving requires the revision that was reviewed; reload if another administrator has
+changed it. Settings updates wait for hosted work to be idle.
+
+Connection definitions do not grant access to credentials. Choose personal authentication
+when each user supplies their own key, shared authentication when an administrator will
+attach a shared key, or no authentication for an anonymous service. Users manage their
+private keys in **Settings → Personal → Credentials** and account connections in
+**Connected accounts**. Project administrators manage project keys in
+**Project Administration → Secrets**. A global administrator can save an instance key
+in **Control Plane Admin → Secrets**, choose a project, and explicitly assign it to
+an eligible shared connection. That assignment takes precedence over project keys;
+project administrators cannot replace it. Rotation or removal of an instance key affects
+all of its assignments, even when the page shows only the selected project's connections.
+Saved secrets are encrypted and never returned to the browser.
+
+**Variables** stores nonsecret configuration values at instance, project, or personal
+scope. Projects inherit instance values and can override or reset them. Personal values
+are private to one account in the selected project. Variable names contain up to 128
+letters, digits, or underscores; values are limited to 4,096 UTF-8 bytes. They are stored
+configuration and are not automatically injected into runtime environments.
+
+Under **Search**, configure SearXNG or SerpAPI and select the agent and research routes.
+Search uses the same explicit personal or shared credential assignments as other
+connections. Definitions and project overrides remain subject to the deployment's
+allowed origins.
 
 Deployment owners configure the immutable network ceiling and external keys in
 [hosted chat deployment](deployment/hosted-chat.md).
 
+## Configure instance telemetry
+
+Use **Control Plane Admin → Telemetry** to configure one OpenTelemetry collector for
+the instance. Projects inherit this destination; execution spans and lifecycle logs
+carry project identity, while metrics remain instance aggregates. Cloud telemetry does
+not export full journal payloads or private conversation content.
+
+Save the collector configuration, then restart the Control Plane to apply it. The page
+shows **restart required** while the desired configuration differs from the running
+exporter. **Test collector** emits and flushes a diagnostic through the applied OTLP
+configuration. A successful test confirms that diagnostic flush; it does not guarantee
+future delivery. Keep telemetry disabled until the destination and transport have been
+reviewed for the deployment.
+
 ## Show deployment markings
 
-Open **Administration → Authentication & settings** to set a plain-text classification banner,
+Open **Control Plane Admin → Authentication & settings** to set a plain-text classification banner,
 tone, and top or top-and-bottom placement. The banner appears on sign-in and
 authenticated pages. It is a visual marking and does not enforce classification.
 Saved settings take precedence over the server's initial `classification` seed.
 
-To publish custom marking colors, open **Settings → Global → Appearance** as a
+To publish custom marking colors, open **Control Plane Admin → Appearance** as a
 global administrator. Under **Classification banner colors**, choose the background
 and text colors, review the preview, then select **Publish banner colors**. Both
 colors must use opaque `#RRGGBB` values with at least 4.5:1 text contrast. The saved
@@ -73,7 +134,7 @@ local to each browser.
 ## Publish instance announcements
 
 Global administrators publish product updates and operational notices through
-**Administration → Announcements**. Every signed-in account can read published
+**Control Plane Admin → Announcements**. Every signed-in account can read published
 announcements; drafts and archives remain administrator-only. These notices are
 separate from the deployment classification marking.
 

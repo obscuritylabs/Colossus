@@ -9,11 +9,15 @@ import { projectPath, request } from "./api";
 import { LoadState } from "./Home";
 import { errorMessage, useResource } from "./resources";
 import { ChatSettingsEditor, type SettingsEditor } from "./ChatSettingsEditors";
+import { ConnectionSettingsExtras } from "./ConnectionSettingsExtras";
+import { SettingsInheritancePanel } from "./SettingsInheritancePanel";
+import type { ConnectionSettingsSection } from "./routes";
 import {
   settingsWrite,
   type Authentication,
   type ChatSettingsSnapshot,
   type ChatSettingsWrite,
+  type InheritedSection,
 } from "./chat-settings";
 
 interface InventoryRow {
@@ -22,7 +26,6 @@ interface InventoryRow {
   authentication?: Authentication;
 }
 
-import { ChatSharedCredential } from "./ChatSharedCredential";
 import { ChatProjectCredentials } from "./ChatProjectCredentials";
 import type { CredentialSetup, CredentialTarget } from "./credential-types";
 
@@ -35,18 +38,22 @@ export function ChatSettings({
   onCredentials,
   onPersonalCredentials,
   credentialTarget,
+  settingsPath,
+  instanceScope = false,
 }: {
   project: string;
   identity: string;
   canAdminister: boolean;
   onClose: () => void;
   onSaved: () => void;
-  section?: "providers" | "models" | "mcp" | "credentials" | "routing";
+  section?: ConnectionSettingsSection;
+  settingsPath?: string;
+  instanceScope?: boolean;
   onCredentials?: (target?: CredentialTarget) => void;
   onPersonalCredentials?: (target?: CredentialTarget) => void;
   credentialTarget?: CredentialTarget | undefined;
 }) {
-  const path = `${projectPath(project)}/chat/settings`;
+  const path = settingsPath ?? `${projectPath(project)}/chat/settings`;
   const resource = useResource<ChatSettingsSnapshot>(
     canAdminister ? path : null,
     0,
@@ -54,12 +61,24 @@ export function ChatSettings({
   );
   const [draft, setDraft] = useState<ChatSettingsWrite | null>(null);
   const [editor, setEditor] = useState<SettingsEditor | null>(null);
+  const [extraEditor, setExtraEditor] = useState<
+    "search" | "variables" | "telemetry" | null
+  >(null);
+  const [resetExtraEditor, setResetExtraEditor] = useState(0);
+  const editing = Boolean(editor) || Boolean(extraEditor);
+  const extraSection = ["search", "telemetry", "variables"].includes(section);
   const [saving, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
   const [catalogBusy, setCatalogBusy] = useState(false);
   const busy = saving || catalogBusy;
-  const scope = JSON.stringify([project, identity, canAdminister]);
+  const scope = JSON.stringify([
+    path,
+    project,
+    identity,
+    canAdminister,
+    instanceScope,
+  ]);
   const currentScope = useRef(scope);
   const reconcilingRevision = useRef<{
     scope: string;
@@ -73,6 +92,8 @@ export function ChatSettings({
     setCatalogBusy(false);
     setError("");
     setNotice("");
+    setExtraEditor(null);
+    setResetExtraEditor((value) => value + 1);
   }, [scope]);
   useEffect(() => {
     if (resource.data) {
@@ -124,7 +145,11 @@ export function ChatSettings({
         setup,
       };
       reconciling = true;
-      setNotice("Project chat configuration saved.");
+      setNotice(
+        instanceScope
+          ? "Control Plane defaults published. Projects inherit these definitions; credentials remain explicitly assigned."
+          : "Project configuration saved.",
+      );
       resource.refresh();
       onSaved();
     } catch (e) {
@@ -136,6 +161,16 @@ export function ChatSettings({
       if (currentScope.current === submittedScope && !reconciling)
         setBusy(false);
     }
+  }
+  function resetInherited(kind: InheritedSection, id: string) {
+    if (!draft?.inheritance || busy || changed) return;
+    void save({
+      ...draft,
+      inheritance: {
+        global_revision: draft.inheritance.global_revision,
+        reset: { [kind]: [id] },
+      },
+    });
   }
   function remove(kind: SettingsEditor["kind"], id: string) {
     if (!draft || busy) return;
@@ -167,6 +202,9 @@ export function ChatSettings({
                   mcp: "mcp",
                   credentials: null,
                   routing: null,
+                  search: null,
+                  telemetry: null,
+                  variables: null,
                 } as const
               )[section]
             }
@@ -176,7 +214,15 @@ export function ChatSettings({
               editor={editor}
               draft={draft!}
               project={project}
-              saved={resource.data!}
+              settingsPath={path}
+              instanceScope={instanceScope}
+              saved={{
+                ...resource.data!,
+                credential_status: resource.data?.credential_status ?? {
+                  providers: {},
+                  mcp: {},
+                },
+              }}
               canManageCredentials={!changed}
               onCredentials={onCredentials}
               onPersonalCredentials={onPersonalCredentials}
@@ -199,15 +245,27 @@ export function ChatSettings({
   function actionBar() {
     return (
       <div className="chat-settings-actions">
-        {section !== "credentials" && onCredentials ? (
-          <Button onClick={() => onCredentials()}>Manage credentials</Button>
+        {section !== "credentials" &&
+        section !== "telemetry" &&
+        section !== "variables" &&
+        onCredentials ? (
+          <Button
+            disabled={busy || editing || changed}
+            onClick={() => onCredentials()}
+          >
+            Manage credentials
+          </Button>
         ) : null}
         <Button
           variant="primary"
-          disabled={!changed || busy || Boolean(editor)}
+          disabled={!changed || busy || editing}
           onClick={() => void save()}
         >
-          {busy ? "Saving…" : "Save project configuration"}
+          {busy
+            ? "Saving…"
+            : instanceScope
+              ? "Publish Control Plane defaults"
+              : "Save project configuration"}
         </Button>
         <Button
           disabled={busy}
@@ -225,6 +283,8 @@ export function ChatSettings({
             onClick={() => {
               if (resource.data) setDraft(settingsWrite(resource.data));
               setEditor(null);
+              setExtraEditor(null);
+              setResetExtraEditor((value) => value + 1);
               setError("");
               setNotice("Unsaved configuration changes discarded.");
             }}
@@ -264,7 +324,7 @@ export function ChatSettings({
             (kind === "provider" ? "providers" : "models")
           }
           busy={busy}
-          editing={Boolean(editor)}
+          editing={editing}
           onAdd={() => setEditor({ kind, id: "" })}
           footer={
             <>
@@ -288,6 +348,18 @@ export function ChatSettings({
             const roles = Object.entries(draft!.models.roles).filter(
               ([, profile]) => profile === row.id,
             );
+            const inheritedKind = kind === "provider" ? "providers" : "models";
+            const origin = instanceScope
+              ? "Control Plane definition"
+              : resource.data?.inheritance?.provenance[inheritedKind][
+                    row.id
+                  ] === "global"
+                ? "Inherited from Control Plane"
+                : resource.data?.inheritance?.global_entries?.[
+                      inheritedKind
+                    ].includes(row.id)
+                  ? "Project override"
+                  : "Project definition";
             return {
               id: row.id,
               label,
@@ -309,22 +381,34 @@ export function ChatSettings({
                   }
                 : {}),
               searchText: row.id + " " + label + " " + row.detail,
-              connection:
-                kind === "model"
-                  ? (draft!.labels?.providers[model?.providerProfile ?? ""] ??
-                    model?.providerProfile ??
-                    "")
-                  : row.authentication === "shared"
-                    ? "Project credential"
-                    : row.authentication === "none"
-                      ? "None"
-                      : "Personal account",
+              connection: (
+                <span>
+                  <span>
+                    {kind === "model"
+                      ? (draft!.labels?.providers[
+                          model?.providerProfile ?? ""
+                        ] ??
+                        model?.providerProfile ??
+                        "")
+                      : row.authentication === "shared"
+                        ? "Explicit shared credential"
+                        : row.authentication === "none"
+                          ? "None"
+                          : "Personal account"}
+                  </span>
+                  <small className="field-help">{origin}</small>
+                </span>
+              ),
               usage:
                 kind === "provider"
                   ? models.length + (models.length === 1 ? " model" : " models")
                   : roles.length + " assigned roles",
               actionAriaLabel: "Edit " + row.id,
-              mutationDisabled: Boolean(editor),
+              actionLabel:
+                origin === "Inherited from Control Plane"
+                  ? "Customize"
+                  : "Edit",
+              mutationDisabled: editing,
               onEdit: () => setEditor({ kind, id: row.id }),
               ...(!inUse(row.id)
                 ? { onDelete: () => remove(kind, row.id) }
@@ -335,11 +419,12 @@ export function ChatSettings({
                     Profile: <code>{row.id}</code>
                   </p>
                   <p>{row.detail}</p>
+                  <p className="field-help">{origin}</p>
                   {kind === "provider" ? (
                     <>
                       <p>
                         {row.authentication === "shared"
-                          ? "Shared project credential"
+                          ? "Explicit shared credential"
                           : row.authentication === "none"
                             ? "No authentication"
                             : "Each user connects their own account"}
@@ -397,7 +482,7 @@ export function ChatSettings({
               label: "Authentication",
               value: (row: InventoryRow) =>
                 row.authentication === "shared"
-                  ? "Shared project credential"
+                  ? "Explicit shared credential"
                   : row.authentication === "none"
                     ? "None"
                     : "Personal account",
@@ -410,14 +495,14 @@ export function ChatSettings({
         cell: (row) => (
           <div className="chat-settings-row-actions">
             <Button
-              disabled={busy || Boolean(editor)}
+              disabled={busy || editing}
               onClick={() => setEditor({ kind, id: row.id })}
             >
               Edit {row.id}
             </Button>
             <Button
               variant="danger"
-              disabled={busy || Boolean(editor) || inUse(row.id)}
+              disabled={busy || editing || inUse(row.id)}
               title={
                 inUse(row.id)
                   ? "Update model or role references before removing this profile."
@@ -427,33 +512,15 @@ export function ChatSettings({
             >
               Remove
             </Button>
-            {row.authentication === "shared" &&
-            !(
-              kind === "provider" &&
-              draft!.providers.profiles[row.id]?.kind === "open_ai_codex"
-            ) ? (
-              <ChatSharedCredential
-                key={`${scope}:${draft!.revision}:${row.id}`}
-                path={`${path}/${kind === "provider" ? "providers" : "mcp"}/${encodeURIComponent(row.id)}/credential`}
-                revision={draft!.revision}
-                endpoint={
-                  (kind === "provider"
-                    ? draft!.providers.profiles[row.id]?.baseUrl
-                    : draft!.mcp.servers[row.id]?.url) ?? ""
-                }
-                present={Boolean(
-                  (kind === "provider"
-                    ? resource.data?.credential_status.providers
-                    : resource.data?.credential_status.mcp)?.[row.id],
-                )}
-                disabled={busy || changed || Boolean(editor)}
-                onSaved={() => {
-                  resource.refresh();
-                  onSaved();
-                  setNotice("Project credential saved.");
-                }}
-                onError={(e) => setError(errorMessage(e))}
-              />
+            {!instanceScope &&
+            row.authentication === "shared" &&
+            onCredentials ? (
+              <Button
+                disabled={busy || changed || editing}
+                onClick={() => onCredentials({ kind: "mcp", id: row.id })}
+              >
+                Manage shared credential
+              </Button>
             ) : null}
           </div>
         ),
@@ -464,7 +531,7 @@ export function ChatSettings({
         <header className="catalog-heading">
           <h3>{title}</h3>
           <Button
-            disabled={busy || Boolean(editor)}
+            disabled={busy || editing}
             onClick={() => setEditor({ kind, id: "" })}
           >
             Add {kind === "mcp" ? "MCP connection" : kind}
@@ -491,44 +558,84 @@ export function ChatSettings({
   return (
     <section
       className="chat-settings catalog-settings"
-      aria-label="Project chat settings"
+      aria-label={
+        instanceScope ? "Control Plane configuration" : "Project chat settings"
+      }
       data-section={section}
     >
-      {!["providers", "models", "routing"].includes(section) ? (
+      {![
+        "providers",
+        "models",
+        "routing",
+        "search",
+        "telemetry",
+        "variables",
+      ].includes(section) ? (
         <header className="catalog-heading">
           <div>
             <h2>
-              {section === "providers"
-                ? "Providers"
-                : section === "models"
-                  ? "Models"
-                  : section === "routing"
-                    ? "Role routing"
-                    : section === "credentials"
-                      ? "Credentials"
-                      : "MCP connections"}
+              {section === "variables"
+                ? "Variables"
+                : section === "search"
+                  ? "Search"
+                  : section === "telemetry"
+                    ? "Telemetry"
+                    : section === "providers"
+                      ? "Providers"
+                      : section === "models"
+                        ? "Models"
+                        : section === "routing"
+                          ? "Role routing"
+                          : section === "credentials"
+                            ? "Credentials"
+                            : "MCP connections"}
             </h2>
             <p>
-              {section === "providers"
-                ? "Manage the model providers available to personal chats in this project."
-                : section === "models"
-                  ? "Configure model profiles and the roles that use them."
-                  : section === "routing"
-                    ? "Choose the primary model and specialized model assignments."
-                    : section === "credentials"
-                      ? "Save and replace the encrypted project credentials used by providers and MCP connections."
-                      : "Manage remote tools. Each person connects their own account unless a project credential is explicitly configured."}
+              {instanceScope
+                ? "Instance definitions are inherited by projects. Credentials require explicit project or personal attachment."
+                : section === "variables"
+                  ? "Nonsecret project configuration values."
+                  : section === "search"
+                    ? "Configure search services and their agent and research routes."
+                    : section === "telemetry"
+                      ? "View the collector configured for this Control Plane."
+                      : section === "providers"
+                        ? "Manage the model providers available to personal chats in this project."
+                        : section === "models"
+                          ? "Configure model profiles and the roles that use them."
+                          : section === "routing"
+                            ? "Choose the primary model and specialized model assignments."
+                            : section === "credentials"
+                              ? "Save and replace the encrypted project credentials used by providers and MCP connections."
+                              : "Manage remote tools. Each person connects their own account unless a project credential is explicitly configured."}
             </p>
           </div>
         </header>
       ) : null}
-      {!["providers", "models"].includes(section) ? (
+      {!["providers", "models", "variables", "telemetry"].includes(section) ? (
         <p className="field-help">
           Connection URLs must be allowed by your deployment administrator.
           Saving applies when chats are idle.
         </p>
       ) : null}
       <LoadState {...resource} retry={resource.refresh} />
+      {!instanceScope && resource.data ? (
+        <SettingsInheritancePanel
+          saved={resource.data}
+          section={section}
+          busy={busy || changed || editing}
+          onReset={resetInherited}
+        />
+      ) : null}
+      {!instanceScope && resource.data && section === "search" ? (
+        <SettingsInheritancePanel
+          saved={resource.data}
+          section="routing"
+          roleFamily="search"
+          busy={busy || changed || editing}
+          onReset={resetInherited}
+        />
+      ) : null}
       {error ? (
         <p className="alert" role="alert">
           {error}
@@ -541,7 +648,10 @@ export function ChatSettings({
       ) : null}
       {draft ? (
         <>
-          {!["providers", "models"].includes(section) ? actionBar() : null}
+          {!["providers", "models", "telemetry"].includes(section) &&
+          !extraSection
+            ? actionBar()
+            : null}
           {editor &&
           editor.kind !==
             (
@@ -551,6 +661,9 @@ export function ChatSettings({
                 mcp: "mcp",
                 credentials: null,
                 routing: null,
+                search: null,
+                telemetry: null,
+                variables: null,
               } as const
             )[section] ? (
             <p className="sync-notice" role="status">
@@ -571,7 +684,7 @@ export function ChatSettings({
               key={scope}
               path={path}
               identity={identity}
-              disabled={busy || changed || Boolean(editor)}
+              disabled={busy || changed || editing}
               onSaved={() => {
                 resource.refresh();
                 onSaved();
@@ -579,6 +692,55 @@ export function ChatSettings({
               }}
               initialConnection={credentialTarget}
             />
+          ) : null}
+          <div hidden={!["search", "telemetry", "variables"].includes(section)}>
+            <ConnectionSettingsExtras
+              section={
+                section === "telemetry" || section === "variables"
+                  ? section
+                  : "search"
+              }
+              draft={draft}
+              saved={resource.data!}
+              instanceScope={instanceScope}
+              busy={
+                busy ||
+                Boolean(editor) ||
+                Boolean(extraEditor && extraEditor !== section)
+              }
+              onEditingChange={setExtraEditor}
+              resetEditor={resetExtraEditor}
+              onChange={setDraft}
+              onSave={(value) => void save(value)}
+              onCredentials={onCredentials}
+              onPersonalCredentials={onPersonalCredentials}
+            />
+          </div>
+          {extraSection && section !== "telemetry" ? actionBar() : null}
+          {section === "telemetry" ? (
+            <Button disabled={busy || editing} onClick={resource.refresh}>
+              Reload settings
+            </Button>
+          ) : null}
+          {extraEditor && extraEditor !== section ? (
+            <p className="sync-notice" role="status">
+              An editor is still open in{" "}
+              {extraEditor === "search"
+                ? "Search"
+                : extraEditor === "variables"
+                  ? "Variables"
+                  : "Telemetry"}
+              . Return there to finish, or cancel editing.
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  setExtraEditor(null);
+                  setResetExtraEditor((value) => value + 1);
+                }}
+              >
+                Cancel editing
+              </Button>
+            </p>
           ) : null}
           <div hidden={section !== "providers"}>
             {inventory(
@@ -629,7 +791,7 @@ export function ChatSettings({
                     providerProfile: model.providerProfile,
                   }),
                 )}
-                disabled={busy || Boolean(editor)}
+                disabled={busy || editing}
                 onChange={(roles) =>
                   setDraft({ ...draft, models: { ...draft.models, roles } })
                 }
@@ -644,7 +806,7 @@ export function ChatSettings({
                     providerProfile: model.providerProfile,
                   }),
                 )}
-                disabled={busy || Boolean(editor)}
+                disabled={busy || editing}
                 onChange={(roles) =>
                   setDraft({ ...draft, models: { ...draft.models, roles } })
                 }

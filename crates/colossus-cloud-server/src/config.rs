@@ -100,6 +100,9 @@ pub struct ChatProjectConfig {
     /// Missing entries require each user's own credential; shared identity is explicit.
     #[serde(default)]
     pub mcp_authentication: BTreeMap<String, colossus_cloud_chat::ChatAuthentication>,
+    /// First-party Search follows the same explicit personal/shared selection.
+    #[serde(default)]
+    pub search_authentication: BTreeMap<String, colossus_cloud_chat::ChatAuthentication>,
     /// Provider credentials follow the same personal-by-default rule.
     #[serde(default)]
     pub provider_authentication: BTreeMap<String, colossus_cloud_chat::ChatAuthentication>,
@@ -109,6 +112,18 @@ pub struct ChatProjectConfig {
     /// Independent MCP credential generations preserve unrelated personal sign-ins.
     #[serde(default)]
     pub mcp_generations: BTreeMap<String, u64>,
+    /// Search connection identity generations are independent of MCP/provider edits.
+    #[serde(default)]
+    pub search_generations: BTreeMap<String, u64>,
+    /// Nonsecret reusable configuration values, without ambient environment injection.
+    #[serde(default)]
+    pub variables: BTreeMap<String, String>,
+    /// Derived from the retained local override record and current instance catalog.
+    #[serde(skip)]
+    pub(crate) inheritance: crate::global_settings::types::Inheritance,
+    /// Explicit project exclusions of inherited definitions; absence preserves legacy settings.
+    #[serde(default)]
+    pub(crate) catalog_disabled: crate::global_settings::types::Sections<BTreeSet<String>>,
     /// Exact configuration generation bound into credentials and browser OAuth flows.
     #[serde(default = "initial_chat_revision")]
     pub revision: u64,
@@ -130,6 +145,9 @@ pub struct ChatSettingsLabels {
     /// Model profile ID to display label; missing entries use the profile ID.
     #[serde(default)]
     pub models: BTreeMap<String, String>,
+    /// Display labels for first-party search profiles.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub search: BTreeMap<String, String>,
 }
 
 impl ChatSettingsLabels {
@@ -145,6 +163,10 @@ impl ChatSettingsLabels {
             (
                 &self.models,
                 runtime.models.profiles.keys().collect::<BTreeSet<_>>(),
+            ),
+            (
+                &self.search,
+                runtime.search.profiles.keys().collect::<BTreeSet<_>>(),
             ),
         ] {
             if labels.len() > profiles.len()
@@ -206,6 +228,26 @@ impl ChatConfig {
 }
 
 impl ChatProjectConfig {
+    /// Create an operator seed with private connection custody and no catalog overrides.
+    /// Deployment validation still reviews the supplied runtime before it can execute.
+    pub fn new(runtime: colossus_runtime::RuntimeConfig) -> Self {
+        Self {
+            runtime,
+            labels: Default::default(),
+            mcp_authentication: BTreeMap::new(),
+            search_authentication: BTreeMap::new(),
+            provider_authentication: BTreeMap::new(),
+            provider_generations: BTreeMap::new(),
+            mcp_generations: BTreeMap::new(),
+            search_generations: BTreeMap::new(),
+            variables: BTreeMap::new(),
+            inheritance: Default::default(),
+            catalog_disabled: Default::default(),
+            revision: 1,
+            codex_auth_path: None,
+            codex_auth_shared: false,
+        }
+    }
     pub(crate) fn generation(
         &self,
         kind: colossus_cloud_chat::ChatConnectionKind,
@@ -214,6 +256,7 @@ impl ChatProjectConfig {
         match kind {
             colossus_cloud_chat::ChatConnectionKind::Provider => &self.provider_generations,
             colossus_cloud_chat::ChatConnectionKind::Mcp => &self.mcp_generations,
+            colossus_cloud_chat::ChatConnectionKind::Search => &self.search_generations,
         }
         .get(id)
         .copied()

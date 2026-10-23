@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  adminUserHref,
   agentHref,
   chatThreadHref,
   chatConnectionsHref,
@@ -89,6 +90,35 @@ describe("Control Plane permalinks", () => {
       project: "project:a",
     });
   });
+  it("round-trips user profiles and their project-scoped inventories", () => {
+    expect(parseRoute(adminUserHref("user:a"), origin)).toEqual({
+      kind: "global",
+      surface: "admin",
+      view: "users",
+      user: "user:a",
+      userView: "overview",
+    });
+    for (const view of [
+      "overview",
+      "projects",
+      "workspaces",
+      "chats",
+    ] as const) {
+      const route = parseRoute(
+        adminUserHref("user:a", view, "project:b"),
+        origin,
+      );
+      expect(route).toEqual({
+        kind: "global",
+        surface: "admin",
+        view: "users",
+        user: "user:a",
+        userView: view,
+        project: "project:b",
+      });
+      expect(routeSurface(route)).toBe("admin");
+    }
+  });
   it("rejects malformed, ambiguous, oversized, and cross-origin destinations", () => {
     for (const href of [
       "https://other.example/fleet",
@@ -101,6 +131,12 @@ describe("Control Plane permalinks", () => {
       "/chat?project=p&user=other",
       "/projects/p/chat/%2Fsecret",
       "/projects/p/chat/t?node_id=other",
+      "/admin/users/%2Fsecret",
+      "/admin/users/%ZZ/chats",
+      "/admin/users/u/unknown",
+      "/admin/users/u/chats?owner=other",
+      "/admin/users/u/chats?project=p&project=q",
+      "/admin/users/u/chats?project=%2Fsecret",
       "/hosted?owner=other",
       "/projects/p/hosted/%2Fsecret",
       "/projects/p/hosted/n?owner=other",

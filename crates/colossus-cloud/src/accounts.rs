@@ -120,6 +120,36 @@ pub struct ProjectMembership {
     pub revision: u64,
 }
 
+/// Explicit project association rendered in account administration.
+#[derive(Clone, Debug, Serialize)]
+pub struct AdminUserProject {
+    /// Current project metadata, including archive state.
+    pub project: CloudProject,
+    /// The account's explicit role and permission ceiling.
+    pub membership: ProjectMembership,
+}
+
+/// Whether this account's personal inventory may be released to the actual viewer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserResourceVisibility {
+    /// The real viewer owns the requested personal resources.
+    Visible,
+    /// Administration does not release another account's personal inventory.
+    PersonalResourcesPrivate,
+}
+
+/// A bounded, visibility-preserving personal resource inventory.
+#[derive(Debug)]
+pub struct AdminUserResourcePage<T> {
+    /// Only resources personally owned by the selected account and visible to the viewer.
+    pub items: Vec<T>,
+    /// Exclusive stable continuation for the same collection.
+    pub next_cursor: Option<String>,
+    /// Explicitly distinguishes restricted personal inventory from an empty inventory.
+    pub visibility: UserResourceVisibility,
+}
+
 /// Verified provider binding. Emails are never used to link accounts.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OidcIdentity {

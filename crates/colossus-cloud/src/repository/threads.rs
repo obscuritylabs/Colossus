@@ -296,6 +296,7 @@ impl CloudRepository {
                 status: None,
                 archived: None,
                 visible_to: Some(caller.subject().into()),
+                owned_by: None,
                 order: EntityOrder::CreatedDesc,
             })
             .await?;
@@ -320,6 +321,7 @@ impl CloudRepository {
                 status: None,
                 archived: None,
                 visible_to: Some(caller.subject().into()),
+                owned_by: None,
                 order: EntityOrder::CreatedDesc,
             })
             .await?;
@@ -443,6 +445,7 @@ impl CloudRepository {
                 status: Some("main".into()),
                 archived,
                 visible_to: Some(caller.subject().into()),
+                owned_by: None,
                 order: EntityOrder::UpdatedDesc,
             })
             .await?;
@@ -790,6 +793,7 @@ impl CloudRepository {
                     status: None,
                     archived: None,
                     visible_to: None,
+                    owned_by: None,
                     order: EntityOrder::IdAsc,
                 })
                 .await?;

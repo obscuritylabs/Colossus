@@ -16,9 +16,6 @@ import {
   SidebarFooter,
   SidebarHeader,
   SidebarInset,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
   SidebarProvider,
   SidebarRail,
   SidebarTrigger,
@@ -29,16 +26,11 @@ import {
   classificationColorVariables,
   type ClassificationColors,
 } from "../lib/classification-colors";
-
-export interface ControlPlaneNavigation {
-  id: string;
-  label: string;
-  shortLabel?: string;
-  href?: string;
-  icon: ReactNode;
-  disabled?: boolean;
-  group?: string;
-}
+import {
+  ControlPlaneNavigationMenu,
+  type ControlPlaneNavigation,
+} from "./ControlPlaneNavigationMenu.js";
+export type { ControlPlaneNavigation } from "./ControlPlaneNavigationMenu.js";
 export interface ClassificationBanner {
   enabled: boolean;
   text: string;
@@ -49,6 +41,7 @@ export interface ClassificationBanner {
 interface FrameProps {
   current: string;
   navigation: ControlPlaneNavigation[];
+  collapsibleNavigationGroups?: readonly string[];
   onNavigate: (id: string) => void;
   sidebar?: ReactNode;
   header?: ReactNode;
@@ -100,6 +93,7 @@ export function ControlPlaneFrame(props: FrameProps) {
 function ControlWorkbench({
   current,
   navigation,
+  collapsibleNavigationGroups,
   onNavigate,
   sidebar,
   header,
@@ -230,77 +224,14 @@ function ControlWorkbench({
           )}
         </SidebarHeader>
         <SidebarContent>
-          <nav aria-label="Application">
-            {[...new Set(navigation.map((item) => item.group ?? ""))].map(
-              (group) => (
-                <section
-                  className="control-navigation-group"
-                  key={group}
-                  aria-label={group || undefined}
-                >
-                  {group ? (
-                    <h2 className="control-navigation-heading">{group}</h2>
-                  ) : null}
-                  <SidebarMenu>
-                    {navigation
-                      .filter((item) => (item.group ?? "") === group)
-                      .map((item) => (
-                        <SidebarMenuItem key={item.id}>
-                          <SidebarMenuButton
-                            asChild
-                            isActive={current === item.id}
-                            className="control-app-link"
-                            tooltip={
-                              !isMobile && !open ? item.label : undefined
-                            }
-                          >
-                            {item.href && !item.disabled ? (
-                              <a
-                                href={item.href}
-                                aria-current={
-                                  current === item.id ? "page" : undefined
-                                }
-                                title={item.label}
-                                aria-label={item.label}
-                                onClick={(event) => {
-                                  if (
-                                    event.button ||
-                                    event.metaKey ||
-                                    event.ctrlKey ||
-                                    event.shiftKey ||
-                                    event.altKey
-                                  )
-                                    return;
-                                  event.preventDefault();
-                                  onNavigate(item.id);
-                                }}
-                              >
-                                {item.icon}
-                                <span>{item.label}</span>
-                              </a>
-                            ) : (
-                              <button
-                                type="button"
-                                aria-current={
-                                  current === item.id ? "page" : undefined
-                                }
-                                disabled={item.disabled}
-                                onClick={() => onNavigate(item.id)}
-                                title={item.label}
-                                aria-label={item.label}
-                              >
-                                {item.icon}
-                                <span>{item.label}</span>
-                              </button>
-                            )}
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      ))}
-                  </SidebarMenu>
-                </section>
-              ),
-            )}
-          </nav>
+          <ControlPlaneNavigationMenu
+            current={current}
+            navigation={navigation}
+            onNavigate={onNavigate}
+            {...(collapsibleNavigationGroups
+              ? { collapsibleNavigationGroups }
+              : {})}
+          />
           {footer ? (
             <div className="control-sidebar-utilities">{footer}</div>
           ) : null}

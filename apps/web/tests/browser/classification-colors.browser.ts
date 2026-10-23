@@ -65,7 +65,7 @@ test("global administrators publish and reset readable classification colors fro
     }
   });
   await page.setViewportSize({ width: 1280, height: 1000 });
-  await page.goto("/settings?project=browser-project");
+  await page.goto("/admin/appearance?project=browser-project");
   const editor = page.getByRole("region", {
     name: "Classification banner colors",
     exact: true,
@@ -107,6 +107,7 @@ test("global administrators publish and reset readable classification colors fro
   await page.setViewportSize({ width: 390, height: 844 });
   for (const appearance of appearanceCases) {
     await selectAppearance(page, appearance);
+    await page.goto("/admin/appearance?project=browser-project");
     await expect(editor).toBeVisible();
     await expect(banners.first()).toHaveCSS(
       "background-color",

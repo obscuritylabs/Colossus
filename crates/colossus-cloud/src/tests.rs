@@ -28,6 +28,8 @@ mod resources;
 mod thread_metadata;
 #[path = "tests/titles.rs"]
 mod titles;
+#[path = "tests/user_inventory.rs"]
+mod user_inventory;
 
 fn caller(project: &str, permissions: &[CloudPermission]) -> CloudCaller {
     CloudCaller::new(

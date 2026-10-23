@@ -287,7 +287,7 @@ for (const appearance of appearanceCases) {
       },
     });
     await expect(
-      page.getByText("Project chat configuration saved.", { exact: true }),
+      page.getByText("Project configuration saved.", { exact: true }),
     ).toBeVisible();
     await page
       .getByRole("button", { name: "Back to work", exact: true })

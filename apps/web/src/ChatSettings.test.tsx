@@ -119,9 +119,19 @@ beforeEach(() => {
       }
       return new Promise<Response>((resolve) => {
         pendingSave = (response) => {
+          const { inheritance, ...configuration } =
+            body as unknown as ChatSettingsWrite;
           settings = {
             ...settings,
-            ...(body as unknown as ChatSettingsWrite),
+            ...configuration,
+            ...(inheritance && settings.inheritance
+              ? {
+                  inheritance: {
+                    ...settings.inheritance,
+                    global_revision: inheritance.global_revision,
+                  },
+                }
+              : {}),
             revision: settings.revision + 1,
           };
           resolve(response);
@@ -216,7 +226,7 @@ it("edits typed provider settings while preserving advanced fields and submittin
   expect(writes[0]!.body).not.toHaveProperty("credential_status");
   expect(button("Saving…").disabled).toBe(true);
   await act(() => pendingSave!(json({ revision: 8 })));
-  expect(container.textContent).toContain("Project chat configuration saved");
+  expect(container.textContent).toContain("Project configuration saved");
   expect(onSaved).toHaveBeenCalledOnce();
 });
 

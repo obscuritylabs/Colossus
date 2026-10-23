@@ -44,6 +44,14 @@ impl CloudStore for MetadataOnlyStore {
     async fn memberships(&self, subject: &str) -> CloudResult<Vec<EntityRecord>> {
         self.inner.memberships(subject).await
     }
+    async fn memberships_page(
+        &self,
+        subject: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> CloudResult<Vec<EntityRecord>> {
+        self.inner.memberships_page(subject, after, limit).await
+    }
     async fn thread_incomplete(&self, project: &str, thread: &str) -> CloudResult<bool> {
         self.inner.thread_incomplete(project, thread).await
     }

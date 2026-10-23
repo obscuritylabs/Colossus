@@ -3,11 +3,12 @@ use crate::{
 };
 use opentelemetry::{
     Key, KeyValue, global,
+    logs::{LogRecord as _, Logger as _, LoggerProvider as _},
     metrics::MeterProvider as _,
     trace::{Span as _, Tracer as _, TracerProvider as _},
 };
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_otlp::WithExportConfig as _;
+use opentelemetry_otlp::{WithExportConfig as _, WithHttpConfig as _};
 use opentelemetry_sdk::{
     Resource,
     logs::SdkLoggerProvider,
@@ -214,6 +215,12 @@ impl ObservabilityDiagnostics {
                 .build()
                 .add(1, &[]);
         }
+        if let Some(provider) = self.logger_provider.as_ref() {
+            let logger = provider.logger("colossus.diagnostics");
+            let mut record = logger.create_log_record();
+            record.set_body("colossus.observability.diagnostic".into());
+            logger.emit(record);
+        }
 
         let mut checks = Vec::with_capacity(3);
         push_flush_check(
@@ -310,6 +317,7 @@ fn build_tracer_provider(
             .build(),
         OtlpProtocol::HttpProtobuf => opentelemetry_otlp::SpanExporter::builder()
             .with_http()
+            .with_http_client(blocking_http_client(config, Signal::Traces)?)
             .with_endpoint(endpoint)
             .with_timeout(config.timeout_for(Signal::Traces))
             .build(),
@@ -335,6 +343,7 @@ fn build_meter_provider(
             .build(),
         OtlpProtocol::HttpProtobuf => opentelemetry_otlp::MetricExporter::builder()
             .with_http()
+            .with_http_client(blocking_http_client(config, Signal::Metrics)?)
             .with_endpoint(endpoint)
             .with_timeout(config.timeout_for(Signal::Metrics))
             .build(),
@@ -449,6 +458,7 @@ fn build_logger_provider(
             .build(),
         OtlpProtocol::HttpProtobuf => opentelemetry_otlp::LogExporter::builder()
             .with_http()
+            .with_http_client(blocking_http_client(config, Signal::Logs)?)
             .with_endpoint(endpoint)
             .with_timeout(config.timeout_for(Signal::Logs))
             .build(),
@@ -458,6 +468,24 @@ fn build_logger_provider(
         .with_resource(resource)
         .with_batch_exporter(exporter)
         .build())
+}
+
+fn blocking_http_client(
+    config: &ObservabilityConfig,
+    signal: Signal,
+) -> Result<reqwest_otel::blocking::Client, ObservabilityError> {
+    let timeout = config.timeout_for(signal);
+    // SDK batch processors use dedicated ordinary threads. Explicitly choose a
+    // blocking client even if feature unification enables OTLP's async client.
+    // Construct its internal runtime outside any host Tokio runtime as well.
+    std::thread::spawn(move || {
+        reqwest_otel::blocking::Client::builder()
+            .timeout(timeout)
+            .build()
+    })
+    .join()
+    .map_err(|_| initialization("HTTP collector client worker unavailable"))?
+    .map_err(initialization)
 }
 
 fn resource(config: &ObservabilityConfig) -> Resource {
@@ -506,7 +534,10 @@ mod tests {
         ObservabilityDiagnostics, is_colossus_journal_target, is_colossus_log_metadata,
         is_colossus_trace_target,
     };
-    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry::{
+        logs::{LogRecord as _, Logger as _, LoggerProvider as _},
+        trace::TracerProvider as _,
+    };
     use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
     use opentelemetry_sdk::{
         logs::{InMemoryLogExporter, SdkLoggerProvider},
@@ -534,6 +565,50 @@ mod tests {
         assert!(!serialized.contains("endpoint"));
         assert!(!serialized.contains("header"));
         assert!(!serialized.contains("payload"));
+    }
+
+    #[test]
+    fn diagnostics_emit_a_constant_log_before_flushing_log_only_collectors() {
+        let exporter = InMemoryLogExporter::default();
+        let provider = SdkLoggerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        // The host retains shutdown ownership while diagnostic handles are borrowed
+        // or dropped. The in-memory exporter clears its records on shutdown.
+        let diagnostics = ObservabilityDiagnostics {
+            tracer_provider: None,
+            meter_provider: None,
+            logger_provider: Some(provider.clone()),
+        };
+        let report = diagnostics.force_flush();
+        assert!(report.ready);
+        let records = exporter.get_emitted_logs().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].record.body(),
+            Some(&opentelemetry::logs::AnyValue::from(
+                "colossus.observability.diagnostic"
+            ))
+        );
+        assert_eq!(report.checks[2].status, "pass");
+        drop(diagnostics);
+        assert!(!exporter.is_shutdown_called());
+
+        let logger = provider.logger("colossus.lifecycle");
+        let mut record = logger.create_log_record();
+        record.set_body("colossus.lifecycle.after-diagnostic".into());
+        logger.emit(record);
+        provider.force_flush().expect("flush after diagnostic");
+        let records = exporter.get_emitted_logs().unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records[1].record.body(),
+            Some(&opentelemetry::logs::AnyValue::from(
+                "colossus.lifecycle.after-diagnostic"
+            ))
+        );
+        provider.shutdown().expect("host-owned shutdown");
+        assert!(exporter.is_shutdown_called());
     }
 
     #[test]

@@ -46,6 +46,7 @@ mod context_failures;
 mod image_views;
 mod plan_interaction;
 mod process_sessions;
+mod project_telemetry;
 mod schedule_approval;
 mod sharing;
 mod standalone_goal;
@@ -1592,6 +1593,10 @@ fn runtime_service_conformance() {
             ))
             .await;
             policy_metadata_is_scoped_path_free_and_updates_with_native_mode(Arc::clone(
+                &fixture.runtime,
+            ))
+            .await;
+            project_telemetry::trusted_project_follows_spawned_and_recovered_work(Arc::clone(
                 &fixture.runtime,
             ))
             .await;

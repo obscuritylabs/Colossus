@@ -1,0 +1,718 @@
+import { useEffect, useRef, useState } from "react";
+import {
+  Button,
+  CatalogInventory,
+  DropdownSelect,
+  TextInput,
+} from "@colossus/ui";
+import { DataTable, type DataTableColumn } from "@colossus/ui/data-table";
+import {
+  SearchSettingsEditor,
+  type SearchSettingsDraft,
+} from "@colossus/ui/components/SearchSettingsEditor";
+import {
+  TelemetrySettingsEditor,
+  type TelemetrySettingsDraft,
+} from "@colossus/ui/components/TelemetrySettingsEditor";
+import type { CredentialTarget } from "./credential-types";
+import { request } from "./api";
+import { errorMessage } from "./resources";
+import {
+  validProfile,
+  validVariableName,
+  type Authentication,
+  type ChatSettingsSnapshot,
+  type ChatSettingsWrite,
+  type ObservabilitySettings,
+  type SearchProfile,
+} from "./chat-settings";
+
+function effectiveSearchAuthentication(
+  draft: ChatSettingsWrite,
+  id: string,
+  profile?: SearchProfile,
+): Authentication {
+  return (
+    draft.search_authentication?.[id] ??
+    (profile?.credentialReference ? "personal" : "none")
+  );
+}
+
+const telemetryDefaults: ObservabilitySettings = {
+  enabled: false,
+  serviceName: "colossus",
+  resourceAttributes: {},
+  traces: { enabled: false, sampleRatio: 1 },
+  metrics: { enabled: false, exportIntervalMs: 60000 },
+  logs: {
+    otlp: false,
+    stdoutJson: false,
+    journalPayloads: "disabled",
+    acknowledgeSensitiveContent: false,
+  },
+  otlp: {
+    endpoint: null,
+    protocol: "grpc",
+    timeoutMs: 10000,
+    acknowledgeInsecureTransport: false,
+  },
+};
+function telemetryDraft(value: ObservabilitySettings): TelemetrySettingsDraft {
+  return {
+    resourceId: "control-plane",
+    label: "Control Plane collector",
+    name: value.serviceName,
+    endpoint: value.otlp.endpoint,
+    protocol: value.otlp.protocol,
+    timeoutMs: value.otlp.timeoutMs,
+    tracesEnabled: value.traces.enabled,
+    traceSampleRatioMillionths: Math.round(value.traces.sampleRatio * 1000000),
+    metricsEnabled: value.metrics.enabled,
+    metricExportIntervalMs: value.metrics.exportIntervalMs,
+    logsOtlp: value.logs.otlp,
+    logsStdoutJson: value.logs.stdoutJson,
+    journalPayloads: value.logs.journalPayloads,
+    acknowledgeSensitiveContent: false,
+    acknowledgeInsecureTransport: value.otlp.acknowledgeInsecureTransport,
+    resourceAttributesText: Object.entries(value.resourceAttributes)
+      .map(([key, text]) => `${key}=${text}`)
+      .join("\n"),
+  };
+}
+
+/** The Web host binds shared editors to an authenticated, revisioned settings draft. */
+export function ConnectionSettingsExtras({
+  section,
+  draft,
+  saved,
+  instanceScope,
+  busy,
+  onChange,
+  onSave,
+  onCredentials,
+  onPersonalCredentials,
+  onEditingChange,
+  resetEditor = 0,
+}: {
+  section: "search" | "variables" | "telemetry";
+  draft: ChatSettingsWrite;
+  saved: ChatSettingsSnapshot;
+  instanceScope: boolean;
+  busy: boolean;
+  onChange: (value: ChatSettingsWrite) => void;
+  onSave: (value: ChatSettingsWrite) => void;
+  onCredentials?: ((target?: CredentialTarget) => void) | undefined;
+  onPersonalCredentials?: ((target?: CredentialTarget) => void) | undefined;
+  onEditingChange?: (
+    section: "search" | "variables" | "telemetry" | null,
+  ) => void;
+  resetEditor?: number;
+}) {
+  const [searchEditor, setSearchEditor] = useState<
+    (SearchSettingsDraft & { authentication: Authentication }) | null
+  >(null);
+  const [variable, setVariable] = useState<{
+    original: string;
+    name: string;
+    value: string;
+  } | null>(null);
+  const [telemetry, setTelemetry] = useState<TelemetrySettingsDraft | null>(
+    null,
+  );
+  const [error, setError] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [diagnostic, setDiagnostic] = useState("");
+  const alive = useRef(true);
+  const currentRevision = useRef(saved.revision);
+  currentRevision.current = saved.revision;
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    setSearchEditor(null);
+    setVariable(null);
+    setTelemetry(null);
+    setError("");
+    setDiagnostic("");
+  }, [saved.revision]);
+  useEffect(() => {
+    setSearchEditor(null);
+    setVariable(null);
+    setTelemetry(null);
+    setError("");
+  }, [resetEditor]);
+  useEffect(() => {
+    onEditingChange?.(
+      searchEditor
+        ? "search"
+        : variable
+          ? "variables"
+          : telemetry
+            ? "telemetry"
+            : null,
+    );
+  }, [
+    Boolean(searchEditor),
+    Boolean(variable),
+    Boolean(telemetry),
+    onEditingChange,
+  ]);
+  const search = draft.search ?? { profiles: {}, roles: {} };
+  const attributes = draft.variables ?? {};
+  const columns: DataTableColumn<{ name: string; value: string }>[] = [
+    { id: "name", label: "Name", value: (row) => row.name },
+    { id: "value", label: "Value", value: (row) => row.value },
+    {
+      id: "source",
+      label: "Source",
+      value: (row) =>
+        saved.inheritance?.provenance.variables[row.name] === "global"
+          ? "Control Plane"
+          : instanceScope
+            ? "Control Plane"
+            : "Project",
+    },
+    {
+      id: "actions",
+      label: "Actions",
+      value: () => "",
+      cell: (row) => (
+        <div className="chat-settings-row-actions">
+          <Button
+            disabled={busy || Boolean(variable)}
+            onClick={() => setVariable({ original: row.name, ...row })}
+          >
+            Edit {row.name}
+          </Button>
+          <Button
+            disabled={busy || Boolean(variable)}
+            variant="danger"
+            onClick={() => {
+              const variables = { ...attributes };
+              delete variables[row.name];
+              onChange({ ...draft, variables });
+            }}
+          >
+            Remove
+          </Button>
+        </div>
+      ),
+    },
+  ];
+  if (section === "variables")
+    return (
+      <section aria-label="Configuration variables">
+        <header className="catalog-heading">
+          <div>
+            <h2>Variables</h2>
+            <p>
+              Reusable, nonsecret configuration values. Global values flow into
+              projects; project values can override them. Values are available
+              to authorized project members and are not injected into process
+              environments.
+            </p>
+          </div>
+          <Button
+            disabled={busy || Boolean(variable)}
+            onClick={() => setVariable({ original: "", name: "", value: "" })}
+          >
+            Add variable
+          </Button>
+        </header>
+        {error ? <p role="alert">{error}</p> : null}
+        {variable ? (
+          <form
+            className="chat-settings-editor"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (
+                !validVariableName(variable.name) ||
+                new TextEncoder().encode(variable.value).length > 4096 ||
+                variable.value.includes("\0")
+              ) {
+                setError(
+                  "Use 1–128 letters, digits, or underscores for the name and at most 4,096 UTF-8 bytes for the value.",
+                );
+                return;
+              }
+              if (
+                !variable.original &&
+                Object.hasOwn(attributes, variable.name)
+              ) {
+                setError(
+                  "That variable already exists. Edit it to change its value.",
+                );
+                return;
+              }
+              const variables = { ...attributes };
+              if (variable.original !== variable.name)
+                delete variables[variable.original];
+              onSave({
+                ...draft,
+                variables: { ...variables, [variable.name]: variable.value },
+              });
+            }}
+          >
+            <h3>{variable.original ? "Edit variable" : "Add variable"}</h3>
+            <label>
+              Name
+              <TextInput
+                aria-label="Variable name"
+                value={variable.name}
+                maxLength={128}
+                disabled={busy || Boolean(variable.original)}
+                onChange={(event) =>
+                  setVariable({ ...variable, name: event.target.value })
+                }
+                required
+              />
+            </label>
+            <label>
+              Value
+              <TextInput
+                aria-label="Variable value"
+                value={variable.value}
+                maxLength={4096}
+                disabled={busy}
+                onChange={(event) =>
+                  setVariable({ ...variable, value: event.target.value })
+                }
+              />
+            </label>
+            <p className="field-help">
+              For API keys and tokens, use Secrets. Variable values are visible
+              configuration.
+            </p>
+            <div className="chat-settings-actions">
+              <Button type="submit" variant="primary" disabled={busy}>
+                Save variable
+              </Button>
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  setVariable(null);
+                  setError("");
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        ) : null}
+        <DataTable
+          data={Object.entries(attributes).map(([name, value]) => ({
+            name,
+            value,
+          }))}
+          columns={columns}
+          getRowId={(row) => row.name}
+          label="Configuration variables"
+          search={{ columnId: "name", label: "Search variables" }}
+          empty="No variables configured."
+        />
+      </section>
+    );
+  if (section === "telemetry") {
+    const value = draft.observability ?? telemetryDefaults;
+    return (
+      <section aria-label="OpenTelemetry settings">
+        <header className="catalog-heading">
+          <div>
+            <h2>OpenTelemetry</h2>
+            <p>
+              One Control Plane collector is inherited by every project.
+              Execution spans and lifecycle logs carry project identity; metrics
+              remain instance aggregates.
+            </p>
+          </div>
+          {instanceScope ? (
+            <Button
+              disabled={busy || Boolean(telemetry)}
+              onClick={() => setTelemetry(telemetryDraft(value))}
+            >
+              Configure collector
+            </Button>
+          ) : null}
+        </header>
+        <p role="status" className="sync-notice">
+          {saved.telemetry?.state === "restart_required"
+            ? "Collector changes are saved. Restart the Control Plane to apply them; the running exporter is unchanged."
+            : saved.telemetry?.state === "active"
+              ? "The exporter is initialized with the saved configuration. Use Test collector to check diagnostic delivery."
+              : "Telemetry export is disabled."}
+        </p>
+        {instanceScope ? (
+          <>
+            <Button
+              disabled={
+                busy ||
+                testing ||
+                saved.telemetry?.state !== "active" ||
+                !value.enabled ||
+                !(
+                  value.traces.enabled ||
+                  value.metrics.enabled ||
+                  value.logs.otlp
+                )
+              }
+              onClick={async () => {
+                const revision = saved.revision;
+                setTesting(true);
+                setDiagnostic("");
+                try {
+                  const result = await request<{
+                    status: "passed" | "failed";
+                    message: string;
+                    revision: number;
+                  }>("/api/admin/hosted-settings/telemetry/test", { revision });
+                  if (
+                    alive.current &&
+                    currentRevision.current === revision &&
+                    result.revision === revision
+                  )
+                    setDiagnostic(result.message);
+                } catch (cause) {
+                  if (alive.current && currentRevision.current === revision)
+                    setDiagnostic(errorMessage(cause));
+                } finally {
+                  if (alive.current) setTesting(false);
+                }
+              }}
+            >
+              {testing ? "Testing collector…" : "Test collector"}
+            </Button>
+            {diagnostic ? <p role="status">{diagnostic}</p> : null}
+          </>
+        ) : null}
+        <dl className="stat-list">
+          <div>
+            <dt>Configuration</dt>
+            <dd>
+              {instanceScope
+                ? "Control Plane administrator"
+                : "Inherited from Control Plane"}
+            </dd>
+          </div>
+          <div>
+            <dt>Collector</dt>
+            <dd>{value.otlp.endpoint || "Not configured"}</dd>
+          </div>
+          <div>
+            <dt>Service</dt>
+            <dd>{value.serviceName}</dd>
+          </div>
+          <div>
+            <dt>Signals</dt>
+            <dd>
+              {[
+                value.traces.enabled && "Traces",
+                value.metrics.enabled && "Metrics",
+                value.logs.otlp && "Lifecycle logs",
+              ]
+                .filter(Boolean)
+                .join(" · ") || "None"}
+            </dd>
+          </div>
+        </dl>
+        <p className="field-help">
+          Private conversation and tool payloads are excluded. Collector changes
+          take effect after a Control Plane restart.
+        </p>
+        {error ? <p role="alert">{error}</p> : null}
+        {instanceScope && telemetry ? (
+          <TelemetrySettingsEditor
+            showDisplayLabel={false}
+            draft={telemetry}
+            busy={busy}
+            onChange={setTelemetry}
+            onCancel={() => setTelemetry(null)}
+            allowSensitivePayloads={false}
+            onSave={() => {
+              try {
+                const resourceAttributes: Record<string, string> = {};
+                for (const line of telemetry.resourceAttributesText
+                  .split("\n")
+                  .filter((line) => line.trim())) {
+                  const split = line.indexOf("=");
+                  if (split < 1)
+                    throw new Error(
+                      "Enter resource attributes as one name=value pair per line.",
+                    );
+                  const key = line.slice(0, split).trim();
+                  if (Object.hasOwn(resourceAttributes, key))
+                    throw new Error("Resource attribute names must be unique.");
+                  resourceAttributes[key] = line.slice(split + 1).trim();
+                }
+                onSave({
+                  ...draft,
+                  observability: {
+                    enabled:
+                      telemetry.tracesEnabled ||
+                      telemetry.metricsEnabled ||
+                      telemetry.logsOtlp ||
+                      telemetry.logsStdoutJson,
+                    serviceName: telemetry.name,
+                    resourceAttributes,
+                    traces: {
+                      enabled: telemetry.tracesEnabled,
+                      sampleRatio:
+                        telemetry.traceSampleRatioMillionths / 1000000,
+                    },
+                    metrics: {
+                      enabled: telemetry.metricsEnabled,
+                      exportIntervalMs: telemetry.metricExportIntervalMs,
+                    },
+                    logs: {
+                      otlp: telemetry.logsOtlp,
+                      stdoutJson: telemetry.logsStdoutJson,
+                      journalPayloads: telemetry.journalPayloads,
+                      acknowledgeSensitiveContent: false,
+                    },
+                    otlp: {
+                      endpoint: telemetry.endpoint,
+                      protocol: telemetry.protocol,
+                      timeoutMs: telemetry.timeoutMs,
+                      acknowledgeInsecureTransport:
+                        telemetry.acknowledgeInsecureTransport,
+                    },
+                  },
+                });
+              } catch (cause) {
+                setError(
+                  cause instanceof Error
+                    ? cause.message
+                    : "Review the collector configuration.",
+                );
+              }
+            }}
+          />
+        ) : null}
+      </section>
+    );
+  }
+  function editSearch(id = "") {
+    const profile = search.profiles[id];
+    setError("");
+    setSearchEditor({
+      resourceId: id || null,
+      label: draft.labels?.search?.[id] ?? id,
+      profile: id,
+      kind: profile?.kind ?? "searxng",
+      endpoint: profile?.endpoint ?? "",
+      authHeader: profile?.authHeader ?? "",
+      timeoutMs: profile?.timeoutMs ?? 30000,
+      userAgent: profile?.userAgent ?? "colossus",
+      authentication: effectiveSearchAuthentication(draft, id, profile),
+    });
+  }
+  return (
+    <section aria-label="Search services">
+      <CatalogInventory
+        kind="search"
+        headingLevel={2}
+        summary={`${Object.keys(search.profiles).length} search services`}
+        busy={busy}
+        editing={Boolean(searchEditor)}
+        onAdd={() => editSearch()}
+        emptyDescription="Connect a search service, then choose where agent and research searches run."
+        rows={Object.entries(search.profiles).map(([id, value]) => ({
+          id,
+          label: draft.labels?.search?.[id] ?? id,
+          name: draft.labels?.search?.[id] ?? id,
+          description: value.endpoint ?? "SerpAPI",
+          searchText: `${id} ${draft.labels?.search?.[id] ?? ""} ${value.endpoint ?? ""}`,
+          connection:
+            effectiveSearchAuthentication(draft, id, value) === "none"
+              ? "No authentication"
+              : "Explicit credential",
+          usage:
+            Object.entries(search.roles)
+              .filter(([, profile]) => profile === id)
+              .map(([role]) => role)
+              .join(", ") || "Not routed",
+          onEdit: () => editSearch(id),
+          ...(!Object.values(search.roles).includes(id)
+            ? {
+                onDelete: () => {
+                  const profiles = { ...search.profiles };
+                  delete profiles[id];
+                  const search_authentication = {
+                    ...draft.search_authentication,
+                  };
+                  delete search_authentication[id];
+                  const labels = {
+                    ...(draft.labels ?? { providers: {}, models: {} }),
+                    search: { ...draft.labels?.search },
+                  };
+                  delete labels.search[id];
+                  onChange({
+                    ...draft,
+                    search: { ...search, profiles },
+                    search_authentication,
+                    labels,
+                  });
+                },
+              }
+            : {}),
+          details: (
+            <>
+              <p>
+                {saved.inheritance?.provenance.search[id] === "global"
+                  ? "Inherited from Control Plane"
+                  : instanceScope
+                    ? "Control Plane definition"
+                    : "Project definition"}
+              </p>
+              {(effectiveSearchAuthentication(draft, id, value) === "personal"
+                ? onPersonalCredentials
+                : onCredentials) &&
+              effectiveSearchAuthentication(draft, id, value) !== "none" ? (
+                <Button
+                  disabled={busy || Boolean(searchEditor)}
+                  onClick={() =>
+                    (effectiveSearchAuthentication(draft, id, value) ===
+                      "personal"
+                      ? onPersonalCredentials
+                      : onCredentials)?.({ kind: "search", id })
+                  }
+                >
+                  Manage search credential
+                </Button>
+              ) : null}
+            </>
+          ),
+        }))}
+      >
+        {error ? <p role="alert">{error}</p> : null}
+        {searchEditor ? (
+          <SearchSettingsEditor
+            draft={searchEditor}
+            busy={busy}
+            onChange={(value) =>
+              setSearchEditor({
+                ...value,
+                authentication:
+                  value.kind === "serp_api" && value.authentication === "none"
+                    ? "personal"
+                    : value.authentication,
+              })
+            }
+            onCancel={() => setSearchEditor(null)}
+            profileReadOnly={Boolean(searchEditor.resourceId)}
+            authentication={
+              <label>
+                Authentication
+                <DropdownSelect
+                  aria-label="Search authentication"
+                  value={searchEditor.authentication}
+                  onChange={(event) =>
+                    setSearchEditor({
+                      ...searchEditor,
+                      authentication: event.target.value as Authentication,
+                    })
+                  }
+                >
+                  <option value="none">No authentication</option>
+                  <option value="personal">
+                    Personal credential (each user)
+                  </option>
+                  <option value="shared">
+                    Shared credential (explicit assignment)
+                  </option>
+                </DropdownSelect>
+              </label>
+            }
+            onSave={() => {
+              if (
+                !validProfile(searchEditor.profile) ||
+                (!searchEditor.resourceId &&
+                  Object.hasOwn(search.profiles, searchEditor.profile))
+              ) {
+                setError("Enter a unique, valid search profile ID.");
+                return;
+              }
+              if (
+                searchEditor.kind === "serp_api" &&
+                searchEditor.authentication === "none"
+              ) {
+                setError(
+                  "SerpAPI requires a personal or explicitly shared credential.",
+                );
+                return;
+              }
+              const profile = {
+                ...(search.profiles[searchEditor.profile]?.kind ===
+                searchEditor.kind
+                  ? search.profiles[searchEditor.profile]
+                  : {}),
+                kind: searchEditor.kind,
+                endpoint: searchEditor.endpoint,
+                timeoutMs: searchEditor.timeoutMs,
+                credentialReference:
+                  searchEditor.authentication === "none"
+                    ? null
+                    : "host:managed",
+                ...(searchEditor.kind === "searxng"
+                  ? {
+                      authHeader: searchEditor.authHeader || "X-Searxng-Key",
+                      userAgent: searchEditor.userAgent || "colossus",
+                    }
+                  : {}),
+              };
+              onSave({
+                ...draft,
+                labels: {
+                  ...(draft.labels ?? { providers: {}, models: {} }),
+                  search: {
+                    ...draft.labels?.search,
+                    [searchEditor.profile]: searchEditor.label,
+                  },
+                },
+                search: {
+                  ...search,
+                  profiles: {
+                    ...search.profiles,
+                    [searchEditor.profile]: profile,
+                  },
+                },
+                search_authentication: {
+                  ...draft.search_authentication,
+                  [searchEditor.profile]: searchEditor.authentication,
+                },
+              });
+            }}
+          />
+        ) : null}
+      </CatalogInventory>
+      <section className="control-card">
+        <h3>Search routing</h3>
+        {["agent", "research"].map((role) => (
+          <label key={role}>
+            {role === "agent" ? "Agent search" : "Research search"}
+            <DropdownSelect
+              aria-label={`${role === "agent" ? "Agent" : "Research"} search route`}
+              value={search.roles[role] ?? ""}
+              disabled={busy || Boolean(searchEditor)}
+              onChange={(event) => {
+                const roles = { ...search.roles };
+                if (event.target.value) roles[role] = event.target.value;
+                else delete roles[role];
+                onChange({ ...draft, search: { ...search, roles } });
+              }}
+            >
+              <option value="">Not configured</option>
+              {Object.keys(search.profiles).map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </DropdownSelect>
+          </label>
+        ))}
+      </section>
+    </section>
+  );
+}

@@ -198,7 +198,7 @@ export function AppearanceSettings({
 }
 
 /** Administrator-published deployment colors remain separate from browser preferences. */
-function EnvironmentAppearance({
+export function EnvironmentAppearance({
   onSaved,
 }: {
   onSaved: (settings: PublicSettings) => void;

@@ -207,7 +207,7 @@ for (const appearance of appearanceCases) {
       },
     });
     await sections
-      .getByRole("button", { name: "Credentials", exact: true })
+      .getByRole("button", { name: "Secrets", exact: true })
       .click();
     // Password inputs have no implicit textbox role.
     const projectInput = page.locator("input[aria-label='API key or token']");
@@ -244,7 +244,7 @@ for (const appearance of appearanceCases) {
       path: `output/playwright/credentials-project-${appearance.id}.png`,
       fullPage: true,
     });
-    await page.getByRole("button", { name: "Global", exact: true }).click();
+    await page.getByRole("button", { name: "Personal", exact: true }).click();
     await sections
       .getByRole("button", { name: "Credentials", exact: true })
       .click();

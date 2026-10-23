@@ -35,6 +35,7 @@ export function ChatProviderSettings({
   id,
   draft,
   project,
+  settingsPath,
   saved,
   onApply,
   onCancel,
@@ -44,6 +45,7 @@ export function ChatProviderSettings({
   id: string;
   draft: ChatSettingsWrite;
   project: string;
+  settingsPath?: string | undefined;
   saved: ChatSettingsSnapshot;
   onApply: (value: ChatSettingsWrite, setup?: CredentialSetup) => void;
   onCancel: () => void;
@@ -66,7 +68,12 @@ export function ChatProviderSettings({
   const presets = useResource<{
     presets: ProviderPreset[];
     availability?: Record<string, PresetAvailability>;
-  }>(projectPath(project) + "/chat/settings/provider-presets", 0, project);
+  }>(
+    (settingsPath ?? projectPath(project) + "/chat/settings") +
+      "/provider-presets",
+    0,
+    settingsPath ?? project,
+  );
   const selected = matchingProviderPreset(
     presets.data?.presets ?? [],
     value.kind,
@@ -226,7 +233,9 @@ export function ChatProviderSettings({
                     <option value="personal">
                       Personal account (each user)
                     </option>
-                    <option value="shared">Shared project credential</option>
+                    <option value="shared">
+                      Shared credential (explicit assignment)
+                    </option>
                     <option value="none">No authentication</option>
                   </DropdownSelect>
                 </label>

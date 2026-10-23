@@ -9,11 +9,22 @@ import type {
   Classification,
   Project,
   User,
+  PublicSettings,
 } from "./control-api";
 import { errorMessage, useResource } from "./resources";
 import { LoadState } from "./Home";
-import { ProjectEditor, SectionTabs } from "./Projects";
-import { globalHref, type AdminView } from "./routes";
+import { ProjectEditor } from "./Projects";
+import {
+  adminUserHref,
+  connectionSettingsSections,
+  type ConnectionSettingsSection,
+  type AdminView,
+  type AdminUserView,
+} from "./routes";
+import { AdminUserDetails } from "./AdminUserDetails";
+import { UserEditor } from "./AdminUserEditor";
+import { GlobalConfiguration } from "./GlobalConfiguration";
+import { EnvironmentAppearance } from "./Appearance";
 import { projectCreateHref } from "./routes";
 import { RouteLink } from "./navigation";
 import { AdminAnnouncements } from "./AdminAnnouncements";
@@ -23,19 +34,49 @@ export function Administration({
   onRefresh,
   onSettings,
   view,
-  onView,
+  userId,
+  userView,
+  userProject,
+  currentUserId,
+  identity,
+  projects,
+  selectedProject,
 }: {
   authConfig: AuthConfig | null;
   onRefresh: () => void;
-  onSettings: (settings: AdminSettings) => void;
+  onSettings: (settings: PublicSettings) => void;
+  userId?: string | undefined;
+  userView?: AdminUserView | undefined;
+  userProject?: string | undefined;
+  currentUserId: string;
+  identity: string;
+  projects: Project[];
+  selectedProject: string;
   view?: AdminView;
   onView?: (value: AdminView) => void;
 }) {
-  const [localTab, setTab] = useState("users");
-  const tab = view ?? localTab;
+  const tab = view ?? "users";
+  if (userId)
+    return (
+      <AdminUserDetails
+        key={`${currentUserId}:${userId}`}
+        userId={userId}
+        currentUserId={currentUserId}
+        view={userView ?? "overview"}
+        project={userProject}
+        authConfig={authConfig}
+        onChanged={onRefresh}
+      />
+    );
   return (
     <section className="control-page">
-      <header className="page-heading">
+      <header
+        className={
+          (connectionSettingsSections as readonly string[]).includes(tab)
+            ? "sr-only"
+            : "page-heading"
+        }
+      >
         <div>
           <span className="eyebrow">Administration</span>
           <h1>Control Plane administration</h1>
@@ -45,25 +86,22 @@ export function Administration({
           </p>
         </div>
       </header>
-      <SectionTabs
-        items={[
-          { id: "users", label: "Users" },
-          { id: "projects", label: "Projects" },
-          { id: "announcements", label: "Announcements" },
-          { id: "settings", label: "Authentication & settings" },
-        ]}
-        current={tab}
-        onChange={(value) =>
-          onView ? onView(value as AdminView) : setTab(value)
-        }
-        hrefFor={(value) => globalHref("admin", undefined, value as AdminView)}
-      />
       {tab === "users" ? (
         <Users authConfig={authConfig} />
       ) : tab === "projects" ? (
         <AdminProjects onRefresh={onRefresh} />
       ) : tab === "announcements" ? (
         <AdminAnnouncements />
+      ) : tab === "appearance" ? (
+        <EnvironmentAppearance onSaved={onSettings} />
+      ) : (connectionSettingsSections as readonly string[]).includes(tab) ? (
+        <GlobalConfiguration
+          section={tab as ConnectionSettingsSection}
+          identity={identity}
+          projects={projects}
+          selectedProject={selectedProject}
+          onSaved={onRefresh}
+        />
       ) : (
         <EnvironmentSettings onSaved={onSettings} />
       )}
@@ -76,7 +114,7 @@ function Users({ authConfig }: { authConfig: AuthConfig | null }) {
     ),
     [extra, setExtra] = useState<User[]>([]),
     [cursor, setCursor] = useState<string | null>(null),
-    [selected, setSelected] = useState<User | "new" | null>(null),
+    [creating, setCreating] = useState(false),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -88,15 +126,24 @@ function Users({ authConfig }: { authConfig: AuthConfig | null }) {
       {
         id: "name",
         label: "User",
-        value: (row) => row.display_name,
+        hideable: false,
+        value: (row) =>
+          [
+            row.display_name,
+            row.email,
+            ...(row.identities?.map(
+              (identity) => identity.username ?? identity.label,
+            ) ?? []),
+          ]
+            .filter(Boolean)
+            .join(" "),
         cell: (row) => (
-          <button
-            type="button"
-            className="catalog-name"
-            onClick={() => setSelected(row)}
-          >
-            {row.display_name}
-          </button>
+          <div className="user-table-name">
+            <RouteLink className="catalog-name" href={adminUserHref(row.id)}>
+              {row.display_name}
+            </RouteLink>
+            {row.email ? <small>{row.email}</small> : null}
+          </div>
         ),
       },
       {
@@ -140,7 +187,7 @@ function Users({ authConfig }: { authConfig: AuthConfig | null }) {
             Provision login identities and control access to the Control Plane.
           </p>
         </div>
-        <Button variant="primary" onClick={() => setSelected("new")}>
+        <Button variant="primary" onClick={() => setCreating(true)}>
           <IconPlus size={16} aria-hidden="true" />
           Create user
         </Button>
@@ -151,16 +198,12 @@ function Users({ authConfig }: { authConfig: AuthConfig | null }) {
           {error}
         </div>
       ) : null}
-      {selected ? (
+      {creating ? (
         <UserEditor
-          key={
-            selected === "new" ? "new" : `${selected.id}:${selected.revision}`
-          }
-          user={selected === "new" ? undefined : selected}
           authConfig={authConfig}
-          onCancel={() => setSelected(null)}
+          onCancel={() => setCreating(false)}
           onSaved={() => {
-            setSelected(null);
+            setCreating(false);
             resource.refresh();
           }}
         />
@@ -202,216 +245,6 @@ function Users({ authConfig }: { authConfig: AuthConfig | null }) {
         </div>
       ) : null}
     </>
-  );
-}
-function UserEditor({
-  user,
-  authConfig,
-  onCancel,
-  onSaved,
-}: {
-  user?: User | undefined;
-  authConfig: AuthConfig | null;
-  onCancel: () => void;
-  onSaved: () => void;
-}) {
-  const [name, setName] = useState(user?.display_name ?? ""),
-    [email, setEmail] = useState(user?.email ?? ""),
-    [username, setUsername] = useState(""),
-    [password, setPassword] = useState(""),
-    [subject, setSubject] = useState(""),
-    [active, setActive] = useState(user?.active ?? true),
-    [admin, setAdmin] = useState(user?.is_admin ?? false),
-    [error, setError] = useState(""),
-    [busy, setBusy] = useState(false),
-    [reset, setReset] = useState(false);
-  const localIdentity = user?.identities?.some((item) => item.kind === "local");
-  async function save() {
-    setBusy(true);
-    setError("");
-    try {
-      if (reset && user)
-        await request(
-          `/api/admin/users/${encodeURIComponent(user.id)}/password`,
-          { revision: user.revision, new_password: password },
-        );
-      else
-        await request(
-          user
-            ? `/api/admin/users/${encodeURIComponent(user.id)}`
-            : "/api/admin/users",
-          user
-            ? {
-                revision: user.revision,
-                display_name: name.trim(),
-                active,
-                is_admin: admin,
-              }
-            : {
-                display_name: name.trim(),
-                email: email.trim() || null,
-                is_admin: admin,
-                ...(username.trim()
-                  ? { username: username.trim(), password }
-                  : {}),
-                ...(subject.trim() ? { oidc_subject: subject.trim() } : {}),
-              },
-          undefined,
-          user && !reset ? "PATCH" : undefined,
-        );
-      onSaved();
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-      setPassword("");
-    }
-  }
-  return (
-    <form
-      className="management-form control-card"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void save();
-      }}
-    >
-      <header>
-        <h3>
-          {reset
-            ? "Reset local password"
-            : user
-              ? `Edit ${user.display_name}`
-              : "Create user"}
-        </h3>
-        <Button onClick={onCancel}>Close</Button>
-      </header>
-      {error ? (
-        <div className="alert" role="alert">
-          {error}
-        </div>
-      ) : null}
-      {reset ? (
-        <>
-          <p className="field-help">
-            Resetting the password invalidates this user’s existing sessions.
-          </p>
-          <label>
-            <span>New password</span>
-            <TextInput
-              type="password"
-              autoComplete="new-password"
-              required
-              minLength={15}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </label>
-        </>
-      ) : (
-        <>
-          <label>
-            <span>Display name</span>
-            <TextInput
-              required
-              maxLength={200}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </label>
-          {!user ? (
-            <>
-              <label>
-                <span>Email · optional</span>
-                <TextInput
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  autoComplete="off"
-                />
-              </label>
-              {authConfig?.local_enabled ? (
-                <div className="form-pair">
-                  <label>
-                    <span>Local username</span>
-                    <TextInput
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value)}
-                      autoComplete="off"
-                    />
-                  </label>
-                  <label>
-                    <span>Local password</span>
-                    <TextInput
-                      type="password"
-                      minLength={15}
-                      required={Boolean(username.trim())}
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      autoComplete="new-password"
-                    />
-                  </label>
-                </div>
-              ) : null}
-              {authConfig?.oidc ? (
-                <label>
-                  <span>OIDC subject</span>
-                  <TextInput
-                    value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
-                    autoComplete="off"
-                  />
-                  <small>
-                    Exact subject from {authConfig.oidc.label}. Emails do not
-                    automatically link identities.
-                  </small>
-                </label>
-              ) : null}
-              <p className="field-help">
-                Provide at least one enabled login identity.
-              </p>
-            </>
-          ) : (
-            <label className="checkbox-field">
-              <input
-                type="checkbox"
-                checked={active}
-                onChange={(e) => setActive(e.target.checked)}
-              />
-              Active user<small>Changing this retires existing sessions.</small>
-            </label>
-          )}
-          <label className="checkbox-field">
-            <input
-              type="checkbox"
-              checked={admin}
-              onChange={(e) => setAdmin(e.target.checked)}
-            />
-            Control Plane administrator
-          </label>
-          <p className="field-help">
-            Administrators can read and manage projects. Running tasks and
-            approving actions still require an explicit project role.
-          </p>
-        </>
-      )}
-      <div className="form-actions">
-        <Button
-          variant="primary"
-          type="submit"
-          disabled={
-            busy ||
-            (!reset && !name.trim()) ||
-            (!user && !username.trim() && !subject.trim())
-          }
-        >
-          {busy ? "Saving…" : reset ? "Reset password" : "Save user"}
-        </Button>
-        {user && localIdentity && authConfig?.local_enabled && !reset ? (
-          <Button onClick={() => setReset(true)}>Reset local password</Button>
-        ) : null}
-        <Button onClick={onCancel}>Cancel</Button>
-      </div>
-    </form>
   );
 }
 function AdminProjects({ onRefresh }: { onRefresh: () => void }) {

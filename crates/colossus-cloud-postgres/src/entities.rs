@@ -311,8 +311,20 @@ pub(super) async fn list(
         EntityKind::Admission => "FALSE".into(),
         _ => "TRUE".into(),
     };
+    let owner_parameter = if query.order == EntityOrder::AnnouncementPriority {
+        14
+    } else {
+        13
+    };
+    let ownership = match query.kind {
+        EntityKind::Node | EntityKind::Thread => format!("source.owner_user_id=${owner_parameter}"),
+        EntityKind::Workspace => format!(
+            "EXISTS(SELECT 1 FROM runtime_agents owned_node WHERE owned_node.project_id=source.project_id AND owned_node.id=source.node_id AND NOT owned_node.deleted AND owned_node.owner_user_id=${owner_parameter})"
+        ),
+        _ => "FALSE".into(),
+    };
     let page = format!(
-        "SELECT source.*,{page_time} AS page_time,ROW_NUMBER() OVER (ORDER BY {order}) AS page_ordinal FROM {table} source WHERE project_id=$1 AND ($2::TEXT IS NULL OR {parent}=$2) AND ($3::TEXT IS NULL OR {comparison}) AND NOT deleted AND ($4::TEXT IS NULL OR {node}=$4) AND ($5::TEXT IS NULL OR strpos(lower({search}),lower($5))>0) AND {status_filter} AND ($7 IS NULL OR {archived}=$7) AND ($11::TEXT IS NULL OR {host}=$11) AND ($12::TEXT IS NULL OR {visibility}) ORDER BY {order} LIMIT $8"
+        "SELECT source.*,{page_time} AS page_time,ROW_NUMBER() OVER (ORDER BY {order}) AS page_ordinal FROM {table} source WHERE project_id=$1 AND ($2::TEXT IS NULL OR {parent}=$2) AND ($3::TEXT IS NULL OR {comparison}) AND NOT deleted AND ($4::TEXT IS NULL OR {node}=$4) AND ($5::TEXT IS NULL OR strpos(lower({search}),lower($5))>0) AND {status_filter} AND ($7 IS NULL OR {archived}=$7) AND ($11::TEXT IS NULL OR {host}=$11) AND ($12::TEXT IS NULL OR {visibility}) AND (${owner_parameter}::TEXT IS NULL OR {ownership}) ORDER BY {order} LIMIT $8"
     );
     let selection = rows::selection(query.kind, "r", "r.page_time");
     let joins = rows::joins(query.kind, "r");
@@ -339,6 +351,7 @@ pub(super) async fn list(
                 .map(i64::from),
         );
     }
+    statement = statement.bind::<Nullable<Text>, _>(query.owned_by.clone());
     let rows = rows::load(conn, query.kind, statement, None)
         .await
         .map_err(CloudError::from)?;
@@ -391,6 +404,30 @@ pub(super) async fn memberships(
     let joins = rows::joins(EntityKind::Membership, "r");
     let statement=sql_query(format!("SELECT {selection} FROM project_memberships r {joins} WHERE r.user_id=$1 AND NOT r.deleted ORDER BY r.project_id LIMIT 1024"))
         .into_boxed::<Pg>().bind::<Text,_>(user.to_owned());
+    Ok(rows::load(conn, EntityKind::Membership, statement, None)
+        .await
+        .map_err(CloudError::from)?
+        .into_iter()
+        .map(|row| row.record)
+        .collect())
+}
+
+pub(super) async fn memberships_page(
+    conn: &mut AsyncPgConnection,
+    user: &str,
+    after: Option<&str>,
+    limit: usize,
+) -> CloudResult<Vec<EntityRecord>> {
+    if !(1..=100).contains(&limit) {
+        return Err(CloudError::InvalidArgument);
+    }
+    let selection = rows::selection(EntityKind::Membership, "r", "''::TEXT");
+    let joins = rows::joins(EntityKind::Membership, "r");
+    let statement = sql_query(format!("SELECT {selection} FROM project_memberships r {joins} WHERE r.user_id=$1 AND NOT r.deleted AND cardinality(r.permissions)>0 AND ($2::TEXT IS NULL OR r.project_id>$2) ORDER BY r.project_id LIMIT $3"))
+        .into_boxed::<Pg>()
+        .bind::<Text,_>(user.to_owned())
+        .bind::<Nullable<Text>,_>(after.map(str::to_owned))
+        .bind::<BigInt,_>(limit as i64);
     Ok(rows::load(conn, EntityKind::Membership, statement, None)
         .await
         .map_err(CloudError::from)?

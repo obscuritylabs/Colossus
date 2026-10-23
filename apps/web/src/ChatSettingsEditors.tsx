@@ -35,7 +35,7 @@ function AuthField({
         onChange={(event) => onChange(event.target.value as Authentication)}
       >
         <option value="personal">Personal account (each user)</option>
-        <option value="shared">Shared project credential</option>
+        <option value="shared">Shared credential (explicit assignment)</option>
         <option value="none">No authentication</option>
       </DropdownSelect>
     </Field>
@@ -45,6 +45,8 @@ interface EditorProps {
   editor: SettingsEditor;
   draft: ChatSettingsWrite;
   project: string;
+  settingsPath?: string;
+  instanceScope?: boolean;
   saved: ChatSettingsSnapshot;
   onApply: (value: ChatSettingsWrite, setup?: CredentialSetup) => void;
   onCancel: () => void;
@@ -57,7 +59,13 @@ export function ChatSettingsEditor(props: EditorProps) {
   if (props.editor.kind === "provider")
     return <ChatProviderSettings {...props} id={props.editor.id} />;
   if (props.editor.kind === "model")
-    return <ChatModelSettings {...props} id={props.editor.id} />;
+    return (
+      <ChatModelSettings
+        {...props}
+        id={props.editor.id}
+        catalogEnabled={!props.instanceScope}
+      />
+    );
   return <McpEditor {...props} />;
 }
 function McpEditor({
