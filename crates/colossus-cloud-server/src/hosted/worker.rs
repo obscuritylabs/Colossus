@@ -10,6 +10,26 @@ use colossus_sdk::{AgentRunClient, ApiErrorCode, GetRunRequest, WatchRunRequest}
 use futures::StreamExt;
 use std::{collections::BTreeSet, time::Duration};
 
+/// Consume completed workers exactly once, retaining unfinished tasks for retirement.
+pub(super) async fn join_stopped_worker(
+    worker: &Mutex<Option<tokio::task::JoinHandle<std::result::Result<(), &'static str>>>>,
+    timeout: Duration,
+) -> std::result::Result<(), CloudError> {
+    let mut worker = worker.lock().await;
+    let Some(task) = worker.as_mut() else {
+        return Ok(());
+    };
+    let result = tokio::time::timeout(timeout, task)
+        .await
+        .map_err(|_| CloudError::Storage)?;
+    // A completed JoinHandle cannot be polled again, including after worker failure.
+    // Timeout or cancellation above leaves its unfinished handle owned by the runtime.
+    let _ = worker.take();
+    result
+        .map_err(|_| CloudError::Storage)?
+        .map_err(|_| CloudError::Storage)
+}
+
 impl HostedExecution {
     pub(super) async fn start_worker(
         &self,
@@ -251,3 +271,6 @@ async fn observe(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
