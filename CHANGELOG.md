@@ -17,8 +17,12 @@ include breaking changes while the public API is still settling.
 - Instance provider, model, MCP, Search, and variable definitions flow into project settings with explicit override and credential assignment boundaries.
 - User administration, instance announcements, classification colors, and collapsible pinned chats are available in Hosted Web.
 - Newly created projects can inspect inherited settings before an operator enables hosted execution.
+- Global connection definitions publish independently of project restrictions; projects default to allowing configured connections and can manage exact-origin restrictions in Network access.
+- Hosted settings validate labels, model limits, connection fields and MCP selectors before saving, with aligned forms, save toasts and compact credential refresh controls.
+- Credentialed loopback connections follow their saved transport settings, and invalid connection bindings are rejected before work is queued.
 - Control Plane server bundles include archive-specific guidance, with packaging inputs checked before release builds.
 - Update ctutils to 0.4.4 to address RUSTSEC-2026-0385.
+- Update the Web and Desktop test runner to Vitest 4.1.12 for the current development-server security fixes.
 
 <!-- colossus:release-notes base=v0.11.10 -->
 
@@ -38,18 +42,22 @@ include breaking changes while the public API is still settling.
 - **browser:** bound owner lease watcher shutdown ([dfd2e2c](https://github.com/obscuritylabs/Colossus/commit/dfd2e2c036185dc00279462edecb52e7623fc0c6))
 - **browser:** poll owner leases for bounded retirement ([61d1f59](https://github.com/obscuritylabs/Colossus/commit/61d1f597535dda7525d3d46b8fd5d61afbef186b))
 - **release:** retain usable Control Plane bundle guidance ([8d20776](https://github.com/obscuritylabs/Colossus/commit/8d20776265f2cbec7c6065870ee9eafab2330ff1))
+- **cloud:** make inherited connections usable across scopes ([129114c](https://github.com/obscuritylabs/Colossus/commit/129114c39c838d9f7f418f05495fc791f65726f5))
+- **ui:** validate scoped settings and improve save feedback ([5c4bec3](https://github.com/obscuritylabs/Colossus/commit/5c4bec31ffdb49d71b1c8d5a96cbcbd9160355ec))
 
 #### Security
 
 - **deps:** update ctutils to patched 0.4.4 ([a7cb848](https://github.com/obscuritylabs/Colossus/commit/a7cb848067e68fc8f065b7de0afab10fe44b4036))
+- **ui:** update Vitest and isolate grammar contract cases ([32df279](https://github.com/obscuritylabs/Colossus/commit/32df279a2a8e065c1542258581900e8d3dea76d7))
 
 #### Maintenance
 
 - **packaging:** pin Homebrew and Nix to 0.11.10 ([#314](https://github.com/obscuritylabs/Colossus/pull/314))
 - **release:** prepare 0.11.11-preview.1 ([e5d2ed2](https://github.com/obscuritylabs/Colossus/commit/e5d2ed2df4712bd4edfbab9f7810a13681340fa2))
 - **release:** prepare 0.11.11-preview.2 ([625338d](https://github.com/obscuritylabs/Colossus/commit/625338de8a8cfc4c98470db2251dcb0e2eb90d95))
+- **release:** include preview security fix in notes ([5a42de4](https://github.com/obscuritylabs/Colossus/commit/5a42de4c1623a4f7ba0a06fe2c648657c71ef35d))
 
-**Source:** [a7cb848](https://github.com/obscuritylabs/Colossus/commit/a7cb848067e68fc8f065b7de0afab10fe44b4036)
+**Source:** [5c4bec3](https://github.com/obscuritylabs/Colossus/commit/5c4bec31ffdb49d71b1c8d5a96cbcbd9160355ec)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.2](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.2)
 
