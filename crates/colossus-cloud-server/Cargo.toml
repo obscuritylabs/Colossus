@@ -56,7 +56,7 @@ zeroize.workspace = true
 colossus-connector.workspace = true
 tempfile.workspace = true
 tower.workspace = true
-colossus-control-plane-client = { version = "=0.11.10", path = "../colossus-control-plane-client" }
+colossus-control-plane-client = { version = "=0.11.11-preview.1", path = "../colossus-control-plane-client" }
 colossus-testkit.workspace = true
 serde-saphyr.workspace = true
 p256.workspace = true
