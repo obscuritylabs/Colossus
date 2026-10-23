@@ -82,12 +82,14 @@ impl HostedExecution {
         &self,
         caller: &CloudCaller,
         node: &str,
+        request: &colossus_sdk::CreateRunRequest,
     ) -> std::result::Result<Option<tokio::sync::MutexGuard<'_, ()>>, CloudError> {
         if self.node_id(caller)?.as_deref() != Some(node) {
             return Ok(None);
         }
         let guard = self.lifecycle.lock().await;
         self.require_live_submission(caller, node).await?;
+        self.require_request(caller, request).await?;
         Ok(Some(guard))
     }
 
@@ -112,6 +114,11 @@ impl HostedExecution {
             .project_config(caller.project_id())
             .await?
             .ok_or(CloudError::NotFound)?;
+        // Validate exact connection bindings before accepting durable work. This
+        // composes references without resolving token values or opening a runtime;
+        // invalid custody must return an error rather than leave unplaceable work
+        // in the supervisor's retry queue.
+        self.credentials(caller, &configuration, None)?;
         let provisioner = CloudCaller::new(
             "service:hosted-execution".into(),
             caller.project_id().into(),
@@ -332,6 +339,14 @@ impl HostedExecution {
             user_id: caller.subject().into(),
             root: self.root.clone(),
             config: runtime_config,
+            unavailable_model_roles: crate::global_settings::network::assess(&configuration)
+                .roles
+                .into_iter()
+                .filter(|(role, availability)| {
+                    configuration.runtime.models.roles.contains_key(role) && !availability.enabled
+                })
+                .map(|(role, _)| role)
+                .collect(),
             wrapping_key_variable: self.deployment.wrapping_key_variable.clone(),
             credentials,
             codex_auth,
@@ -347,7 +362,15 @@ impl HostedExecution {
             .register_target_roles(
                 state,
                 caller,
-                configuration.runtime.models.roles.keys().cloned().collect(),
+                crate::global_settings::network::assess(&configuration)
+                    .roles
+                    .into_iter()
+                    .filter(|(role, availability)| {
+                        configuration.runtime.models.roles.contains_key(role)
+                            && availability.enabled
+                    })
+                    .map(|(role, _)| role)
+                    .collect(),
             )
             .await?;
         let node_id = node.node_id.clone();

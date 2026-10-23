@@ -54,6 +54,7 @@ const projectLabels = [
   "MCP servers",
   "Model routing",
   "Search",
+  "Network access",
   "Telemetry",
   "Secrets",
   "Variables",
@@ -152,6 +153,11 @@ it("distinguishes active global, project and personal settings destinations", ()
       { kind: "project-settings", project: "p", section: "providers" },
       "project-admin",
       "project-providers",
+    ],
+    [
+      { kind: "project-settings", project: "p", section: "network" },
+      "project-admin",
+      "project-network",
     ],
     [
       { kind: "project", project: "p", view: "access" },

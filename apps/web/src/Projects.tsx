@@ -499,6 +499,26 @@ export function ProjectEditor({
   });
   async function save() {
     if (pending.current || !name.trim()) return;
+    const savedName = name.trim(),
+      savedDescription = description.trim();
+    if (
+      new TextEncoder().encode(savedName).length > 256 ||
+      /[\u0000-\u001f\u007f-\u009f]/u.test(savedName)
+    ) {
+      setError(
+        "Use a project name of at most 256 UTF-8 bytes without control characters.",
+      );
+      return;
+    }
+    if (
+      new TextEncoder().encode(savedDescription).length > 4096 ||
+      /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u.test(savedDescription)
+    ) {
+      setError(
+        "Use a description of at most 4,096 UTF-8 bytes. Only tabs and line breaks are allowed control characters.",
+      );
+      return;
+    }
     const isCurrent = captureScope();
     pending.current = true;
     setBusy(true);
@@ -507,8 +527,8 @@ export function ProjectEditor({
       const saved = await request<{ project: Project }>(
         project ? projectPath(project.id) : "/api/projects",
         {
-          name: name.trim(),
-          description: description.trim(),
+          name: savedName,
+          description: savedDescription,
           parent_project_id: parent || null,
           ...(project
             ? { revision: revision.current, archived }
@@ -554,7 +574,7 @@ export function ProjectEditor({
         <TextInput
           required
           disabled={busy}
-          maxLength={200}
+          maxLength={256}
           value={name}
           onChange={(e) => {
             setName(e.target.value);
@@ -573,7 +593,7 @@ export function ProjectEditor({
             setDescription(e.target.value);
             changed();
           }}
-          maxLength={2000}
+          maxLength={4096}
         />
       </label>
       <label>

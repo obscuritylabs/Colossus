@@ -70,6 +70,21 @@ export interface McpServer extends NativeFields {
       })
     | null;
 }
+export interface ConnectionNetworkPolicy {
+  mode: "allow_all" | "allow_list";
+  allowed_origins: string[];
+}
+export interface ConnectionAvailability {
+  enabled: boolean;
+  reason?: string;
+}
+export interface ConnectionAvailabilitySnapshot {
+  providers: Record<string, ConnectionAvailability>;
+  mcp: Record<string, ConnectionAvailability>;
+  search: Record<string, ConnectionAvailability>;
+  models: Record<string, ConnectionAvailability>;
+  roles: Record<string, ConnectionAvailability>;
+}
 export interface ChatSettingsWrite {
   revision: number;
   labels?: {
@@ -93,8 +108,10 @@ export interface ChatSettingsWrite {
   variables?: Record<string, string>;
   observability?: ObservabilitySettings;
   inheritance?: SettingsInheritance;
+  connection_network_policy?: ConnectionNetworkPolicy;
 }
 export interface ChatSettingsSnapshot extends ChatSettingsWrite {
+  connection_availability?: ConnectionAvailabilitySnapshot;
   execution?: {
     enabled: boolean;
     settings_editable: boolean;
@@ -128,6 +145,9 @@ export function settingsWrite(value: ChatSettingsSnapshot): ChatSettingsWrite {
       : {}),
     ...(value.variables ? { variables: value.variables } : {}),
     ...(value.observability ? { observability: value.observability } : {}),
+    ...(value.connection_network_policy
+      ? { connection_network_policy: value.connection_network_policy }
+      : {}),
     ...(value.inheritance
       ? { inheritance: { global_revision: value.inheritance.global_revision } }
       : {}),
@@ -135,7 +155,7 @@ export function settingsWrite(value: ChatSettingsSnapshot): ChatSettingsWrite {
 }
 export function validProfile(value: string) {
   return (
-    /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value) &&
+    /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value) &&
     !["__proto__", "constructor", "prototype"].includes(value)
   );
 }

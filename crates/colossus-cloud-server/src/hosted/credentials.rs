@@ -105,6 +105,9 @@ impl HostedExecution {
         kind: ChatConnectionKind,
         id: &str,
     ) -> std::result::Result<Option<ChatConnectionBinding>, CloudError> {
+        if !crate::global_settings::network::connection_enabled(configuration, kind, id) {
+            return Err(CloudError::PermissionDenied);
+        }
         let (endpoint, authentication) = match kind {
             ChatConnectionKind::Provider => {
                 let profile = configuration
@@ -200,7 +203,8 @@ impl HostedExecution {
         (colossus_runtime::RuntimeConfig, Arc<ChatCredentialResolver>),
         CloudError,
     > {
-        let mut config = configuration.runtime.clone();
+        let executable = crate::global_settings::network::execution(configuration)?;
+        let mut config = executable.runtime;
         let mut entries = Vec::new();
         for (id, profile) in &mut config.providers.profiles {
             if matches!(

@@ -125,7 +125,7 @@ fn definitions_inherit_while_project_overrides_and_resets_remain_explicit() {
 }
 
 #[test]
-fn stale_global_revision_and_unreviewed_origins_cannot_be_applied() {
+fn stale_global_revision_is_rejected_and_reset_recomputes_project_availability() {
     let seed = configuration();
     let mut global = catalog(&seed);
     let current = inheritance::resolve(&seed, &global, &seed).unwrap();
@@ -134,8 +134,7 @@ fn stale_global_revision_and_unreviewed_origins_cannot_be_applied() {
         crate::chat_settings::reviewed_project_update(&current, input, &global, &seed),
         Err(CloudError::Conflict)
     ));
-    // A project row can hide a same-name global definition, but resetting that
-    // row still runs the original operator ceiling before the new endpoint applies.
+    // A project restriction affects use of the reset global definition, not its storage.
     global.providers.profiles.insert(
         "main".into(),
         seed.runtime.providers.profiles["main"].clone(),
@@ -146,15 +145,138 @@ fn stale_global_revision_and_unreviewed_origins_cannot_be_applied() {
     let mut input = settings(&current, global.revision);
     input["inheritance"] =
         json!({"global_revision":global.revision,"reset":{"providers":["main"]}});
+    input["connection_network_policy"] =
+        json!({"mode":"allow_list","allowed_origins":["https://models.example"]});
+    let reset = crate::chat_settings::reviewed_project_update(
+        &current,
+        serde_json::from_value(input).unwrap(),
+        &global,
+        &seed,
+    )
+    .unwrap();
+    assert_eq!(
+        reset.runtime.providers.profiles["main"].base_url.as_deref(),
+        Some("https://unreviewed.example/v1")
+    );
+    assert!(!network::assess(&reset).providers["main"].enabled);
     assert!(matches!(
-        crate::chat_settings::reviewed_project_update(
-            &current,
-            serde_json::from_value(input).unwrap(),
-            &global,
-            &seed
-        ),
-        Err(CloudError::InvalidArgument)
+        network::execution(&reset),
+        Err(CloudError::PermissionDenied)
     ));
+}
+
+#[test]
+fn mcp_tool_selectors_flow_from_global_definitions_through_explicit_project_overrides() {
+    let seed = configuration();
+    let mut global = catalog(&seed);
+    global.mcp.servers = serde_json::from_value(json!({
+        "docs":{"transport":"streamable_http","url":"https://models.example/mcp",
+            "allowedTools":["get_*","*_search","echo"]}
+    }))
+    .unwrap();
+    intrinsic::review(&global).unwrap();
+    let inherited = inheritance::resolve(&seed, &global, &seed).unwrap();
+    assert_eq!(inherited.inheritance.provenance.mcp["docs"], "global");
+    let workspace = tempfile::tempdir().unwrap();
+    let mut runtime = network::execution(&inherited).unwrap().runtime;
+    runtime.use_ephemeral_storage();
+    colossus_runtime::Runtime::open_with_options(
+        &runtime,
+        std::sync::Arc::new(colossus_policy::DenyApproval),
+        None,
+        colossus_runtime::RuntimeOpenOptions::for_controlled_chat(workspace.path()).unwrap(),
+    )
+    .expect("inherited selector patterns must pass actual controlled runtime admission");
+    assert_eq!(
+        inherited.runtime.mcp.servers["docs"].allowed_tools,
+        ["get_*", "*_search", "echo"]
+    );
+    assert_eq!(
+        serde_json::to_value(&inherited.runtime.sandbox).unwrap(),
+        serde_json::to_value(&seed.runtime.sandbox).unwrap()
+    );
+    assert!(
+        inherited.runtime.mcp.servers["docs"]
+            .credential_headers
+            .is_empty()
+    );
+    assert_eq!(
+        inherited.mcp_authentication["docs"],
+        ChatAuthentication::Personal
+    );
+
+    let mut input = settings(&inherited, global.revision);
+    input["mcp"]["servers"]["docs"]["allowedTools"] = json!(["*"]);
+    let overridden = crate::chat_settings::reviewed_project_update(
+        &inherited,
+        serde_json::from_value(input).unwrap(),
+        &global,
+        &seed,
+    )
+    .unwrap();
+    assert_eq!(overridden.inheritance.provenance.mcp["docs"], "project");
+    assert_eq!(overridden.runtime.mcp.servers["docs"].allowed_tools, ["*"]);
+    let mut input = settings(&overridden, global.revision);
+    input["inheritance"] = json!({"global_revision":global.revision,"reset":{"mcp":["docs"]}});
+    let reset = crate::chat_settings::reviewed_project_update(
+        &overridden,
+        serde_json::from_value(input).unwrap(),
+        &global,
+        &seed,
+    )
+    .unwrap();
+    assert_eq!(reset.inheritance.provenance.mcp["docs"], "global");
+    assert_eq!(
+        reset.runtime.mcp.servers["docs"].allowed_tools,
+        ["get_*", "*_search", "echo"]
+    );
+    crate::chat_settings::validate_retained(&reset, &seed).unwrap();
+
+    global.mcp.servers.get_mut("docs").unwrap().allowed_tools = vec!["*".into()];
+    intrinsic::review(&global).unwrap();
+    let dormant = inheritance::catalog_only(&global);
+    assert_eq!(dormant.runtime.mcp.servers["docs"].allowed_tools, ["*"]);
+    assert!(dormant.runtime.sandbox.network_destinations.is_empty());
+    global.mcp.servers.get_mut("docs").unwrap().url = Some("https://unreviewed.example/mcp".into());
+    let mut restricted = seed.clone();
+    restricted.connection_network_policy = serde_json::from_value(
+        json!({"mode":"allow_list","allowed_origins":["https://models.example"]}),
+    )
+    .unwrap();
+    let full = inheritance::resolve(&restricted, &global, &seed).unwrap();
+    assert!(!network::assess(&full).mcp["docs"].enabled);
+    assert!(
+        !network::execution(&full)
+            .unwrap()
+            .runtime
+            .mcp
+            .servers
+            .contains_key("docs")
+    );
+}
+
+#[test]
+fn mcp_tool_selectors_are_core_validated_before_a_global_definition_is_available() {
+    let mut global = HostedCatalog::default();
+    global.mcp.servers = serde_json::from_value(json!({
+        "docs":{"transport":"streamable_http","url":"https://models.example/mcp",
+            "allowedTools":["read"]}
+    }))
+    .unwrap();
+    for selectors in [
+        vec![],
+        vec!["*".into(), "get_*".into()],
+        vec!["get_*".into(), "get_*".into()],
+        vec!["^get_.*$".into()],
+        vec!["get_**".into()],
+        vec!["a".repeat(129)],
+    ] {
+        global.mcp.servers.get_mut("docs").unwrap().allowed_tools = selectors;
+        assert!(matches!(
+            intrinsic::review(&global),
+            Err(CloudError::InvalidArgument)
+        ));
+    }
 }
 
 #[test]
@@ -288,19 +410,22 @@ async fn instance_credentials_require_exact_grants_and_preserve_disconnect_and_r
             .env(INSTANCE_SECRET_CHILD,"1").env(WRAPPING_KEY,"a".repeat(64)).kill_on_drop(true).output()).await.unwrap().unwrap();
         assert!(
             output.status.success(),
-            "isolated instance custody regression failed: {}",
+            "isolated instance custody regression failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         return;
     }
     let directory = tempfile::tempdir().unwrap();
+    let mut restricted = configuration();
+    restricted.connection_network_policy = serde_json::from_value(json!({"mode":"allow_list","allowed_origins":["https://models.example","https://search.example"]})).unwrap();
     let deployment = crate::config::ChatConfig {
         shared: None,
         home: directory.path().join("hosted"),
         wrapping_key_variable: WRAPPING_KEY.into(),
         max_active_runtimes: 1,
         idle_seconds: 300,
-        projects: BTreeMap::from([("project-a".into(), configuration())]),
+        projects: BTreeMap::from([("project-a".into(), restricted.clone())]),
     };
     let database = serde_json::from_value(json!({"connectionVariable":"UNUSED_INSTANCE_TEST_DATABASE","schema":"instance_test","tls":{"kind":"disabled"},"maxConnections":1,"connectionTimeoutMs":5000,"statementTimeoutMs":5000})).unwrap();
     let host = HostedExecution::open(
@@ -312,6 +437,32 @@ async fn instance_credentials_require_exact_grants_and_preserve_disconnect_and_r
         database,
     )
     .unwrap();
+    // An instance administrator can publish intrinsically valid definitions
+    // even when every consuming project's policy blocks their destinations.
+    let mut outside = HostedCatalog {
+        providers: serde_json::from_value(json!({"profiles":{"outside":{"kind":"open_ai_compatible","baseUrl":"https://outside.example/v1"}}})).unwrap(),
+        models: serde_json::from_value(json!({"profiles":{"outside":{"providerProfile":"outside","model":"outside","contextWindowTokens":32768,"maxOutputTokens":4096}},"roles":{}})).unwrap(),
+        mcp: colossus_mcp::McpConfig {
+            servers: serde_json::from_value(json!({"outside":{"transport":"streamable_http","url":"https://outside.example/mcp","allowedTools":["*"]}})).unwrap(),
+            ..Default::default()
+        },
+        search: serde_json::from_value(json!({"profiles":{"outside":{"kind":"searxng","endpoint":"https://outside.example/search"}}})).unwrap(),
+        ..Default::default()
+    };
+    inheritance::review_catalog(&host, &HostedCatalog::default(), &mut outside).unwrap();
+    let merged = inheritance::resolve(&restricted, &outside, &restricted).unwrap();
+    assert!(!network::assess(&merged).providers["outside"].enabled);
+    assert!(!network::assess(&merged).mcp["outside"].enabled);
+    assert!(!network::assess(&merged).search["outside"].enabled);
+    let executable = network::execution(&merged).unwrap();
+    assert!(executable.runtime.providers.profiles.contains_key("main"));
+    assert!(
+        !executable
+            .runtime
+            .providers
+            .profiles
+            .contains_key("outside")
+    );
     let binding = ChatConnectionBinding::new(
         "project-a",
         "alice",
@@ -403,5 +554,61 @@ async fn instance_credentials_require_exact_grants_and_preserve_disconnect_and_r
     assert!(matches!(
         credentials::assigned_vault(&host, &next),
         Err(CloudError::Storage)
+    ));
+}
+
+#[test]
+fn removed_global_dependencies_remain_visible_and_survive_unrelated_project_edits() {
+    let seed = configuration();
+    let mut global = catalog(&seed);
+    let mut raw = seed.clone();
+    let mut model = seed.runtime.models.profiles["main"].clone();
+    model.provider_profile = "shared".into();
+    raw.runtime.models.profiles.insert("local".into(), model);
+    raw.runtime
+        .models
+        .roles
+        .insert("subagent_default".into(), "shared".into());
+    let before = inheritance::resolve(&raw, &global, &seed).unwrap();
+    assert!(network::assess(&before).models["local"].enabled);
+    global.providers.profiles.clear();
+    global.models.profiles.clear();
+    global.revision += 1;
+    let full = inheritance::resolve(&raw, &global, &seed).unwrap();
+    assert!(!network::assess(&full).models["local"].enabled);
+    assert!(!network::assess(&full).roles["subagent_default"].enabled);
+    let mut input = settings(&full, global.revision);
+    input["variables"]["REGION"] = json!("updated");
+    let updated = crate::chat_settings::reviewed_project_update(
+        &full,
+        serde_json::from_value(input).unwrap(),
+        &global,
+        &seed,
+    )
+    .unwrap();
+    assert_eq!(
+        updated.runtime.models.profiles["local"].provider_profile,
+        "shared"
+    );
+    assert_eq!(updated.runtime.models.roles["subagent_default"], "shared");
+    assert_eq!(updated.variables["REGION"], "updated");
+    let persisted = inheritance::local_configuration(&updated);
+    crate::chat_settings::validate_retained(&persisted, &seed).unwrap();
+    let restarted = inheritance::resolve(&persisted, &global, &seed).unwrap();
+    assert!(!network::assess(&restarted).models["local"].enabled);
+    assert_eq!(
+        network::execution(&restarted).unwrap().runtime.models.roles["primary"],
+        "main"
+    );
+    let mut invalid = settings(&restarted, global.revision);
+    invalid["models"]["profiles"]["new"] = json!({"providerProfile":"missing","model":"new","contextWindowTokens":32768,"maxOutputTokens":4096});
+    assert!(matches!(
+        crate::chat_settings::reviewed_project_update(
+            &restarted,
+            serde_json::from_value(invalid).unwrap(),
+            &global,
+            &seed
+        ),
+        Err(CloudError::InvalidArgument)
     ));
 }

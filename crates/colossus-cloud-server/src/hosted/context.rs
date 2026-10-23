@@ -33,11 +33,18 @@ impl HostedExecution {
             .project_config(caller.project_id())
             .await?
             .ok_or(CloudError::NotFound)?;
+        let availability = crate::global_settings::network::assess(&configuration);
         let profiles = configuration
             .runtime
             .models
             .profiles
             .iter()
+            .filter(|(id, _)| {
+                availability
+                    .models
+                    .get(*id)
+                    .is_some_and(|value| value.enabled)
+            })
             .map(|(id, model)| colossus_sdk::ConfiguredModelProfile {
                 profile: id.clone(),
                 model: model.model.clone(),
@@ -80,6 +87,7 @@ impl HostedExecution {
             .ok_or(CloudError::NotFound)?;
         let identity = ChatRuntime::identity_for(caller.project_id(), caller.subject())
             .map_err(|_| CloudError::InvalidArgument)?;
+        let availability = crate::global_settings::network::assess(&configuration);
         Ok(CloudNode {
             execution_kind: colossus_cloud::ExecutionKind::Hosted,
             owner_user_id: Some(caller.subject().into()),
@@ -88,7 +96,19 @@ impl HostedExecution {
             instance_id: format!("hosted-chat-{identity}"),
             label: "Colossus Hosted".into(),
             certificate_sha256: String::new(),
-            roles: configuration.runtime.models.roles.keys().cloned().collect(),
+            roles: configuration
+                .runtime
+                .models
+                .roles
+                .keys()
+                .filter(|role| {
+                    availability
+                        .roles
+                        .get(*role)
+                        .is_some_and(|value| value.enabled)
+                })
+                .cloned()
+                .collect(),
             revoked: false,
             host_id: None,
             workspace_id: None,

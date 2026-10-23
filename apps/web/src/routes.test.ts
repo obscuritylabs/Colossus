@@ -19,6 +19,31 @@ import {
   threadHref,
 } from "./routes";
 const origin = "https://control.example";
+it("addresses project network policy and its singleton editor without exposing a global or resource editor", () => {
+  const base = projectSettingsHref("project:a", "network");
+  expect(parseRoute(base, origin)).toEqual({
+    kind: "project-settings",
+    project: "project:a",
+    section: "network",
+  });
+  const editor = settingsEditorHref(base, { action: "edit" });
+  expect(parseRoute(editor, origin)).toEqual({
+    kind: "project-settings",
+    project: "project:a",
+    section: "network",
+    editor: { action: "edit" },
+  });
+  expect(safeReturnPath(editor, origin)).toBe(editor);
+  for (const href of [
+    "/projects/p/settings/network/new",
+    "/projects/p/settings/network/id/edit",
+    "/projects/p/settings/network/edit?token=secret",
+    "/admin/network",
+    "/admin/network/edit",
+    "/settings/network",
+  ])
+    expect(parseRoute(href, origin).kind, href).toBe("invalid");
+});
 describe("Control Plane permalinks", () => {
   it("round-trips major pages and encoded, exact scoped resource identifiers", () => {
     expect(parseRoute(projectCreateHref(), origin)).toEqual({

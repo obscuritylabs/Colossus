@@ -352,6 +352,7 @@ async fn acceptance() {
     );
     runtime.mcp.servers.insert("docs".into(),serde_json::from_value(json!({"transport":"streamable_http","url":format!("{mcp_origin}/mcp"),"allowedTools":["read"],"oauth":{"clientId":"shared-test-client","callbackPort":8765,"scopes":["read"]}})).unwrap());
     let project = ChatProjectConfig {
+        connection_network_policy: Default::default(),
         labels: Default::default(),
         codex_auth_shared: false,
         runtime,

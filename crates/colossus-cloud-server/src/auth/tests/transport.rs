@@ -25,6 +25,7 @@ use std::{
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
+mod admin_users;
 mod announcements;
 mod global_lifecycle;
 mod hosted;
@@ -33,6 +34,7 @@ mod managed;
 mod native;
 mod resources;
 mod retained;
+mod settings_matrix;
 mod telemetry;
 mod thread_metadata;
 mod user_inventory;

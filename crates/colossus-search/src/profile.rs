@@ -76,9 +76,12 @@ impl SearchProfile {
                 "profile name and timeout must be valid and nonzero".into(),
             ));
         }
-        if user_agent.trim().is_empty() || user_agent.len() > 256 {
+        if user_agent.trim().is_empty()
+            || user_agent.len() > 256
+            || user_agent.bytes().any(|byte| byte.is_ascii_control())
+        {
             return Err(SearchAdapterError::Configuration(
-                "search user agent must contain 1 through 256 bytes".into(),
+                "search user agent must contain 1 through 256 bytes without ASCII control characters".into(),
             ));
         }
         if let Some(reference) = credential_reference.as_deref()

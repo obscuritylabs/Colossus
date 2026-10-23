@@ -570,6 +570,7 @@ impl Runtime {
                 configured_resource_authority(&config.sandbox),
                 Some(Arc::clone(&run_input_media) as Arc<dyn RunInputMediaResolver>),
             )?
+            .with_unavailable_roles(options.unavailable_model_roles.clone())
             .with_continuations(Arc::clone(&continuations))?,
         );
         let searches = Arc::new(search_registry(

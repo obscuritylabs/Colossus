@@ -50,12 +50,23 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-async function input(node: HTMLInputElement, value: string) {
+function projectField(label: string) {
+  const field = [...container.querySelectorAll("label")]
+    .find((element) => element.querySelector("span")?.textContent === label)
+    ?.querySelector<HTMLInputElement | HTMLTextAreaElement>("input,textarea");
+  if (!field) throw new Error(`Missing project field ${label}`);
+  return field;
+}
+async function input(
+  node: HTMLInputElement | HTMLTextAreaElement,
+  value: string,
+) {
   await act(() => {
-    Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value",
-    )!.set!.call(node, value);
+    const prototype =
+      node instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(node, value);
     node.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
@@ -99,6 +110,68 @@ function unloadIsBlocked() {
   return event.defaultPrevented;
 }
 
+it.each([
+  ["name", "é".repeat(129), "project name"],
+  ["name", "Invalid\u0000name", "project name"],
+  ["description", "界".repeat(1366), "description"],
+  ["description", "Invalid\u0000description", "description"],
+])(
+  "explains invalid project %s values before a write",
+  async (field, value, message) => {
+    const response = pendingResponse();
+    await act(() =>
+      root.render(
+        <ProjectEditor
+          project={project}
+          projects={[project]}
+          onSaved={() => {}}
+        />,
+      ),
+    );
+    await input(projectField(field === "name" ? "Name" : "Description"), value);
+    await submitTwice();
+    expect(response.fetch).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      message,
+    );
+  },
+);
+
+it.each([
+  ["n".repeat(256), "d".repeat(4096)],
+  ["é".repeat(128), "界".repeat(1365) + "x"],
+])(
+  "accepts project metadata at its UTF-8 byte boundaries",
+  async (name, description) => {
+    const response = pendingResponse();
+    await act(() =>
+      root.render(
+        <ProjectEditor
+          project={project}
+          projects={[project]}
+          onSaved={() => {}}
+        />,
+      ),
+    );
+    expect(projectField("Name").maxLength).toBe(256);
+    expect(projectField("Description").maxLength).toBe(4096);
+    await input(projectField("Name"), name);
+    await input(projectField("Description"), description);
+    await submitTwice();
+    expect(response.fetch).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.parse(response.fetch.mock.calls[0]![1]!.body as string),
+    ).toMatchObject({
+      revision: 1,
+      name,
+      description,
+    });
+    await response.resolve({
+      project: { ...project, name, description, revision: 2 },
+    });
+  },
+);
+
 it("preserves a project draft and its reviewed revision across identity refreshes, locks submission, and clears the guard after saving", async () => {
   const response = pendingResponse(),
     onSaved = vi.fn();
@@ -111,9 +184,7 @@ it("preserves a project draft and its reviewed revision across identity refreshe
       />,
     ),
   );
-  const name = container.querySelector<HTMLInputElement>(
-    'input[maxlength="200"]',
-  )!;
+  const name = projectField("Name");
   await input(name, "Reviewed draft");
   expect(unloadIsBlocked()).toBe(true);
   const newer = { ...project, revision: 2, name: "Changed elsewhere" };

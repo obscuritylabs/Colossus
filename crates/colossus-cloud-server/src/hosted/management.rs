@@ -271,13 +271,7 @@ impl HostedExecution {
                     return Err(CloudError::Storage);
                 }
                 live.shutdown.send_replace(true);
-                if let Some(task) = live.worker.lock().await.as_mut() {
-                    tokio::time::timeout(Duration::from_secs(10), task)
-                        .await
-                        .map_err(|_| CloudError::Storage)?
-                        .map_err(|_| CloudError::Storage)?
-                        .map_err(|_| CloudError::Storage)?;
-                }
+                super::worker::join_stopped_worker(&live.worker, Duration::from_secs(10)).await?;
                 Ok(serde_json::json!({"stopped":true}))
             }
             Management::OAuthBegin {

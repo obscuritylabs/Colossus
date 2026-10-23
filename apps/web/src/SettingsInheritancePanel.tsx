@@ -17,7 +17,12 @@ export function SettingsInheritancePanel({
   roleFamily?: "model" | "search";
 }) {
   const inheritance = saved.inheritance;
-  if (!inheritance || section === "credentials" || section === "telemetry")
+  if (
+    !inheritance ||
+    section === "credentials" ||
+    section === "telemetry" ||
+    section === "network"
+  )
     return null;
   const kind = section === "routing" ? "roles" : section;
   const disabled = new Set(inheritance.disabled?.[kind] ?? []);

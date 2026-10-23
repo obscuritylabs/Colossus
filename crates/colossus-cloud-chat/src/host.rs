@@ -12,7 +12,7 @@ use colossus_runtime::{
 };
 use colossus_sdk::{AgentRunClient, ContextBoundAgentRunClient};
 use sha2::{Digest as _, Sha256};
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, path::Path, sync::Arc, time::Duration};
 
 /// Trusted host inputs; this type is deliberately not deserializable from an HTTP request.
 pub struct ChatRuntimeOptions {
@@ -24,6 +24,8 @@ pub struct ChatRuntimeOptions {
     pub root: ConfinedRoot,
     /// Administrator-reviewed runtime connection/configuration snapshot.
     pub config: RuntimeConfig,
+    /// Host-denied configured roles; removing their profiles must not enable Primary fallback.
+    pub unavailable_model_roles: BTreeSet<String>,
     /// Explicit headless wrapping key reference for private per-user OAuth vaults.
     pub wrapping_key_variable: String,
     /// Exact late-bound credentials selected under current connection policy.
@@ -134,6 +136,7 @@ impl ChatRuntime {
         options.config.workflows.user = workflows;
         let context = RuntimeOpenOptions::for_controlled_chat(&workspace)
             .map_err(|_| ChatError::InvalidConfiguration)?
+            .with_unavailable_model_roles(options.unavailable_model_roles)
             .with_colossus_home(home.path())
             .map_err(|_| ChatError::StateUnavailable)?;
         let context = if let Some(shared) = options.shared {
@@ -288,6 +291,7 @@ mod custody_tests {
             user_id: "bob".into(),
             root: root.clone(),
             config: RuntimeConfig::controlled_chat_template(root.path().join("unused.redb")),
+            unavailable_model_roles: BTreeSet::new(),
             wrapping_key_variable: "COLOSSUS_UNUSED_TEST_KEY".into(),
             credentials: resolver,
             codex_auth: None,

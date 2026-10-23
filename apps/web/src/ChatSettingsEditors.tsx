@@ -1,5 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Button, DropdownSelect, TextInput } from "@colossus/ui";
+import { IconPlug } from "@tabler/icons-react";
+import { ProviderSetupSection } from "@colossus/ui/components/ProviderSetupSection";
+import "@colossus/ui/styles/provider-settings-editor.css";
 import { ChatProviderSettings } from "./ChatProviderSettings";
 import { ChatModelSettings } from "./ChatModelSettings";
 import type { CredentialSetup, CredentialTarget } from "./credential-types";
@@ -93,6 +96,7 @@ function McpEditor({
   const [client, setClient] = useState(originalMcp?.oauth?.clientId ?? ""),
     [scopes, setScopes] = useState(originalMcp?.oauth?.scopes.join(", ") ?? "");
   const [error, setError] = useState("");
+  const helpId = useId();
   const formValue = JSON.stringify([
     id,
     url,
@@ -114,7 +118,9 @@ function McpEditor({
   function submit(continueToCredential = false) {
     if (busy) return;
     if (!validProfile(id)) {
-      setError("Use a valid profile ID.");
+      setError(
+        "Use a nonreserved Profile ID of 1–128 letters, digits, hyphens, or underscores, starting with a letter or digit.",
+      );
       return;
     }
     if (!editor.id && Object.hasOwn(draft.mcp.servers, id)) {
@@ -127,25 +133,80 @@ function McpEditor({
         !["http:", "https:"].includes(endpoint.protocol) ||
         endpoint.username ||
         endpoint.password ||
-        endpoint.hash
+        !endpoint.hostname ||
+        url.includes("?") ||
+        url.includes("#")
       )
         throw new Error();
+      const loopback =
+        endpoint.hostname === "localhost" ||
+        endpoint.hostname === "[::1]" ||
+        /^127(?:\.\d{1,3}){3}$/u.test(endpoint.hostname);
+      if (endpoint.protocol === "http:" && !loopback) {
+        setError(
+          "Use an HTTPS MCP endpoint, or HTTP for a loopback connection on the Control Plane server.",
+        );
+        return;
+      }
     } catch {
       setError(
-        "Enter an HTTP or HTTPS MCP URL without embedded credentials or a fragment.",
+        "Enter an HTTP or HTTPS MCP endpoint without embedded credentials, a query, or a fragment.",
       );
       return;
     }
-    const next = structuredClone(draft);
-    const allowed = tokens(tools);
-    if (!allowed.length || (allowed.includes("*") && allowed.length !== 1)) {
+    const allowed = tools.split(/[\s,]+/u).filter(Boolean);
+    if (
+      !allowed.length ||
+      allowed.length > 1024 ||
+      allowed.some(
+        (tool) =>
+          !/^[A-Za-z0-9._*-]{1,128}$/u.test(tool) || tool.includes("**"),
+      )
+    ) {
       setError(
-        "Enter exact allowed tool names or patterns. A wildcard must be the only entry.",
+        "Enter 1–1,024 exact tool names or * patterns using 1–128 ASCII letters, digits, dots, underscores, or hyphens. Regex, control characters, and consecutive stars are unsupported.",
       );
+      return;
+    }
+    if (allowed.includes("*") && allowed.length !== 1) {
+      setError(
+        "Use * alone to allow all tools, or list exact names and narrower * patterns.",
+      );
+      return;
+    }
+    if (new Set(allowed).size !== allowed.length) {
+      setError("Use each tool selector only once.");
       return;
     }
     if (oauth && !client.trim()) {
       setError("Enter the registered OAuth client ID.");
+      return;
+    }
+    const oauthClient = client.trim();
+    const oauthScopes = tokens(scopes);
+    const byteLength = (value: string) =>
+      new TextEncoder().encode(value).length;
+    if (
+      oauth &&
+      (byteLength(oauthClient) > 1024 ||
+        /[\u0000-\u001f\u007f]/u.test(oauthClient))
+    ) {
+      setError(
+        "Use an OAuth client ID of at most 1,024 UTF-8 bytes without control characters.",
+      );
+      return;
+    }
+    if (
+      oauth &&
+      (oauthScopes.length > 32 ||
+        oauthScopes.some(
+          (scope) =>
+            byteLength(scope) > 256 || /[\u0000-\u0020\u007f]/u.test(scope),
+        ))
+    ) {
+      setError(
+        "Use at most 32 OAuth scopes, each at most 256 UTF-8 bytes without control characters or spaces.",
+      );
       return;
     }
     if (oauth && auth !== "personal") {
@@ -154,6 +215,7 @@ function McpEditor({
       );
       return;
     }
+    const next = structuredClone(draft);
     const value: McpServer = {
       ...originalMcp,
       transport: "streamable_http",
@@ -162,8 +224,8 @@ function McpEditor({
       oauth: oauth
         ? {
             ...originalMcp?.oauth,
-            clientId: client.trim(),
-            scopes: tokens(scopes),
+            clientId: oauthClient,
+            scopes: oauthScopes,
             callbackPort: originalMcp?.oauth?.callbackPort ?? 8787,
           }
         : null,
@@ -184,81 +246,129 @@ function McpEditor({
   }
   return (
     <form
-      className="chat-settings-editor"
+      className="chat-settings-editor shared-provider-settings-editor mcp-settings-editor"
       aria-label="MCP connection settings"
       onSubmit={(event) => {
         event.preventDefault();
         submit();
       }}
     >
-      <h3 ref={heading} tabIndex={-1}>
-        {editor.id ? "Edit" : "Add"} MCP connection
-      </h3>
+      <div className="provider-editor-heading">
+        <span className="resource-icon">
+          <IconPlug size={18} aria-hidden="true" />
+        </span>
+        <div>
+          <h4 ref={heading} tabIndex={-1}>
+            {editor.id ? "Edit" : "Add"} MCP connection
+          </h4>
+          <p>Connect an MCP server and choose which tools it exposes.</p>
+        </div>
+      </div>
       {error ? <p role="alert">{error}</p> : null}
-      <fieldset disabled={busy} className="chat-settings-fields">
-        <Field label="Profile ID">
-          <TextInput
-            aria-label="Profile ID"
-            value={id}
-            disabled={Boolean(editor.id)}
-            required
-            onChange={(event) => setId(event.target.value)}
-          />
-        </Field>
-        <Field label="MCP server URL">
-          <TextInput
-            aria-label="MCP server URL"
-            type="url"
-            value={url}
-            required
-            maxLength={2048}
-            onChange={(event) => setUrl(event.target.value)}
-          />
-        </Field>
-        <Field label="Allowed tools">
-          <TextInput
-            aria-label="Allowed tools"
-            value={tools}
-            required
-            placeholder="search, read_document"
-            onChange={(event) => setTools(event.target.value)}
-          />
-        </Field>
-        <AuthField value={auth} onChange={setAuth} />
-        <Field label="Sign-in method">
-          <DropdownSelect
-            aria-label="Sign-in method"
-            value={oauth ? "oauth" : "static"}
-            onChange={(event) => setOauth(event.target.value === "oauth")}
-          >
-            <option value="static">
-              Static credential or no authentication
-            </option>
-            <option value="oauth">OAuth sign-in</option>
-          </DropdownSelect>
-        </Field>
-        {oauth ? (
-          <>
-            <Field label="OAuth client ID">
+      <fieldset disabled={busy} className="mcp-settings-fieldset">
+        <ProviderSetupSection
+          title="Connection"
+          description="Name this connection and enter the server address."
+        >
+          <div className="chat-settings-fields">
+            <Field label="Profile ID">
               <TextInput
-                aria-label="OAuth client ID"
-                value={client}
+                aria-label="Profile ID"
+                value={id}
+                disabled={Boolean(editor.id)}
                 required
-                onChange={(event) => setClient(event.target.value)}
+                maxLength={128}
+                spellCheck={false}
+                onChange={(event) => setId(event.target.value)}
               />
+              <small>Letters, numbers, hyphens, and underscores.</small>
             </Field>
-            <Field label="OAuth scopes">
+            <Field label="MCP server URL">
               <TextInput
-                aria-label="OAuth scopes"
-                value={scopes}
-                placeholder="read, search"
-                onChange={(event) => setScopes(event.target.value)}
+                aria-label="MCP server URL"
+                type="url"
+                value={url}
+                required
+                maxLength={2048}
+                aria-describedby={`${helpId}-endpoint`}
+                onChange={(event) => setUrl(event.target.value)}
               />
+              <small id={`${helpId}-endpoint`}>
+                Use the server's Streamable HTTP endpoint. Localhost refers to
+                the Control Plane server.
+              </small>
             </Field>
-          </>
-        ) : null}
+          </div>
+        </ProviderSetupSection>
+        <ProviderSetupSection
+          title="Tools"
+          description="Choose which tools can be used from this server."
+        >
+          <Field label="Allowed tools">
+            <TextInput
+              aria-label="Allowed tools"
+              value={tools}
+              required
+              placeholder="search, get_*, *_search"
+              aria-describedby={`${helpId}-tools`}
+              onChange={(event) => setTools(event.target.value)}
+            />
+            <small id={`${helpId}-tools`}>
+              Exact names or * patterns, separated by commas. Use * alone for
+              all tools.
+            </small>
+          </Field>
+          <details className="mcp-pattern-help">
+            <summary>Pattern matching</summary>
+            <p>
+              Matching is case-sensitive. A * matches zero or more characters,
+              including newly advertised matching tools. Regex and consecutive
+              stars are unsupported.
+            </p>
+          </details>
+        </ProviderSetupSection>
+        <ProviderSetupSection
+          title="Authentication"
+          description="Use a personal sign-in or an explicitly assigned shared credential."
+        >
+          <div className="chat-settings-fields">
+            <AuthField value={auth} onChange={setAuth} />
+            <Field label="Sign-in method">
+              <DropdownSelect
+                aria-label="Sign-in method"
+                value={oauth ? "oauth" : "static"}
+                onChange={(event) => setOauth(event.target.value === "oauth")}
+              >
+                <option value="static">
+                  Static credential or no authentication
+                </option>
+                <option value="oauth">OAuth sign-in</option>
+              </DropdownSelect>
+            </Field>
+            {oauth ? (
+              <>
+                <Field label="OAuth client ID">
+                  <TextInput
+                    aria-label="OAuth client ID"
+                    value={client}
+                    required
+                    onChange={(event) => setClient(event.target.value)}
+                  />
+                </Field>
+                <Field label="OAuth scopes">
+                  <TextInput
+                    aria-label="OAuth scopes"
+                    value={scopes}
+                    placeholder="read, search"
+                    onChange={(event) => setScopes(event.target.value)}
+                  />
+                </Field>
+              </>
+            ) : null}
+          </div>
+        </ProviderSetupSection>
       </fieldset>
-      <div className="chat-settings-actions">
+      <div className="mcp-editor-actions">
         {!oauth &&
         auth !== "none" &&
         (auth === "shared" ? onCredentials : onPersonalCredentials) ? (
@@ -271,11 +381,11 @@ function McpEditor({
             Save and choose credential
           </Button>
         ) : null}
+        <Button type="button" disabled={busy} onClick={onCancel}>
+          Cancel
+        </Button>
         <Button type="submit" variant="primary" disabled={busy}>
           {editor.id ? "Save changes" : "Add MCP connection"}
-        </Button>
-        <Button disabled={busy} onClick={onCancel}>
-          Cancel
         </Button>
       </div>
     </form>

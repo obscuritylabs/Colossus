@@ -23,6 +23,13 @@ pub(super) async fn providers(
         .ok_or(CloudError::NotFound)?;
     let mut providers = Vec::new();
     for (id, profile) in &configuration.runtime.providers.profiles {
+        if !crate::global_settings::network::connection_enabled(
+            &configuration,
+            ChatConnectionKind::Provider,
+            id,
+        ) {
+            continue;
+        }
         let authentication = configuration
             .provider_authentication
             .get(id)

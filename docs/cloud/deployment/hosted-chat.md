@@ -71,9 +71,14 @@ Replace its project ID, model, provider/MCP endpoints, and OAuth client settings
 Remove the sample MCP entry until its server and public S256 PKCE client are ready.
 The MCP callback is `https://BROWSER_HOST/auth/mcp/callback`.
 
-Review exact `sandbox.networkDestinations` origins for providers, MCP, and OAuth
-metadata/token servers. Project administrators can configure connections within
-that ceiling; they cannot grant arbitrary network access.
+Hosted connections default to **Allow all configured connections**. Project
+administrators can restrict provider, MCP, and Search origins through
+**Project Admin → Network access**; see [project connection policy](../administration.md#control-project-network-access).
+Global definitions can be published independently of any project's policy. The host
+admits the configured, permitted connection origins when composing each runtime;
+this does not grant arbitrary networking tools or filesystem/process authority.
+Review any separate operator-configured `sandbox.networkDestinations` needed by
+other allowed effects and the OAuth metadata/token servers used by the deployment.
 
 Set `chat.existingSecret` and `chat.anchor.endpoint` to your external resources.
 For a private anchor CA, set `chat.anchor.existingCaSecret`. The chart enables only

@@ -28,6 +28,7 @@ export function ProviderSettingsEditor<T extends ProviderSettingsDraft>({
   saveDisabled = false,
   saveLabel,
   cancelLabel = "Cancel",
+  endpointHelp = "Use HTTPS except when connecting to a service on this device.",
 }: {
   draft: T;
   busy: boolean;
@@ -41,6 +42,7 @@ export function ProviderSettingsEditor<T extends ProviderSettingsDraft>({
   saveDisabled?: boolean;
   saveLabel?: string;
   cancelLabel?: string;
+  endpointHelp?: string;
 }) {
   const id = useId();
   const codex = draft.kind === "open_ai_codex";
@@ -160,7 +162,7 @@ export function ProviderSettingsEditor<T extends ProviderSettingsDraft>({
             <small>
               {codex
                 ? "This endpoint is managed by the Codex subscription connection."
-                : "Use HTTPS except when connecting to a service on this device."}
+                : endpointHelp}
             </small>
           </label>
         </div>

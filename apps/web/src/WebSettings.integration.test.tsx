@@ -12,6 +12,7 @@ import { AuthenticatedApp } from "./ControlPlane";
 import { NavigationProvider, navigate } from "./navigation";
 import type { ChatSettingsSnapshot, ChatSettingsWrite } from "./chat-settings";
 import type { Me } from "./control-api";
+import type { CredentialSnapshot } from "./CredentialStoreSettings";
 
 let root: Root, container: HTMLDivElement;
 let snapshot: ChatSettingsSnapshot;
@@ -452,7 +453,11 @@ it("retains a canonical project save status across the inventory remount and cle
   expect(location.pathname).toBe("/projects/p/settings/providers");
   expect(container.querySelector("form.provider-editor")).toBeNull();
   expect(
-    [...container.querySelectorAll('[role="status"]')].filter(
+    [
+      ...container.querySelectorAll(
+        '[role="region"][aria-label="Settings notifications"]',
+      ),
+    ].filter(
       (item) => item.textContent?.trim() === "Project configuration saved.",
     ),
   ).toHaveLength(1);
@@ -461,6 +466,266 @@ it("retains a canonical project save status across the inventory remount and cle
   expect(container.textContent).not.toContain("Project configuration saved.");
   await act(() => navigate("/projects/p/settings/providers"));
   expect(container.textContent).not.toContain("Project configuration saved.");
+});
+
+it("reconciles the Network access URL editor before showing its saved policy and success toast", async () => {
+  history.replaceState(null, "", "/projects/p/settings/network/edit");
+  const reads = vi.mocked(fetch).getMockImplementation()!;
+  let confirmSave: ((response: Response) => void) | undefined;
+  let confirmReadback: ((response: Response) => void) | undefined;
+  let submitted: ChatSettingsWrite | undefined;
+  let waitingForReadback = false;
+  vi.mocked(fetch).mockImplementation(async (input, options) => {
+    if (String(input) === "/api/projects/p/chat/settings") {
+      if (options?.method === "PUT") {
+        submitted = JSON.parse(String(options.body)) as ChatSettingsWrite;
+        return new Promise<Response>((resolve) => {
+          confirmSave = (response) => {
+            waitingForReadback = true;
+            resolve(response);
+          };
+        });
+      }
+      if (waitingForReadback)
+        return new Promise<Response>((resolve) => {
+          confirmReadback = (response) => {
+            waitingForReadback = false;
+            resolve(response);
+          };
+        });
+    }
+    return reads(input, options);
+  });
+  await act(() =>
+    root.render(
+      <NavigationProvider>
+        <AuthenticatedApp
+          me={me}
+          authConfig={null}
+          settings={null}
+          onSettings={noop}
+          loadMe={noop}
+          onSignOut={noop}
+        />
+      </NavigationProvider>,
+    ),
+  );
+  expect(container.querySelector(".settings-editor-page h2")?.textContent).toBe(
+    "Edit network access",
+  );
+  expect(container.querySelector(".settings-sidebar")).toBeNull();
+  await act(() => button("Connection access mode").click());
+  const restricted = [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find(
+    (option) => option.textContent?.trim() === "Restrict to an origin list",
+  )!;
+  await act(() => restricted.click());
+  const origins = container.querySelector("textarea")!;
+  await act(() => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(origins, "https://models.example.test");
+    origins.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(() =>
+    container
+      .querySelector("form.connection-network-editor")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+  );
+  expect(submitted?.connection_network_policy).toEqual({
+    mode: "allow_list",
+    allowed_origins: ["https://models.example.test"],
+  });
+  await act(() => confirmSave!(json({ revision: 2 })));
+  expect(location.pathname).toBe("/projects/p/settings/network/edit");
+  expect(container.textContent).not.toContain(
+    "Connection network policy saved.",
+  );
+  const { inheritance: _inheritance, ...configuration } = submitted!;
+  snapshot = { ...snapshot, ...configuration, revision: 2 };
+  await act(() => confirmReadback!(json(snapshot)));
+  expect(location.pathname).toBe("/projects/p/settings/network");
+  expect(container.querySelector("form.connection-network-editor")).toBeNull();
+  expect(container.textContent).toContain("Restricted origins");
+  expect(container.textContent).toContain("https://models.example.test");
+  expect(
+    container.querySelector(
+      '[role="region"][aria-label="Settings notifications"]',
+    )?.textContent,
+  ).toContain("Connection network policy saved.");
+  await act(() => navigate("/projects/q/settings/network"));
+  expect(container.textContent).not.toContain(
+    "Connection network policy saved.",
+  );
+});
+
+it.each(["Cancel", "Back to Network access"])(
+  "retains a routed Network proposal when guarded %s is declined, then leaves after confirmation",
+  async (action) => {
+    history.replaceState(null, "", "/projects/p/settings/network/edit");
+    const confirm = vi
+      .spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    await act(() =>
+      root.render(
+        <NavigationProvider>
+          <AuthenticatedApp
+            me={me}
+            authConfig={null}
+            settings={null}
+            onSettings={noop}
+            loadMe={noop}
+            onSignOut={noop}
+          />
+        </NavigationProvider>,
+      ),
+    );
+    await act(() => button("Connection access mode").click());
+    const option = [
+      ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find(
+      (item) => item.textContent?.trim() === "Restrict to an origin list",
+    )!;
+    await act(() => option.click());
+    const proposal = "https://models.example.test\nhttps://mcp.example.test";
+    const field = container.querySelector("textarea")!;
+    await act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(field, proposal);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(() => button(action).click());
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(location.pathname).toBe("/projects/p/settings/network/edit");
+    expect(container.querySelector("textarea")?.value).toBe(proposal);
+    expect(button("Connection access mode").textContent).toContain(
+      "Restrict to an origin list",
+    );
+    expect(button("Save network access").disabled).toBe(false);
+    await act(() => button(action).click());
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(location.pathname).toBe("/projects/p/settings/network");
+    expect(
+      container.querySelector("form.connection-network-editor"),
+    ).toBeNull();
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.every(([, options]) => options?.method === "GET"),
+    ).toBe(true);
+  },
+);
+
+it("uses one success notification after a routed credential save followed by an inline assignment", async () => {
+  history.replaceState(null, "", "/projects/p/settings/credentials/new");
+  const path = "/api/projects/p/chat/credential-store/project";
+  const data: CredentialSnapshot = {
+    revision: 1,
+    credentials: [],
+    connections: [
+      {
+        id: "company",
+        kind: "provider",
+        label: "Company API",
+        endpoint: "https://models.example.test/v1",
+        credential_binding: "binding-1",
+        credential_id: null,
+      },
+    ],
+  };
+  const reads = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (input, options) => {
+    const target = String(input);
+    if (target === path) {
+      if (options?.method === "POST") {
+        data.credentials = [
+          {
+            id: "saved-key",
+            label: "Project API key",
+            kind: "api_key",
+            legacy: false,
+            used_by: [],
+          },
+        ];
+        data.revision = 2;
+        return json({ id: "saved-key", revision: 2 });
+      }
+      return json(data);
+    }
+    if (target === `${path}/attachments/provider/company`) {
+      expect(JSON.parse(String(options?.body))).toMatchObject({
+        revision: 2,
+        credential_id: "saved-key",
+        credential_binding: "binding-1",
+      });
+      data.revision = 3;
+      data.connections[0]!.credential_id = "saved-key";
+      data.credentials[0]!.used_by = [data.connections[0]!];
+      return json({ revision: 3 });
+    }
+    return reads(input, options);
+  });
+  await act(() =>
+    root.render(
+      <NavigationProvider>
+        <AuthenticatedApp
+          me={me}
+          authConfig={null}
+          settings={null}
+          onSettings={noop}
+          loadMe={noop}
+          onSignOut={noop}
+        />
+      </NavigationProvider>,
+    ),
+  );
+  const label = field("Display label")!;
+  await act(() => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!.call(label, "Project API key");
+    label.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const secret = container.querySelector<HTMLInputElement>(
+    'input[type="password"]',
+  )!;
+  secret.value = "synthetic-project-token";
+  await act(() =>
+    secret
+      .closest("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+  );
+  expect(location.pathname).toBe("/projects/p/settings/credentials");
+  expect(container.querySelectorAll(".app-toast")).toHaveLength(1);
+  expect(container.querySelector(".app-toast")?.textContent).toContain(
+    "Project credential saved.",
+  );
+  await act(() => button("Attach existing credential").click());
+  for (const [name, value] of [
+    ["Saved credential", "Project API key"],
+    ["Credential connection", "Provider: Company API"],
+  ]) {
+    await act(() => button(name!).click());
+    const option = [
+      ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((item) => item.textContent?.trim() === value)!;
+    expect(option).toBeDefined();
+    await act(() => option.click());
+  }
+  await act(() => button("Attach credential").click());
+  expect(location.pathname).toBe("/projects/p/settings/credentials");
+  expect(container.querySelectorAll(".app-toast")).toHaveLength(1);
+  expect(container.querySelector(".app-toast")?.textContent).toContain(
+    "Credential changes saved.",
+  );
+  expect(container.textContent).not.toContain("Project credential saved.");
+  expect(container.innerHTML).not.toContain("synthetic-project-token");
 });
 
 it("keeps a personal variable save status when its URL editor returns to the private inventory", async () => {
@@ -520,7 +785,11 @@ it("keeps a personal variable save status when its URL editor returns to the pri
     "/settings/variables?project=p",
   );
   expect(
-    [...container.querySelectorAll('[role="status"]')].some(
+    [
+      ...container.querySelectorAll(
+        '[role="region"][aria-label="Settings notifications"]',
+      ),
+    ].some(
       (item) =>
         item.textContent?.trim() === "Your project variables were saved.",
     ),

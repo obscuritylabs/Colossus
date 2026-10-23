@@ -126,6 +126,8 @@ export function CatalogInventory({
   description: descriptionOverride,
   usageLabel: usageLabelOverride,
   headingLevel = 3,
+  toolbarActions,
+  addInToolbar = false,
 }: {
   kind: keyof typeof catalogKinds | CatalogInventoryKind;
   summary: string;
@@ -141,6 +143,8 @@ export function CatalogInventory({
   description?: string;
   usageLabel?: string;
   headingLevel?: 2 | 3;
+  toolbarActions?: ReactNode;
+  addInToolbar?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const search = useRef<HTMLInputElement>(null);
@@ -167,6 +171,20 @@ export function CatalogInventory({
   const visible = rows.filter((row) =>
     row.searchText.toLocaleLowerCase().includes(needle),
   );
+  const addButton = (
+    <Button
+      id={typeof kind === "string" ? `add-${kind}` : undefined}
+      variant="primary"
+      type="button"
+      disabled={busy || editing}
+      onClick={() => {
+        setQuery("");
+        onAdd();
+      }}
+    >
+      <IconPlus size={16} aria-hidden="true" /> {addLabel ?? `Add ${singular}`}
+    </Button>
+  );
 
   return (
     <section
@@ -178,43 +196,39 @@ export function CatalogInventory({
           <Heading id={`${id}-heading`}>{title}</Heading>
           <p>{description}</p>
         </div>
-        <Button
-          id={typeof kind === "string" ? `add-${kind}` : undefined}
-          variant="primary"
-          type="button"
-          disabled={busy || editing}
-          onClick={() => {
-            setQuery("");
-            onAdd();
-          }}
-        >
-          <IconPlus size={16} aria-hidden="true" />{" "}
-          {addLabel ?? `Add ${singular}`}
-        </Button>
+        {addInToolbar ? null : addButton}
       </header>
       <p className="catalog-summary">{summary}</p>
       {children}
-      <div className="catalog-search">
-        <IconSearch size={18} aria-hidden="true" />
-        <input
-          ref={search}
-          aria-label={searchLabel}
-          placeholder={searchLabel}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        {query ? (
-          <button
-            type="button"
-            className="ui-icon-button"
-            aria-label="Clear search"
-            onClick={() => {
-              setQuery("");
-              search.current?.focus();
-            }}
-          >
-            <IconX size={16} aria-hidden="true" />
-          </button>
+      <div className="catalog-toolbar">
+        <div className="catalog-search">
+          <IconSearch size={18} aria-hidden="true" />
+          <input
+            ref={search}
+            aria-label={searchLabel}
+            placeholder={searchLabel}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          {query ? (
+            <button
+              type="button"
+              className="ui-icon-button"
+              aria-label="Clear search"
+              onClick={() => {
+                setQuery("");
+                search.current?.focus();
+              }}
+            >
+              <IconX size={16} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+        {toolbarActions || addInToolbar ? (
+          <div className="catalog-toolbar-actions">
+            {toolbarActions}
+            {addInToolbar ? addButton : null}
+          </div>
         ) : null}
       </div>
       <div className="catalog-table-container">

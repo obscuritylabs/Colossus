@@ -139,7 +139,64 @@ it("creates an unused named credential without a provider or MCP configured", as
   expect(localStorage.length).toBe(0);
   expect(sessionStorage.length).toBe(0);
   expect(saved).toHaveBeenCalledOnce();
+  expect(
+    container.querySelector('[aria-label="Notifications"]')?.textContent,
+  ).toContain("Credential changes saved.");
+  const toolbar = container.querySelector(".catalog-toolbar");
+  expect(button("Add credential").closest(".catalog-toolbar")).toBe(toolbar);
+  expect(button("Reload credentials").closest(".catalog-toolbar")).toBe(
+    toolbar,
+  );
+  expect(button("Reload credentials").textContent).toBe("");
 });
+
+it.each(["", "é".repeat(81), "Invalid\u0000label", "Invalid\u0085label"])(
+  "retains entered tokens while invalid credential labels block even direct submission (%s)",
+  async (label) => {
+    await render();
+    await act(() => button("Add credential").click());
+    await input("Display label", "Reviewed label");
+    const token = container.querySelector<HTMLInputElement>(
+      'input[type="password"]',
+    )!;
+    token.value = "retained-private-token";
+    await input("Display label", label);
+    expect(token.disabled).toBe(false);
+    expect(token.value).toBe("retained-private-token");
+    expect(button("Save credential").disabled).toBe(true);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      label ? "1–160 UTF-8 bytes" : "Enter a display label",
+    );
+    await act(() =>
+      token
+        .closest("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(writes).toEqual([]);
+    expect(token.value).toBe("retained-private-token");
+    const validLabel = "é".repeat(80);
+    await input("Display label", validLabel);
+    expect(button("Save credential").disabled).toBe(false);
+    expect(token.value).toBe("retained-private-token");
+    await act(() =>
+      token
+        .closest("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0]!.body).toMatchObject({
+      label: validLabel,
+      secret: "retained-private-token",
+    });
+    expect(token.value).toBe("");
+    data.revision = 4;
+    await act(() => complete!(json({ revision: 4 })));
+  },
+);
 it("attaches an existing credential only to the reviewed destination", async () => {
   data.connections = [
     {

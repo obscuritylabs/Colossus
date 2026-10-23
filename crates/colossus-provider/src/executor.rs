@@ -1319,6 +1319,9 @@ impl ProviderExecutor {
         let host = url
             .host_str()
             .ok_or_else(|| ProviderError::Configuration("provider URL has no host".into()))?;
+        let literal_address = parse_host_ip(host);
+        let literal_host = literal_address.map(|address| address.to_string());
+        let host = literal_host.as_deref().unwrap_or(host);
         let port = url
             .port_or_known_default()
             .ok_or_else(|| ProviderError::Configuration("provider URL has no port".into()))?;
@@ -1332,7 +1335,7 @@ impl ProviderExecutor {
         let allow_non_public = matched == NetworkDestinationMatch::Ambient
             || (matched == NetworkDestinationMatch::Exact
                 && (host.eq_ignore_ascii_case("localhost")
-                    || host.parse::<IpAddr>().is_ok_and(non_public_network_address)));
+                    || literal_address.is_some_and(non_public_network_address)));
         let addresses = resolve_provider_addresses(host, port, allow_non_public).await?;
         let timeout_ms = self.profile.timeout_ms.min(permit.obligations().timeout_ms);
         let mut builder = self

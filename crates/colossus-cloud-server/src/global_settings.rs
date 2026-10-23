@@ -2,6 +2,7 @@
 pub(crate) mod credentials;
 pub(crate) mod inheritance;
 mod intrinsic;
+pub(crate) mod network;
 pub(crate) mod search;
 mod storage;
 pub(crate) mod telemetry;
@@ -65,10 +66,6 @@ async fn replace(
         return Err(CloudError::Conflict.into());
     }
     inheritance::review_catalog(host, &current, &mut input)?;
-    for (project, ceiling) in &host.deployment.projects {
-        let raw = crate::chat_settings::retained_configuration(host, project, ceiling)?;
-        inheritance::resolve(&raw, &input, ceiling)?;
-    }
     input.revision = current
         .revision
         .checked_add(1)
@@ -82,7 +79,7 @@ async fn presets(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>> {
     state.auth.admin(&headers, false).await?;
-    let host = state.hosted.as_deref().ok_or(CloudError::NotFound)?;
+    state.hosted.as_deref().ok_or(CloudError::NotFound)?;
     let presets = colossus_contracts::provider_presets();
     let availability: std::collections::BTreeMap<_, _> = presets
         .iter()
@@ -92,21 +89,13 @@ async fn presets(
                     "deployment_required"
                 }
                 (_, None) => "configure_endpoint",
-                (_, Some(endpoint)) => {
-                    if host.deployment.projects.values().all(|ceiling| {
-                        crate::chat_settings::allowed_endpoint(endpoint, ceiling, false).is_ok()
-                    }) {
-                        "available"
-                    } else {
-                        "deployment_required"
-                    }
-                }
+                (_, Some(_)) => "available",
             };
             (
                 preset.id,
                 serde_json::json!({
                     "status": status,
-                    "reason": "Instance definitions remain subject to each project's operator-managed network ceiling. ChatGPT account enrollment remains deployment-managed."
+                    "reason": "Instance definitions are reusable across projects. Each project controls connection availability in Network access. ChatGPT account enrollment remains deployment-managed."
                 }),
             )
         })

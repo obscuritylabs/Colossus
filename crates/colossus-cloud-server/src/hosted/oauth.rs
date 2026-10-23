@@ -36,6 +36,13 @@ pub(crate) async fn connections(
     let live = host.live.lock().await.get(&identity).cloned();
     let mut connections = Vec::new();
     for (id, server) in &configuration.runtime.mcp.servers {
+        if !crate::global_settings::network::connection_enabled(
+            configuration,
+            ChatConnectionKind::Mcp,
+            id,
+        ) {
+            continue;
+        }
         let authentication = configuration
             .mcp_authentication
             .get(id)
@@ -102,6 +109,17 @@ pub(crate) async fn begin(
     caller.require(CloudPermission::Execute)?;
     caller.require(CloudPermission::Control)?;
     let host = service(&state)?;
+    let configuration = host
+        .project_config(&project)
+        .await?
+        .ok_or(CloudError::NotFound)?;
+    if !crate::global_settings::network::connection_enabled(
+        &configuration,
+        ChatConnectionKind::Mcp,
+        &connection,
+    ) {
+        return Err(CloudError::PermissionDenied.into());
+    }
     if host.shared.is_some() {
         let session = state.auth.session_binding(&headers).await?;
         return Ok(Json(
@@ -122,6 +140,13 @@ pub(crate) async fn begin(
         .ok_or(CloudError::Conflict)?;
     let projects = host.projects.read().await;
     let configuration = projects.get(&project).ok_or(CloudError::NotFound)?;
+    if !crate::global_settings::network::connection_enabled(
+        configuration,
+        ChatConnectionKind::Mcp,
+        &connection,
+    ) {
+        return Err(CloudError::PermissionDenied.into());
+    }
     let server = configuration
         .runtime
         .mcp

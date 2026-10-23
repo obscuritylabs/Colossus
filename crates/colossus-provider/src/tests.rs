@@ -659,6 +659,13 @@ fn provider_request(profile: &ProviderProfile) -> EffectRequest {
 
 async fn one_response_server(body: Value) -> (String, tokio::task::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    one_response_server_on(listener, body).await
+}
+
+async fn one_response_server_on(
+    listener: TcpListener,
+    body: Value,
+) -> (String, tokio::task::JoinHandle<String>) {
     let address = listener.local_addr().expect("address");
     let task = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.expect("accept");
@@ -698,6 +705,106 @@ async fn one_response_server(body: Value) -> (String, tokio::task::JoinHandle<St
         request_text
     });
     (format!("http://{address}/v1"), task)
+}
+
+#[test]
+fn provider_endpoints_accept_ipv6_loopback_without_remote_http_authority() {
+    for endpoint in [
+        "http://localhost:8080/v1",
+        "http://127.1.2.3:8080/v1",
+        "http://[::1]:8080/v1",
+        "https://models.example/v1",
+    ] {
+        assert!(
+            normalize_base_url(endpoint, ResourceAuthority::Declared).is_ok(),
+            "{endpoint}"
+        );
+    }
+    for endpoint in [
+        "http://models.example/v1",
+        "http://10.0.0.1/v1",
+        "http://[fd00::1]/v1",
+        "http://[::ffff:127.0.0.1]/v1",
+    ] {
+        assert!(
+            normalize_base_url(endpoint, ResourceAuthority::Declared).is_err(),
+            "{endpoint}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn ipv6_loopback_provider_calls_require_exact_origin_and_release_real_response() {
+    let listener = match TcpListener::bind("[::1]:0").await {
+        Ok(listener) => listener,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::AddrNotAvailable | std::io::ErrorKind::Unsupported
+            ) =>
+        {
+            eprintln!("IPv6 loopback unavailable: {error}");
+            return;
+        }
+        Err(error) => panic!("bind IPv6 provider fixture: {error}"),
+    };
+    let (base_url, server) = one_response_server_on(
+        listener,
+        json!({"choices":[{"message":{"role":"assistant","content":"ipv6-provider-result"}}]}),
+    )
+    .await;
+    let profile = ProviderProfile::new(
+        "ipv6",
+        ProviderKind::OpenAiCompatible,
+        Some(base_url),
+        Some("env:UNIT_PROVIDER_KEY".into()),
+        5000,
+    )
+    .unwrap();
+    let origin = profile.network_origin().unwrap().unwrap();
+    let credentials = Arc::new(CountingCredentialResolver::new());
+    let executor = ProviderExecutor::with_credentials(profile.clone(), credentials.clone());
+    let gateway = |destination: &str| {
+        EffectGateway::new(
+            Arc::new(InMemoryEventJournal::default()),
+            Arc::new(
+                BuiltInPolicy::offline_default()
+                    .with_action(profile.kind.generation_action(), DecisionOutcome::Allow)
+                    .with_network_destination(destination)
+                    .with_post_effect(true),
+            ),
+            Arc::new(DenyApproval),
+            SafetyKernel::new(["provider.call".into()]),
+            [81; 32],
+        )
+    };
+    assert!(
+        gateway("*")
+            .execute(provider_request(&profile), &executor)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        credentials.calls.load(Ordering::Acquire),
+        0,
+        "a generic destination does not authorize IPv6 loopback credential disclosure"
+    );
+    let released = gateway(&origin)
+        .execute(provider_request(&profile), &executor)
+        .await
+        .unwrap();
+    let turn: ProviderTurn = serde_json::from_slice(&released.bytes).unwrap();
+    assert!(
+        matches!(turn.events.last(),Some(ProviderEvent::FinalOutput{text}) if text=="ipv6-provider-result")
+    );
+    let request = server.await.unwrap();
+    assert!(request.contains("POST /v1/chat/completions HTTP/1.1"));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer unit-secret")
+    );
+    assert_eq!(credentials.calls.load(Ordering::Acquire), 1);
 }
 
 async fn one_status_server(

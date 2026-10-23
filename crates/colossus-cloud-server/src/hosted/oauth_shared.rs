@@ -27,11 +27,18 @@ pub(super) async fn begin_with_session(
     session: String,
 ) -> std::result::Result<serde_json::Value, CloudError> {
     let host = service(state)?;
-    host.ensure(state, caller).await?;
     let configuration = host
         .project_config(caller.project_id())
         .await?
         .ok_or(CloudError::NotFound)?;
+    if !crate::global_settings::network::connection_enabled(
+        &configuration,
+        ChatConnectionKind::Mcp,
+        connection,
+    ) {
+        return Err(CloudError::PermissionDenied);
+    }
+    host.ensure(state, caller).await?;
     let server = configuration
         .runtime
         .mcp
@@ -177,6 +184,13 @@ pub(super) async fn callback(
         .ok_or(CloudError::NotFound)?;
     if configuration.revision != flow.revision {
         return Err(CloudError::Conflict);
+    }
+    if !crate::global_settings::network::connection_enabled(
+        &configuration,
+        ChatConnectionKind::Mcp,
+        &flow.connection,
+    ) {
+        return Err(CloudError::PermissionDenied);
     }
     shared.sql.verify_lease(&flow.lease)?;
     // Authorization and exact binding checks precede single-use consumption.

@@ -406,6 +406,9 @@ impl GatewayModelProvider {
         role: &str,
         options: &colossus_contracts::WorkflowAgentOptions,
     ) -> Result<colossus_provider::ResolvedModel, ModelProviderError> {
+        self.providers
+            .require_role_available(role)
+            .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
         match &options.model_profile {
             Some(profile) if !profile.is_empty() && profile.len() <= 128 => {
                 self.providers.model(profile)

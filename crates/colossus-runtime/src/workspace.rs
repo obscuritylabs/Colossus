@@ -23,6 +23,9 @@ pub struct RuntimeOpenOptions {
     pub(super) model_network_tools: bool,
     /// Trusted cloud-chat composition, independent of public application grants.
     pub(super) controlled_chat: bool,
+    /// Host-denied logical routes; retained even when their profiles are filtered out.
+    /// Public configuration and per-run model preferences cannot remove these denials.
+    pub(super) unavailable_model_roles: BTreeSet<String>,
     pub(super) shared_storage: Option<crate::RuntimeSharedStorage>,
     /// Credential custody injected by the trusted host, never serialized or rendered.
     pub(super) oauth_credential_vault: Option<crate::credential_vault::SuppliedOAuthVault>,
@@ -64,6 +67,7 @@ impl RuntimeOpenOptions {
             automatic_agent_instructions: true,
             model_network_tools: true,
             controlled_chat: false,
+            unavailable_model_roles: BTreeSet::new(),
             shared_storage: None,
             oauth_credential_vault: None,
             expected_workspace_identity: None,
@@ -80,7 +84,8 @@ impl RuntimeOpenOptions {
     ///
     /// This enforces a closed tool and effect ceiling, disables automatic host
     /// instructions and plugin activation, and rejects process/filesystem grants,
-    /// native browser/computer hosts, and non-remote or wildcard MCP declarations.
+    /// native browser/computer hosts, and non-remote MCP declarations. Remote MCP
+    /// selectors retain the canonical bounded star-pattern validation.
     /// Provider and MCP credentials remain host-owned; the host must separately bind
     /// this runtime's state and credential resolver to the intended tenant/user.
     pub fn for_controlled_chat(workspace: impl AsRef<Path>) -> Result<Self, RuntimeError> {
@@ -89,6 +94,16 @@ impl RuntimeOpenOptions {
         options.model_network_tools = false;
         options.automatic_agent_instructions = false;
         Ok(options)
+    }
+
+    /// Preserve explicit host-denied routes instead of falling back to Primary.
+    ///
+    /// This host-only context is not deserializable from configuration or run requests.
+    /// It only narrows provider routing, including internal Research, risk and child roles.
+    #[must_use]
+    pub fn with_unavailable_model_roles(mut self, roles: BTreeSet<String>) -> Self {
+        self.unavailable_model_roles.extend(roles);
+        self
     }
 
     /// Inject shared encrypted canonical state for a controlled hosted runtime.

@@ -45,6 +45,67 @@ fn controlled_chat_template_opens_with_a_pinned_policy() {
     );
 }
 
+#[test]
+fn controlled_chat_host_denied_internal_roles_never_fall_back_or_accept_a_model_override() {
+    let workspace = crate::test_support::private_tempdir();
+    let mut config = RuntimeConfig::controlled_chat_template(workspace.path().join("state.redb"));
+    config.use_ephemeral_storage();
+    let unavailable = [
+        "planner",
+        "subagent_default",
+        "research_planner",
+        "research_worker",
+        "research_synthesizer",
+        "risk_evaluator",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    let options = RuntimeOpenOptions::for_controlled_chat(workspace.path())
+        .unwrap()
+        .with_unavailable_model_roles(unavailable);
+    let runtime =
+        Runtime::open_with_options(&config, Arc::new(DenyApproval), None, options).unwrap();
+    let primary = runtime.provider_route("primary").unwrap();
+    assert_eq!(
+        runtime
+            .provider_route("unconfigured_role")
+            .unwrap()
+            .model_profile,
+        primary.model_profile,
+        "truly unconfigured roles retain the ordinary Primary fallback"
+    );
+    for role in [
+        "planner",
+        "subagent_default",
+        "research_planner",
+        "research_worker",
+        "research_synthesizer",
+        "risk_evaluator",
+    ] {
+        assert!(
+            runtime.provider_route(role).is_err(),
+            "blocked role fell back: {role}"
+        );
+        assert!(
+            runtime
+                .model_route_with_options(
+                    role,
+                    &colossus_contracts::WorkflowAgentOptions {
+                        model_profile: Some(primary.model_profile.clone()),
+                        reasoning_effort: None,
+                    }
+                )
+                .is_err(),
+            "a model preference bypassed the host denial: {role}"
+        );
+    }
+    assert_eq!(
+        runtime.access.action_decision("filesystem.read"),
+        Some(AccessDecision::Deny)
+    );
+}
+
 struct Questions;
 
 #[tokio::test]
@@ -236,8 +297,6 @@ fn controlled_chat_rejects_execution_and_unreviewed_mcp_configuration() {
     candidates.push(candidate);
     for server in [
         json!({"command":"/unreviewed/server", "allowedTools":["lookup"]}),
-        json!({"transport":"streamable_http", "url":"https://mcp.invalid/mcp", "allowedTools":["*"]}),
-        json!({"transport":"streamable_http", "url":"https://mcp.invalid/mcp", "allowedTools":["lookup*"]}),
         json!({"transport":"streamable_http", "url":"https://unreviewed.invalid/mcp", "allowedTools":["lookup"]}),
         json!({"transport":"streamable_http", "url":"https://mcp.invalid/mcp", "allowedTools":["lookup"], "oauth":{"clientId":"fixture", "callbackPort":8787}}),
     ] {
@@ -265,6 +324,163 @@ fn controlled_chat_rejects_execution_and_unreviewed_mcp_configuration() {
         "ordinary defaults remain unchanged"
     );
     assert!(base.plugins.enabled);
+}
+
+#[test]
+fn controlled_chat_mcp_selectors_are_validated_by_the_core_on_runtime_open() {
+    let workspace = crate::test_support::private_tempdir();
+    for selectors in [
+        vec![],
+        vec!["*".into(), "read".into()],
+        vec!["get_*".into(), "get_*".into()],
+        vec!["get_**".into()],
+        vec!["^get_.*$".into()],
+        vec!["get_?".into()],
+        vec!["get_[ab]".into()],
+        vec!["a".repeat(129)],
+        (0..1025).map(|index| format!("get_{index}")).collect(),
+    ] {
+        let mut config = config(workspace.path());
+        config.sandbox.network_destinations = vec!["https://mcp.invalid".into()];
+        config.mcp.servers.insert(
+            "fixture".into(),
+            serde_json::from_value(json!({
+                "transport":"streamable_http", "url":"https://mcp.invalid/mcp",
+                "allowedTools":selectors
+            }))
+            .unwrap(),
+        );
+        assert!(
+            Runtime::open_with_options(
+                &config,
+                Arc::new(DenyApproval),
+                None,
+                RuntimeOpenOptions::for_controlled_chat(workspace.path()).unwrap(),
+            )
+            .is_err(),
+            "invalid selectors reached a controlled runtime: {selectors:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn controlled_chat_mcp_selectors_filter_discovery_without_widening_authority() {
+    for selectors in [vec!["get_*", "*_search", "echo"], vec!["*"]] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut lists = 0;
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_request(&mut socket).await;
+                let result = match request["method"].as_str().unwrap() {
+                    "server/discover" => json!({
+                        "resultType":"complete", "supportedVersions":["2026-07-28"],
+                        "capabilities":{"tools":{}}, "ttlMs":0, "cacheScope":"private"
+                    }),
+                    "tools/list" => {
+                        let mut names = vec![
+                            "get_user",
+                            "get_",
+                            "web_search",
+                            "echo",
+                            "delete_user",
+                            "Get_user",
+                            "forget_user",
+                        ];
+                        if lists > 0 {
+                            names.push("get_future_tool");
+                        }
+                        lists += 1;
+                        json!({"tools": names.into_iter().map(|name| json!({
+                            "name":name, "inputSchema":{"type":"object"}
+                        })).collect::<Vec<_>>()})
+                    }
+                    "tools/call" => {
+                        assert_eq!(request["params"]["name"], "get_future_tool");
+                        json!({"content":[{"type":"text","text":"reviewed future tool"}]})
+                    }
+                    method => panic!("unexpected MCP method {method}"),
+                };
+                let body =
+                    json!({"jsonrpc":"2.0", "id":request["id"], "result":result}).to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let workspace = crate::test_support::private_tempdir();
+        let mut config =
+            RuntimeConfig::controlled_chat_template(workspace.path().join("state.redb"));
+        config.use_ephemeral_storage();
+        config.sandbox.network_destinations = vec![origin.clone()];
+        config.mcp.servers.insert(
+            "fixture".into(),
+            serde_json::from_value(json!({
+                "transport":"streamable_http", "url":format!("{origin}/mcp"),
+                "protocolVersion":"2026-07-28", "allowedTools":selectors
+            }))
+            .unwrap(),
+        );
+        let runtime = Runtime::open_with_options(
+            &config,
+            Arc::new(colossus_policy::AllowApproval {
+                approved_by: "test".into(),
+            }),
+            None,
+            RuntimeOpenOptions::for_controlled_chat(workspace.path()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            runtime.access.action_decision("mcp.call"),
+            Some(AccessDecision::RequireApproval)
+        );
+        let discovered = runtime.mcp_tools(Some("fixture")).await.unwrap();
+        let names = discovered
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<BTreeSet<_>>();
+        assert!(!names.contains("get_future_tool"));
+        for expected in ["get_user", "get_", "web_search", "echo"] {
+            assert!(names.contains(expected));
+        }
+        for nonmatching in ["delete_user", "Get_user", "forget_user"] {
+            assert_eq!(names.contains(nonmatching), selectors == ["*"]);
+        }
+        assert!(
+            runtime
+                .mcp_tools(Some("fixture"))
+                .await
+                .unwrap()
+                .iter()
+                .any(|tool| tool.name == "get_future_tool")
+        );
+        let result = runtime
+            .mcp_call("fixture", "get_future_tool", json!({}))
+            .await
+            .unwrap();
+        assert!(
+            serde_json::to_string(&result)
+                .unwrap()
+                .contains("reviewed future tool")
+        );
+        assert!(
+            runtime
+                .mcp_call("fixture", "never_published", json!({}))
+                .await
+                .is_err()
+        );
+        assert!(runtime.http_get(&format!("{origin}/mcp")).await.is_err());
+        assert!(runtime.read_text_file("private-host-state").await.is_err());
+        assert_eq!(
+            runtime.access.action_decision("network.http"),
+            Some(AccessDecision::Deny)
+        );
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
 }
 
 #[tokio::test]

@@ -10,6 +10,7 @@ export function CredentialForm({
   description,
   endpoint,
   disabled = false,
+  submitDisabled = false,
   onSave,
   onSaved,
   onError,
@@ -20,6 +21,7 @@ export function CredentialForm({
   description: string;
   endpoint: string;
   disabled?: boolean;
+  submitDisabled?: boolean;
   onSave: (secret: string) => Promise<unknown>;
   onSaved: () => void;
   onError: (error: unknown) => void;
@@ -45,7 +47,7 @@ export function CredentialForm({
       aria-label={label}
       onSubmit={(event) => {
         event.preventDefault();
-        if (!input.current?.value || disabled || busy) return;
+        if (!input.current?.value || disabled || submitDisabled || busy) return;
         const secret = input.current.value;
         input.current.value = "";
         const submitted = scope;
@@ -76,7 +78,11 @@ export function CredentialForm({
       </label>
       <small>Credential destination: {endpoint || "Not reported"}</small>
       <small>{description}</small>
-      <Button type="submit" variant="primary" disabled={disabled || busy}>
+      <Button
+        type="submit"
+        variant="primary"
+        disabled={disabled || submitDisabled || busy}
+      >
         {busy ? "Saving…" : action}
       </Button>
     </form>

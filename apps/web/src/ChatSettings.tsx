@@ -1,7 +1,6 @@
 import { CatalogInventory } from "@colossus/ui";
 import { ProviderIcon } from "@colossus/ui/components/ProviderIcon";
 import { ModelRoleRouting } from "@colossus/ui/components/ModelRoleRouting";
-import { ModelRoutingOverview } from "@colossus/ui/components/ModelRoutingOverview";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@colossus/ui";
 import { DataTable, type DataTableColumn } from "@colossus/ui/data-table";
@@ -9,7 +8,12 @@ import { ApiFailure, projectPath, request } from "./api";
 import { LoadState } from "./Home";
 import { errorMessage, useResource } from "./resources";
 import { ChatSettingsEditor, type SettingsEditor } from "./ChatSettingsEditors";
+import { ChatRoutingOverview } from "./ChatRoutingOverview";
 import { ConnectionSettingsExtras } from "./ConnectionSettingsExtras";
+import {
+  ConnectionNetworkSettings,
+  ConnectionNetworkStatus,
+} from "./ConnectionNetworkSettings";
 import { SettingsInheritancePanel } from "./SettingsInheritancePanel";
 import type { ConnectionSettingsSection } from "./routes";
 import {
@@ -286,7 +290,9 @@ export function ChatSettings({
       setNotice(
         instanceScope
           ? "Control Plane defaults published. Projects inherit these definitions; credentials remain explicitly assigned."
-          : "Project configuration saved.",
+          : section === "network"
+            ? "Connection network policy saved."
+            : "Project configuration saved.",
       );
       onSaved();
       if (editorLocation && !setup) onCloseEditor?.();
@@ -313,7 +319,7 @@ export function ChatSettings({
     }
   }
   function recoveryControls() {
-    return editorLocation && mustReload ? (
+    return (editorLocation || section === "network") && mustReload ? (
       <div className="chat-settings-actions">
         <Button disabled={busy} onClick={() => void reloadSettings()}>
           Reload settings
@@ -374,6 +380,7 @@ export function ChatSettings({
                   search: null,
                   telemetry: null,
                   variables: null,
+                  network: null,
                 } as const
               )[section]
             }
@@ -532,7 +539,9 @@ export function ChatSettings({
               {actionBar()}
               <p className="field-help">
                 {kind === "provider"
-                  ? "Connection URLs must be allowed by your deployment administrator. Saving applies when chats are idle."
+                  ? instanceScope
+                    ? "Projects inherit published definitions. Each project's Network access policy controls use; credentials require a separate assignment."
+                    : "This project's Network access policy controls which provider origins can be used. Credentials require a separate assignment. Saving applies when chats are idle."
                   : "Model profiles reference configured providers. Saving applies when chats are idle."}
               </p>
             </>
@@ -598,6 +607,13 @@ export function ChatSettings({
                           : "Personal account"}
                   </span>
                   <small className="field-help">{origin}</small>
+                  <ConnectionNetworkStatus
+                    value={
+                      saved?.connection_availability?.[
+                        kind === "provider" ? "providers" : "models"
+                      ][row.id]
+                    }
+                  />
                 </span>
               ),
               usage:
@@ -684,6 +700,9 @@ export function ChatSettings({
           <span>
             <strong>{row.id}</strong>
             <small>{row.detail}</small>
+            <ConnectionNetworkStatus
+              value={saved?.connection_availability?.mcp[row.id]}
+            />
           </span>
         ),
       },
@@ -753,8 +772,9 @@ export function ChatSettings({
           <div>
             <h2>{title}</h2>
             <p>
-              Manage remote tools and choose personal or explicitly assigned
-              shared authentication.
+              {instanceScope
+                ? "Publish remote tool definitions for projects to inherit. Each project controls connection access and credential assignments."
+                : "Manage remote tools and choose personal or explicitly assigned shared authentication."}
             </p>
           </div>
           <Button
@@ -775,8 +795,9 @@ export function ChatSettings({
         />
         {actionBar()}
         <p className="field-help">
-          Connection URLs must be allowed by your deployment administrator.
-          Saving applies when chats are idle.
+          {instanceScope
+            ? "Published definitions are available to projects. Each project's Network access policy controls use; credentials require a separate assignment."
+            : "This project's Network access policy controls which MCP origins can be used. Credentials require a separate assignment. Saving applies when chats are idle."}
         </p>
       </section>
     );
@@ -886,9 +907,14 @@ export function ChatSettings({
       {recoveryControls()}
       {draft ? (
         <>
-          {!["providers", "models", "mcp", "telemetry", "credentials"].includes(
-            section,
-          ) &&
+          {![
+            "providers",
+            "models",
+            "mcp",
+            "telemetry",
+            "credentials",
+            "network",
+          ].includes(section) &&
           !extraSection &&
           (!onOpenEditor || section !== "routing")
             ? actionBar()
@@ -905,6 +931,7 @@ export function ChatSettings({
                 search: null,
                 telemetry: null,
                 variables: null,
+                network: null,
               } as const
             )[section] ? (
             <p className="sync-notice" role="status">
@@ -931,13 +958,31 @@ export function ChatSettings({
               onSaved={() => {
                 resource.refresh();
                 onSaved();
-                setNotice("Project credential saved.");
               }}
               initialConnection={credentialTarget}
               editorLocation={editorLocation}
               onOpenEditor={onOpenEditor}
               onCloseEditor={onCloseEditor}
               onDirtyChange={onDirtyChange}
+            />
+          ) : null}
+          {section === "network" ? (
+            <ConnectionNetworkSettings
+              key={`${scope}:${resetExtraEditor}`}
+              policy={draft.connection_network_policy}
+              availability={saved?.connection_availability}
+              busy={
+                busy || mustReload || Boolean(editor) || Boolean(extraEditor)
+              }
+              navigationBusy={busy}
+              readOnly={!settingsEditable}
+              editorLocation={editorLocation}
+              onOpenEditor={onOpenEditor}
+              onCloseEditor={onCloseEditor}
+              onDirtyChange={setFormDirty}
+              onSave={(policy) =>
+                void save({ ...draft, connection_network_policy: policy })
+              }
             />
           ) : null}
           {!editorLocation || extraSection ? (
@@ -979,8 +1024,9 @@ export function ChatSettings({
               {actionBar()}
               {section === "search" ? (
                 <p className="field-help">
-                  Search endpoints must be allowed by your deployment
-                  administrator. Saving applies when chats are idle.
+                  {instanceScope
+                    ? "Projects inherit published search definitions. Each project's Network access policy controls use; credentials require a separate assignment."
+                    : "This project's Network access policy controls which search origins can be used. Credentials require a separate assignment. Saving applies when chats are idle."}
                 </p>
               ) : null}
             </>
@@ -1047,7 +1093,7 @@ export function ChatSettings({
               <div hidden={section !== "mcp"}>
                 {inventory(
                   "mcp",
-                  "MCP connections",
+                  "MCP servers",
                   Object.entries(draft.mcp.servers).map(([id, value]) => ({
                     id,
                     detail: `${value.url} · ${value.allowedTools.length} allowed tools`,
@@ -1088,7 +1134,8 @@ export function ChatSettings({
                 </Button>
               ) : null}
               <div className="chat-role-settings">
-                <ModelRoutingOverview
+                <ChatRoutingOverview
+                  instanceScope={instanceScope}
                   roles={draft.models.roles}
                   models={Object.entries(draft.models.profiles).map(
                     ([profile, model]) => ({

@@ -24,9 +24,10 @@ import type { SettingsEditorNavigation } from "./settings-editor";
 const projectTabs = [
   { id: "providers", label: "Providers", group: "Project connections" },
   { id: "models", label: "Models", group: "Project connections" },
-  { id: "mcp", label: "MCP connections", group: "Project connections" },
+  { id: "mcp", label: "MCP servers", group: "Project connections" },
   { id: "routing", label: "Role routing", group: "Project connections" },
   { id: "search", label: "Search", group: "Project services" },
+  { id: "network", label: "Network access", group: "Project services" },
   { id: "telemetry", label: "Telemetry", group: "Project services" },
   { id: "credentials", label: "Secrets", group: "Secrets and variables" },
   { id: "variables", label: "Variables", group: "Secrets and variables" },

@@ -29,7 +29,7 @@ serde_json = "1.0.149"
 sha2 = "0.10.9"
 getrandom = "0.4.3"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-tokio = { version = "1.49.0", features = ["process", "io-util", "rt", "sync", "time", "macros"] }
+tokio = { version = "1.53.3", features = ["process", "io-util", "rt", "sync", "time", "macros"] }
 
 [target.'cfg(windows)'.dependencies]
 colossus-windows-native = { version = "=0.11.11-preview.2", path = "../../crates/colossus-windows-native" }

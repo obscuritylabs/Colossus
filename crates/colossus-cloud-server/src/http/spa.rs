@@ -143,6 +143,8 @@ fn frontend_path(parts: &[String]) -> bool {
             section @ ("credentials" | "variables"),
             tail @ ..,
         ] => settings_editor(section, tail),
+        ["projects", project, "settings", "network"]
+        | ["projects", project, "settings", "network", "edit"] => identifier(project),
         ["projects", project, "settings", section, tail @ ..] if !tail.is_empty() => {
             identifier(project) && settings_editor(section, tail)
         }

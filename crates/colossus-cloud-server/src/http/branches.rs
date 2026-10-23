@@ -20,7 +20,9 @@ pub(super) async fn create(
     let caller = state.auth.caller(&headers, &project, true).await?;
     let _hosted_admission = if let Some(hosted) = &state.hosted {
         let detail = state.repo.get_thread(&caller, &parent).await?;
-        hosted.admission(&caller, &detail.thread.node_id).await?
+        hosted
+            .admission(&caller, &detail.thread.node_id, &input.request)
+            .await?
     } else {
         None
     };
