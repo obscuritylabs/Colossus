@@ -30,6 +30,7 @@ pub(crate) struct State {
     pub shutdown: tokio::sync::watch::Sender<bool>,
     pub replica_id: String,
     pub hosted: Option<Arc<crate::hosted::HostedExecution>>,
+    pub telemetry: Arc<crate::telemetry_host::CloudTelemetry>,
 }
 /// Fully composed HTTP/OIDC and mutual-TLS runtime host.
 pub struct ControlPlaneServer {
@@ -104,6 +105,17 @@ impl ControlPlaneServer {
         } else {
             None
         };
+        let collector = if let Some(hosted) = &chat {
+            crate::global_settings::catalog(hosted)
+                .map(|catalog| (catalog.observability, catalog.revision))
+                .map_err(|_| "instance telemetry catalog unavailable")?
+        } else {
+            (colossus_observability::ObservabilityConfig::default(), 0)
+        };
+        let telemetry = Arc::new(crate::telemetry_host::CloudTelemetry::start(
+            collector.0,
+            collector.1,
+        )?);
         let server = Self {
             state: Arc::new(State {
                 config,
@@ -116,6 +128,7 @@ impl ControlPlaneServer {
                 shutdown: tokio::sync::watch::channel(false).0,
                 replica_id: uuid::Uuid::now_v7().simple().to_string(),
                 hosted: chat,
+                telemetry,
             }),
         };
         if let Some(hosted) = &server.state.hosted {
@@ -206,7 +219,11 @@ impl ControlPlaneServer {
         } else {
             Ok(())
         };
-        result.and(chat_shutdown)
+        let telemetry = self.state.telemetry.clone();
+        let telemetry_shutdown = tokio::task::spawn_blocking(move || telemetry.shutdown())
+            .await
+            .map_err(|_| "instance telemetry shutdown did not complete");
+        result.and(chat_shutdown).and(telemetry_shutdown)
     }
 }
 async fn wait_shutdown(mut receiver: tokio::sync::watch::Receiver<bool>) {

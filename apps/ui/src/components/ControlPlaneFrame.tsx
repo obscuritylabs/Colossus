@@ -16,42 +16,48 @@ import {
   SidebarFooter,
   SidebarHeader,
   SidebarInset,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
   SidebarProvider,
   SidebarRail,
   SidebarTrigger,
   useSidebar,
 } from "./ui/sidebar.js";
 import { TooltipProvider } from "./ui/tooltip.js";
-
-export interface ControlPlaneNavigation {
-  id: string;
-  label: string;
-  shortLabel?: string;
-  href?: string;
-  icon: ReactNode;
-  disabled?: boolean;
-  group?: string;
-}
+import {
+  classificationColorVariables,
+  type ClassificationColors,
+} from "../lib/classification-colors";
+import {
+  ControlPlaneNavigationMenu,
+  type ControlPlaneNavigation,
+} from "./ControlPlaneNavigationMenu.js";
+import {
+  ControlPlaneNavigationBreadcrumb,
+  ControlPlaneSecondaryNavigation,
+  type ControlPlaneSecondaryNavigationProps,
+} from "./ControlPlaneSecondaryNavigation.js";
+export type { ControlPlaneNavigation } from "./ControlPlaneNavigationMenu.js";
+export type { ControlPlaneSecondaryNavigationProps } from "./ControlPlaneSecondaryNavigation.js";
 export interface ClassificationBanner {
   enabled: boolean;
   text: string;
   tone: "neutral" | "info" | "warning" | "danger";
   position: "top" | "top_and_bottom";
+  colors?: ClassificationColors | null;
 }
 interface FrameProps {
   current: string;
   navigation: ControlPlaneNavigation[];
+  collapsibleNavigationGroups?: readonly string[];
   onNavigate: (id: string) => void;
   sidebar?: ReactNode;
+  secondaryNavigation?: ControlPlaneSecondaryNavigationProps | undefined;
   header?: ReactNode;
   sidebarHeader?: ReactNode;
   title?: ReactNode;
   footer?: ReactNode;
   children: ReactNode;
   classification?: ClassificationBanner | undefined;
+  announcement?: ReactNode;
   user?: ReactNode;
   activeScopeKey?: string;
 }
@@ -59,9 +65,13 @@ interface FrameProps {
 /** Owned shadcn presentation; hosts retain routes, records and authority. */
 export function ControlPlaneFrame(props: FrameProps) {
   const classification = props.classification;
+  const classificationStyle = classificationColorVariables(
+    classification?.colors,
+  );
   const banner = classification?.enabled ? (
     <div
-      className={`control-classification classification-${classification.tone}`}
+      className={`control-classification classification-${classification.tone}${classificationStyle ? " classification-custom-colors" : ""}`}
+      style={classificationStyle}
       role="note"
       aria-label="Environment classification"
     >
@@ -70,7 +80,7 @@ export function ControlPlaneFrame(props: FrameProps) {
   ) : null;
   return (
     <div
-      className={`control-plane-frame ${props.sidebar ? "has-scope-sidebar" : ""}`}
+      className={`control-plane-frame ${props.sidebar || props.secondaryNavigation ? "has-scope-sidebar" : ""}`}
     >
       <a href="#control-main" className="application-skip-link">
         Skip to content
@@ -90,8 +100,10 @@ export function ControlPlaneFrame(props: FrameProps) {
 function ControlWorkbench({
   current,
   navigation,
+  collapsibleNavigationGroups,
   onNavigate,
   sidebar,
+  secondaryNavigation,
   header,
   footer,
   children,
@@ -99,9 +111,11 @@ function ControlWorkbench({
   activeScopeKey,
   sidebarHeader,
   title,
+  announcement,
 }: FrameProps) {
   const { setOpenMobile, openMobile, open, isMobile } = useSidebar();
   const appTrigger = useRef<HTMLButtonElement>(null);
+  const scopeTrigger = useRef<HTMLButtonElement>(null);
   const [scopeOpen, setScopeOpen] = useState(true);
   const [scopeOpenMobile, setScopeOpenMobile] = useState(false);
   const [compactScope, setCompactScope] = useState(() =>
@@ -119,26 +133,62 @@ function ControlWorkbench({
   useEffect(() => {
     setOpenMobile(false);
     setScopeOpenMobile(false);
-  }, [activeScopeKey, compactScope, setOpenMobile]);
-  const scopeNavigation = sidebar ? (
+  }, [
+    activeScopeKey,
+    compactScope,
+    secondaryNavigation?.current,
+    setOpenMobile,
+  ]);
+  const secondaryScope = secondaryNavigation?.id ?? secondaryNavigation?.title;
+  useEffect(() => {
+    if (secondaryScope) setScopeOpen(true);
+  }, [secondaryScope]);
+  const scopeLabel = secondaryNavigation
+    ? `${secondaryNavigation.title} navigation`
+    : "Conversation navigation";
+  const scopeId = secondaryNavigation
+    ? "control-administration-navigation"
+    : "control-conversation-navigation";
+  const secondaryNavigate = (id: string) => {
+    setScopeOpenMobile(false);
+    secondaryNavigation?.onNavigate(id);
+  };
+  const scopeContent = secondaryNavigation ? (
+    <ControlPlaneSecondaryNavigation
+      {...secondaryNavigation}
+      onNavigate={secondaryNavigate}
+    />
+  ) : (
+    sidebar
+  );
+  const scopeNavigation = scopeContent ? (
     <aside
-      id="control-conversation-navigation"
-      className="control-scope-sidebar"
-      aria-label="Conversation navigation"
+      id={scopeId}
+      className={`control-scope-sidebar${secondaryNavigation ? " control-administration-sidebar" : ""}`}
+      aria-label={scopeLabel}
       hidden={!compactScope && !scopeOpen}
     >
-      {sidebar}
+      {scopeContent}
     </aside>
   ) : null;
   const scopeToggle = (
     <Button
       variant="ghost"
       size="icon"
+      ref={scopeTrigger}
       className="control-scope-trigger"
-      aria-label="Toggle conversation list"
+      aria-label={
+        secondaryNavigation
+          ? "Toggle administration navigation"
+          : "Toggle conversation list"
+      }
       aria-expanded={compactScope ? scopeOpenMobile : scopeOpen}
-      aria-controls="control-conversation-navigation"
-      title="Toggle conversation list"
+      aria-controls={scopeId}
+      title={
+        secondaryNavigation
+          ? "Toggle administration navigation"
+          : "Toggle conversation list"
+      }
       onClick={compactScope ? undefined : () => setScopeOpen((value) => !value)}
     >
       <IconListDetails size={18} aria-hidden="true" />
@@ -160,15 +210,24 @@ function ControlWorkbench({
             title="Toggle app sidebar (⌘/Ctrl B)"
           />
           <span className="control-header-separator" aria-hidden="true" />
-          {sidebar ? (
+          {scopeContent ? (
             compactScope ? (
               <Sheet open={scopeOpenMobile} onOpenChange={setScopeOpenMobile}>
                 <SheetTrigger asChild>{scopeToggle}</SheetTrigger>
-                <SheetContent side="left" className="control-mobile-sidebar">
+                <SheetContent
+                  side="left"
+                  className="control-mobile-sidebar"
+                  onCloseAutoFocus={(event) => {
+                    event.preventDefault();
+                    scopeTrigger.current?.focus();
+                  }}
+                >
                   <SheetHeader className="shared-sr-only">
-                    <SheetTitle>Conversation navigation</SheetTitle>
+                    <SheetTitle>{scopeLabel}</SheetTitle>
                     <SheetDescription>
-                      Choose a workspace or conversation.
+                      {secondaryNavigation
+                        ? "Choose an administration section. Close to return to the current page."
+                        : "Choose a workspace or conversation."}
                     </SheetDescription>
                   </SheetHeader>
                   {scopeNavigation}
@@ -178,14 +237,22 @@ function ControlWorkbench({
               scopeToggle
             )
           ) : null}
-          <strong>
-            {title ??
-              navigation.find((item) => item.id === current)?.label ??
-              "Colossus"}
-          </strong>
+          {secondaryNavigation ? (
+            <ControlPlaneNavigationBreadcrumb
+              {...secondaryNavigation}
+              onNavigate={secondaryNavigate}
+            />
+          ) : (
+            <strong>
+              {title ??
+                navigation.find((item) => item.id === current)?.label ??
+                "Colossus"}
+            </strong>
+          )}
         </div>
         <div>{header}</div>
       </header>
+      {announcement}
       <div className="control-workbench">
         {compactScope ? null : scopeNavigation}
         <div className="control-content">{children}</div>
@@ -218,77 +285,14 @@ function ControlWorkbench({
           )}
         </SidebarHeader>
         <SidebarContent>
-          <nav aria-label="Application">
-            {[...new Set(navigation.map((item) => item.group ?? ""))].map(
-              (group) => (
-                <section
-                  className="control-navigation-group"
-                  key={group}
-                  aria-label={group || undefined}
-                >
-                  {group ? (
-                    <h2 className="control-navigation-heading">{group}</h2>
-                  ) : null}
-                  <SidebarMenu>
-                    {navigation
-                      .filter((item) => (item.group ?? "") === group)
-                      .map((item) => (
-                        <SidebarMenuItem key={item.id}>
-                          <SidebarMenuButton
-                            asChild
-                            isActive={current === item.id}
-                            className="control-app-link"
-                            tooltip={
-                              !isMobile && !open ? item.label : undefined
-                            }
-                          >
-                            {item.href && !item.disabled ? (
-                              <a
-                                href={item.href}
-                                aria-current={
-                                  current === item.id ? "page" : undefined
-                                }
-                                title={item.label}
-                                aria-label={item.label}
-                                onClick={(event) => {
-                                  if (
-                                    event.button ||
-                                    event.metaKey ||
-                                    event.ctrlKey ||
-                                    event.shiftKey ||
-                                    event.altKey
-                                  )
-                                    return;
-                                  event.preventDefault();
-                                  onNavigate(item.id);
-                                }}
-                              >
-                                {item.icon}
-                                <span>{item.label}</span>
-                              </a>
-                            ) : (
-                              <button
-                                type="button"
-                                aria-current={
-                                  current === item.id ? "page" : undefined
-                                }
-                                disabled={item.disabled}
-                                onClick={() => onNavigate(item.id)}
-                                title={item.label}
-                                aria-label={item.label}
-                              >
-                                {item.icon}
-                                <span>{item.label}</span>
-                              </button>
-                            )}
-                          </SidebarMenuButton>
-                        </SidebarMenuItem>
-                      ))}
-                  </SidebarMenu>
-                </section>
-              ),
-            )}
-          </nav>
+          <ControlPlaneNavigationMenu
+            current={current}
+            navigation={navigation}
+            onNavigate={onNavigate}
+            {...(collapsibleNavigationGroups
+              ? { collapsibleNavigationGroups }
+              : {})}
+          />
           {footer ? (
             <div className="control-sidebar-utilities">{footer}</div>
           ) : null}

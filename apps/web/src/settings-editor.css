@@ -1,0 +1,52 @@
+.settings-editor-page {
+  min-width: 0;
+  width: 100%;
+}
+.settings-editor-page > header {
+  margin-block: 16px;
+}
+.settings-editor-page > header h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--font-size-heading);
+  line-height: var(--line-height-tight);
+}
+.settings-editor-page > header p {
+  max-width: var(--settings-content-max);
+  margin-block: 8px 0;
+  color: var(--muted);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+.settings-editor-page
+  :is(.provider-editor, .model-editor, .service-settings-editor) {
+  margin-block-start: 0;
+}
+fieldset.chat-settings-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.settings-editor-fields {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  gap: var(--settings-section-gap);
+}
+.settings-inheritance {
+  min-width: 0;
+  margin-block: var(--settings-section-gap);
+}
+.settings-inheritance summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+.settings-inheritance summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

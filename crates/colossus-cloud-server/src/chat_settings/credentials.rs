@@ -38,18 +38,15 @@ pub(super) async fn providers(
             None
         };
         let authenticated = if let Some(binding) = &binding {
-            if authentication == ChatAuthentication::Shared
-                && profile
+            host.connection_credential_configured(
+                &caller,
+                binding,
+                authentication,
+                profile
                     .credential_reference
                     .as_deref()
-                    .is_some_and(|value| value.starts_with("env:"))
-            {
-                true // Explicit deployment credential reference; no credential resolution or model request.
-            } else {
-                let vault = host.selected_vault(&caller, authentication)?;
-                ChatCredentialResolver::contains(vault.as_ref(), binding)
-                    .map_err(|_| CloudError::Storage)?
-            }
+                    .is_some_and(|value| value.starts_with("env:")),
+            )?
         } else {
             true
         };
@@ -208,6 +205,12 @@ fn personal_binding(
                 .get(id)
                 .copied()
                 .unwrap_or_default()
+        }
+        ChatConnectionKind::Search => {
+            if !configuration.runtime.search.profiles.contains_key(id) {
+                return Err(CloudError::NotFound);
+            }
+            crate::global_settings::search::authentication(configuration, id)
         }
     };
     if authentication != ChatAuthentication::Personal {

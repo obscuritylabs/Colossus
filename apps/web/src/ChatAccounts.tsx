@@ -3,6 +3,7 @@ import { Button } from "@colossus/ui";
 import { projectPath, request } from "./api";
 import { useResource, errorMessage } from "./resources";
 import { LoadState } from "./Home";
+import type { ChatSettingsSnapshot } from "./chat-settings";
 
 interface Account {
   id: string;
@@ -28,16 +29,20 @@ export function ChatAccounts({
   canConnect: boolean;
 }) {
   const path = projectPath(project) + "/chat";
-  const accounts = useResource<{ accounts: Account[] }>(
-    path + "/accounts",
-    0,
-    identity,
-  );
+  const accounts = useResource<{
+    accounts: Account[];
+    execution?: ChatSettingsSnapshot["execution"];
+  }>(path + "/accounts", 0, identity);
   const mcp = useResource<{ connections: McpAccount[] }>(
-    path + "/connections",
+    accounts.data && accounts.data.execution?.settings_editable !== false
+      ? path + "/connections"
+      : null,
     5000,
     identity,
   );
+  const operation = useRef<AbortController | null>(null);
+  const editable =
+    canConnect && accounts.data?.execution?.settings_editable !== false;
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [setup, setSetup] = useState(false);
@@ -49,6 +54,8 @@ export function ChatAccounts({
   const current = useRef(scope);
   current.current = scope;
   useEffect(() => {
+    operation.current?.abort();
+    operation.current = null;
     setBusy("");
     setError("");
     setSetup(false);
@@ -57,11 +64,14 @@ export function ChatAccounts({
   useEffect(
     () => () => {
       current.current = "";
+      operation.current?.abort();
     },
     [],
   );
   async function action(account: McpAccount, disconnect: boolean) {
-    if (busy || !canConnect) return;
+    if (operation.current || !editable) return;
+    const abort = new AbortController();
+    operation.current = abort;
     const submitted = scope;
     setBusy(account.id);
     setError("");
@@ -70,8 +80,9 @@ export function ChatAccounts({
       const result = await request<{ authorization_url?: string }>(
         `${path}/connections/${encodeURIComponent(account.id)}/${disconnect ? "disconnect" : "auth"}`,
         {},
+        abort.signal,
       );
-      if (current.current !== submitted) return;
+      if (current.current !== submitted || abort.signal.aborted) return;
       if (!disconnect) {
         const url = new URL(result.authorization_url ?? "");
         if (
@@ -85,9 +96,13 @@ export function ChatAccounts({
       }
       mcp.refresh();
     } catch (e) {
-      if (current.current === submitted) setError(errorMessage(e));
+      if (current.current === submitted && !abort.signal.aborted)
+        setError(errorMessage(e));
     } finally {
-      if (current.current === submitted) setBusy("");
+      if (operation.current === abort) {
+        operation.current = null;
+        if (current.current === submitted) setBusy("");
+      }
     }
   }
   return (
@@ -101,6 +116,11 @@ export function ChatAccounts({
       </p>
       <LoadState {...accounts} retry={accounts.refresh} />
       <LoadState {...mcp} retry={mcp.refresh} />
+      {accounts.data?.execution?.settings_editable === false ? (
+        <p className="notice" role="status">
+          {accounts.data.execution.reason}
+        </p>
+      ) : null}
       {error ? <p role="alert">{error}</p> : null}
       {(accounts.data?.accounts ?? []).map((account) => (
         <section
@@ -167,7 +187,7 @@ export function ChatAccounts({
             </div>
             <div>
               <Button
-                disabled={Boolean(busy) || !canConnect}
+                disabled={Boolean(busy) || !editable}
                 onClick={() => void action(account, false)}
               >
                 {busy === account.id
@@ -178,7 +198,7 @@ export function ChatAccounts({
               </Button>
               {account.authenticated ? (
                 <Button
-                  disabled={Boolean(busy) || !canConnect}
+                  disabled={Boolean(busy) || !editable}
                   onClick={() => void action(account, true)}
                 >
                   Disconnect

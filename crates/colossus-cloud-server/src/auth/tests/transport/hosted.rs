@@ -169,6 +169,11 @@ async fn hosted_chat_child() {
         provider_authentication: BTreeMap::new(),
         provider_generations: BTreeMap::new(),
         mcp_generations: BTreeMap::new(),
+        search_authentication: BTreeMap::new(),
+        search_generations: BTreeMap::new(),
+        variables: BTreeMap::new(),
+        inheritance: Default::default(),
+        catalog_disabled: Default::default(),
         revision: 1,
         codex_auth_path: None,
     };

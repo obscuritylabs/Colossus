@@ -35,7 +35,7 @@ function AuthField({
         onChange={(event) => onChange(event.target.value as Authentication)}
       >
         <option value="personal">Personal account (each user)</option>
-        <option value="shared">Shared project credential</option>
+        <option value="shared">Shared credential (explicit assignment)</option>
         <option value="none">No authentication</option>
       </DropdownSelect>
     </Field>
@@ -45,10 +45,14 @@ interface EditorProps {
   editor: SettingsEditor;
   draft: ChatSettingsWrite;
   project: string;
+  settingsPath?: string;
+  instanceScope?: boolean;
   saved: ChatSettingsSnapshot;
   onApply: (value: ChatSettingsWrite, setup?: CredentialSetup) => void;
   onCancel: () => void;
   canManageCredentials: boolean;
+  busy?: boolean;
+  onDirtyChange?: ((dirty: boolean) => void) | undefined;
   onBusyChange?: ((busy: boolean) => void) | undefined;
   onCredentials?: ((target?: CredentialTarget) => void) | undefined;
   onPersonalCredentials?: ((target?: CredentialTarget) => void) | undefined;
@@ -57,7 +61,13 @@ export function ChatSettingsEditor(props: EditorProps) {
   if (props.editor.kind === "provider")
     return <ChatProviderSettings {...props} id={props.editor.id} />;
   if (props.editor.kind === "model")
-    return <ChatModelSettings {...props} id={props.editor.id} />;
+    return (
+      <ChatModelSettings
+        {...props}
+        id={props.editor.id}
+        catalogEnabled={!props.instanceScope}
+      />
+    );
   return <McpEditor {...props} />;
 }
 function McpEditor({
@@ -67,6 +77,8 @@ function McpEditor({
   onCancel,
   onCredentials,
   onPersonalCredentials,
+  busy = false,
+  onDirtyChange,
 }: EditorProps) {
   const originalMcp = draft.mcp.servers[editor.id];
   const [id, setId] = useState(editor.id),
@@ -81,11 +93,26 @@ function McpEditor({
   const [client, setClient] = useState(originalMcp?.oauth?.clientId ?? ""),
     [scopes, setScopes] = useState(originalMcp?.oauth?.scopes.join(", ") ?? "");
   const [error, setError] = useState("");
+  const formValue = JSON.stringify([
+    id,
+    url,
+    auth,
+    tools,
+    oauth,
+    client,
+    scopes,
+  ]);
+  const openingValue = useRef(formValue);
+  useEffect(() => {
+    onDirtyChange?.(formValue !== openingValue.current);
+  }, [formValue, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     heading.current?.focus();
   }, []);
   function submit(continueToCredential = false) {
+    if (busy) return;
     if (!validProfile(id)) {
       setError("Use a valid profile ID.");
       return;
@@ -94,12 +121,31 @@ function McpEditor({
       setError("That profile ID already exists.");
       return;
     }
+    try {
+      const endpoint = new URL(url.trim());
+      if (
+        !["http:", "https:"].includes(endpoint.protocol) ||
+        endpoint.username ||
+        endpoint.password ||
+        endpoint.hash
+      )
+        throw new Error();
+    } catch {
+      setError(
+        "Enter an HTTP or HTTPS MCP URL without embedded credentials or a fragment.",
+      );
+      return;
+    }
     const next = structuredClone(draft);
     const allowed = tokens(tools);
     if (!allowed.length || (allowed.includes("*") && allowed.length !== 1)) {
       setError(
         "Enter exact allowed tool names or patterns. A wildcard must be the only entry.",
       );
+      return;
+    }
+    if (oauth && !client.trim()) {
+      setError("Enter the registered OAuth client ID.");
       return;
     }
     if (oauth && auth !== "personal") {
@@ -139,7 +185,7 @@ function McpEditor({
   return (
     <form
       className="chat-settings-editor"
-      aria-label="Edit mcp"
+      aria-label="MCP connection settings"
       onSubmit={(event) => {
         event.preventDefault();
         submit();
@@ -149,7 +195,7 @@ function McpEditor({
         {editor.id ? "Edit" : "Add"} MCP connection
       </h3>
       {error ? <p role="alert">{error}</p> : null}
-      <div className="chat-settings-fields">
+      <fieldset disabled={busy} className="chat-settings-fields">
         <Field label="Profile ID">
           <TextInput
             aria-label="Profile ID"
@@ -211,12 +257,13 @@ function McpEditor({
             </Field>
           </>
         ) : null}
-      </div>
+      </fieldset>
       <div className="chat-settings-actions">
         {!oauth &&
         auth !== "none" &&
         (auth === "shared" ? onCredentials : onPersonalCredentials) ? (
           <Button
+            disabled={busy}
             onClick={(event) => {
               if (event.currentTarget.form?.reportValidity()) submit(true);
             }}
@@ -224,10 +271,12 @@ function McpEditor({
             Save and choose credential
           </Button>
         ) : null}
-        <Button type="submit" variant="primary">
+        <Button type="submit" variant="primary" disabled={busy}>
           {editor.id ? "Save changes" : "Add MCP connection"}
         </Button>
-        <Button onClick={onCancel}>Cancel</Button>
+        <Button disabled={busy} onClick={onCancel}>
+          Cancel
+        </Button>
       </div>
     </form>
   );

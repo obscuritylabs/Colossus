@@ -4,6 +4,8 @@
 //! Transports authenticate callers and nodes before entering these services.
 
 mod accounts;
+/// Instance-wide publications and account-owned acknowledgement services.
+pub mod announcements;
 mod enrollment;
 mod error;
 mod identity;

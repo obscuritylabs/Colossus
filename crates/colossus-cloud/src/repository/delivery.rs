@@ -58,6 +58,7 @@ impl CloudRepository {
                 status: Some("pending".into()),
                 archived: None,
                 visible_to: None,
+                owned_by: None,
                 order: EntityOrder::IdAsc,
             })
             .await?
@@ -575,6 +576,7 @@ impl CloudRepository {
                 status: None,
                 archived: None,
                 visible_to: None,
+                owned_by: None,
                 order: EntityOrder::IdAsc,
             })
             .await?

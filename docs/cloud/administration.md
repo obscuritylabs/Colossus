@@ -1,6 +1,6 @@
 ---
 title: Projects and access
-description: Manage Cloud accounts, project membership, deployment markings, and policy monitoring.
+description: Manage Cloud accounts, project membership, deployment markings, announcements, and policy monitoring.
 audience: operator
 type: how-to
 icon: lucide/users
@@ -8,13 +8,26 @@ icon: lucide/users
 
 # Projects and access
 
-Use **Administration** to manage users and projects. A global administrator can
+Use **Control Plane Admin** to manage users and projects. A global administrator can
 manage the service and shared project resources; personal hosted conversations and
 execution remain private to their owners.
 
+The application sidebar has two administration entry points: **Project Admin** for the
+selected project's settings and **Control Plane Admin** for instance administrators.
+Each opens a secondary section list. Collapse either sidebar independently; on narrow
+screens, **Toggle administration navigation** opens the section list without covering
+the page permanently. Entries follow the signed-in account's current permissions.
+
+Create and edit forms have their own addresses. Copy the browser address to share a
+provider, model, MCP, Search, variable, secret, user, or announcement form with another
+authorized person. Opening a link or refreshing loads the saved resource in its exact
+scope. Unsaved changes require a discard decision before leaving; drafts and secret
+values are never included in the address. Failed saves retain the proposal, and conflicts
+require reviewing the current settings before another write.
+
 ## Create a project and grant access
 
-1. Open **Administration → Projects** and choose **New project**.
+1. Open **Control Plane Admin → Projects** and choose **New project**.
 2. Create the project, then open its **Access** view.
 3. Add each member with the role needed for their work.
 
@@ -34,6 +47,27 @@ Approver access cannot authorize a tool the runtime has not exposed. A personal
 hosted owner with Execute and Control can answer their own exact one-use approval;
 shared execution retains the separate project Approve requirement.
 
+## Review a user
+
+Open **Control Plane Admin → Users** and select a user's name. Their page shows account
+status, administrator access, contact details, login identities, and account timestamps.
+Choose **Edit user** to change the account or reset a local password.
+
+Use **Projects** to review explicit memberships, roles, and permissions, or follow
+**Manage access** to the project's access view. Global administrator access is
+separate from these memberships; it does not manufacture an execution role.
+
+The **Workspaces** and **Chats** views have a project selector and searchable,
+sortable tables with column visibility and row pagination. Search and sorting apply
+to loaded records; choose **Load more** when another server page is available.
+Each view has its own address, so bookmarks and browser history retain the selected
+user, view, and explicit project selection.
+
+Personal resource inventories remain owner-only, including chat titles. Reviewing
+another account shows a privacy notice instead of a resource count or private rows.
+Your own profile can list your authorized personal resources; opening a chat still
+requires the ordinary project and owner checks.
+
 ## Manage sign-in
 
 Local accounts are the Helm default. Bootstrap creates the first administrator
@@ -46,20 +80,113 @@ Changing the issuer or client ID requires users to sign in again.
 
 ## Configure hosted connections
 
-Project administrators use **Chat → Settings** to configure providers, model
-profiles, and remote MCP connections within the deployment's allowed origins.
-Users manage personal accounts in **Connections**. Settings expose connection
-metadata, not credentials or host file paths.
+Global administrators configure **Providers**, **Models**, **MCP servers**, **Search**,
+and **Model routing** under **Control Plane Admin**. Projects inherit these definitions.
+Under **Project Admin**, project administrators can customize an inherited
+definition, add a project definition, or remove one from the project. Expand the
+inherited configuration list to reset an override or enable a removed global definition.
+Saving requires the revision that was reviewed; reload if another administrator has
+changed it. Settings updates wait for hosted work to be idle.
+
+Connection definitions do not grant access to credentials. Choose personal authentication
+when each user supplies their own key, shared authentication when an administrator will
+attach a shared key, or no authentication for an anonymous service. Users manage their
+private keys in **Settings → Personal → Credentials** and account connections in
+**Connected accounts**. Project administrators manage project keys in
+**Project Admin → Secrets**. A global administrator can save an instance key
+in **Control Plane Admin → Secrets**, choose a project, and explicitly assign it to
+an eligible shared connection. That assignment takes precedence over project keys;
+project administrators cannot replace it. Rotation or removal of an instance key affects
+all of its assignments, even when the page shows only the selected project's connections.
+Saved secrets are encrypted and never returned to the browser.
+
+**Variables** stores nonsecret configuration values at instance, project, or personal
+scope. Projects inherit instance values and can override or reset them. Personal values
+are private to one account in the selected project. Variable names contain up to 128
+letters, digits, or underscores; values are limited to 4,096 UTF-8 bytes. They are stored
+configuration and are not automatically injected into runtime environments.
+
+Under **Search**, configure SearXNG or SerpAPI and select the agent and research routes.
+Search uses the same explicit personal or shared credential assignments as other
+connections. Definitions and project overrides remain subject to the deployment's
+allowed origins.
 
 Deployment owners configure the immutable network ceiling and external keys in
 [hosted chat deployment](deployment/hosted-chat.md).
 
+A newly created project can review inherited definitions before Hosted execution is
+configured. Those settings remain read-only until a deployment operator supplies that
+project's runtime and allowed origins. Creating a child project does not copy its
+parent's execution authority or credentials. Secrets, personal variables, and connected
+accounts show the same setup requirement; they cannot be edited or connected through
+an unconfigured project.
+
+## Configure instance telemetry
+
+Use **Control Plane Admin → Telemetry** to configure one OpenTelemetry collector for
+the instance. Projects inherit this destination; execution spans and lifecycle logs
+carry project identity, while metrics remain instance aggregates. Cloud telemetry does
+not export full journal payloads or private conversation content.
+
+Save the collector configuration, then restart the Control Plane to apply it. The page
+shows **restart required** while the desired configuration differs from the running
+exporter. **Test collector** emits and flushes a diagnostic through the applied OTLP
+configuration. A successful test confirms that diagnostic flush; it does not guarantee
+future delivery. Keep telemetry disabled until the destination and transport have been
+reviewed for the deployment.
+
 ## Show deployment markings
 
-Open **Administration → Settings** to set a plain-text classification banner,
+Open **Control Plane Admin → Authentication & settings** to set a plain-text classification banner,
 tone, and top or top-and-bottom placement. The banner appears on sign-in and
 authenticated pages. It is a visual marking and does not enforce classification.
 Saved settings take precedence over the server's initial `classification` seed.
+
+To publish custom marking colors, open **Control Plane Admin → Appearance** as a
+global administrator. Under **Classification banner colors**, choose the background
+and text colors, review the preview, then select **Publish banner colors**. Both
+colors must use opaque `#RRGGBB` values with at least 4.5:1 text contrast. The saved
+pair applies to everyone's authenticated and sign-in banners. **Use tone colors**
+restores the selected tone's theme colors. These controls leave the marking's text,
+visibility and placement unchanged; personal theme and text-size preferences remain
+local to each browser.
+
+## Publish instance announcements
+
+Global administrators publish product updates and operational notices through
+**Control Plane Admin → Announcements**. Every signed-in account can read published
+announcements; drafts and archives remain administrator-only. These notices are
+separate from the deployment classification marking.
+
+1. Select **New announcement** and enter a title, compact banner summary and
+   Markdown message. Use **Preview** to review the banner and full message before
+   publication. Markdown supports links, lists and code; bodies are limited to
+   16 KiB of UTF-8 text and use the shared safe renderer.
+2. Choose a style and priority. Enable **Show a dismissible banner** to make the
+   update eligible for the compact banner below the application toolbar. Priority
+   chooses among eligible banners. The full message also appears in the toolbar's
+   **Announcements** center.
+3. Optionally set **Expires at** in your local time. Expired announcements leave
+   the active feed and banner. Leave it empty to retain the publication until you
+   archive it.
+4. Select **Save draft** to retain unpublished work or **Publish to everyone** to
+   release it. Edit a publication with **Publish changes**; use **Archive
+   announcement** to withdraw it while retaining its administrative history.
+
+Opening an update marks it read. Dismissing its banner also marks it read, while the
+message remains available in the Announcements center. Read and dismissal state are
+stored on the server for that account, so another browser or server restart preserves
+them; one user's dismissal does not hide an update for another user.
+Open clients refresh announcements and marking colors on focus and every 30 seconds
+while visible. Use the application toolbar's refresh action to check announcements
+immediately.
+
+Publishing changed title, summary, Markdown or style creates a new content publication
+and makes it unread and eligible for dismissal again. Changing priority, banner
+eligibility or expiration preserves existing read and dismissal state. Archiving and
+republishing identical content also preserves that state. If a save cannot be
+confirmed, use **Check save status** before retrying the retained exact save; reload
+the current version when another administrator has changed it.
 
 ## Monitor runtime policy
 

@@ -23,11 +23,12 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
 const MANAGED_REFERENCE: &str = "host:managed";
+pub(crate) mod availability;
 mod credentials;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SettingsInput {
+pub(crate) struct SettingsInput {
     revision: u64,
     #[serde(default)]
     labels: Option<ChatSettingsLabels>,
@@ -38,23 +39,47 @@ struct SettingsInput {
     provider_authentication: BTreeMap<String, ChatAuthentication>,
     #[serde(default)]
     mcp_authentication: BTreeMap<String, ChatAuthentication>,
+    #[serde(default)]
+    search: Option<colossus_runtime::SearchConfig>,
+    #[serde(default)]
+    search_authentication: Option<BTreeMap<String, ChatAuthentication>>,
+    #[serde(default)]
+    observability: Option<colossus_runtime::ObservabilityConfig>,
+    #[serde(default)]
+    variables: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing)]
+    inheritance: Option<crate::global_settings::types::InheritanceInput>,
+    #[serde(default, skip_serializing)]
+    global_revision: Option<u64>,
+    // Released runtime status is accepted for GET/PUT compatibility and ignored.
+    #[serde(default, skip_serializing, rename = "telemetry")]
+    _telemetry: Option<serde_json::Value>,
+    #[serde(default, skip_serializing, rename = "execution")]
+    _execution: Option<serde_json::Value>,
 }
 #[derive(Serialize)]
 struct SettingsOutput {
     #[serde(flatten)]
     configuration: SettingsInput,
     credential_status: CredentialStatus,
+    inheritance: crate::global_settings::types::Inheritance,
+    execution: availability::ExecutionAvailability,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    telemetry: Option<crate::telemetry_host::TelemetryStatus>,
 }
 #[derive(Default, Serialize)]
 struct CredentialStatus {
     providers: BTreeMap<String, bool>,
     mcp: BTreeMap<String, bool>,
+    search: BTreeMap<String, bool>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CredentialInput {
     revision: u64,
     secret: String,
+    #[serde(default)]
+    credential_binding: Option<String>,
 }
 
 pub(crate) fn router() -> Router<Arc<State>> {
@@ -114,11 +139,27 @@ async fn settings(
     let caller = state.auth.caller(&headers, &project, false).await?;
     caller.require(CloudPermission::Administer)?;
     let host = hosted(&state)?;
-    let configuration = host
-        .project_config(&project)
-        .await?
-        .ok_or(CloudError::NotFound)?;
+    let Some(configuration) = host.project_config(&project).await? else {
+        // Cloud project creation grants no runtime or network authority. Release
+        // the reusable definitions so administrators can review inherited setup
+        // without confusing an unprovisioned project with a missing resource.
+        let catalog = crate::global_settings::catalog(host)?;
+        let projection = crate::global_settings::inheritance::catalog_only(&catalog);
+        let mut output = public_configuration(projection);
+        output.execution = availability::ExecutionAvailability::dormant();
+        output.credential_status = CredentialStatus::default();
+        output.telemetry = Some(
+            state
+                .telemetry
+                .configure(&catalog.observability, catalog.revision),
+        );
+        return Ok(Json(output));
+    };
     let mut output = public_configuration(configuration.clone());
+    output.telemetry = Some(state.telemetry.configure(
+        &configuration.runtime.observability,
+        configuration.inheritance.global_revision,
+    ));
     for (id, profile) in &configuration.runtime.providers.profiles {
         let authentication = configuration
             .provider_authentication
@@ -131,17 +172,18 @@ async fn settings(
             false
         } else if profile.kind.generation_action() == "provider.openai.codex" {
             configuration.codex_auth_path.is_some() || configuration.codex_auth_shared
-        } else if profile
-            .credential_reference
-            .as_deref()
-            .is_some_and(|reference| reference.starts_with("env:"))
-        {
-            true
         } else if let Some(binding) =
             host.connection_binding(&caller, &configuration, ChatConnectionKind::Provider, id)?
         {
-            ChatCredentialResolver::contains(host.project_vault(&project)?.as_ref(), &binding)
-                .map_err(|_| CloudError::Storage)?
+            shared_credential_configured(
+                host,
+                &project,
+                &binding,
+                profile
+                    .credential_reference
+                    .as_deref()
+                    .is_some_and(|reference| reference.starts_with("env:")),
+            )?
         } else {
             false
         };
@@ -158,23 +200,64 @@ async fn settings(
             .unwrap_or_default();
         let configured = if authentication != ChatAuthentication::Shared {
             false
-        } else if server
-            .credential_headers
-            .values()
-            .any(|header| header.reference.starts_with("env:"))
-        {
-            true
         } else if let Some(binding) =
             host.connection_binding(&caller, &configuration, ChatConnectionKind::Mcp, id)?
         {
-            ChatCredentialResolver::contains(host.project_vault(&project)?.as_ref(), &binding)
-                .map_err(|_| CloudError::Storage)?
+            shared_credential_configured(
+                host,
+                &project,
+                &binding,
+                server
+                    .credential_headers
+                    .values()
+                    .any(|header| header.reference.starts_with("env:")),
+            )?
         } else {
             false
         };
         output.credential_status.mcp.insert(id.clone(), configured);
     }
+    for (id, profile) in &configuration.runtime.search.profiles {
+        let configured = if crate::global_settings::search::authentication(&configuration, id)
+            != ChatAuthentication::Shared
+        {
+            false
+        } else if let Some(binding) =
+            host.connection_binding(&caller, &configuration, ChatConnectionKind::Search, id)?
+        {
+            shared_credential_configured(
+                host,
+                &project,
+                &binding,
+                crate::global_settings::search::reference(profile)
+                    .is_some_and(|reference| reference.starts_with("env:")),
+            )?
+        } else {
+            false
+        };
+        output
+            .credential_status
+            .search
+            .insert(id.clone(), configured);
+    }
     Ok(Json(output))
+}
+
+fn shared_credential_configured(
+    host: &HostedExecution,
+    project: &str,
+    binding: &ChatConnectionBinding,
+    environment_configured: bool,
+) -> std::result::Result<bool, CloudError> {
+    if let Some(vault) = crate::global_settings::credentials::assigned_vault(host, binding)? {
+        return ChatCredentialResolver::contains(vault.as_ref(), binding)
+            .map_err(|_| CloudError::Storage);
+    }
+    if environment_configured {
+        return Ok(true);
+    }
+    ChatCredentialResolver::contains(host.project_vault(project)?.as_ref(), binding)
+        .map_err(|_| CloudError::Storage)
 }
 
 fn public_configuration(configuration: ChatProjectConfig) -> SettingsOutput {
@@ -211,8 +294,21 @@ fn public_configuration(configuration: ChatProjectConfig) -> SettingsOutput {
             mcp,
             provider_authentication: configuration.provider_authentication,
             mcp_authentication: configuration.mcp_authentication,
+            search: Some(crate::global_settings::search::public_search(
+                &configuration.runtime.search,
+            )),
+            search_authentication: Some(configuration.search_authentication),
+            observability: Some(configuration.runtime.observability),
+            variables: Some(configuration.variables),
+            inheritance: None,
+            global_revision: None,
+            _telemetry: None,
+            _execution: None,
         },
         credential_status,
+        inheritance: configuration.inheritance,
+        execution: availability::ExecutionAvailability::enabled(),
+        telemetry: None,
     }
 }
 
@@ -235,15 +331,20 @@ async fn replace(
         .projects
         .get(&project)
         .ok_or(CloudError::NotFound)?;
-    let updated = reviewed_configuration(current, input, ceiling)?;
+    let global = crate::global_settings::catalog(host)?;
+    let updated = reviewed_project_update(current, input, &global, ceiling)?;
     if host.active_project_run_status(&project).await? {
         return Err(CloudError::Conflict.into());
     }
     if edit.is_none() {
         host.stop_project(&project).await?;
     }
-    let encoded =
-        zeroize::Zeroizing::new(serde_json::to_vec(&updated).map_err(|_| CloudError::Storage)?);
+    let encoded = zeroize::Zeroizing::new(
+        serde_json::to_vec(&crate::global_settings::inheritance::local_configuration(
+            &updated,
+        ))
+        .map_err(|_| CloudError::Storage)?,
+    );
     let record = VaultRecord::new(encoded.to_vec()).map_err(|_| CloudError::InvalidArgument)?;
     if let Some(edit) = &edit {
         edit.shared.save_configuration(
@@ -288,19 +389,14 @@ pub(crate) fn validate_retained(
     configuration: &ChatProjectConfig,
     seed: &ChatProjectConfig,
 ) -> std::result::Result<(), CloudError> {
-    configuration.validate().map_err(|_| CloudError::Storage)?;
-    colossus_runtime::RuntimeConfig::from_yaml(
-        &configuration
-            .runtime
-            .to_yaml()
-            .map_err(|_| CloudError::Storage)?,
-    )
-    .map_err(|_| CloudError::Storage)?;
-    // Only the three browser-managed sections may differ from operator authority.
+    // Partial local catalogs are validated after inherited definitions are resolved.
+    // Every other operator-controlled runtime field must retain its exact seed value.
     let mut authority = configuration.runtime.clone();
     authority.providers = seed.runtime.providers.clone();
     authority.models = seed.runtime.models.clone();
     authority.mcp = seed.runtime.mcp.clone();
+    authority.search = seed.runtime.search.clone();
+    authority.observability = seed.runtime.observability.clone();
     if serde_json::to_value(&authority).map_err(|_| CloudError::Storage)?
         != serde_json::to_value(&seed.runtime).map_err(|_| CloudError::Storage)?
         || configuration.codex_auth_path != seed.codex_auth_path
@@ -346,6 +442,23 @@ fn reviewed_configuration(
     updated.runtime.providers = input.providers;
     updated.runtime.models = input.models;
     updated.runtime.mcp = input.mcp;
+    if let Some(search) = input.search {
+        updated.runtime.search = search;
+    }
+    if let Some(authentication) = input.search_authentication {
+        updated.search_authentication = authentication;
+    }
+    if let Some(variables) = input.variables {
+        updated.variables = variables;
+    }
+    if input
+        .observability
+        .as_ref()
+        .is_some_and(|value| value != &current.runtime.observability)
+    {
+        return Err(CloudError::InvalidArgument);
+    }
+    crate::global_settings::inheritance::validate_variables(&updated.variables)?;
     updated.labels = input.labels.unwrap_or_else(|| {
         let mut labels = current.labels.clone();
         labels
@@ -354,6 +467,9 @@ fn reviewed_configuration(
         labels
             .models
             .retain(|id, _| updated.runtime.models.profiles.contains_key(id));
+        labels
+            .search
+            .retain(|id, _| updated.runtime.search.profiles.contains_key(id));
         labels
     });
     updated
@@ -547,6 +663,7 @@ fn reviewed_configuration(
             );
         }
     }
+    crate::global_settings::search::review_search(current, &mut updated, ceiling)?;
     let serialized = updated
         .runtime
         .to_yaml()
@@ -557,6 +674,266 @@ fn reviewed_configuration(
         .validate()
         .map_err(|_| CloudError::InvalidArgument)?;
     Ok(updated)
+}
+
+/// Validate a fully resolved snapshot without allocating a new project revision.
+pub(crate) fn review_effective(
+    current: &ChatProjectConfig,
+    ceiling: &ChatProjectConfig,
+) -> std::result::Result<ChatProjectConfig, CloudError> {
+    let input = public_configuration(current.clone()).configuration;
+    let mut reviewed = reviewed_configuration(current, input, ceiling)?;
+    reviewed.revision = current.revision;
+    Ok(reviewed)
+}
+
+fn reconcile<T: Clone + Serialize>(
+    input: &mut BTreeMap<String, T>,
+    global: &BTreeMap<String, T>,
+    previous: &std::collections::BTreeSet<String>,
+    reset: &std::collections::BTreeSet<String>,
+    disabled: &mut std::collections::BTreeSet<String>,
+) -> std::result::Result<std::collections::BTreeSet<String>, CloudError> {
+    for id in reset {
+        input.insert(
+            id.clone(),
+            global.get(id).ok_or(CloudError::NotFound)?.clone(),
+        );
+    }
+    for id in global.keys() {
+        if input.contains_key(id) {
+            disabled.remove(id);
+        } else {
+            disabled.insert(id.clone());
+        }
+    }
+    let mut overrides = std::collections::BTreeSet::new();
+    for (id, value) in input {
+        if !reset.contains(id)
+            && (previous.contains(id)
+                || global
+                    .get(id)
+                    .map(|inherited| {
+                        crate::global_settings::inheritance::equal(value, inherited)
+                            .map(|same| !same)
+                    })
+                    .transpose()?
+                    .unwrap_or(true))
+        {
+            overrides.insert(id.clone());
+        }
+    }
+    Ok(overrides)
+}
+
+fn reset_auth(
+    authentication: &mut BTreeMap<String, ChatAuthentication>,
+    global: &BTreeMap<String, ChatAuthentication>,
+    reset: &std::collections::BTreeSet<String>,
+) {
+    for id in reset {
+        if let Some(value) = global.get(id) {
+            authentication.insert(id.clone(), *value);
+        } else {
+            authentication.remove(id);
+        }
+    }
+}
+
+pub(crate) fn reviewed_project_update(
+    current: &ChatProjectConfig,
+    mut input: SettingsInput,
+    global: &crate::global_settings::types::HostedCatalog,
+    ceiling: &ChatProjectConfig,
+) -> std::result::Result<ChatProjectConfig, CloudError> {
+    let request = input.inheritance.take();
+    let expected = request
+        .as_ref()
+        .map(|request| request.global_revision)
+        .or(input.global_revision);
+    if (global.revision > 0 || expected.is_some()) && expected != Some(global.revision) {
+        return Err(CloudError::Conflict);
+    }
+    let reset = request.map(|request| request.reset).unwrap_or_default();
+    let mut disabled = current.catalog_disabled.clone();
+    let prior = &current.inheritance.overrides;
+    let mut keep = crate::global_settings::types::Sections {
+        providers: reconcile(
+            &mut input.providers.profiles,
+            &global.providers.profiles,
+            &prior.providers,
+            &reset.providers,
+            &mut disabled.providers,
+        )?,
+        models: reconcile(
+            &mut input.models.profiles,
+            &global.models.profiles,
+            &prior.models,
+            &reset.models,
+            &mut disabled.models,
+        )?,
+        mcp: reconcile(
+            &mut input.mcp.servers,
+            &global.mcp.servers,
+            &prior.mcp,
+            &reset.mcp,
+            &mut disabled.mcp,
+        )?,
+        variables: reconcile(
+            input
+                .variables
+                .get_or_insert_with(|| current.variables.clone()),
+            &global.variables,
+            &prior.variables,
+            &reset.variables,
+            &mut disabled.variables,
+        )?,
+        roles: reconcile(
+            &mut input.models.roles,
+            &global.models.roles,
+            &prior.roles,
+            &reset
+                .roles
+                .iter()
+                .filter(|id| !id.starts_with("search:"))
+                .cloned()
+                .collect(),
+            &mut disabled.roles,
+        )?,
+        search: Default::default(),
+    };
+    let search = input.search.get_or_insert_with(|| {
+        crate::global_settings::search::public_search(&current.runtime.search)
+    });
+    keep.search = reconcile(
+        &mut search.profiles,
+        &global.search.profiles,
+        &prior.search,
+        &reset.search,
+        &mut disabled.search,
+    )?;
+    let role_resets = reset
+        .roles
+        .iter()
+        .filter_map(|id| id.strip_prefix("search:").map(str::to_owned))
+        .collect();
+    let prior_roles = prior
+        .roles
+        .iter()
+        .filter_map(|id| id.strip_prefix("search:").map(str::to_owned))
+        .collect();
+    let mut disabled_search = disabled
+        .roles
+        .iter()
+        .filter_map(|id| id.strip_prefix("search:").map(str::to_owned))
+        .collect();
+    for role in reconcile(
+        &mut search.roles,
+        &global.search.roles,
+        &prior_roles,
+        &role_resets,
+        &mut disabled_search,
+    )? {
+        keep.roles.insert(format!("search:{role}"));
+    }
+    disabled.roles.retain(|id| !id.starts_with("search:"));
+    disabled
+        .roles
+        .extend(disabled_search.into_iter().map(|id| format!("search:{id}")));
+    reset_auth(
+        &mut input.provider_authentication,
+        &global.provider_authentication,
+        &reset.providers,
+    );
+    reset_auth(
+        &mut input.mcp_authentication,
+        &global.mcp_authentication,
+        &reset.mcp,
+    );
+    let search_auth = input
+        .search_authentication
+        .get_or_insert_with(|| current.search_authentication.clone());
+    reset_auth(search_auth, &global.search_authentication, &reset.search);
+    for (profiles, auth, inherited, reset, overrides) in [
+        (
+            input.providers.profiles.keys().collect::<Vec<_>>(),
+            &input.provider_authentication,
+            &global.provider_authentication,
+            &reset.providers,
+            &mut keep.providers,
+        ),
+        (
+            input.mcp.servers.keys().collect(),
+            &input.mcp_authentication,
+            &global.mcp_authentication,
+            &reset.mcp,
+            &mut keep.mcp,
+        ),
+    ] {
+        for id in profiles {
+            if !reset.contains(id)
+                && auth.get(id).copied().unwrap_or_default()
+                    != inherited.get(id).copied().unwrap_or_default()
+            {
+                overrides.insert(id.clone());
+            }
+        }
+    }
+    for (id, profile) in &search.profiles {
+        let inherited = global.search.profiles.get(id).map(|profile| {
+            crate::global_settings::search::profile_authentication(
+                profile,
+                global.search_authentication.get(id).copied(),
+            )
+        });
+        let selected = crate::global_settings::search::profile_authentication(
+            profile,
+            search_auth.get(id).copied(),
+        );
+        if !reset.search.contains(id) && inherited != Some(selected) {
+            keep.search.insert(id.clone());
+        }
+    }
+    if let Some(labels) = input.labels.as_mut() {
+        for (labels, inherited, reset, overrides) in [
+            (
+                &mut labels.providers,
+                &global.labels.providers,
+                &reset.providers,
+                &mut keep.providers,
+            ),
+            (
+                &mut labels.models,
+                &global.labels.models,
+                &reset.models,
+                &mut keep.models,
+            ),
+            (
+                &mut labels.search,
+                &global.labels.search,
+                &reset.search,
+                &mut keep.search,
+            ),
+        ] {
+            for id in reset {
+                if let Some(label) = inherited.get(id) {
+                    labels.insert(id.clone(), label.clone());
+                } else {
+                    labels.remove(id);
+                }
+            }
+            for (id, label) in labels {
+                if !reset.contains(id) && inherited.get(id) != Some(label) {
+                    overrides.insert(id.clone());
+                }
+            }
+        }
+    }
+    let mut updated = reviewed_configuration(current, input, ceiling)?;
+    updated.inheritance.overrides = keep;
+    updated.catalog_disabled = disabled;
+    let raw = crate::global_settings::inheritance::local_configuration(&updated);
+    crate::global_settings::inheritance::resolve(&raw, global, ceiling)
 }
 
 fn oauth_identity(oauth: Option<&colossus_mcp::McpOAuthConfig>) -> Option<(&str, &[String])> {
@@ -628,7 +1005,7 @@ async fn save_credential(
     if input.revision != configuration.revision {
         return Err(CloudError::Conflict.into());
     }
-    let (authentication, endpoint) = match kind {
+    let (authentication, _endpoint) = match kind {
         ChatConnectionKind::Provider => {
             let profile = configuration
                 .runtime
@@ -667,21 +1044,45 @@ async fn save_credential(
                 server.url.as_deref().ok_or(CloudError::InvalidArgument)?,
             )
         }
+        ChatConnectionKind::Search => {
+            let profile = configuration
+                .runtime
+                .search
+                .profiles
+                .get(&connection)
+                .ok_or(CloudError::NotFound)?;
+            (
+                crate::global_settings::search::authentication(configuration, &connection),
+                crate::global_settings::search::endpoint(profile),
+            )
+        }
     };
     if authentication != ChatAuthentication::Shared {
         return Err(CloudError::PermissionDenied.into());
     }
-    let binding = ChatConnectionBinding::new(
-        &project,
-        caller.subject(),
-        kind,
-        &connection,
-        configuration.generation(kind, &connection),
-        endpoint,
-        authentication,
-    )
-    .map_err(|_| CloudError::InvalidArgument)?
-    .ok_or(CloudError::InvalidArgument)?;
+    let binding = host
+        .connection_binding(&caller, configuration, kind, &connection)?
+        .ok_or(CloudError::InvalidArgument)?;
+    let provenance = match kind {
+        ChatConnectionKind::Provider => &configuration.inheritance.provenance.providers,
+        ChatConnectionKind::Mcp => &configuration.inheritance.provenance.mcp,
+        ChatConnectionKind::Search => &configuration.inheritance.provenance.search,
+    };
+    let inherited = provenance
+        .get(&connection)
+        .is_some_and(|source| *source == "global");
+    // Instance edits can repoint an inherited definition without changing this
+    // project's revision. Only an exact reviewed binding identifies that target.
+    if input
+        .credential_binding
+        .as_deref()
+        .map_or(inherited, |reviewed| reviewed != binding.record_id())
+    {
+        return Err(CloudError::Conflict.into());
+    }
+    if crate::global_settings::credentials::assigned_vault(host, &binding)?.is_some() {
+        return Err(CloudError::PermissionDenied.into());
+    }
     let vault = host.project_vault(&project)?;
     if host.active_project_run_status(&project).await? {
         return Err(CloudError::Conflict.into());
@@ -726,9 +1127,25 @@ async fn save_credential(
                 .ok_or(CloudError::InvalidArgument)?
                 .reference = reference
         }
+        ChatConnectionKind::Search => {
+            crate::global_settings::search::set_reference(
+                updated
+                    .runtime
+                    .search
+                    .profiles
+                    .get_mut(&connection)
+                    .ok_or(CloudError::NotFound)?,
+                Some(reference),
+            )?;
+        }
     }
-    let record = VaultRecord::new(serde_json::to_vec(&updated).map_err(|_| CloudError::Storage)?)
-        .map_err(|_| CloudError::InvalidArgument)?;
+    let record = VaultRecord::new(
+        serde_json::to_vec(&crate::global_settings::inheritance::local_configuration(
+            &updated,
+        ))
+        .map_err(|_| CloudError::Storage)?,
+    )
+    .map_err(|_| CloudError::InvalidArgument)?;
     if let Some(edit) = &edit {
         edit.shared.save_configuration(
             &project,

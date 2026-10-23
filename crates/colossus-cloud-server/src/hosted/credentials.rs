@@ -73,6 +73,15 @@ impl HostedExecution {
         )
     }
 
+    pub(crate) fn instance_vault(
+        &self,
+    ) -> std::result::Result<Arc<dyn CredentialVault>, CloudError> {
+        if let Some(shared) = &self.shared {
+            return Ok(shared.vault("instance/connections", None));
+        }
+        self.vault("instance/credentials", "cloud-hosted-instance")
+    }
+
     pub(crate) fn user_vault(
         &self,
         project: &str,
@@ -132,8 +141,20 @@ impl HostedExecution {
                         .unwrap_or_default(),
                 )
             }
+            ChatConnectionKind::Search => {
+                let profile = configuration
+                    .runtime
+                    .search
+                    .profiles
+                    .get(id)
+                    .ok_or(CloudError::NotFound)?;
+                (
+                    crate::global_settings::search::endpoint(profile),
+                    crate::global_settings::search::authentication(configuration, id),
+                )
+            }
         };
-        ChatConnectionBinding::new(
+        let binding = ChatConnectionBinding::new(
             caller.project_id(),
             caller.subject(),
             kind,
@@ -142,7 +163,32 @@ impl HostedExecution {
             endpoint,
             authentication,
         )
-        .map_err(|_| CloudError::InvalidArgument)
+        .map_err(|_| CloudError::InvalidArgument)?;
+        let Some(binding) = binding else {
+            return Ok(None);
+        };
+        let (provenance, generations) = match kind {
+            ChatConnectionKind::Provider => (
+                &configuration.inheritance.provenance.providers,
+                &configuration.inheritance.global_generations.providers,
+            ),
+            ChatConnectionKind::Mcp => (
+                &configuration.inheritance.provenance.mcp,
+                &configuration.inheritance.global_generations.mcp,
+            ),
+            ChatConnectionKind::Search => (
+                &configuration.inheritance.provenance.search,
+                &configuration.inheritance.global_generations.search,
+            ),
+        };
+        let binding = if provenance.get(id).is_some_and(|source| *source == "global") {
+            binding
+                .with_catalog_generation(*generations.get(id).ok_or(CloudError::Storage)?)
+                .map_err(|_| CloudError::InvalidArgument)?
+        } else {
+            binding
+        };
+        Ok(Some(binding))
     }
 
     pub(super) fn credentials(
@@ -183,6 +229,27 @@ impl HostedExecution {
                 .ok_or(CloudError::InvalidArgument)?;
             let vault = self.credential_source(caller, &binding, authentication, reference)?;
             profile.credential_reference = Some(ChatCredentialResolver::reference(&binding));
+            entries.push((binding, vault));
+        }
+        for (id, profile) in &mut config.search.profiles {
+            let authentication = crate::global_settings::search::authentication(configuration, id);
+            if authentication == ChatAuthentication::None {
+                if crate::global_settings::search::reference(profile).is_some() {
+                    return Err(CloudError::InvalidArgument);
+                }
+                continue;
+            }
+            let reference = crate::global_settings::search::reference(profile)
+                .unwrap_or("host:managed")
+                .to_owned();
+            let binding = self
+                .connection_binding(caller, configuration, ChatConnectionKind::Search, id)?
+                .ok_or(CloudError::InvalidArgument)?;
+            let vault = self.credential_source(caller, &binding, authentication, &reference)?;
+            crate::global_settings::search::set_reference(
+                profile,
+                Some(ChatCredentialResolver::reference(&binding)),
+            )?;
             entries.push((binding, vault));
         }
         for (id, server) in &mut config.mcp.servers {
@@ -243,6 +310,27 @@ impl HostedExecution {
         }
     }
 
+    pub(crate) fn connection_credential_configured(
+        &self,
+        caller: &CloudCaller,
+        binding: &ChatConnectionBinding,
+        authentication: ChatAuthentication,
+        operator_configured: bool,
+    ) -> std::result::Result<bool, CloudError> {
+        if authentication == ChatAuthentication::Shared {
+            if let Some(vault) = crate::global_settings::credentials::assigned_vault(self, binding)?
+            {
+                return ChatCredentialResolver::contains(vault.as_ref(), binding)
+                    .map_err(|_| CloudError::Storage);
+            }
+            if operator_configured {
+                return Ok(true);
+            }
+        }
+        let vault = self.selected_vault(caller, authentication)?;
+        ChatCredentialResolver::contains(vault.as_ref(), binding).map_err(|_| CloudError::Storage)
+    }
+
     fn credential_source(
         &self,
         caller: &CloudCaller,
@@ -250,6 +338,11 @@ impl HostedExecution {
         authentication: ChatAuthentication,
         reference: &str,
     ) -> std::result::Result<Arc<dyn CredentialVault>, CloudError> {
+        if authentication == ChatAuthentication::Shared
+            && let Some(vault) = crate::global_settings::credentials::assigned_vault(self, binding)?
+        {
+            return Ok(vault);
+        }
         if authentication == ChatAuthentication::Shared
             && let Some(variable) = reference.strip_prefix("env:")
         {
@@ -281,6 +374,25 @@ pub(crate) fn runtime_mcp_name(configuration: &ChatProjectConfig, id: &str) -> S
             .generation(ChatConnectionKind::Mcp, id)
             .to_be_bytes(),
     );
+    if configuration
+        .inheritance
+        .provenance
+        .mcp
+        .get(id)
+        .is_some_and(|source| *source == "global")
+    {
+        hash.update(b"instance-catalog-generation");
+        hash.update(
+            configuration
+                .inheritance
+                .global_generations
+                .mcp
+                .get(id)
+                .copied()
+                .unwrap_or(0)
+                .to_be_bytes(),
+        );
+    }
     let digest = hex::encode(hash.finalize());
     format!("{}-g{digest}", id.chars().take(16).collect::<String>())
 }
@@ -316,5 +428,48 @@ impl CredentialVault for ReadOnlyEnvironmentVault {
     }
     fn delete(&self, _: &CredentialKey) -> std::result::Result<(), CredentialError> {
         Err(CredentialError::InvalidInput)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_mcp_oauth_identity_tracks_connection_generation_without_catalog_churn() {
+        let mut configuration = ChatProjectConfig::new(
+            colossus_runtime::RuntimeConfig::controlled_chat_template("unused.redb"),
+        );
+        let local = runtime_mcp_name(&configuration, "remote");
+        configuration
+            .inheritance
+            .provenance
+            .mcp
+            .insert("remote".into(), "global");
+        configuration
+            .inheritance
+            .global_generations
+            .mcp
+            .insert("remote".into(), 2);
+        let inherited = runtime_mcp_name(&configuration, "remote");
+        assert_ne!(local, inherited);
+        configuration.inheritance.global_revision = 25;
+        configuration
+            .labels
+            .models
+            .insert("unrelated".into(), "Renamed model".into());
+        assert_eq!(runtime_mcp_name(&configuration, "remote"), inherited);
+        configuration
+            .inheritance
+            .global_generations
+            .mcp
+            .insert("remote".into(), 3);
+        assert_ne!(runtime_mcp_name(&configuration, "remote"), inherited);
+        configuration
+            .inheritance
+            .provenance
+            .mcp
+            .insert("remote".into(), "project");
+        assert_eq!(runtime_mcp_name(&configuration, "remote"), local);
     }
 }

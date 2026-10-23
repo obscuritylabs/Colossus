@@ -262,6 +262,16 @@ impl CloudRepository {
     ) -> CloudResult<CloudThreadDetail> {
         self.thread_detail(caller, id, None, None).await
     }
+    /// Read current conversation metadata without loading retained turns or messages.
+    /// The authenticated caller must retain Read access and personal visibility.
+    pub async fn read_thread_metadata(
+        &self,
+        caller: &CloudCaller,
+        id: &str,
+    ) -> CloudResult<CloudThread> {
+        caller.require(CloudPermission::Read)?;
+        self.thread_for_caller(caller, id).await
+    }
     /// Bounded retained history remains readable while its runtime is disconnected.
     pub async fn thread_detail(
         &self,
@@ -286,6 +296,7 @@ impl CloudRepository {
                 status: None,
                 archived: None,
                 visible_to: Some(caller.subject().into()),
+                owned_by: None,
                 order: EntityOrder::CreatedDesc,
             })
             .await?;
@@ -310,6 +321,7 @@ impl CloudRepository {
                 status: None,
                 archived: None,
                 visible_to: Some(caller.subject().into()),
+                owned_by: None,
                 order: EntityOrder::CreatedDesc,
             })
             .await?;
@@ -433,6 +445,7 @@ impl CloudRepository {
                 status: Some("main".into()),
                 archived,
                 visible_to: Some(caller.subject().into()),
+                owned_by: None,
                 order: EntityOrder::UpdatedDesc,
             })
             .await?;
@@ -780,6 +793,7 @@ impl CloudRepository {
                     status: None,
                     archived: None,
                     visible_to: None,
+                    owned_by: None,
                     order: EntityOrder::IdAsc,
                 })
                 .await?;

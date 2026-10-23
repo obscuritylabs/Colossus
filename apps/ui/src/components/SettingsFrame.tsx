@@ -66,6 +66,10 @@ export function SettingsFrame({
   brandMarkUrl = colossusMark,
   globalDescription = "Shared resources & defaults",
   workspaceDescription = "Settings for one workspace",
+  globalLabel = "Global",
+  workspaceLabel = "Workspace",
+  showWorkspaceScope = true,
+  additionalScopes,
   standalone = false,
 }: {
   scope: "global" | "space";
@@ -81,6 +85,10 @@ export function SettingsFrame({
   brandMarkUrl?: string;
   globalDescription?: string;
   workspaceDescription?: string;
+  globalLabel?: string;
+  workspaceLabel?: string;
+  showWorkspaceScope?: boolean;
+  additionalScopes?: ReactNode;
   standalone?: boolean;
 }) {
   const Heading = standalone ? "h1" : "h2";
@@ -124,7 +132,7 @@ export function SettingsFrame({
             >
               <button
                 type="button"
-                aria-label="Global"
+                aria-label={globalLabel}
                 aria-describedby="settings-global-description"
                 aria-pressed={scope === "global"}
                 className="sidebar-nav-item"
@@ -132,28 +140,31 @@ export function SettingsFrame({
               >
                 <IconWorld size={17} stroke={1.7} aria-hidden="true" />
                 <span>
-                  <strong>Global</strong>
+                  <strong>{globalLabel}</strong>
                   <small id="settings-global-description">
                     {globalDescription}
                   </small>
                 </span>
               </button>
-              <button
-                type="button"
-                aria-label="Workspace"
-                aria-describedby="settings-workspace-description"
-                aria-pressed={scope === "space"}
-                className="sidebar-nav-item"
-                onClick={() => onScopeChange("space")}
-              >
-                <IconFolder size={17} stroke={1.7} aria-hidden="true" />
-                <span>
-                  <strong>Workspace</strong>
-                  <small id="settings-workspace-description">
-                    {workspaceDescription}
-                  </small>
-                </span>
-              </button>
+              {showWorkspaceScope ? (
+                <button
+                  type="button"
+                  aria-label={workspaceLabel}
+                  aria-describedby="settings-workspace-description"
+                  aria-pressed={scope === "space"}
+                  className="sidebar-nav-item"
+                  onClick={() => onScopeChange("space")}
+                >
+                  <IconFolder size={17} stroke={1.7} aria-hidden="true" />
+                  <span>
+                    <strong>{workspaceLabel}</strong>
+                    <small id="settings-workspace-description">
+                      {workspaceDescription}
+                    </small>
+                  </span>
+                </button>
+              ) : null}
+              {additionalScopes}
             </div>
             {scope === "space" ? (
               <div className="settings-scope-context">{workspaceContext}</div>

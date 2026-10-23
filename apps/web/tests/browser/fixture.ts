@@ -474,6 +474,23 @@ export async function browserFixture(
         );
       if (path === "/api/auth/config")
         return json({ local_enabled: true, oidc: null });
+      if (path === "/api/announcements")
+        return json({
+          active_banner: null,
+          announcements: [],
+          next_cursor: null,
+        });
+      if (path === "/api/admin/settings")
+        return json({
+          revision: 1,
+          classification: {
+            enabled: false,
+            text: "",
+            tone: "neutral",
+            position: "top",
+          },
+          auth: { local_enabled: true, oidc_label: null },
+        });
       if (path === "/api/settings")
         return json({
           classification: {

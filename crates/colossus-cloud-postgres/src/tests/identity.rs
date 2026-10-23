@@ -92,6 +92,18 @@ async fn postgres_identity_membership_hierarchy_and_administrator_invariants() {
         .await
         .unwrap();
     assert_eq!(repo.user_memberships("operator").await.unwrap().len(), 1);
+    let (account_projects, cursor) = repo
+        .admin_user_projects(&admin, "operator", None, 1)
+        .await
+        .unwrap();
+    assert_eq!(account_projects[0].project.id, "parent-project");
+    assert!(
+        repo.admin_user_projects(&admin, "operator", cursor.as_deref(), 1)
+            .await
+            .unwrap()
+            .0
+            .is_empty()
+    );
     assert_eq!(
         repo.project_members(&caller, None, 100).await.unwrap()[0].user_id,
         "operator"
@@ -106,6 +118,13 @@ async fn postgres_identity_membership_hierarchy_and_administrator_invariants() {
         repo.project_members(&caller, None, 100)
             .await
             .unwrap()
+            .is_empty()
+    );
+    assert!(
+        repo.admin_user_projects(&admin, "operator", None, 1)
+            .await
+            .unwrap()
+            .0
             .is_empty()
     );
     let restored = repo

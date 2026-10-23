@@ -20,6 +20,11 @@ fn configuration() -> ChatProjectConfig {
         provider_authentication: BTreeMap::from([("main".into(), ChatAuthentication::Shared)]),
         provider_generations: BTreeMap::new(),
         mcp_generations: BTreeMap::new(),
+        search_authentication: BTreeMap::new(),
+        search_generations: BTreeMap::new(),
+        variables: BTreeMap::new(),
+        inheritance: Default::default(),
+        catalog_disabled: Default::default(),
         revision: 1,
         codex_auth_path: None,
     }
@@ -106,6 +111,7 @@ fn display_labels_roundtrip_outside_runtime_and_survive_legacy_writes() {
     let mut legacy = snapshot;
     legacy.as_object_mut().unwrap().remove("labels");
     legacy.as_object_mut().unwrap().remove("credential_status");
+    legacy.as_object_mut().unwrap().remove("inheritance");
     let input: SettingsInput = serde_json::from_value(legacy).unwrap();
     let restored = reviewed_configuration(&next, input, &current).unwrap();
     assert_eq!(restored.labels.providers["main"], "Production provider");

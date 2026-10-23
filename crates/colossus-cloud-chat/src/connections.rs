@@ -26,12 +26,15 @@ pub enum ChatConnectionKind {
     Provider,
     /// Remote MCP-server authentication.
     Mcp,
+    /// First-party web search authentication, separate from model and MCP keys.
+    Search,
 }
 impl ChatConnectionKind {
     fn purpose(self) -> &'static str {
         match self {
             Self::Provider => "provider",
             Self::Mcp => "mcp",
+            Self::Search => "search",
         }
     }
 }
@@ -62,6 +65,7 @@ pub struct ChatConnectionBinding {
     connection: String,
     generation: u64,
     endpoint: String,
+    catalog_generation: Option<u64>,
 }
 impl ChatConnectionBinding {
     /// Bind the authenticated user and current project connection policy before lookup.
@@ -108,7 +112,17 @@ impl ChatConnectionBinding {
             connection: connection.into(),
             generation,
             endpoint: url.into(),
+            catalog_generation: None,
         }))
+    }
+
+    /// Bind a connection inherited from an instance definition to its exact identity generation.
+    pub fn with_catalog_generation(mut self, generation: u64) -> Result<Self, ChatError> {
+        if generation == 0 {
+            return Err(ChatError::InvalidConfiguration);
+        }
+        self.catalog_generation = Some(generation);
+        Ok(self)
     }
 
     /// Nonsecret scope metadata for connection status presentation.
@@ -138,6 +152,10 @@ impl ChatConnectionBinding {
         ] {
             digest.update((value.len() as u64).to_be_bytes());
             digest.update(value.as_bytes());
+        }
+        if let Some(generation) = self.catalog_generation {
+            digest.update(b"instance-catalog-generation");
+            digest.update(generation.to_be_bytes());
         }
         hex::encode(digest.finalize())
     }

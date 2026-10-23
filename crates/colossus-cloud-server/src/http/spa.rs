@@ -104,16 +104,67 @@ fn identifier(value: &str) -> bool {
         && !value.chars().any(|c| c.is_whitespace() || c == '\u{feff}')
 }
 
+fn settings_editor(section: &str, tail: &[&str]) -> bool {
+    let resource = matches!(
+        section,
+        "users"
+            | "announcements"
+            | "providers"
+            | "models"
+            | "mcp"
+            | "search"
+            | "credentials"
+            | "variables"
+    );
+    match tail {
+        ["new"] => resource,
+        ["edit"] => matches!(section, "routing" | "search" | "telemetry"),
+        [resource_id, "edit"] => resource && identifier(resource_id),
+        _ => false,
+    }
+}
+
 fn frontend_path(parts: &[String]) -> bool {
     let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
     match parts.as_slice() {
         [] | ["chat" | "hosted" | "fleet" | "projects" | "admin" | "settings"] => true,
-        ["admin", "users" | "projects" | "settings"] => true,
+        [
+            "admin",
+            "users" | "projects" | "settings" | "announcements" | "appearance" | "providers"
+            | "models" | "mcp" | "routing" | "search" | "telemetry" | "credentials" | "variables",
+        ] => true,
+        [
+            "settings",
+            "appearance" | "account" | "credentials" | "connections" | "variables",
+        ] => true,
+        ["admin", section, tail @ ..] if settings_editor(section, tail) => true,
+        [
+            "settings",
+            section @ ("credentials" | "variables"),
+            tail @ ..,
+        ] => settings_editor(section, tail),
+        ["projects", project, "settings", section, tail @ ..] if !tail.is_empty() => {
+            identifier(project) && settings_editor(section, tail)
+        }
+        ["admin", "users", user]
+        | [
+            "admin",
+            "users",
+            user,
+            "overview" | "projects" | "workspaces" | "chats",
+        ] => identifier(user),
         ["projects", "new"] => true,
         [
             "projects",
             project,
             "overview" | "tasks" | "analytics" | "access" | "settings",
+        ] => identifier(project),
+        [
+            "projects",
+            project,
+            "settings",
+            "providers" | "models" | "mcp" | "routing" | "search" | "telemetry" | "credentials"
+            | "variables",
         ] => identifier(project),
         [
             "projects",

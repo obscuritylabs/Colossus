@@ -1,6 +1,6 @@
 //! Decode native Diesel rows and verify the reconstructed domain value.
 use super::{
-    DomainRow, Query, accounts::*, conversations::*, inventory::*, placements::*,
+    DomainRow, Query, accounts::*, announcements::*, conversations::*, inventory::*, placements::*,
     settings::SettingsRow,
 };
 use colossus_cloud::storage::{EntityKey, EntityKind, EntityRecord, conflict};
@@ -134,6 +134,8 @@ pub(crate) async fn load(
         EntityKind::Invitation => load!(InvitationRow),
         EntityKind::Renewal => load!(RenewalRow),
         EntityKind::Setting => load!(SettingsRow),
+        EntityKind::Announcement => load!(AnnouncementRow),
+        EntityKind::AnnouncementReceipt => load!(AnnouncementReceiptRow),
         EntityKind::AuthFlow => load!(AuthFlowRow),
     }
 }

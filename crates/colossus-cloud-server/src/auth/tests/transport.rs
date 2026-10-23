@@ -25,12 +25,17 @@ use std::{
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
+mod announcements;
+mod global_lifecycle;
 mod hosted;
 mod isolated;
 mod managed;
 mod native;
 mod resources;
 mod retained;
+mod telemetry;
+mod thread_metadata;
+mod user_inventory;
 
 #[derive(Default)]
 struct TestKeys(Mutex<HashMap<String, Zeroizing<Vec<u8>>>>);

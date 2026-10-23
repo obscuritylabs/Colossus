@@ -35,6 +35,7 @@ for (const appearance of appearanceCases) {
       path: `output/playwright/project-create-${appearance.id}.png`,
       fullPage: true,
     });
+    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(page).toHaveURL(/\/projects$/u);
     await page.goBack();

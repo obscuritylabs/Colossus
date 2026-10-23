@@ -52,18 +52,22 @@ let root: Root,
   row: Thread,
   detail: ThreadDetailResponse;
 let canControl: boolean, forkEnabled: boolean;
+let pinEnabled: boolean, pinned: boolean;
 let respond: (path: string, init?: RequestInit) => Promise<Response>;
 const changed = vi.fn(),
   refresh = vi.fn(),
   removedFocus = vi.fn(),
-  fork = vi.fn();
+  fork = vi.fn(),
+  pin = vi.fn();
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   row = { ...thread };
   detail = { thread: { ...thread, revision: 8 }, tasks: [task], messages: [] };
   canControl = true;
   forkEnabled = false;
-  for (const callback of [changed, refresh, removedFocus, fork])
+  pinEnabled = false;
+  pinned = false;
+  for (const callback of [changed, refresh, removedFocus, fork, pin])
     callback.mockReset();
   container = document.createElement("div");
   document.body.append(container);
@@ -102,6 +106,8 @@ async function render(identity = "alice") {
           onRefresh={refresh}
           onRemovedFocus={removedFocus}
           onFork={forkEnabled ? fork : undefined}
+          pinned={pinned}
+          onPin={pinEnabled ? pin : undefined}
         />
       </NavigationProvider>,
     ),
@@ -337,4 +343,44 @@ it("drops late fork detail when the account changes", async () => {
   await act(async () => complete(Response.json(detail)));
   expect(document.querySelector('[role="menu"]')).toBeNull();
   expect(fork).not.toHaveBeenCalled();
+});
+
+it("offers owner-local pinning without runtime control or a metadata mutation", async () => {
+  pinEnabled = true;
+  canControl = false;
+  row = { ...row, active_task_id: "running-task" };
+  await render();
+  await open();
+  const choice = document.querySelector<HTMLElement>(
+    '[role="menuitemcheckbox"][aria-label="Pin A different chat"]',
+  )!;
+  expect(choice.getAttribute("aria-checked")).toBe("false");
+  expect(document.querySelector('[role="menu"]')?.textContent).not.toMatch(
+    /Rename|Archive|Restore/,
+  );
+  await act(async () => choice.click());
+  expect(pin).toHaveBeenCalledWith(true);
+  expect(fetch).not.toHaveBeenCalled();
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it("keeps archived pins removable and describes the pin without claiming run status", async () => {
+  pinEnabled = true;
+  pinned = true;
+  canControl = false;
+  row = { ...row, archived: true };
+  await render();
+  expect(container.querySelector(".chat-history-meta")?.textContent).toContain(
+    "Pinned",
+  );
+  await open();
+  const choice = document.querySelector<HTMLElement>(
+    '[role="menuitemcheckbox"][aria-label="Unpin A different chat"]',
+  )!;
+  expect(choice.getAttribute("aria-checked")).toBe("true");
+  await act(async () => choice.click());
+  expect(pin).toHaveBeenCalledWith(false);
+  expect(fetch).not.toHaveBeenCalled();
+  await render("bob");
+  expect(trigger()).toBeNull();
 });

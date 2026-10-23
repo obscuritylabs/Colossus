@@ -24,8 +24,12 @@ mod personal_roles;
 mod plans;
 #[path = "tests/resources.rs"]
 mod resources;
+#[path = "tests/thread_metadata.rs"]
+mod thread_metadata;
 #[path = "tests/titles.rs"]
 mod titles;
+#[path = "tests/user_inventory.rs"]
+mod user_inventory;
 
 fn caller(project: &str, permissions: &[CloudPermission]) -> CloudCaller {
     CloudCaller::new(

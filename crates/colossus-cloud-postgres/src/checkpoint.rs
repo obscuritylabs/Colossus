@@ -86,6 +86,8 @@ fn kind(table: &str) -> Option<EntityKind> {
         "user_identities" => Some(EntityKind::OidcIdentity),
         "local_credentials" => Some(EntityKind::LocalCredential),
         "control_plane_settings" => Some(EntityKind::Setting),
+        "announcements" => Some(EntityKind::Announcement),
+        "announcement_receipts" => Some(EntityKind::AnnouncementReceipt),
         "projects" => Some(EntityKind::Project),
         "project_memberships" => Some(EntityKind::Membership),
         "oidc_flows" => Some(EntityKind::AuthFlow),

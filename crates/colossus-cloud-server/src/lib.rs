@@ -2,6 +2,7 @@
 mod admin;
 /// Separately deployed protected rollback-anchor authority for hosted Chat.
 pub mod anchor_authority;
+mod announcements;
 mod auth;
 mod certificates;
 mod chat;
@@ -14,10 +15,12 @@ pub mod cli;
 /// Secret-reference-only Kubernetes and local host configuration.
 pub mod config;
 mod connection;
+mod global_settings;
 mod http;
 mod observability;
 mod resources;
 /// Composed HTTP/OIDC and mutual-TLS server lifecycle.
 pub mod server;
 mod settings;
+mod telemetry_host;
 mod tls;

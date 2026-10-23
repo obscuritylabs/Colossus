@@ -139,10 +139,9 @@ async fn list(
     let caller = state.auth.caller(&headers, &project, false).await?;
     scope.authorize(&caller, false)?;
     let host = hosted(&state)?;
-    let config = host
-        .project_config(&project)
-        .await?
-        .ok_or(CloudError::NotFound)?;
+    let Some(config) = host.project_config(&project).await? else {
+        return Ok(Json(inventory::dormant_snapshot()));
+    };
     let vault = host.selected_vault(&caller, scope.authentication())?;
     let store = CredentialStore::load(vault.as_ref()).map_err(custody)?;
     Ok(Json(snapshot(
@@ -233,6 +232,7 @@ async fn write(
         if row.binding.record_id() != target.credential_binding {
             return Err(CloudError::Conflict.into());
         }
+        require_project_attachment_authority(host, scope, &row.binding)?;
         store.attach(&row.binding, Some(&id)).map_err(custody)?;
     }
     if !unused_creation {
@@ -302,6 +302,7 @@ async fn attach(
     if row.binding.record_id() != input.credential_binding {
         return Err(CloudError::Conflict.into());
     }
+    require_project_attachment_authority(host, scope, &row.binding)?;
     if let Some(id) = &input.credential_id {
         adopt(&mut store, vault.as_ref(), &rows, id)?;
     }
@@ -311,6 +312,19 @@ async fn attach(
     stop_local(host, &state, &caller, scope, edit.is_some()).await?;
     store.commit(vault.as_ref()).map_err(custody)?;
     Ok(Json(serde_json::json!({"revision":store.revision()})))
+}
+
+fn require_project_attachment_authority(
+    host: &HostedExecution,
+    scope: Scope,
+    binding: &ChatConnectionBinding,
+) -> std::result::Result<(), CloudError> {
+    if matches!(scope, Scope::Project)
+        && crate::global_settings::credentials::assigned_vault(host, binding)?.is_some()
+    {
+        return Err(CloudError::PermissionDenied);
+    }
+    Ok(())
 }
 
 fn editing_vault(
@@ -371,10 +385,12 @@ async fn accounts(
 ) -> Result<Json<serde_json::Value>> {
     let caller = state.auth.caller(&headers, &project, false).await?;
     caller.require(CloudPermission::Read)?;
-    let config = hosted(&state)?
-        .project_config(&project)
-        .await?
-        .ok_or(CloudError::NotFound)?;
+    let Some(config) = hosted(&state)?.project_config(&project).await? else {
+        return Ok(Json(serde_json::json!({
+            "accounts":[],
+            "execution":crate::chat_settings::availability::ExecutionAvailability::dormant(),
+        })));
+    };
     let managed = config.codex_auth_path.is_some() || config.codex_auth_shared;
     Ok(Json(serde_json::json!({"accounts":[{
         "id":"chatgpt", "label":"ChatGPT / Codex", "kind":"chatgpt",

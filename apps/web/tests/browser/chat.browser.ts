@@ -5,6 +5,7 @@ import {
   selectAppearance,
   openAppSidebar,
   openConversationList,
+  chooseProjectSettingsSection,
 } from "./appearance";
 
 for (const appearance of appearanceCases) {
@@ -211,10 +212,7 @@ for (const appearance of appearanceCases) {
       .getByRole("button", { name: "Save changes", exact: true })
       .click();
     await expect.poll(() => fixture.settingsSubmissions.length).toBe(1);
-    await page
-      .getByRole("navigation", { name: "Settings sections" })
-      .getByRole("button", { name: "Models", exact: true })
-      .click();
+    await chooseProjectSettingsSection(page, "Models");
     await page
       .getByRole("button", { name: "Edit careful", exact: true })
       .click();
@@ -225,9 +223,9 @@ for (const appearance of appearanceCases) {
       .getByRole("button", { name: "Save changes", exact: true })
       .click();
     await expect.poll(() => fixture.settingsSubmissions.length).toBe(2);
+    await chooseProjectSettingsSection(page, "Role routing");
     await page
-      .getByRole("navigation", { name: "Settings sections" })
-      .getByRole("button", { name: "Role routing", exact: true })
+      .getByRole("button", { name: "Configure routing", exact: true })
       .click();
     await page
       .getByRole("combobox", { name: "Research planner model", exact: true })
@@ -236,13 +234,10 @@ for (const appearance of appearanceCases) {
       .getByRole("option", { name: "careful · configured-model", exact: true })
       .click();
     await page
-      .getByRole("button", { name: "Save project configuration", exact: true })
+      .getByRole("button", { name: "Save routing", exact: true })
       .click();
     await expect.poll(() => fixture.settingsSubmissions.length).toBe(3);
-    await page
-      .getByRole("navigation", { name: "Settings sections" })
-      .getByRole("button", { name: "MCP connections", exact: true })
-      .click();
+    await chooseProjectSettingsSection(page, "MCP connections");
     await page.getByRole("button", { name: "Edit docs", exact: true }).click();
     await page
       .getByRole("textbox", { name: "Allowed tools", exact: true })
@@ -287,7 +282,7 @@ for (const appearance of appearanceCases) {
       },
     });
     await expect(
-      page.getByText("Project chat configuration saved.", { exact: true }),
+      page.getByText("Project configuration saved.", { exact: true }),
     ).toBeVisible();
     await page
       .getByRole("button", { name: "Back to work", exact: true })

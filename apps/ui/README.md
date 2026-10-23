@@ -149,6 +149,14 @@ native behavior and the existing palette and text-size tokens. Add future shadcn
 components to this package as they are adopted, with relative internal imports,
 exact Radix dependencies, and no persistence or transport in the foundation.
 
+`AnnouncementBanner` and `AnnouncementCenter` from
+`@colossus/ui/components/Announcements` share a compact notice and accessible
+notification sheet. Import `styles/announcements.css`; full Markdown loads only
+when an update is opened. Hosts own eligible content, publication identities,
+pagination, permissions and durable read/dismiss receipts. `ClassificationColorsEditor`
+from `@colossus/ui/appearance` previews validated marking colors; hosts decide
+whether applying them changes personal or administrator-controlled settings.
+
 `ControlPlaneFrame` supplies a labeled app sidebar with project selection, a separate
 conversation navigation pane, an inset content window, and a configurable classification
 banner. App navigation collapses to an icon rail through its trigger or keyboard shortcut;

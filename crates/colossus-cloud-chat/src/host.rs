@@ -176,7 +176,8 @@ impl ChatRuntime {
             interactions,
             "primary",
             "You are Colossus, a cloud assistant. Use only the configured tools available in this conversation. No provisioned computer or coding environment is attached.",
-        ));
+        ).with_telemetry_project_id(options.project_id)
+            .map_err(|_| ChatError::InvalidConfiguration)?);
         let principal = ApplicationPrincipal::authenticated(
             format!("app:cloud-chat-{identity}"),
             format!("cloud-chat-{identity}"),

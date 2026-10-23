@@ -226,6 +226,34 @@ async fn postgres_personal_history_filters_before_pagination_and_aggregates() {
                 .contains("legacy-shared")
         );
     }
+    // Account administration's owner subset remains separate from viewer authority,
+    // and both filters precede LIMIT for conversation and workspace inventories.
+    for (kind, expected) in [
+        (EntityKind::Thread, "bob-private"),
+        (EntityKind::Workspace, "bob-workspace"),
+    ] {
+        let query = EntityQuery {
+            kind,
+            project_id: "acceptance-project".into(),
+            owned_by: Some("bob".into()),
+            visible_to: Some("bob".into()),
+            limit: 1,
+            ..Default::default()
+        };
+        let owned = store.list(&query).await.unwrap();
+        assert_eq!(owned.len(), 1);
+        assert_eq!(owned[0].key.id, expected);
+        assert!(
+            store
+                .list(&EntityQuery {
+                    visible_to: Some("alice".into()),
+                    ..query
+                })
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
     let now = time::OffsetDateTime::parse(
         "2026-10-19T13:00:00Z",
         &time::format_description::well_known::Rfc3339,

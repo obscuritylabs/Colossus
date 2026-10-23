@@ -7,6 +7,7 @@ import {
   openAppSidebar,
   openConversationList,
   selectAppearance,
+  chooseProjectSettingsSection,
 } from "./appearance";
 
 // Exercise every canonical provider through the same host-supplied shared picker.
@@ -122,10 +123,11 @@ async function openProjectSettings(page: Page) {
 }
 
 async function chooseSettingsSection(page: Page, name: string) {
-  await page
-    .getByRole("navigation", { name: "Settings sections" })
-    .getByRole("button", { name, exact: true })
-    .click();
+  await chooseProjectSettingsSection(page, name);
+  if (name === "Role routing")
+    await page
+      .getByRole("button", { name: "Configure routing", exact: true })
+      .click();
 }
 
 async function assertSettingsBounds(page: Page) {
@@ -174,6 +176,18 @@ test("provider inventory uses the full Desktop picker and persists provider disp
   await expect(inventory).toBeVisible();
   await expect(inventory.locator(".catalog-inventory-row")).toHaveCount(1);
   await expect(inventory).toContainText("Company AI");
+  const provenance = inventory
+    .getByRole("cell", { name: /^Explicit shared credential/u })
+    .getByText("Project definition", { exact: true });
+  await expect(provenance).toBeVisible();
+  const separation = await provenance.evaluate((element) => ({
+    originTop: element.getBoundingClientRect().top,
+    connectionBottom:
+      element.previousElementSibling!.getBoundingClientRect().bottom,
+  }));
+  expect(separation.originTop).toBeGreaterThanOrEqual(
+    separation.connectionBottom,
+  );
   await page
     .getByRole("textbox", { name: "Search providers", exact: true })
     .fill("missing provider");
@@ -247,7 +261,6 @@ test("provider inventory uses the full Desktop picker and persists provider disp
   });
   await expect(inventory).toContainText("Team OpenRouter");
   await page.reload();
-  await page.getByRole("button", { name: "Workspace", exact: true }).click();
   await chooseSettingsSection(page, "Providers");
   await expect(
     page.getByRole("table", { name: "Configured providers", exact: true }),
@@ -408,9 +421,7 @@ test("role routing inherits Primary and persists only explicit assignments", asy
   await expect(
     routing.getByText("Uses configured-model · company", { exact: true }),
   ).toHaveCount(6);
-  await page
-    .getByRole("button", { name: "Save project configuration", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Save routing", exact: true }).click();
   await expect.poll(() => fixture.settingsSubmissions.length).toBe(1);
   expect(fixture.settingsSubmissions[0]!.models).toMatchObject({
     roles: { primary: "careful", research_planner: "fast" },
@@ -418,6 +429,9 @@ test("role routing inherits Primary and persists only explicit assignments", asy
   expect(
     (fixture.settingsSubmissions[0]!.models as { roles: unknown }).roles,
   ).toEqual({ primary: "careful", research_planner: "fast" });
+  await page
+    .getByRole("button", { name: "Configure routing", exact: true })
+    .click();
   await primary.click();
   await expect(
     page.getByRole("option", { name: "Use primary", exact: true }),
@@ -431,9 +445,7 @@ test("role routing inherits Primary and persists only explicit assignments", asy
   ).toHaveCount(7);
   await planner.click();
   await page.getByRole("option", { name: "Use primary", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Save project configuration", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Save routing", exact: true }).click();
   await expect.poll(() => fixture.settingsSubmissions.length).toBe(2);
   expect(
     (fixture.settingsSubmissions[1]!.models as { roles: unknown }).roles,

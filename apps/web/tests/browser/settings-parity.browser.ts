@@ -5,6 +5,7 @@ import {
   selectAppearance,
   openAppSidebar,
   openConversationList,
+  chooseProjectSettingsSection,
 } from "./appearance";
 
 for (const appearance of appearanceCases) {
@@ -63,9 +64,6 @@ for (const appearance of appearanceCases) {
     await page
       .getByRole("menuitem", { name: "Project settings", exact: true })
       .click();
-    const sections = page.getByRole("navigation", {
-      name: "Settings sections",
-    });
     await page
       .getByRole("button", { name: "Add provider", exact: true })
       .click();
@@ -128,6 +126,7 @@ for (const appearance of appearanceCases) {
       path: `output/playwright/provider-setup-${appearance.id}.png`,
       fullPage: true,
     });
+    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await page
       .getByRole("button", { name: "Edit company", exact: true })
@@ -143,6 +142,10 @@ for (const appearance of appearanceCases) {
     await expect(manageCredentials).toBeEnabled();
     await providerUrl.fill("https://models.example/v1");
     await manageCredentials.click();
+    await expect(page).toHaveURL(/\/settings\/credentials\/new\?/u);
+    expect(new URL(page.url()).searchParams.get("kind")).toBe("provider");
+    expect(new URL(page.url()).searchParams.get("connection")).toBe("company");
+    await page.reload();
     await expect(
       page.locator("input[aria-label='API key or token']"),
     ).toBeInViewport();
@@ -153,7 +156,8 @@ for (const appearance of appearanceCases) {
     await expect(
       page.locator("input[aria-label='API key or token']"),
     ).toBeEnabled();
-    await sections.getByRole("button", { name: "Models", exact: true }).click();
+    page.once("dialog", (dialog) => dialog.accept());
+    await chooseProjectSettingsSection(page, "Models");
     await page
       .getByRole("button", { name: "Edit careful", exact: true })
       .click();
@@ -184,9 +188,9 @@ for (const appearance of appearanceCases) {
     });
     if (appearance.id === "dark") {
       await page.setViewportSize({ width: 1280, height: 900 });
-      await page.locator(".settings-main").evaluate((element) => {
-        element.scrollTop = 0;
-      });
+      await page
+        .getByRole("textbox", { name: /^Model identifier/u })
+        .scrollIntoViewIfNeeded();
       await page.screenshot({
         path: "output/playwright/provider-models-desktop.png",
       });
@@ -206,9 +210,11 @@ for (const appearance of appearanceCases) {
         },
       },
     });
-    await sections
-      .getByRole("button", { name: "Credentials", exact: true })
+    await chooseProjectSettingsSection(page, "Providers");
+    await page
+      .getByRole("button", { name: "Edit company", exact: true })
       .click();
+    await manageCredentials.click();
     // Password inputs have no implicit textbox role.
     const projectInput = page.locator("input[aria-label='API key or token']");
     // The selected connection reopens its editor after the credential catalog loads.
@@ -244,10 +250,7 @@ for (const appearance of appearanceCases) {
       path: `output/playwright/credentials-project-${appearance.id}.png`,
       fullPage: true,
     });
-    await page.getByRole("button", { name: "Global", exact: true }).click();
-    await sections
-      .getByRole("button", { name: "Credentials", exact: true })
-      .click();
+    await page.goto("/settings/credentials?project=browser-project");
     const personalInput = page.locator("input[aria-label='API key or token']");
     await page
       .getByRole("button", {
@@ -255,6 +258,10 @@ for (const appearance of appearanceCases) {
         exact: true,
       })
       .click();
+    await expect(page).toHaveURL(
+      /\/settings\/credentials\/new\?project=browser-project$/u,
+    );
+    await page.reload();
     await page.screenshot({
       path: `output/playwright/credentials-personal-editor-${appearance.id}.png`,
       fullPage: true,
@@ -296,9 +303,9 @@ for (const appearance of appearanceCases) {
     expect(browserStorage).not.toContain("synthetic-private-browser-secret");
     expect(browserStorage).not.toContain("synthetic-shared-browser-secret");
     await page.reload();
-    await sections
-      .getByRole("button", { name: "Credentials", exact: true })
-      .click();
+    await expect(page).toHaveURL(
+      /\/settings\/credentials\?project=browser-project$/u,
+    );
     await expect(
       page
         .getByRole("region", { name: "Personal credentials", exact: true })

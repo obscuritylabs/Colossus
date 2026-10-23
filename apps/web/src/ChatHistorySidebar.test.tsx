@@ -35,6 +35,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(now);
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  localStorage.clear();
   paths.length = 0;
   threads = [current];
   container = document.createElement("div");
@@ -224,4 +225,26 @@ it("shows released titles and described updated times without guessing run metad
   expect(navigation.textContent).not.toMatch(
     /Running|Completed|Failed|Research|Plan/,
   );
+});
+
+it("keeps an inaccessible pin removable without retaining its title or opening a chat", async () => {
+  const key = 'colossus.web.chat-pins:v1:["alice","p"]';
+  localStorage.setItem(key, JSON.stringify({ version: 1, ids: ["missing"] }));
+  threads = [];
+  const initial = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (path, init) =>
+    String(path).endsWith("/metadata")
+      ? Response.json({ error: "not_found" }, { status: 404 })
+      : initial(path, init),
+  );
+  await render();
+  expect(container.textContent).toContain("Pinned chat unavailable.");
+  expect(container.textContent).not.toContain("Start a conversation");
+  await act(() => button("Remove pin").click());
+  expect(JSON.parse(localStorage.getItem(key)!).ids).toEqual([]);
+  expect(container.textContent).not.toContain("Pinned chat unavailable.");
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("New chat");
+  expect(
+    vi.mocked(fetch).mock.calls.every(([, init]) => init?.method === "GET"),
+  ).toBe(true);
 });

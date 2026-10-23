@@ -18,6 +18,7 @@ use std::{collections::BTreeSet, convert::Infallible, sync::Arc, time::Duration}
 mod branches;
 mod diagnostics;
 mod spa;
+mod thread_metadata;
 
 pub(crate) fn router(state: Arc<State>) -> Router {
     Router::new().route("/health/live",get(||async{"ok"})).route("/health/ready",get(ready))
@@ -32,6 +33,7 @@ pub(crate) fn router(state: Arc<State>) -> Router {
         .route("/api/projects/{project}/workspaces",get(workspaces))
         .route("/api/projects/{project}/threads",get(threads).post(create_thread))
         .route("/api/projects/{project}/threads/{thread}",get(thread_detail).patch(edit_thread))
+        .route("/api/projects/{project}/threads/{thread}/metadata",get(thread_metadata::read))
         .route("/api/projects/{project}/threads/{thread}/messages",post(send_message))
         .route("/api/projects/{project}/threads/{thread}/branches",get(branches::list).post(branches::create))
         .route("/api/projects/{project}/threads/{thread}/events",get(thread_events))
@@ -43,7 +45,7 @@ pub(crate) fn router(state: Arc<State>) -> Router {
         .route("/api/projects/{project}/tasks/{task}/cancel",post(cancel))
         .route("/api/projects/{project}/tasks/{task}/respond",post(respond))
         .route("/api/projects/{project}/tasks/{task}/inboxes",post(inspect_inboxes))
-        .merge(crate::resources::router()).merge(crate::admin::router()).merge(crate::observability::router()).merge(crate::settings::router()).merge(crate::chat::router()).merge(crate::hosted::router()).merge(crate::chat_settings::router()).merge(crate::chat_credentials::router())
+        .merge(crate::resources::router()).merge(crate::admin::router()).merge(crate::announcements::router()).merge(crate::observability::router()).merge(crate::settings::router()).merge(crate::chat::router()).merge(crate::hosted::router()).merge(crate::chat_settings::router()).merge(crate::chat_credentials::router()).merge(crate::global_settings::router())
         .fallback_service(spa::service(&state.config.web_root))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::HeaderName::from_static("x-content-type-options"), header::HeaderValue::from_static("nosniff")))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::HeaderName::from_static("referrer-policy"),header::HeaderValue::from_static("no-referrer")))

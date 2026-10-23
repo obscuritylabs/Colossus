@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { WorkspaceSidebarThreadContent } from "@colossus/ui";
 import { Button } from "@colossus/ui/components/ui/button";
 import { Input } from "@colossus/ui/components/ui/input";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
@@ -20,6 +21,7 @@ import {
   IconGitFork,
   IconLock,
   IconPencil,
+  IconPin,
 } from "@tabler/icons-react";
 import {
   ApiFailure,
@@ -51,6 +53,10 @@ export function ChatHistorySidebarRow({
   onRemovedFocus,
   onRefresh,
   onFork,
+  pinned = false,
+  onPin,
+  visible = true,
+  onHiddenFocus,
 }: {
   thread: Thread;
   project: string;
@@ -63,6 +69,10 @@ export function ChatHistorySidebarRow({
   onRemovedFocus: () => void;
   onRefresh: () => void;
   onFork: ((thread: Thread, source: Task) => void) | undefined;
+  pinned?: boolean;
+  onPin?: ((pinned: boolean) => void) | undefined;
+  visible?: boolean;
+  onHiddenFocus?: (() => void) | undefined;
 }) {
   const menu = useSidebarDropdown();
   const [bound, setBound] = useState(thread);
@@ -83,12 +93,25 @@ export function ChatHistorySidebarRow({
   const skipMenuFocus = useRef(false);
   const restoreTriggerFocus = useRef(false);
   const detailAbort = useRef<AbortController | null>(null);
+  const visibleRef = useRef(visible);
+  const hiddenHadFocus = useRef(false);
+  const hiddenFocusPending = useRef(false);
+  if (visibleRef.current && !visible) {
+    // Capture before the parent's hidden attribute can move focus to the body.
+    hiddenHadFocus.current = Boolean(
+      rowRef.current?.contains(document.activeElement) ||
+      menu.contentRef.current?.contains(document.activeElement),
+    );
+  }
+  visibleRef.current = visible;
   const owned =
     thread.project_id === project && thread.owner_user_id === identity;
   const allowed = canControl && owned;
   const showActions =
     owned &&
-    (canControl || Boolean(onFork && !thread.archived && thread.can_continue));
+    (canControl ||
+      Boolean(onPin && (!thread.archived || pinned)) ||
+      Boolean(onFork && !thread.archived && thread.can_continue));
   const title = thread.title || "Untitled chat";
   const updated = chatUpdatedTime(thread.updated_at, now);
   const state =
@@ -109,19 +132,40 @@ export function ChatHistorySidebarRow({
   useEffect(() => {
     if (!menu.open) detailAbort.current?.abort();
   }, [menu.open]);
+  useLayoutEffect(() => {
+    if (visible) {
+      hiddenHadFocus.current = false;
+      hiddenFocusPending.current = false;
+      return;
+    }
+    const hadFocus = Boolean(
+      rowRef.current?.contains(document.activeElement) ||
+      menu.contentRef.current?.contains(document.activeElement) ||
+      (hiddenHadFocus.current && document.activeElement === document.body),
+    );
+    hiddenHadFocus.current = false;
+    restoreTriggerFocus.current = false;
+    detailAbort.current?.abort();
+    if (menu.open) {
+      hiddenFocusPending.current = hadFocus;
+      skipMenuFocus.current = true;
+      menu.onOpenChange(false);
+    } else if (hadFocus && !hiddenFocusPending.current) onHiddenFocus?.();
+  }, [visible, menu.open, menu.onOpenChange, menu.contentRef, onHiddenFocus]);
   useEffect(() => {
     if (!editing && !busy && restoreTriggerFocus.current) {
       restoreTriggerFocus.current = false;
-      menu.triggerRef.current?.focus();
+      if (visibleRef.current) menu.triggerRef.current?.focus();
     }
   }, [editing, busy, menu.triggerRef]);
   useEffect(() => {
-    if (!editing) return;
+    if (!editing || !visibleRef.current) return;
     titleRef.current?.focus();
     titleRef.current?.select();
     const escape = (event: KeyboardEvent) => {
       if (
         event.key === "Escape" &&
+        visibleRef.current &&
         !event.isComposing &&
         event.target instanceof Node &&
         renameRef.current?.contains(event.target) &&
@@ -139,6 +183,7 @@ export function ChatHistorySidebarRow({
   }, [editing, menu.triggerRef]);
 
   async function openMenu(open: boolean) {
+    if (open && !visibleRef.current) return;
     menu.onOpenChange(open);
     detailAbort.current?.abort();
     if (!open) return;
@@ -173,6 +218,7 @@ export function ChatHistorySidebarRow({
       menu.contentRef.current?.contains(document.activeElement),
     );
     const mayRestoreFocus = () =>
+      visibleRef.current &&
       actionHadFocus &&
       (document.activeElement === document.body ||
         rowRef.current?.contains(document.activeElement) ||
@@ -227,6 +273,7 @@ export function ChatHistorySidebarRow({
     <div
       className="chat-history-entry"
       ref={rowRef}
+      data-chat-row={thread.thread_id}
       aria-busy={busy || undefined}
     >
       {editing ? (
@@ -285,6 +332,7 @@ export function ChatHistorySidebarRow({
                   {updated.dateTime ? "Updated " : ""}
                   {updated.label}
                 </time>
+                {pinned ? <span>Pinned</span> : null}
                 {state ? (
                   <span className="chat-history-row-state">
                     {state === "Pending work" ? (
@@ -296,15 +344,16 @@ export function ChatHistorySidebarRow({
               </span>
             }
             status={
-              state ? (
+              state || pinned ? (
                 <span className="chat-history-row-indicator" aria-hidden="true">
+                  {pinned ? <IconPin size={14} /> : null}
                   {state === "Pending work" ? (
                     <IconClock size={14} />
                   ) : state === "Read only" ? (
                     <IconLock size={14} />
-                  ) : (
+                  ) : state ? (
                     <IconAlertCircle size={14} />
-                  )}
+                  ) : null}
                 </span>
               ) : undefined
             }
@@ -337,9 +386,21 @@ export function ChatHistorySidebarRow({
             collisionPadding={8}
             aria-label={`Actions for ${title}`}
             onCloseAutoFocus={(event) => {
-              if (skipMenuFocus.current) {
+              if (!visibleRef.current || skipMenuFocus.current) {
                 event.preventDefault();
                 skipMenuFocus.current = false;
+              }
+              if (hiddenFocusPending.current) {
+                hiddenFocusPending.current = false;
+                // Restore after the modal menu's focus trap has been removed,
+                // and leave any focus the user moved elsewhere untouched.
+                if (
+                  !visibleRef.current &&
+                  (document.activeElement === document.body ||
+                    rowRef.current?.contains(document.activeElement) ||
+                    menu.contentRef.current?.contains(document.activeElement))
+                )
+                  onHiddenFocus?.();
               }
             }}
           >
@@ -391,6 +452,20 @@ export function ChatHistorySidebarRow({
                     </p>
                   ) : null}
                 </>
+              ) : null}
+              {onPin && (!bound.archived || pinned) ? (
+                <DropdownMenuCheckboxItem
+                  className="control-sidebar-dropdown-item"
+                  checked={pinned}
+                  aria-label={`${pinned ? "Unpin" : "Pin"} ${title}`}
+                  onSelect={() => {
+                    skipMenuFocus.current = true;
+                    onPin(!pinned);
+                  }}
+                >
+                  <IconPin size={16} aria-hidden="true" />
+                  {pinned ? "Unpin" : "Pin"}
+                </DropdownMenuCheckboxItem>
               ) : null}
             </DropdownMenuGroup>
             {allowed ? (

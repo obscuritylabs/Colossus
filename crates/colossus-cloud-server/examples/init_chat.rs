@@ -86,17 +86,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if provider.kind.generation_action() == "provider.openai.codex" && codex_auth_path.is_none() {
         return Err("the selected Codex provider requires its explicit native account file".into());
     }
-    let project_config = ChatProjectConfig {
-        labels: Default::default(),
-        codex_auth_shared: false,
-        runtime,
-        mcp_authentication: BTreeMap::new(),
-        provider_authentication: BTreeMap::from([(provider_id.clone(), authentication)]),
-        provider_generations: BTreeMap::new(),
-        mcp_generations: BTreeMap::new(),
-        revision: 1,
-        codex_auth_path,
-    };
+    let mut project_config = ChatProjectConfig::new(runtime);
+    project_config.provider_authentication =
+        BTreeMap::from([(provider_id.clone(), authentication)]);
+    project_config.codex_auth_path = codex_auth_path;
     let configuration = ChatConfig {
         shared: None,
         home: root.path().join("host"),

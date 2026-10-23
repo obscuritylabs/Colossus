@@ -351,7 +351,7 @@ it("preserves the authorized project through global settings navigation and relo
   await act(() => root.render(<App />));
   await contains("Retained exact-resource reply");
   const settings = container.querySelector<HTMLAnchorElement>(
-    'a[href="/settings?project=p"]',
+    'a[href="/settings/appearance?project=p"]',
   );
   expect(settings).not.toBeNull();
   await act(() => settings!.click());

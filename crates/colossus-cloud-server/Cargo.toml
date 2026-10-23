@@ -24,6 +24,7 @@ colossus-mcp.workspace = true
 colossus-cloud-postgres.workspace = true
 colossus-contracts.workspace = true
 colossus-network.workspace = true
+colossus-observability = { workspace = true, features = ["host-exporters"] }
 chacha20poly1305.workspace = true
 colossus-cloud-protocol.workspace = true
 colossus-ports.workspace = true
@@ -55,7 +56,7 @@ zeroize.workspace = true
 colossus-connector.workspace = true
 tempfile.workspace = true
 tower.workspace = true
-colossus-control-plane-client = { version = "=0.11.10", path = "../colossus-control-plane-client" }
+colossus-control-plane-client = { version = "=0.11.11-preview.1", path = "../colossus-control-plane-client" }
 colossus-testkit.workspace = true
 serde-saphyr.workspace = true
 p256.workspace = true

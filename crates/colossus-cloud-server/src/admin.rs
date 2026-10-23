@@ -14,6 +14,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
+mod user_inventory;
+
 pub(crate) fn router() -> Router<Arc<State>> {
     Router::new()
         .route("/api/projects", get(projects).post(create_project))
@@ -31,6 +33,7 @@ pub(crate) fn router() -> Router<Arc<State>> {
         .route("/api/admin/users", get(users).post(create_user))
         .route("/api/admin/users/{user}", get(user).patch(edit_user))
         .route("/api/admin/users/{user}/password", post(password))
+        .merge(user_inventory::router())
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

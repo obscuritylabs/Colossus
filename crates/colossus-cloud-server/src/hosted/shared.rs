@@ -63,6 +63,7 @@ impl SharedChat {
             namespace: format!("vault-{}", hex::encode(Sha256::digest(scope.as_bytes()))),
             lease,
             gate: None,
+            instance_edit: None,
         })
     }
     pub(crate) fn editing_vault(
@@ -76,6 +77,25 @@ impl SharedChat {
             namespace: format!("vault-{}", hex::encode(Sha256::digest(scope.as_bytes()))),
             lease: None,
             gate: Some((project.into(), owner.into())),
+            instance_edit: None,
+        })
+    }
+
+    pub(crate) fn instance_editing_vault(
+        self: &Arc<Self>,
+        owner: &str,
+        actor: &str,
+        operation: &str,
+    ) -> Arc<dyn CredentialVault> {
+        Arc::new(SqlVault {
+            shared: self.clone(),
+            namespace: format!(
+                "vault-{}",
+                hex::encode(Sha256::digest(b"instance/connections"))
+            ),
+            lease: None,
+            gate: None,
+            instance_edit: Some((owner.into(), actor.into(), operation.into())),
         })
     }
 
@@ -291,8 +311,12 @@ impl SharedChat {
             .revision
             .checked_sub(1)
             .ok_or(CloudError::InvalidArgument)?;
-        let plaintext =
-            Zeroizing::new(serde_json::to_vec(configuration).map_err(|_| CloudError::Storage)?);
+        let plaintext = Zeroizing::new(
+            serde_json::to_vec(&crate::global_settings::inheritance::local_configuration(
+                configuration,
+            ))
+            .map_err(|_| CloudError::Storage)?,
+        );
         let ciphertext = self.seal(
             &namespace,
             "configuration",
@@ -346,6 +370,27 @@ struct SqlVault {
     namespace: String,
     lease: Option<ChatLease>,
     gate: Option<(String, String)>,
+    instance_edit: Option<(String, String, String)>,
+}
+
+impl SqlVault {
+    fn commit(&self, writes: &[ChatRecordWrite<'_>]) -> std::result::Result<(), CredentialError> {
+        if let Some((owner, actor, operation)) = &self.instance_edit {
+            self.shared
+                .sql
+                .write_instance_records(writes, owner, actor, operation)
+        } else {
+            self.shared.sql.write_records_guarded(
+                writes,
+                self.lease.as_ref(),
+                self.gate
+                    .as_ref()
+                    .map(|(project, owner)| (project.as_str(), owner.as_str())),
+            )
+        }
+        .map(|_| ())
+        .map_err(credential_error)
+    }
 }
 impl CredentialVault for SqlVault {
     fn read(
@@ -395,22 +440,13 @@ impl CredentialVault for SqlVault {
             .shared
             .seal(&self.namespace, &id, previous.revision + 1, record.expose())
             .map_err(credential_error)?;
-        self.shared
-            .sql
-            .write_records_guarded(
-                &[ChatRecordWrite {
-                    namespace: &self.namespace,
-                    record_id: &id,
-                    expected_revision: previous.revision,
-                    ciphertext: Some(&ciphertext),
-                    ttl_seconds: None,
-                }],
-                self.lease.as_ref(),
-                self.gate
-                    .as_ref()
-                    .map(|(project, owner)| (project.as_str(), owner.as_str())),
-            )
-            .map_err(credential_error)?;
+        self.commit(&[ChatRecordWrite {
+            namespace: &self.namespace,
+            record_id: &id,
+            expected_revision: previous.revision,
+            ciphertext: Some(&ciphertext),
+            ttl_seconds: None,
+        }])?;
         Ok(())
     }
     fn delete(&self, key: &CredentialKey) -> std::result::Result<(), CredentialError> {
@@ -423,22 +459,13 @@ impl CredentialVault for SqlVault {
         if previous.ciphertext.is_none() {
             return Ok(());
         }
-        self.shared
-            .sql
-            .write_records_guarded(
-                &[ChatRecordWrite {
-                    namespace: &self.namespace,
-                    record_id: &id,
-                    expected_revision: previous.revision,
-                    ciphertext: None,
-                    ttl_seconds: None,
-                }],
-                self.lease.as_ref(),
-                self.gate
-                    .as_ref()
-                    .map(|(project, owner)| (project.as_str(), owner.as_str())),
-            )
-            .map_err(credential_error)?;
+        self.commit(&[ChatRecordWrite {
+            namespace: &self.namespace,
+            record_id: &id,
+            expected_revision: previous.revision,
+            ciphertext: None,
+            ttl_seconds: None,
+        }])?;
         Ok(())
     }
 }

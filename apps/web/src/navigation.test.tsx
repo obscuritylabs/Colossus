@@ -10,6 +10,7 @@ import {
   rememberSignInReturn,
   restoreSignInReturn,
   useNavigation,
+  useSettingsNavigationGuard,
 } from "./navigation";
 import { AgentSidebar } from "./AgentScope";
 let root: Root, container: HTMLDivElement;
@@ -153,4 +154,49 @@ it("resumes a bounded local deep link after sign-in without external redirects",
   expect(() => navigate("https://other.example/fleet")).toThrow(
     "Invalid Control Plane destination",
   );
+});
+
+function DirtySettingsView() {
+  const dirty = useSettingsNavigationGuard();
+  return (
+    <>
+      <button onClick={() => dirty(true)}>Edit setting</button>
+      <View />
+    </>
+  );
+}
+it("keeps unsaved settings through rejected links, history, and reload", async () => {
+  const confirm = vi.fn(() => false);
+  Object.defineProperty(window, "confirm", {
+    configurable: true,
+    value: confirm,
+  });
+  await act(() =>
+    root.render(
+      <NavigationProvider>
+        <DirtySettingsView />
+      </NavigationProvider>,
+    ),
+  );
+  await act(() => navigate("/admin/providers"));
+  await act(() => navigate("/admin/providers/new"));
+  await act(() => container.querySelector("button")!.click());
+  await act(() =>
+    container.querySelector<HTMLAnchorElement>('a[href="/fleet"]')!.click(),
+  );
+  expect(location.pathname).toBe("/admin/providers/new");
+  expect(confirm).toHaveBeenCalledTimes(1);
+  const unload = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(unload);
+  expect(unload.defaultPrevented).toBe(true);
+  await act(() => history.back());
+  await changed();
+  await changed();
+  expect(location.pathname).toBe("/admin/providers/new");
+  expect(container.querySelector("output")?.textContent).toBe(
+    "/admin/providers/new",
+  );
+  confirm.mockReturnValue(true);
+  await act(() => navigate("/fleet"));
+  expect(location.pathname).toBe("/fleet");
 });

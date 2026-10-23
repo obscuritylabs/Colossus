@@ -14,18 +14,7 @@ import {
   Button,
 } from "@colossus/ui";
 
-import {
-  IconHome,
-  IconMessageCircle,
-  IconServer,
-  IconCloud,
-  IconFolder,
-  IconUsers,
-  IconSettings,
-  IconRefresh,
-  IconPlus,
-  IconX,
-} from "@tabler/icons-react";
+import { IconRefresh, IconPlus, IconX } from "@tabler/icons-react";
 import { SendShortcutContext, useAppearance } from "./Appearance";
 import {
   ApiFailure,
@@ -59,6 +48,8 @@ import { DocumentationLink } from "./DocumentationLink";
 import { ChatHistorySidebar } from "./ChatHistorySidebar";
 import { WebSettings } from "./WebSettings";
 import { useResource } from "./resources";
+import { useInstanceAnnouncements } from "./InstanceAnnouncements";
+import { controlNavigation } from "./control-navigation";
 const ThreadDetail = lazy(() =>
   import("./ThreadDetail").then((module) => ({ default: module.ThreadDetail })),
 );
@@ -73,7 +64,11 @@ const Administration = lazy(() =>
     default: module.Administration,
   })),
 );
-import { useNavigation, RouteLink } from "./navigation";
+import {
+  useNavigation,
+  useSettingsNavigationGuard,
+  RouteLink,
+} from "./navigation";
 import { conversationHref, isPersonalHostedChat } from "./conversation-route";
 import {
   agentHref,
@@ -82,10 +77,13 @@ import {
   globalHref,
   hostHref,
   projectHref,
+  projectSettingsHref,
+  personalSettingsHref,
   routeSurface,
+  settingsEditorHref,
+  connectionSettingsSections,
   taskHref,
   threadHref,
-  type Surface,
 } from "./routes";
 export function AuthenticatedApp({
   me,
@@ -123,9 +121,35 @@ export function AuthenticatedApp({
     if (authorizedProject) setPreferredProject(project);
   }, [authorizedProject, project]);
   const surface = routeSurface(route);
-  const [settingsScope, setSettingsScope] = useState<"global" | "space">(
-    "global",
-  );
+  const onSettingsDirtyChange = useSettingsNavigationGuard();
+  const settingsBase =
+    route.kind === "project-settings"
+      ? projectSettingsHref(route.project, route.section)
+      : route.kind === "global" && route.surface === "settings"
+        ? personalSettingsHref(route.section ?? "appearance", route.project)
+        : route.kind === "global" && route.surface === "admin"
+          ? globalHref("admin", route.project, route.view ?? "users")
+          : "/settings";
+  const settingsScope = `${me.user.id}:${settingsBase}`;
+  const [savedSettingsNotice, setSavedSettingsNotice] = useState<{
+    scope: string;
+    message: string;
+  } | null>(null);
+  useEffect(() => setSavedSettingsNotice(null), [settingsScope]);
+  const settingsEditorNavigation = {
+    editorLocation:
+      route.kind === "project-settings" || route.kind === "global"
+        ? route.editor
+        : undefined,
+    onOpenEditor: (
+      location: import("./settings-editor").SettingsEditorLocation,
+    ) => {
+      setSavedSettingsNotice(null);
+      navigation.go(settingsEditorHref(settingsBase, location));
+    },
+    onCloseEditor: () => navigation.go(settingsBase),
+    onDirtyChange: onSettingsDirtyChange,
+  };
   const [chatRefresh, setChatRefresh] = useState(0);
   const [forkDraft, setForkDraft] = useState<ForkDraftSource | null>(null);
   const returnToWork = useRef(globalHref("chat", project));
@@ -136,6 +160,7 @@ export function AuthenticatedApp({
     thread: Thread | null;
   }>({ project, href: globalHref("chat", project), thread: null });
   const { appearance, setAppearance } = useAppearance();
+  const announcements = useInstanceAnnouncements(me.user.id);
   const [nodeCache, setNodes] = useState<FleetNode[]>([]),
     [hostCache, setHosts] = useState<Host[]>([]),
     [taskCache, setTasks] = useState<Task[]>([]),
@@ -163,6 +188,7 @@ export function AuthenticatedApp({
     hosts = loadedProject === project ? hostCache : [],
     tasks = loadedProject === project ? taskCache : [];
   const permissions = authorizedProject ? projectPermissions(me, project) : [];
+  const appNavigation = controlNavigation(me, route, project);
   const threadResource = useResource<ThreadDetailResponse>(
     (route.kind === "thread" || route.kind === "chat") && authorizedProject
       ? `${projectPath(project)}/threads/${encodeURIComponent(route.thread)}`
@@ -226,8 +252,7 @@ export function AuthenticatedApp({
   }
   function openProjectSettings() {
     returnToWork.current = navigation.href;
-    setSettingsScope("space");
-    navigation.go(globalHref("settings", project));
+    navigation.go(projectSettingsHref(project));
   }
   const [workspaceSessions, setWorkspaceSessions] = useState<
     Record<string, string>
@@ -457,18 +482,23 @@ export function AuthenticatedApp({
     }
   }
   function selectProject(id: string) {
-    setPreferredProject(id);
     navigation.go(
       route.kind === "project"
         ? projectHref(id, route.view)
-        : surface === "projects"
-          ? projectHref(id)
-          : route.kind === "global"
-            ? globalHref(surface, id, route.view)
-            : globalHref(
-                surface === "chat" || surface === "hosted" ? surface : "fleet",
-                id,
-              ),
+        : route.kind === "project-settings"
+          ? projectSettingsHref(id, route.section)
+          : surface === "projects"
+            ? projectHref(id)
+            : route.kind === "global"
+              ? surface === "settings"
+                ? personalSettingsHref(route.section, id)
+                : globalHref(surface, id, route.view)
+              : globalHref(
+                  surface === "chat" || surface === "hosted"
+                    ? surface
+                    : "fleet",
+                  id,
+                ),
     );
   }
   async function createTask(runRequest: RunRequest) {
@@ -599,6 +629,12 @@ export function AuthenticatedApp({
     unavailable =
       "Your signed-in identity does not have Control Plane administration access.";
   else if (
+    route.kind === "project-settings" &&
+    !permissions.includes("administer")
+  )
+    unavailable =
+      "Your signed-in identity does not have administration access to this project.";
+  else if (
     (route.kind === "thread" || route.kind === "chat") &&
     threadResource.error
   )
@@ -629,86 +665,43 @@ export function AuthenticatedApp({
     <SendShortcutContext value={appearance.sendShortcut}>
       <ControlPlaneFrame
         activeScopeKey={JSON.stringify(route)}
-        current={surface}
-        navigation={[
-          {
-            id: "home",
-            group: "Workspace",
-            label: "Home",
-            href: globalHref("home", authorizedProject ? project : undefined),
-            icon: <IconHome size={21} aria-hidden="true" />,
-          },
-          {
-            id: "chat",
-            group: "Workspace",
-            label: "Chat",
-            href: globalHref("chat", authorizedProject ? project : undefined),
-            icon: <IconMessageCircle size={21} aria-hidden="true" />,
-          },
-          {
-            id: "hosted",
-            group: "Workspace",
-            label: "Hosted",
-            href: globalHref("hosted", authorizedProject ? project : undefined),
-            icon: <IconCloud size={21} aria-hidden="true" />,
-          },
-          {
-            id: "fleet",
-            group: "Workspace",
-            label: "Fleet",
-            href: globalHref("fleet", authorizedProject ? project : undefined),
-            icon: <IconServer size={21} aria-hidden="true" />,
-          },
-          {
-            id: "projects",
-            group: "Administration",
-            label: "Projects",
-            href: globalHref(
-              "projects",
-              authorizedProject ? project : undefined,
-            ),
-            icon: <IconFolder size={21} aria-hidden="true" />,
-          },
-          ...(me.user.is_admin
-            ? [
-                {
-                  id: "admin",
-                  group: "Administration",
-                  label: "Administration",
-                  shortLabel: "Admin",
-                  href: globalHref(
-                    "admin",
-                    authorizedProject ? project : undefined,
-                  ),
-                  icon: <IconUsers size={21} aria-hidden="true" />,
+        current={appNavigation.current}
+        navigation={appNavigation.items}
+        secondaryNavigation={
+          appNavigation.secondary
+            ? {
+                id: appNavigation.secondary.id,
+                title: appNavigation.secondary.title,
+                context: appNavigation.secondary.context,
+                navigation: appNavigation.secondary.items,
+                current: appNavigation.secondary.current,
+                onNavigate: (id) => {
+                  const destination = appNavigation.secondary?.items.find(
+                    (item) => item.id === id,
+                  )?.href;
+                  if (destination) navigation.go(destination);
                 },
-              ]
-            : []),
-          {
-            id: "settings",
-            group: "Administration",
-            label: "Settings",
-            href: globalHref(
-              "settings",
-              authorizedProject ? project : undefined,
-            ),
-            icon: <IconSettings size={21} aria-hidden="true" />,
-          },
-        ]}
+              }
+            : undefined
+        }
         onNavigate={(id) => {
-          if (id === "settings") {
+          const destination = appNavigation.items.find(
+            (item) => item.id === id,
+          )?.href;
+          if (!destination) return;
+          if (id === "settings" || id.startsWith("project-"))
             returnToWork.current = navigation.href;
-            setSettingsScope("global");
-          }
-          navigation.go(
-            globalHref(id as Surface, authorizedProject ? project : undefined),
-          );
+          navigation.go(destination);
         }}
         title={
           <span className="control-window-context">
             <span>
-              {me.projects.find((item) => item.id === project)?.name ??
-                "Colossus"}
+              {surface === "admin"
+                ? "Control Plane"
+                : surface === "settings" && route.kind !== "project-settings"
+                  ? "Personal"
+                  : (me.projects.find((item) => item.id === project)?.name ??
+                    "Colossus")}
             </span>
             <span aria-hidden="true">/</span>
             <span>
@@ -717,7 +710,16 @@ export function AuthenticatedApp({
                   ? "Connections"
                   : "Chat"
                 : surface === "settings"
-                  ? "Settings"
+                  ? route.kind === "project-settings"
+                    ? ((
+                        appNavigation.secondary?.items ?? appNavigation.items
+                      ).find(
+                        (item) =>
+                          item.id ===
+                          (appNavigation.secondary?.current ??
+                            appNavigation.current),
+                      )?.label ?? "Project settings")
+                    : "Settings"
                   : surface === "home"
                     ? "Home"
                     : surface === "hosted"
@@ -726,20 +728,31 @@ export function AuthenticatedApp({
                         ? "Fleet"
                         : surface === "projects"
                           ? "Projects"
-                          : "Administration"}
+                          : ((
+                              appNavigation.secondary?.items ??
+                              appNavigation.items
+                            ).find(
+                              (item) =>
+                                item.id ===
+                                (appNavigation.secondary?.current ??
+                                  appNavigation.current),
+                            )?.label ?? "Administration")}
             </span>
           </span>
         }
         classification={settings?.classification}
+        announcement={announcements.notice}
         user={
           <ControlPlaneAccountMenu
             name={me.user.display_name}
             detail={me.user.email ?? "Signed in"}
             onSettings={() => {
               returnToWork.current = navigation.href;
-              setSettingsScope("global");
               navigation.go(
-                globalHref("settings", authorizedProject ? project : undefined),
+                personalSettingsHref(
+                  "appearance",
+                  authorizedProject ? project : undefined,
+                ),
               );
             }}
             onSignOut={onSignOut}
@@ -854,6 +867,7 @@ export function AuthenticatedApp({
         }
         header={
           <>
+            {announcements.control}
             {surface !== "chat" ? (
               <span className="connection-indicator">
                 <span className={`dot ${live ? "live" : ""}`} />
@@ -870,6 +884,7 @@ export function AuthenticatedApp({
                 threadResource.refresh();
                 taskResource.refresh();
                 selectedAgent.refresh();
+                announcements.refresh();
               }}
             >
               <IconRefresh size={16} aria-hidden="true" />
@@ -897,6 +912,12 @@ export function AuthenticatedApp({
               <IconX size={16} aria-hidden="true" />
             </button>
           </div>
+        ) : null}
+        {savedSettingsNotice?.scope === settingsScope &&
+        (surface === "settings" || surface === "admin") ? (
+          <p role="status" className="sync-notice">
+            {savedSettingsNotice.message}
+          </p>
         ) : null}
         <Suspense
           key={me.user.id}
@@ -1038,7 +1059,8 @@ export function AuthenticatedApp({
             />
           ) : surface === "settings" ? (
             <WebSettings
-              key={`${me.user.id}:${project}`}
+              {...settingsEditorNavigation}
+              key={`${me.user.id}:${JSON.stringify(route)}`}
               project={project}
               projectName={
                 me.projects.find((item) => item.id === project)?.name ?? ""
@@ -1053,19 +1075,101 @@ export function AuthenticatedApp({
               }
               appearance={appearance}
               onAppearance={setAppearance}
-              initialScope={settingsScope}
+              isGlobalAdmin={me.user.is_admin}
+              onEnvironmentSettings={onSettings}
+              onInstanceSettings={() =>
+                navigation.go(globalHref("admin", undefined, "providers"))
+              }
+              initialScope={
+                route.kind === "project-settings" ? "space" : "global"
+              }
+              initialSection={
+                route.kind === "project-settings"
+                  ? route.section
+                  : route.kind === "global"
+                    ? route.section
+                    : undefined
+              }
+              onCredentialEditor={(scope, target) =>
+                navigation.go(
+                  settingsEditorHref(
+                    scope === "space"
+                      ? projectSettingsHref(project, "credentials")
+                      : personalSettingsHref("credentials", project),
+                    { action: "new", target },
+                  ),
+                )
+              }
+              onSectionChange={(scope, section) =>
+                navigation.go(
+                  scope === "space"
+                    ? projectSettingsHref(
+                        project,
+                        section as import("./routes").ConnectionSettingsSection,
+                      )
+                    : personalSettingsHref(
+                        section as import("./routes").PersonalSettingsSection,
+                        authorizedProject ? project : undefined,
+                      ),
+                )
+              }
               onReturn={() => navigation.go(returnToWork.current)}
               onConnections={openConnections}
               onSaved={() => {
+                if (settingsEditorNavigation.editorLocation)
+                  setSavedSettingsNotice({
+                    scope: settingsScope,
+                    message:
+                      route.kind === "project-settings"
+                        ? route.section === "credentials"
+                          ? "Project credential saved."
+                          : "Project configuration saved."
+                        : route.kind === "global" &&
+                            route.section === "credentials"
+                          ? "Credential changes saved."
+                          : route.kind === "global" &&
+                              route.section === "variables"
+                            ? "Your project variables were saved."
+                            : "Settings saved.",
+                  });
                 threadResource.refresh();
                 setChatRefresh((value) => value + 1);
               }}
             />
           ) : surface === "admin" ? (
             <Administration
+              key={me.user.id}
+              {...settingsEditorNavigation}
+              identity={me.user.id}
+              projects={me.projects}
+              selectedProject={
+                route.kind === "global" ? (route.project ?? "") : ""
+              }
+              onProjectChange={(id) =>
+                navigation.go(globalHref("admin", id, "credentials"))
+              }
               authConfig={authConfig}
-              onRefresh={loadMe}
+              onRefresh={() => {
+                loadMe();
+                if (
+                  route.kind === "global" &&
+                  route.editor &&
+                  route.view !== "credentials" &&
+                  (connectionSettingsSections as readonly string[]).includes(
+                    route.view ?? "",
+                  )
+                )
+                  setSavedSettingsNotice({
+                    scope: settingsScope,
+                    message:
+                      "Control Plane defaults published. Projects inherit these definitions; credentials remain explicitly assigned.",
+                  });
+              }}
               onSettings={onSettings}
+              currentUserId={me.user.id}
+              userId={route.kind === "global" ? route.user : undefined}
+              userView={route.kind === "global" ? route.userView : undefined}
+              userProject={route.kind === "global" ? route.project : undefined}
               view={route.kind === "global" ? (route.view ?? "users") : "users"}
               onView={(view) =>
                 navigation.go(globalHref("admin", undefined, view))

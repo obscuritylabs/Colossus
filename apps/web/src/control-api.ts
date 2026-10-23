@@ -101,6 +101,7 @@ export interface Classification {
   text: string;
   tone: "neutral" | "info" | "warning" | "danger";
   position: "top" | "top_and_bottom";
+  colors?: { background: string; text: string } | null;
 }
 export interface PublicSettings {
   classification: Classification;
