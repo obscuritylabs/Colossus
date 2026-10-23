@@ -267,14 +267,13 @@ for (const kind of ["local", "oidc", "both"] as const) {
         ).toHaveCount(0);
       if (kind !== "local") {
         const subjectField = page.getByRole("textbox", {
-          name: "OIDC subject",
-          exact: true,
+          name: /^OIDC subject(?:\s|$)/u,
         });
         await subjectField.fill(subject);
         await expect(subjectField).toHaveValue(subject);
       } else
         await expect(
-          page.getByRole("textbox", { name: "OIDC subject", exact: true }),
+          page.getByRole("textbox", { name: /^OIDC subject(?:\s|$)/u }),
         ).toHaveCount(0);
       await page
         .getByRole("button", { name: "Save user", exact: true })

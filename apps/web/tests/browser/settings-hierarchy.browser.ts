@@ -466,8 +466,9 @@ test("legacy search credentials stay personal on edit and deletion clears labels
       profiles: {
         legacy: {
           kind: "searxng",
-          endpoint: "https://search.example",
+          endpoint: "https://search.example/search",
           credentialReference: "legacy:credential",
+          authHeader: "Authorization",
         },
       },
       roles: { agent: "legacy" },

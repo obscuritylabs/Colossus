@@ -24,9 +24,7 @@ test("routed save notifications stay above a wrapping bottom classification stri
   await page
     .getByRole("textbox", { name: /^Display label(?:\s|$)/u })
     .fill("Reviewed provider");
-  await page
-    .getByRole("button", { name: "Save provider", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(page).toHaveURL(
     /\/projects\/browser-project\/settings\/providers$/u,
   );
