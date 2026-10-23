@@ -13,7 +13,7 @@ use std::{
 };
 
 const RETIRED: u8 = 255;
-const LEASE_READ_TIMEOUT: Duration = Duration::from_millis(100);
+const LEASE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 use crate::OwnerDeath;
 
@@ -83,11 +83,11 @@ impl CreationFence {
 ///
 /// A death atomically fences creation before shutting down the underlying browser
 /// socket. This wakes even a server blocked halfway through a frame. Orderly
-/// retirement uses a separate state and wakes only lease readers, preserving the
+/// retirement uses a separate state and retires only lease readers, preserving the
 /// browser channel long enough to return its cleanup acknowledgement.
 pub struct DeathFence {
     state: CreationFence,
-    readers: Vec<(UnixStream, JoinHandle<()>)>,
+    readers: Vec<JoinHandle<()>>,
     wakeups: Arc<Mutex<Vec<UnixStream>>>,
 }
 
@@ -121,11 +121,13 @@ impl DeathFence {
             endpoints.push((OwnerDeath::Desktop, desktop));
         }
         for (cause, mut endpoint) in endpoints {
-            // Darwin can miss a read-side shutdown racing the reader's first
-            // recv. Retain that immediate wakeup, with a finite read interval
-            // so retirement never depends on the peer closing its live lease.
-            endpoint.set_read_timeout(Some(LEASE_READ_TIMEOUT))?;
-            let reader_control = endpoint.try_clone()?;
+            // A blocking recv can miss a concurrent shutdown notification on
+            // Darwin. Native-only lease endpoints have one reader, so readiness
+            // waits plus nonblocking reads keep retirement finite without
+            // shutting down an endpoint underneath that reader.
+            endpoint.set_nonblocking(true)?;
+            let timeout =
+                rustix::event::Timespec::try_from(LEASE_POLL_INTERVAL).map_err(io::Error::other)?;
             let wakeups = owner.wakeups.clone();
             let state = owner.state.clone();
             let reader = thread::Builder::new()
@@ -135,6 +137,15 @@ impl DeathFence {
                     loop {
                         if state.check().is_err() {
                             return;
+                        }
+                        let mut wait = [rustix::event::PollFd::new(
+                            &endpoint,
+                            rustix::event::PollFlags::IN,
+                        )];
+                        match rustix::event::poll(&mut wait, Some(&timeout)) {
+                            Ok(0) | Err(rustix::io::Errno::INTR) => continue,
+                            Ok(_) => {}
+                            Err(_) => break,
                         }
                         match endpoint.read(&mut byte) {
                             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -168,7 +179,7 @@ impl DeathFence {
                         }
                     }
                 })?;
-            owner.readers.push((reader_control, reader));
+            owner.readers.push(reader);
         }
         Ok(owner)
     }
@@ -216,14 +227,7 @@ impl DeathFence {
             );
         }
         let mut failure = None;
-        for (stream, _) in &self.readers {
-            if let Err(error) = stream.shutdown(Shutdown::Read)
-                && error.kind() != io::ErrorKind::NotConnected
-            {
-                failure.get_or_insert(error);
-            }
-        }
-        for (_, reader) in self.readers.drain(..) {
+        for reader in self.readers.drain(..) {
             if reader.join().is_err() {
                 failure.get_or_insert_with(|| io::Error::other("native lease reader failed"));
             }
