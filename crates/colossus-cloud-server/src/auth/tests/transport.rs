@@ -25,6 +25,7 @@ use std::{
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
+mod admin_users;
 mod announcements;
 mod global_lifecycle;
 mod hosted;

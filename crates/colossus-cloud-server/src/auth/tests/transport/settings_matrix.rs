@@ -8,6 +8,7 @@ mod effects;
 mod fixture;
 mod lifecycles;
 mod mutations;
+mod project_authorization;
 mod project_metadata;
 mod services;
 mod variables;
