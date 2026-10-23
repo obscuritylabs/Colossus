@@ -29,6 +29,10 @@ used by CI, includes the Tauri system libraries, installs the pinned `actionlint
 Docker daemon for documentation builds. In Codespaces or VS Code, rebuild the container
 after changing `.devcontainer/`.
 
+The container also installs a pinned Codex CLI. After rebuilding, run
+`codex --version` to verify the installation, then launch `codex` and sign in when
+prompted. The version pin lives in `.devcontainer/Dockerfile`.
+
 Rust API contract builds use the exact cross-platform `protoc-bin-vendored` workspace
 dependency, so contributors and release runners do not need an ambient `protoc` binary.
 Language SDK generation remains separate and uses its own pinned local generator

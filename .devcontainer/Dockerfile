@@ -41,6 +41,9 @@ RUN apt-get update \
     && ln --symbolic ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && rm -rf /var/lib/apt/lists/*
 
+RUN npm install --global --no-audit --no-fund @openai/codex@0.163.0 \
+    && codex --version
+
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 USER vscode
