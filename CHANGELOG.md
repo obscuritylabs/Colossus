@@ -18,6 +18,7 @@ include breaking changes while the public API is still settling.
 - User administration, instance announcements, classification colors, and collapsible pinned chats are available in Hosted Web.
 - Newly created projects can inspect inherited settings before an operator enables hosted execution.
 - Control Plane server bundles include archive-specific guidance, with packaging inputs checked before release builds.
+- Update ctutils to 0.4.4 to address RUSTSEC-2026-0385.
 
 <!-- colossus:release-notes base=v0.11.10 -->
 
@@ -38,12 +39,17 @@ include breaking changes while the public API is still settling.
 - **browser:** poll owner leases for bounded retirement ([61d1f59](https://github.com/obscuritylabs/Colossus/commit/61d1f597535dda7525d3d46b8fd5d61afbef186b))
 - **release:** retain usable Control Plane bundle guidance ([8d20776](https://github.com/obscuritylabs/Colossus/commit/8d20776265f2cbec7c6065870ee9eafab2330ff1))
 
+#### Security
+
+- **deps:** update ctutils to patched 0.4.4 ([a7cb848](https://github.com/obscuritylabs/Colossus/commit/a7cb848067e68fc8f065b7de0afab10fe44b4036))
+
 #### Maintenance
 
 - **packaging:** pin Homebrew and Nix to 0.11.10 ([#314](https://github.com/obscuritylabs/Colossus/pull/314))
 - **release:** prepare 0.11.11-preview.1 ([e5d2ed2](https://github.com/obscuritylabs/Colossus/commit/e5d2ed2df4712bd4edfbab9f7810a13681340fa2))
+- **release:** prepare 0.11.11-preview.2 ([625338d](https://github.com/obscuritylabs/Colossus/commit/625338de8a8cfc4c98470db2251dcb0e2eb90d95))
 
-**Source:** [8d20776](https://github.com/obscuritylabs/Colossus/commit/8d20776265f2cbec7c6065870ee9eafab2330ff1)
+**Source:** [a7cb848](https://github.com/obscuritylabs/Colossus/commit/a7cb848067e68fc8f065b7de0afab10fe44b4036)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.2](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.2)
 
