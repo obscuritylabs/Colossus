@@ -162,7 +162,7 @@ async function editVariable(page: Page, name: string, value: string) {
   await page.getByRole("button", { name: `Edit ${name}`, exact: true }).click();
   await expect(
     page.getByRole("textbox", { name: "Variable name", exact: true }),
-  ).toBeDisabled();
+  ).not.toBeEditable();
   await page
     .getByRole("textbox", { name: "Variable value", exact: true })
     .fill(value);
@@ -357,7 +357,7 @@ test("a stale project revision is shown once and reconciled explicitly without r
   fixture.nextSave(() => "conflict");
   await editVariable(page, "REGION", "draft-kept");
   await expect(page.getByRole("alert")).toContainText(
-    "Reload settings to reconcile",
+    "Your proposed configuration is retained. Reload settings before saving again.",
   );
   expect(fixture.writes).toHaveLength(1);
   await expect(
@@ -369,12 +369,18 @@ test("a stale project revision is shown once and reconciled explicitly without r
     variables: { REGION: "another-admin" },
     inheritance: { ...inheritance(), global_revision: 7 },
   };
+  await expect(
+    page.getByRole("button", { name: "Save variable", exact: true }),
+  ).toBeDisabled();
+  page.once("dialog", (dialog) => dialog.accept());
   await page
     .getByRole("button", { name: "Reload settings", exact: true })
     .click();
   await expect(
     page.getByRole("textbox", { name: "Variable value", exact: true }),
-  ).toBeHidden();
+  ).toHaveValue("another-admin");
+  await expect(page).toHaveURL(/\/variables\/REGION\/edit$/u);
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(
     page.getByRole("table", { name: "Configuration variables", exact: true }),
   ).toContainText("another-admin");
@@ -433,8 +439,13 @@ test("legacy search credentials stay personal on edit and deletion clears labels
       exact: true,
     }),
   ).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "Configure search routing", exact: true })
+    .click();
   await choose(page, "Agent search route", "Not configured");
-  await publish(page);
+  await page
+    .getByRole("button", { name: "Save search routing", exact: true })
+    .click();
   await expect.poll(() => fixture.writes.length).toBe(2);
   await page
     .getByRole("button", {
@@ -550,15 +561,20 @@ test("new shared search definitions and inherited search routes use explicit aut
   fixture.verify();
 });
 
-test("unfinished Search drafts survive section changes and lock unrelated mutations until cancelled", async ({
+test("URL-addressed Search drafts guard navigation and retain edits after a cancelled discard", async ({
   page,
 }) => {
   const fixture = await hierarchyFixture(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto("/admin/search");
-  await page
-    .getByRole("button", { name: "Add search service", exact: true })
-    .click();
+  await page.goto("/admin/search/new");
+  await expect(
+    page.getByRole("heading", {
+      name: "Add search service",
+      exact: true,
+      level: 3,
+    }),
+  ).toBeVisible();
+  await page.reload();
   await page
     .getByRole("textbox", { name: "Display label", exact: true })
     .fill("Unfinished research search");
@@ -568,42 +584,30 @@ test("unfinished Search drafts survive section changes and lock unrelated mutati
   await page
     .getByRole("textbox", { name: /^Endpoint URL/u })
     .fill("https://draft-search.example");
-  const administration = page
-    .getByRole("navigation", { name: "Application", exact: true })
-    .getByRole("region", { name: "Control Plane Admin", exact: true });
+  const administration = page.getByRole("navigation", {
+    name: "Control Plane Admin sections",
+    exact: true,
+  });
+  page.once("dialog", (dialog) => {
+    expect(dialog.message()).toBe("Discard unsaved settings changes?");
+    void dialog.dismiss();
+  });
   await administration
     .getByRole("link", { name: "Providers", exact: true })
     .click();
-  const notice = page
-    .getByRole("status")
-    .filter({ hasText: "An editor is still open in Search." });
-  await expect(notice).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Add provider", exact: true }),
-  ).toBeDisabled();
-  await expect(
-    page.getByRole("button", {
-      name: "Publish Control Plane defaults",
-      exact: true,
-    }),
-  ).toBeDisabled();
-  await administration
-    .getByRole("link", { name: "Search", exact: true })
-    .click();
+  await expect(page).toHaveURL(/\/admin\/search\/new$/u);
   await expect(
     page.getByRole("textbox", { name: "Display label", exact: true }),
   ).toHaveValue("Unfinished research search");
   await expect(
     page.getByRole("textbox", { name: /^Endpoint URL/u }),
   ).toHaveValue("https://draft-search.example");
-  await expect(
-    page.getByRole("button", { name: "Save search service", exact: true }),
-  ).toBeEnabled();
-  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(fixture.writes).toHaveLength(0);
+  page.once("dialog", (dialog) => dialog.accept());
   await administration
     .getByRole("link", { name: "Providers", exact: true })
     .click();
-  await expect(notice).toHaveCount(0);
+  await expect(page).toHaveURL(/\/admin\/providers$/u);
   await expect(
     page.getByRole("button", { name: "Add provider", exact: true }),
   ).toBeEnabled();
@@ -1044,6 +1048,10 @@ test("shared MCP credentials use named project Secrets with an explicit reviewed
   await page
     .getByRole("button", { name: "Manage shared credential", exact: true })
     .click();
+  await expect(page).toHaveURL(/\/settings\/credentials\/new\?/u);
+  expect(new URL(page.url()).searchParams.get("kind")).toBe("mcp");
+  expect(new URL(page.url()).searchParams.get("connection")).toBe("docs");
+  await page.reload();
   const secret = page.locator("input[aria-label='API key or token']");
   await expect(secret).toBeVisible();
   await expect(
@@ -1206,3 +1214,185 @@ for (const appearance of appearanceCases) {
     fixture.verify();
   });
 }
+
+for (const editor of [
+  ["variables/REGION/edit", "Variable value", "global-east", "variables"],
+  ["search/new", "Display label", "", "search"],
+  [
+    "telemetry/edit",
+    "Collector endpoint",
+    "https://collector.example:4317",
+    "telemetry",
+  ],
+] as const) {
+  test(`global ${editor[0]} editor supports direct links, reload, and keyboard return`, async ({
+    page,
+  }) => {
+    const fixture = await hierarchyFixture(page);
+    await page.goto(`/admin/${editor[0]}`);
+    const field = page.getByRole("textbox", { name: editor[1], exact: true });
+    await expect(field).toHaveValue(editor[2]);
+    await expect(
+      page.getByRole("navigation", { name: "Breadcrumb", exact: true }),
+    ).toContainText("Control Plane Admin");
+    await page.reload();
+    await expect(field).toHaveValue(editor[2]);
+    const back = page
+      .locator(".settings-editor-page")
+      .getByRole("button", { name: /^Back to /u });
+    await back.focus();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(new RegExp(`/admin/${editor[3]}$`, "u"));
+    expect(fixture.writes).toHaveLength(0);
+    fixture.verify();
+  });
+}
+
+for (const editor of [
+  [
+    "providers/company/edit",
+    /^Endpoint URL/u,
+    "https://models.example/v1",
+    "providers",
+  ],
+  ["models/careful/edit", /^Model identifier/u, "configured-model", "models"],
+  ["mcp/docs/edit", /^MCP server URL/u, "https://docs.example/mcp", "mcp"],
+] as const) {
+  test(`project ${editor[0]} editor supports direct links and reload`, async ({
+    page,
+  }) => {
+    const fixture = await browserFixture(page, { administer: true });
+    await page.goto(`/projects/${project}/settings/${editor[0]}`);
+    const field = page.getByRole("textbox", { name: editor[1] });
+    await expect(field).toHaveValue(editor[2]);
+    await page.reload();
+    await expect(field).toHaveValue(editor[2]);
+    await expect(
+      page.getByRole("navigation", { name: "Breadcrumb", exact: true }),
+    ).toContainText("Project Admin");
+    const back = page
+      .locator(".settings-editor-page")
+      .getByRole("button", { name: /^Back to /u });
+    await back.press("Enter");
+    await expect(page).toHaveURL(
+      new RegExp(`/projects/${project}/settings/${editor[3]}$`, "u"),
+    );
+    expect(fixture.settingsSubmissions).toHaveLength(0);
+    fixture.verify();
+  });
+}
+
+test("unprovisioned projects display inherited settings without opening mutation forms", async ({
+  page,
+}) => {
+  const fixture = await hierarchyFixture(page, false);
+  const reason =
+    "Hosted execution is not enabled for this project. A deployment operator must configure its runtime and allowed origins before project overrides or connection credentials can be used.";
+  fixture.local = {
+    ...fixture.local,
+    execution: { enabled: false, settings_editable: false, reason },
+  };
+  for (const section of [
+    "providers",
+    "models",
+    "mcp",
+    "routing",
+    "search",
+    "telemetry",
+    "variables",
+    "credentials",
+  ]) {
+    await page.goto(`/projects/${project}/settings/${section}`);
+    await expect(
+      page.getByRole("status").filter({ hasText: reason }),
+    ).toBeVisible();
+    for (const button of await page
+      .getByRole("button", {
+        name: /^(Add (provider|model|MCP connection|search service|variable|credential)|Configure (routing|search routing|collector)|Save project configuration)$/u,
+      })
+      .all()) {
+      await expect(button).toBeDisabled();
+    }
+    if (section === "variables") {
+      await expect(
+        page.getByRole("table", {
+          name: "Configuration variables",
+          exact: true,
+        }),
+      ).toContainText("global-east");
+      await expect(
+        page.getByRole("table", {
+          name: "Configuration variables",
+          exact: true,
+        }),
+      ).toContainText("Control Plane");
+    }
+  }
+  for (const editor of [
+    "providers/new",
+    "models/new",
+    "mcp/new",
+    "variables/REGION/edit",
+    "search/new",
+    "routing/edit",
+    "credentials/new",
+  ]) {
+    await page.goto(`/projects/${project}/settings/${editor}`);
+    await expect(
+      page.getByRole("heading", { name: "Setting unavailable", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("status")).toContainText(reason);
+    await expect(page.locator("form")).toHaveCount(0);
+  }
+  expect(fixture.writes).toHaveLength(0);
+  expect(fixture.credentialWrites).toHaveLength(0);
+  fixture.verify();
+});
+
+test("unprovisioned personal settings stay readable and block copied credential and variable editor links", async ({
+  page,
+}) => {
+  const fixture = await browserFixture(page);
+  const reason =
+    "Hosted execution is not enabled for this project. Ask a deployment operator to configure its runtime before saving credentials.";
+  const execution = { enabled: false, settings_editable: false, reason };
+  const connectionReads: string[] = [];
+  await page.route(`**/api/projects/${project}/chat/**`, (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/credential-store/personal"))
+      return route.fulfill({
+        json: { revision: 0, credentials: [], connections: [], execution },
+      });
+    if (path.endsWith("/variables/personal"))
+      return route.fulfill({ json: { revision: 0, variables: {}, execution } });
+    if (path.endsWith("/accounts"))
+      return route.fulfill({ json: { accounts: [], execution } });
+    if (path.endsWith("/connections")) connectionReads.push(path);
+    return route.fallback();
+  });
+  for (const section of ["credentials", "variables", "connections"]) {
+    await page.goto(`/settings/${section}?project=${project}`);
+    await expect(
+      page.getByRole("status").filter({ hasText: reason }),
+    ).toBeVisible();
+    for (const button of await page
+      .getByRole("button", { name: /^(Add credential|Add variable|Connect)$/u })
+      .all())
+      await expect(button).toBeDisabled();
+  }
+  for (const section of ["credentials", "variables"]) {
+    await page.goto(`/settings/${section}/new?project=${project}`);
+    await expect(page.locator(".settings-editor-page")).toBeVisible();
+    await expect(page.getByRole("status")).toContainText(reason);
+    await expect(page.locator("form")).toHaveCount(0);
+    await expect(
+      page.getByRole("textbox", {
+        name: /^(Display label|Variable name|Variable value)$/u,
+      }),
+    ).toHaveCount(0);
+    await expect(page.locator("input[type='password']")).toHaveCount(0);
+  }
+  expect(connectionReads).toEqual([]);
+  expect(fixture.credentialWrites).toHaveLength(0);
+  fixture.verify();
+});

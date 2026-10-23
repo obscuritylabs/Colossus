@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   adminUserHref,
+  settingsEditorHref,
+  projectSettingsHref,
+  personalSettingsHref,
   agentHref,
   chatThreadHref,
   chatConnectionsHref,
@@ -151,4 +154,123 @@ describe("Control Plane permalinks", () => {
       safeReturnPath(`${origin}/projects/p/threads/t#ignored`, origin),
     ).toBe("/projects/p/threads/t");
   });
+});
+
+it("round-trips scoped resource editors without credentials in URLs", () => {
+  for (const section of [
+    "providers",
+    "models",
+    "mcp",
+    "search",
+    "credentials",
+    "variables",
+  ] as const) {
+    for (const editor of [
+      { action: "new" as const },
+      { action: "edit" as const, id: "resource:a" },
+    ]) {
+      expect(
+        parseRoute(
+          settingsEditorHref(projectSettingsHref("project:a", section), editor),
+          origin,
+        ),
+      ).toEqual({
+        kind: "project-settings",
+        project: "project:a",
+        section,
+        editor,
+      });
+      expect(
+        parseRoute(
+          settingsEditorHref(globalHref("admin", undefined, section), editor),
+          origin,
+        ),
+      ).toEqual({ kind: "global", surface: "admin", view: section, editor });
+    }
+  }
+  expect(
+    parseRoute(
+      settingsEditorHref(personalSettingsHref("credentials", "p"), {
+        action: "new",
+      }),
+      origin,
+    ),
+  ).toEqual({
+    kind: "global",
+    surface: "settings",
+    section: "credentials",
+    project: "p",
+    editor: { action: "new" },
+  });
+  expect(parseRoute("/admin/users/new", origin)).toEqual({
+    kind: "global",
+    surface: "admin",
+    view: "users",
+    editor: { action: "new" },
+  });
+  for (const section of ["routing", "search", "telemetry"])
+    expect(parseRoute(`/admin/${section}/edit`, origin)).toMatchObject({
+      editor: { action: "edit" },
+    });
+  for (const path of [
+    "/admin/models/edit",
+    "/admin/telemetry/new",
+    "/admin/routing/x/edit",
+    "/settings/appearance/new",
+    "/admin/announcements/a/edit?token=secret",
+    "/projects/p/settings/credentials/%2Fsecret/edit",
+    "/admin/providers/a/edit/extra",
+  ])
+    expect(parseRoute(path, origin).kind, path).toBe("invalid");
+});
+it("retains a credential destination in an explicit project scope without accepting partial or misplaced targets", () => {
+  const editor = {
+    action: "new" as const,
+    target: { kind: "mcp" as const, id: "docs:a" },
+  };
+  expect(
+    parseRoute(
+      settingsEditorHref(projectSettingsHref("p", "credentials"), editor),
+      origin,
+    ),
+  ).toEqual({
+    kind: "project-settings",
+    project: "p",
+    section: "credentials",
+    editor,
+  });
+  expect(
+    parseRoute(
+      settingsEditorHref(personalSettingsHref("credentials", "p"), editor),
+      origin,
+    ),
+  ).toEqual({
+    kind: "global",
+    surface: "settings",
+    section: "credentials",
+    project: "p",
+    editor,
+  });
+  expect(
+    parseRoute(
+      settingsEditorHref(globalHref("admin", "p", "credentials"), editor),
+      origin,
+    ),
+  ).toEqual({
+    kind: "global",
+    surface: "admin",
+    view: "credentials",
+    project: "p",
+    editor,
+  });
+  for (const path of [
+    "/settings/credentials/new?kind=mcp&connection=a",
+    "/settings/credentials/new?project=p&kind=mcp",
+    "/admin/credentials/new?project=p&connection=a",
+    "/admin/credentials/new?project=p&kind=unknown&connection=a",
+    "/admin/credentials/a/edit?project=p&kind=mcp&connection=a",
+    "/projects/p/settings/credentials/new?kind=mcp&connection=%2Fsecret",
+    "/projects/p/settings/providers/new?kind=mcp&connection=a",
+  ])
+    expect(parseRoute(path, origin).kind, path).toBe("invalid");
 });

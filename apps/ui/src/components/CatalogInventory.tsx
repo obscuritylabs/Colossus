@@ -122,6 +122,9 @@ export function CatalogInventory({
   footer,
   addLabel,
   emptyDescription,
+  title: titleOverride,
+  description: descriptionOverride,
+  usageLabel: usageLabelOverride,
   headingLevel = 3,
 }: {
   kind: keyof typeof catalogKinds | CatalogInventoryKind;
@@ -134,6 +137,9 @@ export function CatalogInventory({
   footer?: ReactNode;
   addLabel?: string;
   emptyDescription?: string;
+  title?: string;
+  description?: string;
+  usageLabel?: string;
   headingLevel?: 2 | 3;
 }) {
   const [query, setQuery] = useState("");
@@ -141,16 +147,19 @@ export function CatalogInventory({
   const [expanded, setExpanded] = useState<string | null>(null);
   const id = useId();
   const {
-    title,
+    title: defaultTitle,
     singular,
     plural,
     column,
-    description,
+    description: defaultDescription,
     connectionLabel,
-    usageLabel,
+    usageLabel: defaultUsageLabel,
     Icon,
     className,
   } = typeof kind === "string" ? catalogKinds[kind] : kind;
+  const title = titleOverride ?? defaultTitle;
+  const description = descriptionOverride ?? defaultDescription;
+  const usageLabel = usageLabelOverride ?? defaultUsageLabel;
   const Heading = headingLevel === 2 ? "h2" : "h3";
   const searchLabel =
     kind === "search" ? "Search services" : `Search ${plural}`;

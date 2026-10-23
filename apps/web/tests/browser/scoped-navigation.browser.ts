@@ -5,7 +5,6 @@ import { browserFixture } from "./fixture";
 
 const project = "browser-project";
 const chatUrl = `/projects/${project}/chat/browser-thread`;
-const timestamp = "2026-10-22T10:00:00Z";
 const projectSections = [
   ["Members", `/projects/${project}/access`],
   ["Providers", `/projects/${project}/settings/providers`],
@@ -35,7 +34,6 @@ const globalSections = [
 ] as const;
 type Role =
   "operator" | "project administrator" | "Control Plane administrator";
-
 async function navigationFixture(page: Page, role: Role, noProject = false) {
   const fixture = await browserFixture(page, {
     managedChat: true,
@@ -61,8 +59,8 @@ async function navigationFixture(page: Page, role: Role, noProject = false) {
         active: true,
         is_admin: role === "Control Plane administrator",
         revision: 1,
-        created_at: timestamp,
-        updated_at: timestamp,
+        created_at: "2026-10-22T10:00:00Z",
+        updated_at: "2026-10-22T10:00:00Z",
       },
       projects: [],
       memberships: [],
@@ -71,7 +69,6 @@ async function navigationFixture(page: Page, role: Role, noProject = false) {
   }
   return { ...fixture, adminReads };
 }
-
 function application(page: Page) {
   return page.getByRole("navigation", { name: "Application", exact: true });
 }
@@ -85,33 +82,22 @@ async function openApplication(page: Page) {
     await toggle.click();
   await expect(application(page)).toBeVisible();
 }
-async function expandGroup(page: Page, name: string) {
-  const group = application(page).getByRole("region", { name, exact: true });
-  const toggle = group.getByRole("button", { name, exact: true });
-  if ((await toggle.getAttribute("aria-expanded")) === "false") {
-    await toggle.focus();
-    await toggle.press("Enter");
-  }
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  return group;
-}
 async function expectDestinations(
-  group: Locator,
+  nav: Locator,
   items: readonly (readonly [string, string])[],
 ) {
   for (const [name, href] of items) {
-    const link = group.getByRole("link", { name, exact: true });
+    const link = nav.getByRole("link", { name, exact: true });
     await expect(link).toBeVisible();
     await expect(link).toHaveAttribute("href", href);
   }
 }
-
 for (const role of [
   "operator",
   "project administrator",
   "Control Plane administrator",
 ] as const) {
-  test(`${role} sees workspace browsing, authorized administration and clearly personal settings`, async ({
+  test(`${role} sees compact authorized administration destinations and personal settings`, async ({
     page,
   }) => {
     const fixture = await navigationFixture(page, role);
@@ -122,46 +108,79 @@ for (const role of [
       name: "Workspace",
       exact: true,
     });
-    for (const label of ["Home", "Chat", "Hosted", "Fleet", "Projects"]) {
+    for (const label of ["Home", "Chat", "Hosted", "Fleet", "Projects"])
       await expect(
         workspace.getByRole("link", { name: label, exact: true }),
       ).toBeVisible();
-    }
     await expect(
       workspace.getByRole("link", { name: "Projects", exact: true }),
     ).toHaveAttribute("href", "/projects");
-    if (role === "operator") {
+    const administration = application(page).getByRole("region", {
+      name: "Administration",
+      exact: true,
+    });
+    if (role === "operator") await expect(administration).toHaveCount(0);
+    else {
       await expect(
-        application(page).getByRole("region", {
-          name: "Project Administration",
+        administration.getByRole("link", {
+          name: "Project Admin",
+          exact: true,
+        }),
+      ).toHaveAttribute("href", `/projects/${project}/access`);
+      await expect(administration.getByRole("link")).toHaveCount(
+        role === "Control Plane administrator" ? 2 : 1,
+      );
+      await page.goto(`/projects/${project}/settings/providers`);
+      const secondary = page.getByRole("navigation", {
+        name: "Project Admin sections",
+        exact: true,
+      });
+      await expectDestinations(secondary, projectSections);
+      await expect(
+        page.getByRole("navigation", {
+          name: "Settings sections",
           exact: true,
         }),
       ).toHaveCount(0);
-    } else {
-      const projectAdmin = await expandGroup(page, "Project Administration");
-      await expectDestinations(projectAdmin, projectSections);
+      await expect(
+        secondary.getByRole("link", { name: "Providers", exact: true }),
+      ).toHaveAttribute("aria-current", "page");
+      await expect(
+        page.getByRole("complementary", {
+          name: "Project Admin navigation",
+          exact: true,
+        }),
+      ).toContainText("Browser test project");
     }
     if (role === "Control Plane administrator") {
-      const globalAdmin = await expandGroup(page, "Control Plane Admin");
-      await expectDestinations(globalAdmin, globalSections);
-      await globalAdmin
-        .getByRole("link", { name: "Users", exact: true })
+      await application(page)
+        .getByRole("link", { name: "Control Plane Admin", exact: true })
         .press("Enter");
       await expect(page).toHaveURL("/admin/users");
+      const secondary = page.getByRole("navigation", {
+        name: "Control Plane Admin sections",
+        exact: true,
+      });
+      await expectDestinations(secondary, globalSections);
       await expect(
-        page.getByRole("table", { name: "Control Plane users", exact: true }),
-      ).toBeVisible();
-      await expect(
-        globalAdmin.getByRole("link", { name: "Users", exact: true }),
+        secondary.getByRole("link", { name: "Users", exact: true }),
       ).toHaveAttribute("aria-current", "page");
-    } else {
       await expect(
-        application(page).getByRole("region", {
+        application(page).getByRole("link", {
+          name: "Control Plane Admin",
+          exact: true,
+        }),
+      ).toHaveAttribute("aria-current", "page");
+      await expect(
+        page.getByRole("navigation", { name: "Breadcrumb", exact: true }),
+      ).toContainText("Users");
+    } else
+      await expect(
+        application(page).getByRole("link", {
           name: "Control Plane Admin",
           exact: true,
         }),
       ).toHaveCount(0);
-    }
     const settings = application(page)
       .getByRole("region", { name: "Personal", exact: true })
       .getByRole("link", { name: "Settings", exact: true });
@@ -171,19 +190,13 @@ for (const role of [
     );
     await settings.press("Enter");
     await expect(page).toHaveURL(`/settings/appearance?project=${project}`);
-    await expect(
-      page
-        .getByRole("group", { name: "Configuration scope", exact: true })
-        .getByRole("button", { name: "Personal", exact: true }),
-    ).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator("#appearance-text-size")).toBeVisible();
     if (role !== "Control Plane administrator")
       expect(fixture.adminReads).toEqual([]);
     fixture.verify();
   });
 }
-
-test("Control Plane Users stays reachable when the administrator has no selected project", async ({
+test("Control Plane Users remains reachable without a selected project", async ({
   page,
 }) => {
   const fixture = await navigationFixture(
@@ -193,38 +206,26 @@ test("Control Plane Users stays reachable when the administrator has no selected
   );
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/admin/users");
-  await openApplication(page);
-  const globalAdmin = application(page).getByRole("region", {
-    name: "Control Plane Admin",
-    exact: true,
-  });
   await expect(
-    globalAdmin.getByRole("button", {
-      name: "Control Plane Admin",
-      exact: true,
-    }),
-  ).toHaveAttribute("aria-expanded", "true");
+    application(page).getByRole("link", { name: "Project Admin", exact: true }),
+  ).toHaveCount(0);
   await expect(
-    globalAdmin.getByRole("link", { name: "Users", exact: true }),
+    page
+      .getByRole("navigation", {
+        name: "Control Plane Admin sections",
+        exact: true,
+      })
+      .getByRole("link", { name: "Users", exact: true }),
   ).toHaveAttribute("aria-current", "page");
   await expect(
     page.getByRole("table", { name: "Control Plane users", exact: true }),
   ).toBeVisible();
-  await expect(
-    application(page).getByRole("region", {
-      name: "Project Administration",
-      exact: true,
-    }),
-  ).toHaveCount(0);
   await application(page)
-    .getByRole("region", { name: "Personal", exact: true })
     .getByRole("link", { name: "Settings", exact: true })
     .press("Enter");
   await expect(page).toHaveURL("/settings/appearance");
-  await expect(page.locator("#appearance-text-size")).toBeVisible();
   fixture.verify();
 });
-
 test("a project administrator cannot reach global Users through a copied URL", async ({
   page,
 }) => {
@@ -237,9 +238,8 @@ test("a project administrator cannot reach global Users through a copied URL", a
       { exact: true },
     ),
   ).toBeVisible();
-  await openApplication(page);
   await expect(
-    application(page).getByRole("region", {
+    application(page).getByRole("link", {
       name: "Control Plane Admin",
       exact: true,
     }),
@@ -250,96 +250,110 @@ test("a project administrator cannot reach global Users through a copied URL", a
   expect(fixture.adminReads).toEqual([]);
   fixture.verify();
 });
-
-for (const appearance of appearanceCases.filter(
-  (item) => item.id !== "neutral",
-)) {
-  test(`administration disclosure remains keyboard accessible in the icon rail and ${appearance.label} Large mobile navigation`, async ({
+for (const appearance of appearanceCases) {
+  test(`compact administration rail and keyboard secondary sheets fit ${appearance.label} Large layouts`, async ({
     page,
   }) => {
     const fixture = await navigationFixture(
       page,
       "Control Plane administrator",
     );
-    await page.addInitScript((appearance) => {
-      localStorage.setItem(
-        "colossus.web.appearance.v1",
-        JSON.stringify({
-          colorTheme: appearance.theme,
-          darkPalette: appearance.palette,
-          textSize: "large",
-        }),
-      );
-    }, appearance);
+    await page.addInitScript(
+      (appearance) =>
+        localStorage.setItem(
+          "colossus.web.appearance.v1",
+          JSON.stringify({
+            colorTheme: appearance.theme,
+            darkPalette: appearance.palette,
+            textSize: "large",
+          }),
+        ),
+      appearance,
+    );
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.goto(chatUrl);
-    await openApplication(page);
+    await page.goto("/admin/users");
     const toggle = page.getByRole("button", {
       name: "Toggle app sidebar",
       exact: true,
     });
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    const railAdmin = application(page).getByRole("button", {
+    await expect(application(page).getByRole("link")).toHaveCount(8);
+    await expect
+      .poll(
+        async () =>
+          (await page.locator(".control-app-sidebar").boundingBox())!.width,
+      )
+      .toBeLessThanOrEqual(49);
+    const admin = application(page).getByRole("link", {
       name: "Control Plane Admin",
       exact: true,
     });
-    await expect(railAdmin).toBeVisible();
-    await expect(railAdmin).toHaveAttribute("aria-expanded", "false");
-    await railAdmin.focus();
-    await railAdmin.press("Enter");
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await expect(railAdmin).toBeFocused();
-    const globalAdmin = application(page).getByRole("region", {
-      name: "Control Plane Admin",
-      exact: true,
-    });
-    const users = globalAdmin.getByRole("link", { name: "Users", exact: true });
-    await users.press("Enter");
+    await admin.focus();
+    await admin.press("Enter");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await expect(
-      page.getByRole("table", { name: "Control Plane users", exact: true }),
+      page.getByRole("navigation", {
+        name: "Control Plane Admin sections",
+        exact: true,
+      }),
     ).toBeVisible();
     await page.screenshot({
       path: `output/playwright/scoped-navigation-${appearance.id}-large-desktop.png`,
     });
     await page.setViewportSize({ width: 390, height: 900 });
-    // Wait for the responsive sidebar to replace its desktop tree before opening it.
     await expect(
       page.locator(".control-app-sidebar[data-sidebar='sidebar']"),
     ).toHaveCount(0);
-    await openApplication(page);
-    const dialog = page.getByRole("dialog", {
-      name: "Navigation",
+    const secondaryToggle = page.getByRole("button", {
+      name: "Toggle administration navigation",
       exact: true,
     });
-    await expect(dialog).toBeVisible();
-    const heading = dialog.getByRole("button", {
-      name: "Control Plane Admin",
+    await secondaryToggle.focus();
+    await secondaryToggle.press("Enter");
+    const secondaryDialog = page.getByRole("dialog", {
+      name: "Control Plane Admin navigation",
       exact: true,
     });
-    await expect(heading).toHaveAttribute("aria-expanded", "true");
-    await heading.focus();
-    await heading.press("Space");
-    await expect(heading).toHaveAttribute("aria-expanded", "false");
-    await expect(heading).toBeFocused();
-    await heading.press("Space");
-    await expect(heading).toHaveAttribute("aria-expanded", "true");
-    const mobileUsers = dialog
-      .getByRole("region", { name: "Control Plane Admin", exact: true })
-      .getByRole("link", { name: "Users", exact: true });
-    await mobileUsers.focus();
-    await expect(mobileUsers).toBeInViewport({ ratio: 1 });
-    expect((await heading.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await expect(secondaryDialog).toBeVisible();
+    const users = secondaryDialog.getByRole("link", {
+      name: "Users",
+      exact: true,
+    });
+    await users.focus();
+    await expect(users).toBeFocused();
+    expect((await users.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await secondaryDialog
+      .getByRole("link", { name: "Authentication & settings", exact: true })
+      .scrollIntoViewIfNeeded();
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     ).toBe(true);
     await page.screenshot({
-      path: `output/playwright/scoped-navigation-${appearance.id}-large-mobile-users.png`,
+      path: `output/playwright/scoped-navigation-${appearance.id}-large-mobile-secondary.png`,
     });
     await page.keyboard.press("Escape");
-    await expect(dialog).toBeHidden();
+    await expect(secondaryDialog).toBeHidden();
+    await expect(secondaryToggle).toBeFocused();
+    await openApplication(page);
+    const primaryDialog = page.getByRole("dialog", {
+      name: "Navigation",
+      exact: true,
+    });
+    await expect(
+      primaryDialog
+        .getByRole("navigation", { name: "Application", exact: true })
+        .getByRole("link"),
+    ).toHaveCount(8);
+    await expect(
+      primaryDialog
+        .getByRole("region", { name: "Administration", exact: true })
+        .getByRole("link"),
+    ).toHaveCount(2);
+    await page.keyboard.press("Escape");
+    await expect(primaryDialog).toBeHidden();
     await expect(toggle).toBeFocused();
     fixture.verify();
   });

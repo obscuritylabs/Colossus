@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useSyncExternalStore,
   type AnchorHTMLAttributes,
   type ReactNode,
@@ -11,6 +12,31 @@ import { parseRoute, safeReturnPath, type Route } from "./routes";
 
 const changed = "colossus:web:navigation";
 const returnKey = "colossus:web:sign-in-return";
+const guards = new Set<() => boolean>();
+const mayLeave = () => [...guards].every((guard) => guard());
+/** One host guard covers links, project switches, browser history, and reload. */
+export function useSettingsNavigationGuard() {
+  const dirty = useRef(false);
+  useEffect(() => {
+    const guard = () =>
+      !dirty.current || window.confirm("Discard unsaved settings changes?");
+    guards.add(guard);
+    const unload = (event: BeforeUnloadEvent) => {
+      if (dirty.current) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", unload);
+    return () => {
+      guards.delete(guard);
+      window.removeEventListener("beforeunload", unload);
+    };
+  }, []);
+  return useCallback((value: boolean) => {
+    dirty.current = value;
+  }, []);
+}
 const snapshot = () => `${window.location.pathname}${window.location.search}`;
 function subscribe(listener: () => void) {
   window.addEventListener("popstate", listener);
@@ -28,9 +54,12 @@ export function navigate(href: string, replace = false) {
   const path = safeReturnPath(href, window.location.origin);
   if (!path) throw new Error("Invalid Control Plane destination.");
   if (path === snapshot()) return;
+  if (!mayLeave()) return;
   const state = {
     colossusRoute: {
       from: replace ? (historyMarker()?.from ?? null) : snapshot(),
+      index:
+        (window.history.state?.colossusRoute?.index ?? 0) + (replace ? 0 : 1),
     },
   };
   if (replace) window.history.replaceState(state, "", path);
@@ -83,6 +112,35 @@ interface Navigation {
 }
 const Context = createContext<Navigation | null>(null);
 export function NavigationProvider({ children }: { children: ReactNode }) {
+  useEffect(() => {
+    let index = window.history.state?.colossusRoute?.index ?? 0;
+    window.history.replaceState(
+      { ...window.history.state, colossusRoute: { ...historyMarker(), index } },
+      "",
+    );
+    let restoring = false;
+    const onPop = (event: PopStateEvent) => {
+      const nextIndex = event.state?.colossusRoute?.index ?? 0;
+      if (restoring) {
+        restoring = false;
+        return;
+      }
+      if (nextIndex !== index && !mayLeave()) {
+        restoring = true;
+        event.stopImmediatePropagation();
+        window.history.go(index - nextIndex);
+      } else index = nextIndex;
+    };
+    const onChange = () => {
+      index = window.history.state?.colossusRoute?.index ?? index;
+    };
+    window.addEventListener("popstate", onPop, true);
+    window.addEventListener(changed, onChange);
+    return () => {
+      window.removeEventListener("popstate", onPop, true);
+      window.removeEventListener(changed, onChange);
+    };
+  }, []);
   const href = useSyncExternalStore(subscribe, snapshot, snapshot);
   const route = parseRoute(href, window.location.origin);
   const go = useCallback(

@@ -1,5 +1,16 @@
-import type { CredentialTarget } from "./credential-types";
-import { useEffect, useRef, useState } from "react";
+import type { CredentialTarget, CredentialExecution } from "./credential-types";
+import {
+  SettingsEditorPage,
+  SettingsEditorUnavailable,
+  type SettingsEditorLocation,
+} from "./settings-editor";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import {
   Button,
   CatalogInventory,
@@ -32,6 +43,7 @@ interface Credential {
   used_by: Destination[];
 }
 export interface CredentialSnapshot {
+  execution?: CredentialExecution;
   revision: number;
   credentials: Credential[];
   connections: Destination[];
@@ -44,6 +56,42 @@ const kinds: Record<Kind, string> = {
 };
 const destinationKey = (row: Destination) => `${row.kind}:${row.id}`;
 
+/** A routed page already provides its heading; retain the shared form geometry. */
+function CredentialEntryEditor({
+  page,
+  children,
+  onCancel,
+  busy,
+  ...props
+}: ComponentProps<typeof CredentialEditor> & { page: boolean }) {
+  if (!page)
+    return (
+      <CredentialEditor {...props} busy={busy} onCancel={onCancel}>
+        {children}
+      </CredentialEditor>
+    );
+  return (
+    <section
+      className="shared-credential-editor shared-provider-settings-editor"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && !event.defaultPrevented && !busy) {
+          event.preventDefault();
+          onCancel();
+        }
+      }}
+    >
+      <div className="shared-credential-editor-body provider-editor-section provider-credential-control">
+        {children}
+      </div>
+      <footer className="mcp-editor-actions">
+        <Button disabled={busy} onClick={onCancel}>
+          Cancel
+        </Button>
+      </footer>
+    </section>
+  );
+}
+
 /** The host owns storage and destination authority; saved values never enter this view. */
 export function CredentialStoreSettings({
   path,
@@ -54,6 +102,11 @@ export function CredentialStoreSettings({
   resourcePath = path,
   onSaved,
   initialConnection,
+  editorLocation,
+  onOpenEditor,
+  onCloseEditor,
+  onDirtyChange,
+  assignmentContext,
 }: {
   path: string;
   identity: string;
@@ -63,6 +116,11 @@ export function CredentialStoreSettings({
   resourcePath?: string;
   onSaved: () => void;
   initialConnection?: CredentialTarget | undefined;
+  editorLocation?: SettingsEditorLocation | undefined;
+  onOpenEditor?: ((location: SettingsEditorLocation) => void) | undefined;
+  onCloseEditor?: (() => void) | undefined;
+  onDirtyChange?: ((dirty: boolean) => void) | undefined;
+  assignmentContext?: ReactNode;
 }) {
   const resource = useResource<CredentialSnapshot>(resourcePath, 0, identity);
   const [editor, setEditor] = useState<"secret" | "attach" | "remove" | null>(
@@ -76,10 +134,24 @@ export function CredentialStoreSettings({
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
   const [waitingRevision, setWaitingRevision] = useState(0);
+  const [dirty, setDirty] = useState(false);
+  const [mustReload, setMustReload] = useState(false);
+  const [readyRoute, setReadyRoute] = useState("");
+  const reviewed = useRef<CredentialSnapshot | null>(null);
+  const pending = useRef<object | null>(null);
   const scope = JSON.stringify([path, resourcePath, identity, canEdit]);
   const currentScope = useRef(scope);
   currentScope.current = scope;
   const opened = useRef("");
+  const routeKey = JSON.stringify([scope, editorLocation]);
+  const routed = Boolean(editorLocation);
+  const view = JSON.stringify([scope, editorLocation]);
+  const operationScope = useRef({ view });
+  if (operationScope.current.view !== view) operationScope.current = { view };
+  useEffect(() => {
+    onDirtyChange?.(dirty || saving);
+    return () => onDirtyChange?.(false);
+  }, [dirty, saving, onDirtyChange]);
   useEffect(() => {
     setEditor(null);
     setId("");
@@ -89,6 +161,10 @@ export function CredentialStoreSettings({
     setNotice("");
     setSaving(false);
     setWaitingRevision(0);
+    setDirty(false);
+    setMustReload(false);
+    setReadyRoute("");
+    reviewed.current = null;
     opened.current = "";
   }, [scope]);
   useEffect(
@@ -98,16 +174,48 @@ export function CredentialStoreSettings({
     [],
   );
   const data = resource.data;
+  const executionUnavailable = data?.execution?.settings_editable === false;
+  const executionReason =
+    data?.execution?.reason ||
+    "A deployment operator must provision this project's hosted runtime before credentials can be configured.";
   const busy =
     saving ||
+    mustReload ||
+    executionUnavailable ||
     !canEdit ||
     resource.loading ||
     Boolean(waitingRevision && (!data || data.revision < waitingRevision));
   const credential = data?.credentials.find((row) => row.id === id);
-  const connection = data?.connections.find(
+  const connection = (reviewed.current ?? data)?.connections.find(
     (row) => destinationKey(row) === target,
   );
+  function closeEditor() {
+    if (saving) return;
+    if (routed && onCloseEditor) onCloseEditor();
+    else {
+      setEditor(null);
+      setDirty(false);
+      reviewed.current = null;
+    }
+  }
   function edit(value?: Credential, destination?: Destination) {
+    if (executionUnavailable || !canEdit) return;
+    if (onOpenEditor) {
+      onOpenEditor(
+        value
+          ? { action: "edit", id: value.id }
+          : {
+              action: "new",
+              ...(destination
+                ? { target: { kind: destination.kind, id: destination.id } }
+                : {}),
+            },
+      );
+      return;
+    }
+    reviewed.current = data;
+    setDirty(false);
+    setMustReload(false);
     setId(value?.id ?? "");
     setLabel(value?.label ?? "");
     setKind(value?.kind ?? "api_key");
@@ -117,8 +225,50 @@ export function CredentialStoreSettings({
     setNotice("");
   }
   useEffect(() => {
+    if (!editorLocation) {
+      if (readyRoute) {
+        setEditor(null);
+        setDirty(false);
+        setReadyRoute("");
+      }
+      return;
+    }
+    if (!data || readyRoute === routeKey) return;
+    const selected =
+      editorLocation.action === "edit"
+        ? data.credentials.find((row) => row.id === editorLocation.id)
+        : undefined;
+    reviewed.current = data;
+    setId(selected?.id ?? "");
+    setLabel(selected?.label ?? "");
+    setKind(selected?.kind ?? "api_key");
+    const destination =
+      editorLocation.action === "new" && editorLocation.target
+        ? data.connections.find(
+            (row) =>
+              row.kind === editorLocation.target!.kind &&
+              row.id === editorLocation.target!.id,
+          )
+        : undefined;
+    setTarget(destination ? destinationKey(destination) : "");
+    setEditor("secret");
+    setError("");
+    setNotice("");
+    setDirty(false);
+    setMustReload(false);
+    setReadyRoute(routeKey);
+    setSaving(false);
+  }, [data, editorLocation, routeKey, readyRoute]);
+  useEffect(() => {
     const key = JSON.stringify([scope, initialConnection]);
-    if (!initialConnection || !data || !canEdit || opened.current === key)
+    if (
+      routed ||
+      !initialConnection ||
+      !data ||
+      !canEdit ||
+      executionUnavailable ||
+      opened.current === key
+    )
       return;
     opened.current = key;
     const destination = data.connections.find(
@@ -134,14 +284,38 @@ export function CredentialStoreSettings({
     const existing = data.credentials.find(
       (row) => row.id === destination?.credential_id,
     );
+    if (onOpenEditor && destination) {
+      edit(existing, destination);
+      return;
+    }
     if (destination && !existing && data.credentials.length) {
+      reviewed.current = data;
       setId("");
       setTarget(destinationKey(destination));
       setEditor("attach");
     } else edit(existing, destination);
-  }, [scope, initialConnection, data, canEdit, globalScope]);
+  }, [
+    scope,
+    initialConnection,
+    data,
+    canEdit,
+    globalScope,
+    routed,
+    executionUnavailable,
+    onOpenEditor,
+  ]);
   async function mutate(url: string, body: object, method?: "DELETE") {
+    if (
+      !canEdit ||
+      !data ||
+      executionUnavailable ||
+      mustReload ||
+      pending.current === operationScope.current
+    )
+      return;
     const submitted = scope;
+    const submittedOperation = operationScope.current;
+    pending.current = submittedOperation;
     setSaving(true);
     setError("");
     setNotice("");
@@ -153,19 +327,35 @@ export function CredentialStoreSettings({
         method,
       );
       if (currentScope.current !== submitted) return;
+      resource.refresh();
+      if (operationScope.current !== submittedOperation) return;
       setWaitingRevision(result.revision);
       setEditor(null);
+      setDirty(false);
+      reviewed.current = null;
+      onDirtyChange?.(false);
       setNotice("Credential changes saved.");
-      resource.refresh();
+      if (routed) onCloseEditor?.();
       onSaved();
     } catch (e) {
-      if (currentScope.current === submitted) {
-        setError(`${errorMessage(e)} Reload credentials before retrying.`);
+      if (
+        currentScope.current === submitted &&
+        operationScope.current === submittedOperation
+      ) {
+        setMustReload(true);
+        setError(
+          `${errorMessage(e)} Return to credentials and reload them before retrying.`,
+        );
         resource.refresh();
       }
       throw e;
     } finally {
-      if (currentScope.current === submitted) setSaving(false);
+      if (pending.current === submittedOperation) pending.current = null;
+      if (
+        currentScope.current === submitted &&
+        operationScope.current === submittedOperation
+      )
+        setSaving(false);
     }
   }
   async function attach(value: string | null, destination: Destination) {
@@ -173,14 +363,16 @@ export function CredentialStoreSettings({
     await mutate(
       `${path}/attachments/${globalScope ? `${encodeURIComponent(destination.project_id ?? "")}/` : ""}${destination.kind}/${encodeURIComponent(destination.id)}`,
       {
-        revision: data.revision,
+        revision: (reviewed.current ?? data).revision,
         credential_id: value,
         credential_binding: destination.credential_binding,
       },
     );
   }
+  const inventoryLabel =
+    globalScope || projectScope ? "secrets" : "credentials";
   const description = globalScope
-    ? "Instance secrets are write-only. A Control Plane administrator must explicitly assign a secret to a shared connection in a selected project before it can be used."
+    ? "Encrypted instance secrets are used only by the project connections an administrator explicitly assigns."
     : projectScope
       ? "Shared within this project. Only explicitly attached connections may use a saved credential."
       : "Private to your account in this project. Save a credential now and attach it to a provider, search service, or MCP server later.";
@@ -189,7 +381,7 @@ export function CredentialStoreSettings({
       <option value="">
         {editor === "attach" ? "Choose a connection" : "Save without attaching"}
       </option>
-      {(data?.connections ?? []).map((row) => (
+      {((reviewed.current ?? data)?.connections ?? []).map((row) => (
         <option
           key={destinationKey(row)}
           value={destinationKey(row)}
@@ -208,6 +400,295 @@ export function CredentialStoreSettings({
       ))}
     </>
   );
+  const editorContent = (
+    <>
+      {editor === "secret" ? (
+        <CredentialEntryEditor
+          page={routed}
+          title={id ? "Rotate credential" : "Add credential"}
+          description={description}
+          busy={saving}
+          onCancel={closeEditor}
+        >
+          <label>
+            <span>Display label</span>
+            <TextInput
+              value={label}
+              maxLength={160}
+              disabled={busy}
+              onChange={(event) => {
+                setLabel(event.target.value);
+                setDirty(true);
+              }}
+              placeholder="For example, GitHub workspace token"
+            />
+          </label>
+          <label>
+            <span>Credential type</span>
+            <DropdownSelect
+              aria-label="Credential type"
+              value={kind}
+              disabled={busy}
+              onChange={(event) => {
+                setKind(event.target.value as Kind);
+                setDirty(true);
+              }}
+            >
+              {Object.entries(kinds).map(([value, text]) => (
+                <option key={value} value={value}>
+                  {text}
+                </option>
+              ))}
+            </DropdownSelect>
+          </label>
+          {!id ? (
+            <label>
+              <span>Attach to connection</span>
+              <DropdownSelect
+                aria-label="Credential connection"
+                value={target}
+                disabled={busy}
+                onChange={(event) => {
+                  setTarget(event.target.value);
+                  setDirty(true);
+                }}
+              >
+                {destinationOptions}
+              </DropdownSelect>
+            </label>
+          ) : (
+            <p className="field-help">
+              Rotation replaces the saved value. Existing connection assignments
+              stay in place; use Attach existing credential to change an
+              assignment.
+            </p>
+          )}
+          {id && globalScope ? (
+            <p className="field-help">
+              Rotation updates this secret for every project where it is
+              assigned. The connections shown here are limited to the selected
+              project.
+            </p>
+          ) : id && credential?.used_by.length ? (
+            <p className="field-help">
+              Rotation updates every connection using this credential:{" "}
+              {credential.used_by.map((row) => row.label).join(", ")}.
+            </p>
+          ) : null}
+          <div onInputCapture={() => setDirty(true)}>
+            <CredentialForm
+              key={JSON.stringify([
+                scope,
+                id,
+                target,
+                reviewed.current?.revision,
+              ])}
+              scope={JSON.stringify([
+                scope,
+                id,
+                target,
+                reviewed.current?.revision,
+              ])}
+              label="API key or token"
+              action={id ? "Save rotated credential" : "Save credential"}
+              endpoint={
+                connection?.endpoint ??
+                (id
+                  ? "Existing credential assignments"
+                  : "Not attached to a connection")
+              }
+              disabled={busy || !label.trim()}
+              description={
+                connection
+                  ? "Saving attaches this credential to the destination shown above."
+                  : id
+                    ? "Saving replaces the stored value for every existing assignment."
+                    : "Saving alone gives agents no access to this credential."
+              }
+              onSave={async (secret) =>
+                mutate(id ? `${path}/${encodeURIComponent(id)}` : path, {
+                  revision: (reviewed.current ?? data)!.revision,
+                  label: label.trim(),
+                  kind,
+                  secret,
+                  ...(connection
+                    ? {
+                        attachment: {
+                          ...(globalScope
+                            ? { project_id: connection.project_id }
+                            : {}),
+                          kind: connection.kind,
+                          connection: connection.id,
+                          credential_binding: connection.credential_binding,
+                        },
+                      }
+                    : {}),
+                })
+              }
+              onSaved={() => {}}
+              onError={() => {}}
+            />
+          </div>
+        </CredentialEntryEditor>
+      ) : null}
+      {editor === "attach" ? (
+        <CredentialEditor
+          title="Attach credential"
+          description="Choose a saved credential and review the destination that will receive it."
+          busy={saving}
+          onCancel={closeEditor}
+          submitLabel="Attach credential"
+          submitDisabled={busy || !id || !connection}
+          onSubmit={() => {
+            if (connection) void attach(id, connection).catch(() => {});
+          }}
+        >
+          <label>
+            <span>Credential</span>
+            <DropdownSelect
+              aria-label="Saved credential"
+              value={id}
+              disabled={busy}
+              onChange={(event) => {
+                setId(event.target.value);
+                setDirty(true);
+              }}
+            >
+              <option value="">Choose a credential</option>
+              {(data?.credentials ?? []).map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.label}
+                </option>
+              ))}
+            </DropdownSelect>
+          </label>
+          <label>
+            <span>Connection</span>
+            <DropdownSelect
+              aria-label="Credential connection"
+              value={target}
+              disabled={busy}
+              onChange={(event) => {
+                setTarget(event.target.value);
+                setDirty(true);
+              }}
+            >
+              {destinationOptions}
+            </DropdownSelect>
+          </label>
+          <Button
+            disabled={busy}
+            onClick={() => {
+              setId("");
+              setLabel("");
+              setKind("api_key");
+              setEditor("secret");
+            }}
+          >
+            Create new credential
+          </Button>
+          {connection ? (
+            <p>
+              Credential destination: {connection.endpoint}
+              {connection.credential_id && connection.credential_id !== id
+                ? ". This replaces its current credential attachment."
+                : ""}
+            </p>
+          ) : null}
+        </CredentialEditor>
+      ) : null}
+      {editor === "remove" && credential ? (
+        <CredentialEditor
+          title="Remove credential"
+          description={`Remove ${credential.label} from secure storage.`}
+          busy={saving}
+          onCancel={closeEditor}
+          submitLabel="Remove credential"
+          submitDisabled={busy}
+          onSubmit={() =>
+            void mutate(
+              `${path}/${encodeURIComponent(id)}`,
+              { revision: (reviewed.current ?? data)!.revision },
+              "DELETE",
+            ).catch(() => {})
+          }
+        >
+          <p>
+            {globalScope
+              ? "Removal disconnects this secret from every project where it is assigned. Those connections will need another credential."
+              : credential.used_by.length
+                ? `These connections will need another credential: ${credential.used_by.map((row) => row.label).join(", ")}.`
+                : "This credential is not attached to a connection."}
+          </p>
+        </CredentialEditor>
+      ) : null}
+    </>
+  );
+  if (editorLocation) {
+    const destination =
+      editorLocation.target &&
+      data?.connections.find(
+        (row) =>
+          row.kind === editorLocation.target!.kind &&
+          row.id === editorLocation.target!.id,
+      );
+    if (
+      data &&
+      !executionUnavailable &&
+      editorLocation.target &&
+      (!destination ||
+        (!globalScope && destination.credential_source === "global"))
+    )
+      return (
+        <SettingsEditorUnavailable
+          backLabel={inventoryLabel}
+          onBack={closeEditor}
+          reason={
+            !destination
+              ? "This connection is no longer available in this scope. Return to the connection list and choose its current destination."
+              : "A Control Plane administrator manages this connection's credential assignment."
+          }
+        />
+      );
+    if (
+      data &&
+      !executionUnavailable &&
+      editorLocation.action === "edit" &&
+      !data.credentials.some((row) => row.id === editorLocation.id)
+    ) {
+      return (
+        <SettingsEditorUnavailable
+          backLabel={inventoryLabel}
+          onBack={closeEditor}
+        />
+      );
+    }
+    return (
+      <SettingsEditorPage
+        title={
+          editorLocation.action === "edit"
+            ? "Rotate credential"
+            : "Add credential"
+        }
+        description={description}
+        backLabel={inventoryLabel}
+        onBack={closeEditor}
+        busy={saving}
+      >
+        <LoadState {...resource} retry={resource.refresh} />
+        {error ? <p role="alert">{error}</p> : null}
+        {executionUnavailable ? (
+          <p role="status">{executionReason}</p>
+        ) : !canEdit ? (
+          <p role="alert">
+            You do not have permission to change credentials in this scope.
+          </p>
+        ) : readyRoute === routeKey && data ? (
+          editorContent
+        ) : null}
+      </SettingsEditorPage>
+    );
+  }
   return (
     <section
       aria-label={
@@ -221,10 +702,12 @@ export function CredentialStoreSettings({
       <LoadState {...resource} retry={resource.refresh} />
       {error ? <p role="alert">{error}</p> : null}
       {notice ? <p role="status">{notice}</p> : null}
-      <p className="field-help">{description}</p>
+      {executionUnavailable ? <p role="status">{executionReason}</p> : null}
       <CatalogInventory
         key={scope}
         kind="credential"
+        title={globalScope || projectScope ? "Secrets" : "Credentials"}
+        description={description}
         headingLevel={2}
         summary={`${data?.credentials.length ?? 0} saved credentials · ${data?.connections.length ?? 0} available connections`}
         busy={busy}
@@ -253,6 +736,7 @@ export function CredentialStoreSettings({
           mutationDisabled: Boolean(editor),
           onEdit: () => edit(row),
           onDelete: () => {
+            reviewed.current = data;
             setId(row.id);
             setEditor("remove");
             setError("");
@@ -307,183 +791,16 @@ export function CredentialStoreSettings({
           ),
         }))}
       >
-        {editor === "secret" ? (
-          <CredentialEditor
-            title={id ? "Rotate credential" : "Add credential"}
-            description={description}
-            busy={busy}
-            onCancel={() => setEditor(null)}
-          >
-            <label>
-              <span>Display label</span>
-              <TextInput
-                value={label}
-                maxLength={160}
-                disabled={busy}
-                onChange={(event) => setLabel(event.target.value)}
-                placeholder="For example, GitHub workspace token"
-              />
-            </label>
-            <label>
-              <span>Credential type</span>
-              <DropdownSelect
-                aria-label="Credential type"
-                value={kind}
-                disabled={busy}
-                onChange={(event) => setKind(event.target.value as Kind)}
-              >
-                {Object.entries(kinds).map(([value, text]) => (
-                  <option key={value} value={value}>
-                    {text}
-                  </option>
-                ))}
-              </DropdownSelect>
-            </label>
-            <label>
-              <span>Attach to connection</span>
-              <DropdownSelect
-                aria-label="Credential connection"
-                value={target}
-                disabled={busy}
-                onChange={(event) => setTarget(event.target.value)}
-              >
-                {destinationOptions}
-              </DropdownSelect>
-            </label>
-            {id && globalScope ? (
-              <p className="field-help">
-                Rotation updates this secret for every project where it is
-                assigned. The connections shown here are limited to the selected
-                project.
-              </p>
-            ) : id && credential?.used_by.length ? (
-              <p className="field-help">
-                Rotation updates every connection using this credential:{" "}
-                {credential.used_by.map((row) => row.label).join(", ")}.
-              </p>
-            ) : null}
-            <CredentialForm
-              key={JSON.stringify([scope, id, target, data?.revision])}
-              scope={JSON.stringify([scope, id, target, data?.revision])}
-              label="API key or token"
-              action={id ? "Save rotated credential" : "Save credential"}
-              endpoint={connection?.endpoint ?? "Not attached to a connection"}
-              disabled={busy || !label.trim()}
-              description={
-                connection
-                  ? "Saving attaches this credential to the destination shown above."
-                  : "Saving alone gives agents no access to this credential."
-              }
-              onSave={async (secret) =>
-                mutate(id ? `${path}/${encodeURIComponent(id)}` : path, {
-                  revision: data!.revision,
-                  label: label.trim(),
-                  kind,
-                  secret,
-                  ...(connection
-                    ? {
-                        attachment: {
-                          ...(globalScope
-                            ? { project_id: connection.project_id }
-                            : {}),
-                          kind: connection.kind,
-                          connection: connection.id,
-                          credential_binding: connection.credential_binding,
-                        },
-                      }
-                    : {}),
-                })
-              }
-              onSaved={() => {}}
-              onError={() => {}}
-            />
-          </CredentialEditor>
-        ) : null}
-        {editor === "attach" ? (
-          <CredentialEditor
-            title="Attach credential"
-            description="Choose a saved credential and review the destination that will receive it."
-            busy={busy}
-            onCancel={() => setEditor(null)}
-            submitLabel="Attach credential"
-            submitDisabled={!id || !connection}
-            onSubmit={() => {
-              if (connection) void attach(id, connection).catch(() => {});
-            }}
-          >
-            <label>
-              <span>Credential</span>
-              <DropdownSelect
-                aria-label="Saved credential"
-                value={id}
-                disabled={busy}
-                onChange={(event) => setId(event.target.value)}
-              >
-                <option value="">Choose a credential</option>
-                {(data?.credentials ?? []).map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.label}
-                  </option>
-                ))}
-              </DropdownSelect>
-            </label>
-            <label>
-              <span>Connection</span>
-              <DropdownSelect
-                aria-label="Credential connection"
-                value={target}
-                disabled={busy}
-                onChange={(event) => setTarget(event.target.value)}
-              >
-                {destinationOptions}
-              </DropdownSelect>
-            </label>
-            <Button
-              disabled={busy}
-              onClick={() => {
-                setId("");
-                setLabel("");
-                setKind("api_key");
-                setEditor("secret");
-              }}
-            >
-              Create new credential
-            </Button>
-            {connection ? (
-              <p>
-                Credential destination: {connection.endpoint}
-                {connection.credential_id && connection.credential_id !== id
-                  ? ". This replaces its current credential attachment."
-                  : ""}
-              </p>
-            ) : null}
-          </CredentialEditor>
-        ) : null}
-        {editor === "remove" && credential ? (
-          <CredentialEditor
-            title="Remove credential"
-            description={`Remove ${credential.label} from secure storage.`}
-            busy={busy}
-            onCancel={() => setEditor(null)}
-            submitLabel="Remove credential"
-            onSubmit={() =>
-              void mutate(
-                `${path}/${encodeURIComponent(id)}`,
-                { revision: data!.revision },
-                "DELETE",
-              ).catch(() => {})
-            }
-          >
-            <p>
-              {globalScope
-                ? "Removal disconnects this secret from every project where it is assigned. Those connections will need another credential."
-                : credential.used_by.length
-                  ? `These connections will need another credential: ${credential.used_by.map((row) => row.label).join(", ")}.`
-                  : "This credential is not attached to a connection."}
-            </p>
-          </CredentialEditor>
-        ) : null}
+        {editorContent}
       </CatalogInventory>
+      {assignmentContext ? (
+        <section aria-label="Connection assignments">
+          <header className="catalog-heading">
+            <h2>Assignments</h2>
+          </header>
+          {assignmentContext}
+        </section>
+      ) : null}
       <div className="chat-settings-actions">
         <Button
           disabled={
@@ -493,6 +810,7 @@ export function CredentialStoreSettings({
             !data?.connections.length
           }
           onClick={() => {
+            reviewed.current = data;
             setId("");
             setTarget("");
             setEditor("attach");
@@ -500,7 +818,16 @@ export function CredentialStoreSettings({
         >
           Attach existing credential
         </Button>
-        <Button disabled={saving} onClick={resource.refresh}>
+        <Button
+          disabled={saving}
+          onClick={() => {
+            setEditor(null);
+            setDirty(false);
+            setMustReload(false);
+            reviewed.current = null;
+            resource.refresh();
+          }}
+        >
           Reload credentials
         </Button>
       </div>

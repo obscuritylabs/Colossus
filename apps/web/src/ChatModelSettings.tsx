@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ModelSettingsEditor,
   type ModelSettingsDraft,
@@ -20,7 +20,11 @@ export function ChatModelSettings({
   onApply,
   onCancel,
   onBusyChange,
+  busy = false,
+  onDirtyChange,
 }: {
+  busy?: boolean;
+  onDirtyChange?: ((dirty: boolean) => void) | undefined;
   id: string;
   draft: ChatSettingsWrite;
   project: string;
@@ -56,6 +60,12 @@ export function ChatModelSettings({
       ?.declared as ModelSettingsDraft["declared"],
   }));
   const [error, setError] = useState("");
+  const formValue = JSON.stringify(value);
+  const openingValue = useRef(formValue);
+  useEffect(() => {
+    onDirtyChange?.(formValue !== openingValue.current);
+  }, [formValue, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const [pending, setPending] = useState(false);
   const provider = draft.providers.profiles[value.providerProfile];
   const canLoad = Boolean(
@@ -77,6 +87,7 @@ export function ChatModelSettings({
     });
   }
   function apply() {
+    if (busy || pending) return;
     if (
       !validProfile(value.profile) ||
       !value.label.trim() ||
@@ -92,6 +103,18 @@ export function ChatModelSettings({
       Object.hasOwn(draft.models.profiles, value.profile)
     ) {
       setError("That profile ID already exists.");
+      return;
+    }
+    if (!Object.hasOwn(draft.providers.profiles, value.providerProfile)) {
+      setError("Choose an available provider before saving this model.");
+      return;
+    }
+    if (
+      ![value.maxOutputTokens, value.contextWindowTokens].every(
+        (limit) => Number.isSafeInteger(limit) && limit > 0,
+      )
+    ) {
+      setError("Token limits must be positive whole numbers.");
       return;
     }
     if (value.maxOutputTokens > value.contextWindowTokens) {
@@ -136,7 +159,7 @@ export function ChatModelSettings({
           profile,
           label: draft.labels?.providers[profile] ?? profile,
         }))}
-        busy={pending}
+        busy={busy || pending}
         onChange={setValue}
         onCancel={onCancel}
         onSave={apply}

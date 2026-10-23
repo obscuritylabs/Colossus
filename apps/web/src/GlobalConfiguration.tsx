@@ -6,6 +6,7 @@ import { globalHref } from "./routes";
 import { useNavigation } from "./navigation";
 import { ChatSettings } from "./ChatSettings";
 import { CredentialStoreSettings } from "./CredentialStoreSettings";
+import type { SettingsEditorNavigation } from "./settings-editor";
 
 /** Instance authority is checked by the admin route and every server operation. */
 export function GlobalConfiguration({
@@ -14,12 +15,18 @@ export function GlobalConfiguration({
   projects,
   selectedProject,
   onSaved,
-}: {
+  editorLocation,
+  onOpenEditor,
+  onCloseEditor,
+  onDirtyChange,
+  onProjectChange,
+}: SettingsEditorNavigation & {
   section: ConnectionSettingsSection;
   identity: string;
   projects: Project[];
   selectedProject: string;
   onSaved: () => void;
+  onProjectChange?: ((id: string) => void) | undefined;
 }) {
   const navigation = useNavigation();
   const [grantProject, setGrantProject] = useState(() =>
@@ -27,45 +34,13 @@ export function GlobalConfiguration({
       ? selectedProject
       : "",
   );
+  const effectiveProject = onProjectChange ? selectedProject : grantProject;
   const availableProject =
-    projects.find((item) => item.id === grantProject && !item.archived)?.id ??
-    "";
+    projects.find((item) => item.id === effectiveProject && !item.archived)
+      ?.id ?? "";
   if (section === "credentials")
     return (
       <section aria-label="Instance secrets and assignments">
-        <header className="catalog-heading">
-          <div>
-            <h2>Control Plane secrets</h2>
-            <p>
-              Save a secret once, then explicitly assign it to eligible project
-              connections. Definition inheritance alone never grants credential
-              access.
-            </p>
-          </div>
-        </header>
-        <label className="chat-setting-field">
-          <span>Project for credential assignments</span>
-          <DropdownSelect
-            aria-label="Project for credential assignments"
-            value={availableProject}
-            onChange={(event) => setGrantProject(event.target.value)}
-          >
-            <option value="">Secrets only — choose a project to assign</option>
-            {projects
-              .filter((item) => !item.archived)
-              .map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-          </DropdownSelect>
-        </label>
-        <p className="field-help">
-          Connections shown belong to the selected project and must use
-          explicitly shared authentication. Rotating or deleting an instance
-          secret affects every project assigned to it. Personal authentication
-          always uses that person's private credentials.
-        </p>
         <CredentialStoreSettings
           key={`${identity}:${availableProject}`}
           path="/api/admin/credential-store"
@@ -73,19 +48,59 @@ export function GlobalConfiguration({
           identity={identity}
           canEdit
           globalScope
+          assignmentContext={
+            <>
+              <label className="chat-setting-field">
+                <span>Project for credential assignments</span>
+                <DropdownSelect
+                  aria-label="Project for credential assignments"
+                  value={availableProject}
+                  onChange={(event) =>
+                    onProjectChange
+                      ? onProjectChange(event.target.value)
+                      : setGrantProject(event.target.value)
+                  }
+                >
+                  <option value="">
+                    Secrets only — choose a project to assign
+                  </option>
+                  {projects
+                    .filter((item) => !item.archived)
+                    .map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                </DropdownSelect>
+              </label>
+              <p className="field-help">
+                Assignments apply to the selected project's shared connections.
+                Rotating or deleting an instance secret affects every project
+                assigned to it.
+              </p>
+            </>
+          }
+          editorLocation={editorLocation}
+          onOpenEditor={onOpenEditor}
+          onCloseEditor={onCloseEditor}
+          onDirtyChange={onDirtyChange}
           onSaved={onSaved}
         />
       </section>
     );
   return (
     <ChatSettings
-      key={identity}
+      key={`${identity}:${section}:${JSON.stringify(editorLocation)}`}
       project={selectedProject}
       identity={identity}
       canAdminister
       instanceScope
       settingsPath="/api/admin/hosted-settings"
       section={section}
+      editorLocation={editorLocation}
+      onOpenEditor={onOpenEditor}
+      onCloseEditor={onCloseEditor}
+      onDirtyChange={onDirtyChange}
       onClose={() => navigation.go(globalHref("admin", undefined, "users"))}
       onSaved={onSaved}
       onCredentials={() =>

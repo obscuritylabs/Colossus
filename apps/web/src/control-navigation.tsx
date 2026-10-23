@@ -98,44 +98,90 @@ export function controlNavigation(me: Me, route: Route, project: string) {
       icon: <IconFolder size={21} />,
     },
   ];
-  if (canAdminister) {
-    items.push(
+  if (canAdminister)
+    items.push({
+      id: "project-admin",
+      group: "Administration",
+      label: "Project Admin",
+      href: projectHref(project, "access"),
+      icon: <IconSettings size={21} />,
+    });
+  if (me.user.is_admin)
+    items.push({
+      id: "admin",
+      group: "Administration",
+      label: "Control Plane Admin",
+      href: globalHref("admin", undefined, "users"),
+      icon: <IconShield size={21} />,
+    });
+  items.push({
+    id: "settings",
+    group: "Personal",
+    label: "Settings",
+    href: personalSettingsHref("appearance", selected),
+    icon: <IconSettings size={21} />,
+  });
+  const projectAdministration =
+    canAdminister &&
+    ((route.kind === "project-settings" && route.project === project) ||
+      (route.kind === "project" &&
+        route.project === project &&
+        (route.view === "access" || route.view === "settings")));
+  if (projectAdministration) {
+    const current =
+      route.kind === "project-settings"
+        ? `project-${route.section}`
+        : route.view === "access"
+          ? "project-members"
+          : "project-settings";
+    const sections: ControlPlaneNavigation[] = [
       {
         id: "project-members",
-        group: "Project Administration",
         label: "Members",
         href: projectHref(project, "access"),
         icon: <IconUsers size={19} />,
       },
       ...configurationSections.map((section) => ({
         id: `project-${section.id}`,
-        group: "Project Administration",
         label: section.label,
         href: projectSettingsHref(project, section.id),
         icon: section.icon,
       })),
       {
         id: "project-settings",
-        group: "Project Administration",
         label: "General",
         href: projectHref(project, "settings"),
         icon: <IconSettings size={19} />,
       },
-    );
+    ];
+    return {
+      items,
+      current: "project-admin",
+      secondary: {
+        id: `project:${project}`,
+        title: "Project Admin",
+        context: me.projects.find((item) => item.id === project)!.name,
+        items: sections,
+        current,
+      },
+    };
   }
-  if (me.user.is_admin) {
+  if (
+    me.user.is_admin &&
+    route.kind === "global" &&
+    route.surface === "admin"
+  ) {
     const admin = (
       view: AdminView,
       label: string,
       icon: ReactNode,
     ): ControlPlaneNavigation => ({
       id: `admin-${view}`,
-      group: "Control Plane Admin",
       label,
       href: globalHref("admin", undefined, view),
       icon,
     });
-    items.push(
+    const sections: ControlPlaneNavigation[] = [
       admin("users", "Users", <IconUsers size={19} />),
       admin("projects", "Projects", <IconFolder size={19} />),
       ...configurationSections.map((section) =>
@@ -144,26 +190,18 @@ export function controlNavigation(me: Me, route: Route, project: string) {
       admin("announcements", "Announcements", <IconBell size={19} />),
       admin("appearance", "Appearance", <IconPalette size={19} />),
       admin("settings", "Authentication & settings", <IconShield size={19} />),
-    );
+    ];
+    return {
+      items,
+      current: "admin",
+      secondary: {
+        id: "control-plane",
+        title: "Control Plane Admin",
+        context: "Instance-wide settings",
+        items: sections,
+        current: `admin-${route.view ?? "users"}`,
+      },
+    };
   }
-  items.push({
-    id: "settings",
-    group: "Personal",
-    label: "Settings",
-    href: personalSettingsHref("appearance", selected),
-    icon: <IconSettings size={21} />,
-  });
-  let current: string = routeSurface(route);
-  if (route.kind === "project-settings") current = `project-${route.section}`;
-  else if (route.kind === "project" && route.view === "access" && canAdminister)
-    current = "project-members";
-  else if (
-    route.kind === "project" &&
-    route.view === "settings" &&
-    canAdminister
-  )
-    current = "project-settings";
-  else if (route.kind === "global" && route.surface === "admin")
-    current = `admin-${route.view ?? "users"}`;
-  return { items, current };
+  return { items, current: routeSurface(route), secondary: undefined };
 }

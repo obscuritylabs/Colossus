@@ -5,13 +5,18 @@ import { ModelRoutingOverview } from "@colossus/ui/components/ModelRoutingOvervi
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@colossus/ui";
 import { DataTable, type DataTableColumn } from "@colossus/ui/data-table";
-import { projectPath, request } from "./api";
+import { ApiFailure, projectPath, request } from "./api";
 import { LoadState } from "./Home";
 import { errorMessage, useResource } from "./resources";
 import { ChatSettingsEditor, type SettingsEditor } from "./ChatSettingsEditors";
 import { ConnectionSettingsExtras } from "./ConnectionSettingsExtras";
 import { SettingsInheritancePanel } from "./SettingsInheritancePanel";
 import type { ConnectionSettingsSection } from "./routes";
+import {
+  SettingsEditorPage,
+  SettingsEditorUnavailable,
+  type SettingsEditorNavigation,
+} from "./settings-editor";
 import {
   settingsWrite,
   type Authentication,
@@ -40,7 +45,11 @@ export function ChatSettings({
   credentialTarget,
   settingsPath,
   instanceScope = false,
-}: {
+  editorLocation,
+  onOpenEditor,
+  onCloseEditor,
+  onDirtyChange,
+}: SettingsEditorNavigation & {
   project: string;
   identity: string;
   canAdminister: boolean;
@@ -59,8 +68,46 @@ export function ChatSettings({
     0,
     identity,
   );
+  const [saved, setSaved] = useState<ChatSettingsSnapshot | null>(null);
+  const availability = saved ?? resource.data;
+  const settingsEditable =
+    canAdminister &&
+    (instanceScope || availability?.execution?.settings_editable !== false);
+  const executionReason = !settingsEditable
+    ? (availability?.execution?.reason ??
+      "Hosted execution is not enabled for this project. Ask a deployment operator to configure its runtime and allowed origins before editing project settings.")
+    : "";
   const [draft, setDraft] = useState<ChatSettingsWrite | null>(null);
-  const [editor, setEditor] = useState<SettingsEditor | null>(null);
+  const [mustReload, setMustReload] = useState(false);
+  const mustReloadRef = useRef(false);
+  const dirtyDraft = useRef(false);
+  const minimumRevision = useRef<number | null>(null);
+  const [inlineEditor, setEditor] = useState<SettingsEditor | null>(null);
+  const [formDirty, setFormDirty] = useState(false);
+  const [extraDirty, setExtraDirty] = useState(false);
+  const routedKind = (
+    { providers: "provider", models: "model", mcp: "mcp" } as const
+  )[section as "providers" | "models" | "mcp"];
+  const editor =
+    editorLocation && routedKind
+      ? {
+          kind: routedKind,
+          id: editorLocation.action === "edit" ? (editorLocation.id ?? "") : "",
+        }
+      : inlineEditor;
+  function openEditor(value: SettingsEditor) {
+    if (!settingsEditable || mustReloadRef.current) return;
+    if (onOpenEditor)
+      onOpenEditor(
+        value.id ? { action: "edit", id: value.id } : { action: "new" },
+      );
+    else setEditor(value);
+  }
+  function closeEditor() {
+    setEditor(null);
+    if (!editorLocation) setFormDirty(false);
+    onCloseEditor?.();
+  }
   const [extraEditor, setExtraEditor] = useState<
     "search" | "variables" | "telemetry" | null
   >(null);
@@ -80,37 +127,46 @@ export function ChatSettings({
     instanceScope,
   ]);
   const currentScope = useRef(scope);
-  const reconcilingRevision = useRef<{
-    scope: string;
-    revision: number;
-    setup?: CredentialSetup | undefined;
-  } | null>(null);
+  const operationScope = useRef({ scope });
+  if (operationScope.current.scope !== scope)
+    operationScope.current = { scope };
+  const pendingSave = useRef<object | null>(null);
   currentScope.current = scope;
   useEffect(() => {
-    reconcilingRevision.current = null;
+    setSaved(null);
+    setDraft(null);
+    mustReloadRef.current = false;
+    setMustReload(false);
+    minimumRevision.current = null;
     setBusy(false);
     setCatalogBusy(false);
     setError("");
     setNotice("");
     setExtraEditor(null);
+    setFormDirty(false);
+    setExtraDirty(false);
     setResetExtraEditor((value) => value + 1);
   }, [scope]);
+  function acceptSettings(snapshot: ChatSettingsSnapshot) {
+    setSaved(snapshot);
+    setDraft(settingsWrite(snapshot));
+    setEditor(null);
+    setExtraEditor(null);
+    setFormDirty(false);
+    setExtraDirty(false);
+    setResetExtraEditor((value) => value + 1);
+    mustReloadRef.current = false;
+    setMustReload(false);
+    minimumRevision.current = null;
+    onDirtyChange?.(false);
+  }
   useEffect(() => {
-    if (resource.data) {
-      setDraft(settingsWrite(resource.data));
-      setEditor(null);
-      if (
-        reconcilingRevision.current?.scope === scope &&
-        resource.data.revision >= reconcilingRevision.current.revision
-      ) {
-        const completed = reconcilingRevision.current;
-        reconcilingRevision.current = null;
-        setBusy(false);
-        const setup = completed?.setup;
-        if (setup?.authentication === "shared") onCredentials?.(setup.target);
-        else if (setup) onPersonalCredentials?.(setup.target);
-      }
-    } else setDraft(null);
+    if (
+      resource.data &&
+      (!saved ||
+        (!dirtyDraft.current && !pendingSave.current && !mustReloadRef.current))
+    )
+      acceptSettings(resource.data);
   }, [resource.data, scope]);
   useEffect(
     () => () => {
@@ -120,50 +176,163 @@ export function ChatSettings({
   );
   const changed = Boolean(
     draft &&
-    resource.data &&
-    JSON.stringify(draft) !== JSON.stringify(settingsWrite(resource.data)),
+    saved &&
+    JSON.stringify(draft) !== JSON.stringify(settingsWrite(saved)),
   );
-  async function save(value?: ChatSettingsWrite, setup?: CredentialSetup) {
-    if (!(value ?? draft) || !canAdminister || busy) return;
-    const submitted = structuredClone(value ?? draft!),
+  dirtyDraft.current = changed || formDirty || extraDirty;
+  useEffect(() => {
+    onDirtyChange?.(
+      settingsEditable &&
+        (changed || formDirty || extraDirty || saving || mustReload),
+    );
+  }, [
+    settingsEditable,
+    changed,
+    formDirty,
+    extraDirty,
+    saving,
+    mustReload,
+    onDirtyChange,
+  ]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+  function requireReload() {
+    mustReloadRef.current = true;
+    setMustReload(true);
+  }
+  function currentOperation(operation: object, submittedScope: string) {
+    return (
+      currentScope.current === submittedScope &&
+      operationScope.current === operation
+    );
+  }
+  async function readCurrent(minimum: number) {
+    const snapshot = await request<ChatSettingsSnapshot>(path);
+    if (!Number.isSafeInteger(snapshot.revision) || snapshot.revision < minimum)
+      throw new Error("The current saved revision is not available yet.");
+    return snapshot;
+  }
+  async function reloadSettings() {
+    if (busy || pendingSave.current === operationScope.current) return;
+    if (
+      (dirtyDraft.current || mustReloadRef.current) &&
+      !window.confirm(
+        "Discard your proposed configuration and reload current settings?",
+      )
+    )
+      return;
+    const submittedOperation = operationScope.current,
       submittedScope = scope;
+    pendingSave.current = submittedOperation;
     setBusy(true);
     setError("");
     setNotice("");
-    let reconciling = false;
     try {
-      const saved = await request<{ revision: number }>(
+      const snapshot = await readCurrent(
+        minimumRevision.current ?? saved?.revision ?? 0,
+      );
+      if (!currentOperation(submittedOperation, submittedScope)) return;
+      acceptSettings(snapshot);
+      setNotice("Current settings loaded.");
+    } catch (cause) {
+      if (currentOperation(submittedOperation, submittedScope)) {
+        requireReload();
+        setError(
+          `${errorMessage(cause)} Your proposed configuration is retained. Reload settings before saving again.`,
+        );
+      }
+    } finally {
+      if (pendingSave.current === submittedOperation)
+        pendingSave.current = null;
+      if (currentOperation(submittedOperation, submittedScope)) setBusy(false);
+    }
+  }
+  async function save(value?: ChatSettingsWrite, setup?: CredentialSetup) {
+    if (
+      !(value ?? draft) ||
+      !settingsEditable ||
+      busy ||
+      mustReloadRef.current ||
+      pendingSave.current === operationScope.current
+    )
+      return;
+    const submitted = structuredClone(value ?? draft!),
+      submittedScope = scope,
+      submittedOperation = operationScope.current;
+    pendingSave.current = submittedOperation;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    let accepted = false;
+    try {
+      const result = await request<{ revision: number }>(
         path,
         submitted,
         undefined,
         "PUT",
       );
-      if (currentScope.current !== submittedScope) return;
-      reconcilingRevision.current = {
-        scope: submittedScope,
-        revision: saved.revision,
-        setup,
-      };
-      reconciling = true;
+      if (!currentOperation(submittedOperation, submittedScope)) return;
+      accepted = true;
+      if (
+        !Number.isSafeInteger(result.revision) ||
+        result.revision < submitted.revision
+      )
+        throw new Error(
+          "The save acknowledgement did not include a current revision.",
+        );
+      minimumRevision.current = result.revision;
+      const snapshot = await readCurrent(result.revision);
+      if (!currentOperation(submittedOperation, submittedScope)) return;
+      acceptSettings(snapshot);
       setNotice(
         instanceScope
           ? "Control Plane defaults published. Projects inherit these definitions; credentials remain explicitly assigned."
           : "Project configuration saved.",
       );
-      resource.refresh();
       onSaved();
-    } catch (e) {
-      if (currentScope.current === submittedScope)
-        setError(
-          `${errorMessage(e)} Reload settings to reconcile before changing a submitted configuration.`,
-        );
+      if (editorLocation && !setup) onCloseEditor?.();
+      if (setup?.authentication === "shared") onCredentials?.(setup.target);
+      else if (setup) onPersonalCredentials?.(setup.target);
+    } catch (cause) {
+      if (currentOperation(submittedOperation, submittedScope)) {
+        const uncertain = !(cause instanceof ApiFailure) || cause.status >= 500;
+        if (
+          accepted ||
+          uncertain ||
+          (cause instanceof ApiFailure && cause.status === 409)
+        ) {
+          requireReload();
+          setError(
+            `${accepted ? "The submitted configuration was accepted, but its current saved revision could not be confirmed." : errorMessage(cause)} Your proposed configuration is retained. Reload settings before saving again.`,
+          );
+        } else setError(errorMessage(cause));
+      }
     } finally {
-      if (currentScope.current === submittedScope && !reconciling)
-        setBusy(false);
+      if (pendingSave.current === submittedOperation)
+        pendingSave.current = null;
+      if (currentOperation(submittedOperation, submittedScope)) setBusy(false);
     }
   }
+  function recoveryControls() {
+    return editorLocation && mustReload ? (
+      <div className="chat-settings-actions">
+        <Button disabled={busy} onClick={() => void reloadSettings()}>
+          Reload settings
+        </Button>
+        <span className="field-help">
+          Review the latest saved configuration before making another change.
+        </span>
+      </div>
+    ) : null;
+  }
   function resetInherited(kind: InheritedSection, id: string) {
-    if (!draft?.inheritance || busy || changed) return;
+    if (
+      !settingsEditable ||
+      !draft?.inheritance ||
+      busy ||
+      changed ||
+      mustReloadRef.current
+    )
+      return;
     void save({
       ...draft,
       inheritance: {
@@ -173,7 +342,7 @@ export function ChatSettings({
     });
   }
   function remove(kind: SettingsEditor["kind"], id: string) {
-    if (!draft || busy) return;
+    if (!settingsEditable || !draft || busy || mustReloadRef.current) return;
     const next = structuredClone(draft);
     if (kind === "provider") {
       delete next.providers.profiles[id];
@@ -210,29 +379,47 @@ export function ChatSettings({
             }
           >
             <ChatSettingsEditor
-              key={`${editor.kind}:${editor.id}`}
+              key={`${editor.kind}:${editor.id}:${resetExtraEditor}`}
               editor={editor}
               draft={draft!}
               project={project}
               settingsPath={path}
               instanceScope={instanceScope}
               saved={{
-                ...resource.data!,
-                credential_status: resource.data?.credential_status ?? {
+                ...saved!,
+                credential_status: saved?.credential_status ?? {
                   providers: {},
                   mcp: {},
                 },
               }}
-              canManageCredentials={!changed}
-              onCredentials={onCredentials}
-              onPersonalCredentials={onPersonalCredentials}
+              busy={busy || mustReload || !settingsEditable}
+              onDirtyChange={setFormDirty}
+              canManageCredentials={!changed && !formDirty && !mustReload}
+              onCredentials={
+                onCredentials
+                  ? (target) => {
+                      if (changed || formDirty || mustReloadRef.current) return;
+                      setEditor(null);
+                      onDirtyChange?.(false);
+                      onCredentials(target);
+                    }
+                  : undefined
+              }
+              onPersonalCredentials={
+                onPersonalCredentials
+                  ? (target) => {
+                      if (changed || formDirty || mustReloadRef.current) return;
+                      setEditor(null);
+                      onDirtyChange?.(false);
+                      onPersonalCredentials(target);
+                    }
+                  : undefined
+              }
               onBusyChange={(value) => {
                 if (currentScope.current === scope) setCatalogBusy(value);
               }}
-              onCancel={() => setEditor(null)}
+              onCancel={closeEditor}
               onApply={(value, setup) => {
-                setDraft(value);
-                setEditor(null);
                 setNotice("");
                 void save(value, setup);
               }}
@@ -250,7 +437,9 @@ export function ChatSettings({
         section !== "variables" &&
         onCredentials ? (
           <Button
-            disabled={busy || editing || changed}
+            disabled={
+              busy || mustReload || !settingsEditable || editing || changed
+            }
             onClick={() => onCredentials()}
           >
             Manage credentials
@@ -258,7 +447,9 @@ export function ChatSettings({
         ) : null}
         <Button
           variant="primary"
-          disabled={!changed || busy || editing}
+          disabled={
+            !settingsEditable || !changed || busy || mustReload || editing
+          }
           onClick={() => void save()}
         >
           {busy
@@ -268,22 +459,20 @@ export function ChatSettings({
               : "Save project configuration"}
         </Button>
         <Button
-          disabled={busy}
-          onClick={() => {
-            resource.refresh();
-            setError("");
-            setNotice("");
-          }}
+          disabled={busy || (!mustReload && (editing || changed))}
+          onClick={() => void reloadSettings()}
         >
           Reload settings
         </Button>
         {changed ? (
           <Button
-            disabled={busy}
+            disabled={busy || mustReload}
             onClick={() => {
-              if (resource.data) setDraft(settingsWrite(resource.data));
+              if (saved) setDraft(settingsWrite(saved));
               setEditor(null);
               setExtraEditor(null);
+              setFormDirty(false);
+              setExtraDirty(false);
               setResetExtraEditor((value) => value + 1);
               setError("");
               setNotice("Unsaved configuration changes discarded.");
@@ -317,21 +506,34 @@ export function ChatSettings({
       return (
         <CatalogInventory
           kind={kind === "provider" ? "provider" : "model"}
+          description={
+            instanceScope
+              ? kind === "provider"
+                ? "Control Plane provider definitions flow into projects. Credential access requires a separate assignment."
+                : "Publish model profiles and their provider references for projects to inherit. Assign each model to the roles that use it."
+              : kind === "provider"
+                ? "Provider connections available to chats in this project. Each person connects privately unless a shared credential is explicitly assigned."
+                : "Model profiles available to this project and the roles that use them."
+          }
+          usageLabel={
+            kind === "provider" ? "Configured models" : "Assigned roles"
+          }
           headingLevel={2}
           summary={
             rows.length +
             " configured " +
             (kind === "provider" ? "providers" : "models")
           }
-          busy={busy}
+          busy={busy || mustReload || !settingsEditable}
           editing={editing}
-          onAdd={() => setEditor({ kind, id: "" })}
+          onAdd={() => openEditor({ kind, id: "" })}
           footer={
             <>
               {actionBar()}
               <p className="field-help">
-                Connection URLs must be allowed by your deployment
-                administrator. Saving applies when chats are idle.
+                {kind === "provider"
+                  ? "Connection URLs must be allowed by your deployment administrator. Saving applies when chats are idle."
+                  : "Model profiles reference configured providers. Saving applies when chats are idle."}
               </p>
             </>
           }
@@ -351,13 +553,12 @@ export function ChatSettings({
             const inheritedKind = kind === "provider" ? "providers" : "models";
             const origin = instanceScope
               ? "Control Plane definition"
-              : resource.data?.inheritance?.provenance[inheritedKind][
-                    row.id
-                  ] === "global"
+              : saved?.inheritance?.provenance[inheritedKind][row.id] ===
+                  "global"
                 ? "Inherited from Control Plane"
-                : resource.data?.inheritance?.global_entries?.[
-                      inheritedKind
-                    ].includes(row.id)
+                : saved?.inheritance?.global_entries?.[inheritedKind].includes(
+                      row.id,
+                    )
                   ? "Project override"
                   : "Project definition";
             return {
@@ -382,7 +583,7 @@ export function ChatSettings({
                 : {}),
               searchText: row.id + " " + label + " " + row.detail,
               connection: (
-                <span>
+                <span className="catalog-connection-copy">
                   <span>
                     {kind === "model"
                       ? (draft!.labels?.providers[
@@ -409,7 +610,7 @@ export function ChatSettings({
                   ? "Customize"
                   : "Edit",
               mutationDisabled: editing,
-              onEdit: () => setEditor({ kind, id: row.id }),
+              onEdit: () => openEditor({ kind, id: row.id }),
               ...(!inUse(row.id)
                 ? { onDelete: () => remove(kind, row.id) }
                 : {}),
@@ -434,19 +635,31 @@ export function ChatSettings({
                           {draft!.labels?.models[id] ?? id} · {value.model}
                         </p>
                       ))}
-                      <Button
-                        onClick={() => {
-                          if (row.authentication === "shared")
-                            onCredentials?.({ kind: "provider", id: row.id });
-                          else
-                            onPersonalCredentials?.({
-                              kind: "provider",
-                              id: row.id,
-                            });
-                        }}
-                      >
-                        Manage credentials
-                      </Button>
+                      {row.authentication !== "none" &&
+                      (row.authentication === "shared"
+                        ? onCredentials
+                        : onPersonalCredentials) ? (
+                        <Button
+                          disabled={
+                            busy ||
+                            mustReload ||
+                            !settingsEditable ||
+                            changed ||
+                            editing
+                          }
+                          onClick={() => {
+                            if (row.authentication === "shared")
+                              onCredentials?.({ kind: "provider", id: row.id });
+                            else
+                              onPersonalCredentials?.({
+                                kind: "provider",
+                                id: row.id,
+                              });
+                          }}
+                        >
+                          Manage credentials
+                        </Button>
+                      ) : null}
                     </>
                   ) : (
                     <p>
@@ -495,14 +708,20 @@ export function ChatSettings({
         cell: (row) => (
           <div className="chat-settings-row-actions">
             <Button
-              disabled={busy || editing}
-              onClick={() => setEditor({ kind, id: row.id })}
+              disabled={busy || mustReload || !settingsEditable || editing}
+              onClick={() => openEditor({ kind, id: row.id })}
             >
               Edit {row.id}
             </Button>
             <Button
               variant="danger"
-              disabled={busy || editing || inUse(row.id)}
+              disabled={
+                busy ||
+                mustReload ||
+                !settingsEditable ||
+                editing ||
+                inUse(row.id)
+              }
               title={
                 inUse(row.id)
                   ? "Update model or role references before removing this profile."
@@ -516,7 +735,9 @@ export function ChatSettings({
             row.authentication === "shared" &&
             onCredentials ? (
               <Button
-                disabled={busy || changed || editing}
+                disabled={
+                  busy || mustReload || !settingsEditable || changed || editing
+                }
                 onClick={() => onCredentials({ kind: "mcp", id: row.id })}
               >
                 Manage shared credential
@@ -529,10 +750,16 @@ export function ChatSettings({
     return (
       <section className="chat-settings-inventory" aria-label={title}>
         <header className="catalog-heading">
-          <h3>{title}</h3>
+          <div>
+            <h2>{title}</h2>
+            <p>
+              Manage remote tools and choose personal or explicitly assigned
+              shared authentication.
+            </p>
+          </div>
           <Button
-            disabled={busy || editing}
-            onClick={() => setEditor({ kind, id: "" })}
+            disabled={busy || mustReload || !settingsEditable || editing}
+            onClick={() => openEditor({ kind, id: "" })}
           >
             Add {kind === "mcp" ? "MCP connection" : kind}
           </Button>
@@ -546,6 +773,11 @@ export function ChatSettings({
           itemLabel="profiles"
           search={{ columnId: "name", label: `Search ${title.toLowerCase()}` }}
         />
+        {actionBar()}
+        <p className="field-help">
+          Connection URLs must be allowed by your deployment administrator.
+          Saving applies when chats are idle.
+        </p>
       </section>
     );
   }
@@ -555,6 +787,75 @@ export function ChatSettings({
         Project administration access is required to configure chat.
       </p>
     );
+  if (editorLocation && !settingsEditable && saved)
+    return (
+      <SettingsEditorUnavailable
+        backLabel={
+          section === "mcp"
+            ? "MCP servers"
+            : section[0]!.toUpperCase() + section.slice(1)
+        }
+        onBack={closeEditor}
+        reason={executionReason}
+      />
+    );
+  if (editorLocation && routedKind) {
+    const backLabel =
+      section === "mcp"
+        ? "MCP servers"
+        : section === "models"
+          ? "Models"
+          : "Providers";
+    const entries =
+      routedKind === "provider"
+        ? draft?.providers.profiles
+        : routedKind === "model"
+          ? draft?.models.profiles
+          : draft?.mcp.servers;
+    const unavailable =
+      editorLocation.action === "edit" &&
+      (!editorLocation.id ||
+        (entries && !Object.hasOwn(entries, editorLocation.id)));
+    return (
+      <section className="chat-settings catalog-settings">
+        <LoadState {...resource} retry={resource.refresh} />
+        {error ? (
+          <p role="alert" className="alert">
+            {error}
+          </p>
+        ) : null}
+        {notice ? (
+          <p role="status" className="sync-notice">
+            {notice}
+          </p>
+        ) : null}
+        {recoveryControls()}
+        {draft ? (
+          unavailable ? (
+            <SettingsEditorUnavailable
+              backLabel={backLabel}
+              onBack={closeEditor}
+            />
+          ) : (
+            <SettingsEditorPage
+              title={`${editorLocation.action === "new" ? "Add" : "Edit"} ${routedKind === "mcp" ? "MCP server" : routedKind}`}
+              backLabel={backLabel}
+              showHeading={false}
+              busy={busy}
+              onBack={closeEditor}
+              description={
+                instanceScope
+                  ? "Control Plane defaults flow into projects. Credential access requires a separate explicit assignment."
+                  : "Changes apply to this project. Editing an inherited definition creates a project override."
+              }
+            >
+              {editorForm(routedKind)}
+            </SettingsEditorPage>
+          )
+        ) : null}
+      </section>
+    );
+  }
   return (
     <section
       className="chat-settings catalog-settings"
@@ -563,78 +864,14 @@ export function ChatSettings({
       }
       data-section={section}
     >
-      {![
-        "providers",
-        "models",
-        "routing",
-        "search",
-        "telemetry",
-        "variables",
-      ].includes(section) ? (
-        <header className="catalog-heading">
-          <div>
-            <h2>
-              {section === "variables"
-                ? "Variables"
-                : section === "search"
-                  ? "Search"
-                  : section === "telemetry"
-                    ? "Telemetry"
-                    : section === "providers"
-                      ? "Providers"
-                      : section === "models"
-                        ? "Models"
-                        : section === "routing"
-                          ? "Role routing"
-                          : section === "credentials"
-                            ? "Credentials"
-                            : "MCP connections"}
-            </h2>
-            <p>
-              {instanceScope
-                ? "Instance definitions are inherited by projects. Credentials require explicit project or personal attachment."
-                : section === "variables"
-                  ? "Nonsecret project configuration values."
-                  : section === "search"
-                    ? "Configure search services and their agent and research routes."
-                    : section === "telemetry"
-                      ? "View the collector configured for this Control Plane."
-                      : section === "providers"
-                        ? "Manage the model providers available to personal chats in this project."
-                        : section === "models"
-                          ? "Configure model profiles and the roles that use them."
-                          : section === "routing"
-                            ? "Choose the primary model and specialized model assignments."
-                            : section === "credentials"
-                              ? "Save and replace the encrypted project credentials used by providers and MCP connections."
-                              : "Manage remote tools. Each person connects their own account unless a project credential is explicitly configured."}
-            </p>
-          </div>
-        </header>
-      ) : null}
-      {!["providers", "models", "variables", "telemetry"].includes(section) ? (
-        <p className="field-help">
-          Connection URLs must be allowed by your deployment administrator.
-          Saving applies when chats are idle.
-        </p>
-      ) : null}
       <LoadState {...resource} retry={resource.refresh} />
-      {!instanceScope && resource.data ? (
-        <SettingsInheritancePanel
-          saved={resource.data}
-          section={section}
-          busy={busy || changed || editing}
-          onReset={resetInherited}
-        />
-      ) : null}
-      {!instanceScope && resource.data && section === "search" ? (
-        <SettingsInheritancePanel
-          saved={resource.data}
-          section="routing"
-          roleFamily="search"
-          busy={busy || changed || editing}
-          onReset={resetInherited}
-        />
+      {executionReason && saved ? (
+        <div className="sync-notice">
+          <p role="status">{executionReason}</p>
+          {section === "credentials" ? (
+            <Button onClick={resource.refresh}>Reload settings</Button>
+          ) : null}
+        </div>
       ) : null}
       {error ? (
         <p className="alert" role="alert">
@@ -646,10 +883,14 @@ export function ChatSettings({
           {notice}
         </p>
       ) : null}
+      {recoveryControls()}
       {draft ? (
         <>
-          {!["providers", "models", "telemetry"].includes(section) &&
-          !extraSection
+          {!["providers", "models", "mcp", "telemetry", "credentials"].includes(
+            section,
+          ) &&
+          !extraSection &&
+          (!onOpenEditor || section !== "routing")
             ? actionBar()
             : null}
           {editor &&
@@ -679,46 +920,76 @@ export function ChatSettings({
               </Button>
             </p>
           ) : null}
-          {section === "credentials" ? (
+          {section === "credentials" && settingsEditable ? (
             <ChatProjectCredentials
               key={scope}
               path={path}
               identity={identity}
-              disabled={busy || changed || editing}
+              disabled={
+                busy || mustReload || !settingsEditable || changed || editing
+              }
               onSaved={() => {
                 resource.refresh();
                 onSaved();
                 setNotice("Project credential saved.");
               }}
               initialConnection={credentialTarget}
+              editorLocation={editorLocation}
+              onOpenEditor={onOpenEditor}
+              onCloseEditor={onCloseEditor}
+              onDirtyChange={onDirtyChange}
             />
           ) : null}
-          <div hidden={!["search", "telemetry", "variables"].includes(section)}>
-            <ConnectionSettingsExtras
-              section={
-                section === "telemetry" || section === "variables"
-                  ? section
-                  : "search"
-              }
-              draft={draft}
-              saved={resource.data!}
-              instanceScope={instanceScope}
-              busy={
-                busy ||
-                Boolean(editor) ||
-                Boolean(extraEditor && extraEditor !== section)
-              }
-              onEditingChange={setExtraEditor}
-              resetEditor={resetExtraEditor}
-              onChange={setDraft}
-              onSave={(value) => void save(value)}
-              onCredentials={onCredentials}
-              onPersonalCredentials={onPersonalCredentials}
-            />
-          </div>
-          {extraSection && section !== "telemetry" ? actionBar() : null}
-          {section === "telemetry" ? (
-            <Button disabled={busy || editing} onClick={resource.refresh}>
+          {!editorLocation || extraSection ? (
+            <div
+              hidden={!["search", "telemetry", "variables"].includes(section)}
+            >
+              <ConnectionSettingsExtras
+                section={
+                  section === "telemetry" || section === "variables"
+                    ? section
+                    : "search"
+                }
+                draft={draft}
+                saved={saved!}
+                instanceScope={instanceScope}
+                busy={
+                  busy ||
+                  mustReload ||
+                  !settingsEditable ||
+                  Boolean(editor) ||
+                  Boolean(extraEditor && extraEditor !== section)
+                }
+                navigationBusy={busy}
+                onEditingChange={setExtraEditor}
+                onDirtyChange={setExtraDirty}
+                resetEditor={resetExtraEditor}
+                editorLocation={editorLocation}
+                onOpenEditor={onOpenEditor}
+                onCloseEditor={onCloseEditor}
+                onChange={setDraft}
+                onSave={(value) => void save(value)}
+                onCredentials={onCredentials}
+                onPersonalCredentials={onPersonalCredentials}
+              />
+            </div>
+          ) : null}
+          {!editorLocation && extraSection && section !== "telemetry" ? (
+            <>
+              {actionBar()}
+              {section === "search" ? (
+                <p className="field-help">
+                  Search endpoints must be allowed by your deployment
+                  administrator. Saving applies when chats are idle.
+                </p>
+              ) : null}
+            </>
+          ) : null}
+          {!editorLocation && section === "telemetry" ? (
+            <Button
+              disabled={busy || (!mustReload && editing)}
+              onClick={() => void reloadSettings()}
+            >
               Reload settings
             </Button>
           ) : null}
@@ -742,76 +1013,166 @@ export function ChatSettings({
               </Button>
             </p>
           ) : null}
-          <div hidden={section !== "providers"}>
-            {inventory(
-              "provider",
-              "Providers",
-              Object.entries(draft.providers.profiles).map(([id, value]) => ({
-                id,
-                detail: `${value.kind}${value.baseUrl ? ` · ${value.baseUrl}` : ""}`,
-                authentication: draft.provider_authentication[id] ?? "personal",
-              })),
-            )}
-          </div>
-          <div hidden={section !== "models"}>
-            {inventory(
-              "model",
-              "Models",
-              Object.entries(draft.models.profiles).map(([id, value]) => ({
-                id,
-                detail: `${value.model} · ${value.providerProfile} · ${
-                  Object.entries(draft.models.roles)
-                    .filter(([, profile]) => profile === id)
-                    .map(([role]) => role)
-                    .join(", ") || "No default roles"
-                }`,
-              })),
-            )}
-          </div>
-          <div hidden={section !== "mcp"}>
-            {inventory(
-              "mcp",
-              "MCP connections",
-              Object.entries(draft.mcp.servers).map(([id, value]) => ({
-                id,
-                detail: `${value.url} · ${value.allowedTools.length} allowed tools`,
-                authentication: draft.mcp_authentication[id] ?? "personal",
-              })),
-            )}
-          </div>
+          {!editorLocation ? (
+            <>
+              <div hidden={section !== "providers"}>
+                {inventory(
+                  "provider",
+                  "Providers",
+                  Object.entries(draft.providers.profiles).map(
+                    ([id, value]) => ({
+                      id,
+                      detail: `${value.kind}${value.baseUrl ? ` · ${value.baseUrl}` : ""}`,
+                      authentication:
+                        draft.provider_authentication[id] ?? "personal",
+                    }),
+                  ),
+                )}
+              </div>
+              <div hidden={section !== "models"}>
+                {inventory(
+                  "model",
+                  "Models",
+                  Object.entries(draft.models.profiles).map(([id, value]) => ({
+                    id,
+                    detail: `${value.model} · ${value.providerProfile} · ${
+                      Object.entries(draft.models.roles)
+                        .filter(([, profile]) => profile === id)
+                        .map(([role]) => role)
+                        .join(", ") || "No default roles"
+                    }`,
+                  })),
+                )}
+              </div>
+              <div hidden={section !== "mcp"}>
+                {inventory(
+                  "mcp",
+                  "MCP connections",
+                  Object.entries(draft.mcp.servers).map(([id, value]) => ({
+                    id,
+                    detail: `${value.url} · ${value.allowedTools.length} allowed tools`,
+                    authentication: draft.mcp_authentication[id] ?? "personal",
+                  })),
+                )}
+              </div>
+            </>
+          ) : null}
           {section === "routing" ? (
-            <div className="chat-role-settings">
-              <ModelRoutingOverview
-                roles={draft.models.roles}
-                models={Object.entries(draft.models.profiles).map(
-                  ([profile, model]) => ({
-                    profile,
-                    label: draft.labels?.models[profile] ?? profile,
-                    model: model.model,
-                    providerProfile: model.providerProfile,
-                  }),
-                )}
-                disabled={busy || editing}
-                onChange={(roles) =>
-                  setDraft({ ...draft, models: { ...draft.models, roles } })
-                }
-              />
-              <ModelRoleRouting
-                roles={draft.models.roles}
-                models={Object.entries(draft.models.profiles).map(
-                  ([profile, model]) => ({
-                    profile,
-                    label: draft.labels?.models[profile] ?? profile,
-                    model: model.model,
-                    providerProfile: model.providerProfile,
-                  }),
-                )}
-                disabled={busy || editing}
-                onChange={(roles) =>
-                  setDraft({ ...draft, models: { ...draft.models, roles } })
-                }
-              />
-            </div>
+            <>
+              {onOpenEditor && !editorLocation ? (
+                <header className="catalog-heading">
+                  <div>
+                    <h2>Model routing</h2>
+                    <p>
+                      Choose the models used by each role. Unassigned roles use
+                      the primary model.
+                    </p>
+                  </div>
+                  <Button
+                    disabled={
+                      busy ||
+                      mustReload ||
+                      !settingsEditable ||
+                      changed ||
+                      editing
+                    }
+                    onClick={() => onOpenEditor({ action: "edit" })}
+                  >
+                    Configure routing
+                  </Button>
+                </header>
+              ) : null}
+              {editorLocation ? (
+                <Button disabled={busy} onClick={closeEditor}>
+                  Back to Model routing
+                </Button>
+              ) : null}
+              <div className="chat-role-settings">
+                <ModelRoutingOverview
+                  roles={draft.models.roles}
+                  models={Object.entries(draft.models.profiles).map(
+                    ([profile, model]) => ({
+                      profile,
+                      label: draft.labels?.models[profile] ?? profile,
+                      model: model.model,
+                      providerProfile: model.providerProfile,
+                    }),
+                  )}
+                  disabled={
+                    busy ||
+                    mustReload ||
+                    !settingsEditable ||
+                    editing ||
+                    Boolean(onOpenEditor && !editorLocation)
+                  }
+                  onChange={(roles) =>
+                    setDraft({ ...draft, models: { ...draft.models, roles } })
+                  }
+                />
+                {!onOpenEditor || editorLocation ? (
+                  <ModelRoleRouting
+                    roles={draft.models.roles}
+                    models={Object.entries(draft.models.profiles).map(
+                      ([profile, model]) => ({
+                        profile,
+                        label: draft.labels?.models[profile] ?? profile,
+                        model: model.model,
+                        providerProfile: model.providerProfile,
+                      }),
+                    )}
+                    disabled={
+                      busy ||
+                      !settingsEditable ||
+                      editing ||
+                      Boolean(onOpenEditor && !editorLocation)
+                    }
+                    onChange={(roles) =>
+                      setDraft({ ...draft, models: { ...draft.models, roles } })
+                    }
+                  />
+                ) : null}
+              </div>
+              {editorLocation ? (
+                <div className="chat-settings-actions">
+                  <Button disabled={busy} onClick={closeEditor}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="primary"
+                    disabled={
+                      busy || mustReload || !settingsEditable || !changed
+                    }
+                    onClick={() => void save()}
+                  >
+                    Save routing
+                  </Button>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          {!editorLocation && !instanceScope && saved ? (
+            <SettingsInheritancePanel
+              saved={saved}
+              section={section}
+              busy={
+                busy || mustReload || !settingsEditable || changed || editing
+              }
+              onReset={resetInherited}
+            />
+          ) : null}
+          {!editorLocation &&
+          !instanceScope &&
+          saved &&
+          section === "search" ? (
+            <SettingsInheritancePanel
+              saved={saved}
+              section="routing"
+              roleFamily="search"
+              busy={
+                busy || mustReload || !settingsEditable || changed || editing
+              }
+              onReset={resetInherited}
+            />
           ) : null}
         </>
       ) : null}

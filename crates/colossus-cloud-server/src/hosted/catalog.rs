@@ -121,10 +121,24 @@ pub(crate) async fn presets(
     let caller = state.auth.caller(&headers, &project, false).await?;
     caller.require(CloudPermission::Administer)?;
     let host = state.hosted.as_ref().ok_or(CloudError::NotFound)?;
-    let configuration = host
-        .project_config(&project)
-        .await?
-        .ok_or(CloudError::NotFound)?;
+    let Some(configuration) = host.project_config(&project).await? else {
+        let presets = colossus_contracts::provider_presets();
+        let availability: BTreeMap<_, _> = presets
+            .iter()
+            .map(|preset| {
+                (
+                    preset.id,
+                    PresetAvailability {
+                        status: PresetStatus::DeploymentRequired,
+                        reason: crate::chat_settings::availability::OPERATOR_SETUP_REQUIRED,
+                    },
+                )
+            })
+            .collect();
+        return Ok(Json(
+            serde_json::json!({"presets":presets,"availability":availability}),
+        ));
+    };
     let ceiling = host
         .deployment
         .projects

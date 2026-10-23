@@ -61,6 +61,26 @@ pub(crate) fn resolve(
     global: &HostedCatalog,
     ceiling: &ChatProjectConfig,
 ) -> CloudResult<ChatProjectConfig> {
+    crate::chat_settings::review_effective(&definitions(raw, global), ceiling)
+}
+
+/// Read-only catalog projection for a Cloud project without an operator runtime seed.
+/// This value must never enter Hosted execution caches or retained configuration.
+pub(crate) fn catalog_only(global: &HostedCatalog) -> ChatProjectConfig {
+    let mut runtime = colossus_runtime::RuntimeConfig::controlled_chat_template(
+        "/catalog-only/unconfigured.redb",
+    );
+    runtime.providers.profiles.clear();
+    runtime.models.profiles.clear();
+    runtime.models.roles.clear();
+    runtime.mcp.servers.clear();
+    runtime.search.profiles.clear();
+    runtime.search.roles.clear();
+    runtime.sandbox.network_destinations.clear();
+    definitions(&ChatProjectConfig::new(runtime), global)
+}
+
+fn definitions(raw: &ChatProjectConfig, global: &HostedCatalog) -> ChatProjectConfig {
     let local = &raw.runtime;
     let disabled = &raw.catalog_disabled;
     let mut output = raw.clone();
@@ -191,7 +211,7 @@ pub(crate) fn resolve(
     output.labels.search = merge(&global.labels.search, &raw.labels.search, &disabled.search);
     output.variables = merge(&global.variables, &raw.variables, &disabled.variables);
     output.runtime.observability = global.observability.clone();
-    crate::chat_settings::review_effective(&output, ceiling)
+    output
 }
 
 /// Persist only local rows. Shared catalog updates remain visible without rewriting tenant custody.

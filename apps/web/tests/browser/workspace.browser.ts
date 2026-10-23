@@ -1,6 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import { browserFixture } from "./fixture";
-import { appearanceCases, selectAppearance } from "./appearance";
+import {
+  appearanceCases,
+  selectAppearance,
+  chooseProjectSettingsSection,
+} from "./appearance";
 import type { ThreadDetailResponse } from "../../src/api";
 
 async function expectIconRail(page: Page) {
@@ -1012,9 +1016,6 @@ for (const appearance of appearanceCases.slice(0, 2)) {
     await page
       .getByRole("menuitem", { name: "Project settings", exact: true })
       .press("Enter");
-    const sections = page.getByRole("navigation", {
-      name: "Settings sections",
-    });
     await expect(
       page.getByRole("heading", { name: "Providers", exact: true }),
     ).toBeVisible();
@@ -1028,6 +1029,7 @@ for (const appearance of appearanceCases.slice(0, 2)) {
       name: /^Request timeout \(ms\)/u,
     });
     await timeout.fill("450000");
+    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(fixture.settingsSubmissions).toHaveLength(0);
     await expect(
@@ -1045,18 +1047,14 @@ for (const appearance of appearanceCases.slice(0, 2)) {
       .getByRole("button", { name: "Save changes", exact: true })
       .click();
     await expect.poll(() => fixture.settingsSubmissions.length).toBe(1);
-    await sections
-      .getByRole("button", { name: "Models", exact: true })
-      .press("Enter");
+    await chooseProjectSettingsSection(page, "Models");
     await expect(
       page.getByRole("heading", { name: "Models", exact: true }),
     ).toBeVisible();
     await expect(
       page.getByText("Unsaved configuration changes", { exact: true }),
     ).toHaveCount(0);
-    await sections
-      .getByRole("button", { name: "Providers", exact: true })
-      .press("Enter");
+    await chooseProjectSettingsSection(page, "Providers");
     await page
       .getByRole("button", { name: "Edit company", exact: true })
       .click();

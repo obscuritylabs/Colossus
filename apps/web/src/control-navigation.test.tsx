@@ -81,39 +81,37 @@ it("shows project administration only for the selected authorized project", () =
   const { items } = controlNavigation(account, home, "p");
   expect(
     items
-      .filter((item) => item.group === "Project Administration")
+      .filter((item) => item.group === "Administration")
       .map((item) => item.label),
-  ).toEqual(projectLabels);
-  expect(items.find((item) => item.id === "project-members")?.href).toBe(
+  ).toEqual(["Project Admin"]);
+  expect(items.find((item) => item.id === "project-admin")?.href).toBe(
     "/projects/p/access",
   );
-  expect(items.find((item) => item.id === "project-providers")?.href).toBe(
-    "/projects/p/settings/providers",
-  );
+  expect(items).toHaveLength(7);
+  expect(controlNavigation(account, home, "p").secondary).toBeUndefined();
   for (const project of ["q", "unavailable"]) {
     expect(
       controlNavigation(account, home, project).items.some(
-        (item) => item.group === "Project Administration",
+        (item) => item.id === "project-admin",
       ),
     ).toBe(false);
   }
-  expect(items.some((item) => item.group === "Control Plane Admin")).toBe(
-    false,
-  );
+  expect(items.some((item) => item.id === "admin")).toBe(false);
 });
 
 it("keeps Control Plane administration available without manufacturing a selected project", () => {
   const account = { ...identity(true), projects: [], memberships: [] };
-  const { items, current } = controlNavigation(
+  const { items, current, secondary } = controlNavigation(
     account,
     { kind: "global", surface: "admin", view: "users" },
     "",
   );
   expect(
     items
-      .filter((item) => item.group === "Control Plane Admin")
+      .filter((item) => item.group === "Administration")
       .map((item) => item.label),
-  ).toEqual([
+  ).toEqual(["Control Plane Admin"]);
+  expect(secondary?.items.map((item) => item.label)).toEqual([
     "Users",
     "Projects",
     "Providers",
@@ -128,34 +126,43 @@ it("keeps Control Plane administration available without manufacturing a selecte
     "Appearance",
     "Authentication & settings",
   ]);
-  expect(items.find((item) => item.id === "admin-users")?.href).toBe(
+  expect(secondary?.items.find((item) => item.id === "admin-users")?.href).toBe(
     "/admin/users",
   );
-  expect(items.find((item) => item.id === "admin-projects")?.href).toBe(
-    "/admin/projects",
-  );
+  expect(
+    secondary?.items.find((item) => item.id === "admin-projects")?.href,
+  ).toBe("/admin/projects");
   expect(items.find((item) => item.id === "settings")?.href).toBe(
     "/settings/appearance",
   );
-  expect(items.some((item) => item.group === "Project Administration")).toBe(
-    false,
-  );
-  expect(current).toBe("admin-users");
+  expect(items.some((item) => item.id === "project-admin")).toBe(false);
+  expect(current).toBe("admin");
+  expect(secondary?.current).toBe("admin-users");
 });
 
 it("distinguishes active global, project and personal settings destinations", () => {
   const account = identity(true, true);
-  const cases: [Route, string][] = [
+  const cases: [Route, string, string | undefined][] = [
     [
       { kind: "global", surface: "admin", view: "providers" },
+      "admin",
       "admin-providers",
     ],
     [
       { kind: "project-settings", project: "p", section: "providers" },
+      "project-admin",
       "project-providers",
     ],
-    [{ kind: "project", project: "p", view: "access" }, "project-members"],
-    [{ kind: "project", project: "p", view: "settings" }, "project-settings"],
+    [
+      { kind: "project", project: "p", view: "access" },
+      "project-admin",
+      "project-members",
+    ],
+    [
+      { kind: "project", project: "p", view: "settings" },
+      "project-admin",
+      "project-settings",
+    ],
     [
       {
         kind: "global",
@@ -164,9 +171,61 @@ it("distinguishes active global, project and personal settings destinations", ()
         project: "p",
       },
       "settings",
+      undefined,
     ],
   ];
-  for (const [route, current] of cases) {
-    expect(controlNavigation(account, route, "p").current).toBe(current);
+  for (const [route, current, secondaryCurrent] of cases) {
+    const navigation = controlNavigation(account, route, "p");
+    expect(navigation.current).toBe(current);
+    expect(navigation.secondary?.current).toBe(secondaryCurrent);
   }
+});
+
+it("limits the primary rail to two administration destinations and moves settings into the authorized scope", () => {
+  const account = identity(true, true);
+  const navigation = controlNavigation(
+    account,
+    { kind: "project-settings", project: "p", section: "models" },
+    "p",
+  );
+  expect(navigation.items).toHaveLength(8);
+  expect(
+    navigation.items
+      .filter((item) => item.group === "Administration")
+      .map((item) => item.id),
+  ).toEqual(["project-admin", "admin"]);
+  expect(
+    navigation.items.some(
+      (item) => item.id === "project-models" || item.id === "admin-models",
+    ),
+  ).toBe(false);
+  expect(navigation.secondary?.items.map((item) => item.label)).toEqual(
+    projectLabels,
+  );
+  expect(navigation.secondary?.context).toBe("Project p");
+  expect(
+    navigation.secondary?.items.find((item) => item.id === "project-models")
+      ?.href,
+  ).toBe("/projects/p/settings/models");
+  expect(
+    controlNavigation(
+      identity(false, true),
+      { kind: "project-settings", project: "q", section: "models" },
+      "q",
+    ).secondary,
+  ).toBeUndefined();
+  expect(
+    controlNavigation(
+      account,
+      { kind: "project-settings", project: "q", section: "models" },
+      "p",
+    ).secondary,
+  ).toBeUndefined();
+  expect(
+    controlNavigation(
+      identity(),
+      { kind: "global", surface: "admin", view: "users" },
+      "p",
+    ).secondary,
+  ).toBeUndefined();
 });

@@ -19,13 +19,30 @@ import {
 } from "./control-api";
 import { errorMessage, useResource } from "./resources";
 import { AnalyticsPanel, LoadState } from "./Home";
-import { RouteLink } from "./navigation";
+import { RouteLink, useSettingsNavigationGuard } from "./navigation";
 import {
   globalHref,
   projectHref,
   projectCreateHref,
   type ProjectView,
 } from "./routes";
+
+/** Async completions belong to the mounted resource scope, including A → B → A. */
+function useOperationScope(key: string) {
+  const scope = useRef({ key });
+  if (scope.current.key !== key) scope.current = { key };
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  return () => {
+    const operation = scope.current;
+    return () => alive.current && scope.current === operation;
+  };
+}
 export function SectionTabs({
   items,
   current,
@@ -184,15 +201,16 @@ export function Projects({
             <>
               <section className="control-card">
                 <header>
-                  <h3>Project details</h3>
+                  <h2>Project details</h2>
                 </header>
                 {permissions.includes("administer") ? (
                   <ProjectEditor
-                    key={`${project.id}:${project.revision}`}
+                    key={project.id}
                     project={project}
                     projects={me.projects}
                     onSaved={onRefresh}
                     allowHierarchy={me.user.is_admin}
+                    showHeading={false}
                   />
                 ) : (
                   <>
@@ -441,14 +459,34 @@ export function ProjectEditor({
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const creationId = useRef(crypto.randomUUID().replaceAll("-", ""));
-  const alive = useRef(true);
   const pending = useRef(false);
+  const dirty = useRef(false);
+  const revision = useRef(project?.revision);
+  const draftScope = useRef(project?.id);
+  const markDirty = useSettingsNavigationGuard();
+  const captureScope = useOperationScope(project?.id ?? "new-project");
+  const changed = () => {
+    dirty.current = true;
+    markDirty(true);
+  };
   useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
+    const scopeChanged = draftScope.current !== project?.id;
+    if (scopeChanged || (!dirty.current && !pending.current)) {
+      setName(project?.name ?? "");
+      setDescription(project?.description ?? "");
+      setParent(project?.parent_project_id ?? "");
+      setArchived(project?.archived ?? false);
+      revision.current = project?.revision;
+      if (scopeChanged) {
+        pending.current = false;
+        dirty.current = false;
+        markDirty(false);
+        setBusy(false);
+        setError("");
+      }
+    }
+    draftScope.current = project?.id;
+  }, [project, markDirty]);
   const candidates = projects.filter((item) => {
     let cursor: Project | undefined = item;
     const seen = new Set<string>();
@@ -461,29 +499,37 @@ export function ProjectEditor({
   });
   async function save() {
     if (pending.current || !name.trim()) return;
+    const isCurrent = captureScope();
     pending.current = true;
     setBusy(true);
     setError("");
     try {
-      await request(
+      const saved = await request<{ project: Project }>(
         project ? projectPath(project.id) : "/api/projects",
         {
           name: name.trim(),
           description: description.trim(),
           parent_project_id: parent || null,
           ...(project
-            ? { revision: project.revision, archived }
+            ? { revision: revision.current, archived }
             : { id: creationId.current }),
         },
         undefined,
         project ? "PATCH" : undefined,
       );
-      if (alive.current) onSaved();
+      if (isCurrent()) {
+        dirty.current = false;
+        markDirty(false);
+        revision.current = saved.project.revision;
+        onSaved();
+      }
     } catch (e) {
-      if (alive.current) setError(errorMessage(e));
+      if (isCurrent()) setError(errorMessage(e));
     } finally {
-      pending.current = false;
-      if (alive.current) setBusy(false);
+      if (isCurrent()) {
+        pending.current = false;
+        setBusy(false);
+      }
     }
   }
   return (
@@ -510,7 +556,10 @@ export function ProjectEditor({
           disabled={busy}
           maxLength={200}
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            setName(e.target.value);
+            changed();
+          }}
         />
       </label>
       <label>
@@ -520,7 +569,10 @@ export function ProjectEditor({
           rows={3}
           disabled={busy}
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={(e) => {
+            setDescription(e.target.value);
+            changed();
+          }}
           maxLength={2000}
         />
       </label>
@@ -529,7 +581,10 @@ export function ProjectEditor({
         <DropdownSelect
           disabled={busy || !allowHierarchy}
           value={parent}
-          onChange={(e) => setParent(e.target.value)}
+          onChange={(e) => {
+            setParent(e.target.value);
+            changed();
+          }}
         >
           <option value="">None · top-level project</option>
           {candidates.map((item) => (
@@ -549,7 +604,10 @@ export function ProjectEditor({
             type="checkbox"
             disabled={busy}
             checked={archived}
-            onChange={(e) => setArchived(e.target.checked)}
+            onChange={(e) => {
+              setArchived(e.target.checked);
+              changed();
+            }}
           />
           Archived
         </label>
@@ -559,7 +617,20 @@ export function ProjectEditor({
           {busy ? "Saving…" : "Save project"}
         </Button>
         {onCancel ? (
-          <Button disabled={busy} onClick={onCancel}>
+          <Button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              if (
+                dirty.current &&
+                !window.confirm("Discard unsaved settings changes?")
+              )
+                return;
+              dirty.current = false;
+              markDirty(false);
+              onCancel();
+            }}
+          >
             Cancel
           </Button>
         ) : null}
@@ -588,6 +659,21 @@ export function ProjectAccess({
     [role, setRole] = useState<ProjectRole>("viewer"),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const pending = useRef(false);
+  const captureScope = useOperationScope(project);
+  const markDirty = useSettingsNavigationGuard();
+  useEffect(() => {
+    pending.current = false;
+    setBusy(false);
+    setError("");
+    setCandidate("");
+    setQuery("");
+    setSearch("");
+    setRole("viewer");
+    setMore([]);
+    setCursor(null);
+    markDirty(false);
+  }, [project, markDirty]);
   useEffect(() => {
     const timer = setTimeout(() => setSearch(query.trim()), 250);
     return () => clearTimeout(timer);
@@ -604,6 +690,9 @@ export function ProjectAccess({
     setCursor(resource.data?.next_cursor ?? null);
   }, [resource.data]);
   async function mutate(body: unknown, userId?: string, remove = false) {
+    if (!canManage || pending.current || (!userId && !candidate)) return;
+    const isCurrent = captureScope();
+    pending.current = true;
     setBusy(true);
     setError("");
     try {
@@ -617,23 +706,29 @@ export function ProjectAccess({
         undefined,
         remove ? "DELETE" : userId ? "PATCH" : undefined,
       );
-      resource.refresh();
-      onChanged();
-      setCandidate("");
-      setQuery("");
+      if (isCurrent()) {
+        markDirty(false);
+        resource.refresh();
+        onChanged();
+        setCandidate("");
+        setQuery("");
+      }
     } catch (e) {
-      setError(errorMessage(e));
+      if (isCurrent()) setError(errorMessage(e));
     } finally {
-      setBusy(false);
+      if (isCurrent()) {
+        pending.current = false;
+        setBusy(false);
+      }
     }
   }
   return (
     <section className="control-card">
       <header>
-        <h3>
+        <h2>
           <IconUsers size={17} aria-hidden="true" />
           Project access
-        </h3>
+        </h2>
       </header>
       <p className="field-help">
         Roles grant explicit project permissions. Agent tools and approvals
@@ -656,10 +751,12 @@ export function ProjectAccess({
           <label>
             <span>Find a user</span>
             <TextInput
+              disabled={busy}
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
                 setCandidate("");
+                markDirty(false);
               }}
               placeholder="Type at least two characters"
             />
@@ -668,8 +765,11 @@ export function ProjectAccess({
             <span>User</span>
             <DropdownSelect
               value={candidate}
-              onChange={(e) => setCandidate(e.target.value)}
-              disabled={!candidates.data?.users.length}
+              onChange={(e) => {
+                setCandidate(e.target.value);
+                markDirty(Boolean(e.target.value));
+              }}
+              disabled={busy || !candidates.data?.users.length}
             >
               <option value="">Select a user</option>
               {candidates.data?.users.map((user) => (
@@ -682,8 +782,12 @@ export function ProjectAccess({
           <label>
             <span>Role</span>
             <DropdownSelect
+              disabled={busy}
               value={role}
-              onChange={(e) => setRole(e.target.value as ProjectRole)}
+              onChange={(e) => {
+                setRole(e.target.value as ProjectRole);
+                if (candidate) markDirty(true);
+              }}
             >
               {projectRoles.map((item) => (
                 <option key={item.value} value={item.value}>
@@ -767,7 +871,11 @@ export function ProjectAccess({
         <Button
           disabled={busy}
           onClick={async () => {
+            if (pending.current) return;
+            const isCurrent = captureScope();
+            pending.current = true;
             setBusy(true);
+            setError("");
             try {
               const value = await request<{
                 members: Member[];
@@ -775,12 +883,17 @@ export function ProjectAccess({
               }>(
                 `${projectPath(project)}/members?after=${encodeURIComponent(cursor)}`,
               );
-              setMore((current) => [...current, ...value.members]);
-              setCursor(value.next_cursor ?? null);
+              if (isCurrent()) {
+                setMore((current) => [...current, ...value.members]);
+                setCursor(value.next_cursor ?? null);
+              }
             } catch (e) {
-              setError(errorMessage(e));
+              if (isCurrent()) setError(errorMessage(e));
             } finally {
-              setBusy(false);
+              if (isCurrent()) {
+                pending.current = false;
+                setBusy(false);
+              }
             }
           }}
         >
@@ -813,21 +926,43 @@ export function PolicyEditor({
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState("");
+  const pending = useRef(false);
+  const dirty = useRef(false);
+  const revision = useRef<number | null>(null);
+  const markDirty = useSettingsNavigationGuard();
+  const captureScope = useOperationScope(project);
+  const changed = () => {
+    dirty.current = true;
+    markDirty(true);
+    setNotice("");
+  };
+  const applyBaseline = (baseline: PolicyBaseline) => {
+    revision.current = baseline.revision;
+    setProfile(baseline.required_sandbox_profile ?? "");
+    setApprovals(baseline.allowed_approval_modes.join("\n"));
+    setTools(baseline.allowed_tools?.join("\n") ?? "");
+    setToolLimit(baseline.allowed_tools !== null);
+  };
   useEffect(() => {
-    if (resource.data) {
-      setProfile(resource.data.required_sandbox_profile ?? "");
-      setApprovals(resource.data.allowed_approval_modes.join("\n"));
-      setTools(resource.data.allowed_tools?.join("\n") ?? "");
-      setToolLimit(resource.data.allowed_tools !== null);
-    }
+    pending.current = false;
+    dirty.current = false;
+    revision.current = null;
+    markDirty(false);
+    setBusy(false);
+    setError("");
+    setNotice("");
+  }, [project, markDirty]);
+  useEffect(() => {
+    if (resource.data && !dirty.current && !pending.current)
+      applyBaseline(resource.data);
   }, [resource.data]);
   return (
     <section className="control-card">
       <header>
-        <h3>
+        <h2>
           <IconShield size={17} aria-hidden="true" />
           Policy monitoring baseline
-        </h3>
+        </h2>
       </header>
       <p className="field-help">
         Compare runtime-reported posture with this project’s expectations.
@@ -840,14 +975,18 @@ export function PolicyEditor({
           className="management-form"
           onSubmit={async (e) => {
             e.preventDefault();
+            if (!canManage || pending.current || revision.current === null)
+              return;
+            const isCurrent = captureScope();
+            pending.current = true;
             setBusy(true);
             setError("");
             setNotice("");
             try {
-              await request(
+              const saved = await request<PolicyBaseline>(
                 `${projectPath(project)}/policy`,
                 {
-                  revision: resource.data!.revision,
+                  revision: revision.current,
                   required_sandbox_profile: profile.trim() || null,
                   allowed_approval_modes: lines(approvals),
                   allowed_tools: toolLimit ? lines(tools) : null,
@@ -855,19 +994,42 @@ export function PolicyEditor({
                 undefined,
                 "PATCH",
               );
-              resource.refresh();
-              setNotice("Monitoring baseline saved.");
+              if (isCurrent()) {
+                dirty.current = false;
+                markDirty(false);
+                applyBaseline(saved);
+                resource.refresh();
+                setNotice("Monitoring baseline saved.");
+              }
             } catch (error) {
-              setError(errorMessage(error));
+              if (isCurrent()) setError(errorMessage(error));
             } finally {
-              setBusy(false);
+              if (isCurrent()) {
+                pending.current = false;
+                setBusy(false);
+              }
             }
           }}
         >
           {error ? (
             <div className="alert" role="alert">
               {error}
-              <Button onClick={resource.refresh}>Reload baseline</Button>
+              <Button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  if (
+                    dirty.current &&
+                    !window.confirm("Discard unsaved settings changes?")
+                  )
+                    return;
+                  dirty.current = false;
+                  markDirty(false);
+                  resource.refresh();
+                }}
+              >
+                Reload baseline
+              </Button>
             </div>
           ) : null}
           {notice ? (
@@ -879,8 +1041,11 @@ export function PolicyEditor({
             <span>Required sandbox profile</span>
             <TextInput
               value={profile}
-              onChange={(e) => setProfile(e.target.value)}
-              disabled={!canManage}
+              onChange={(e) => {
+                setProfile(e.target.value);
+                changed();
+              }}
+              disabled={busy || !canManage}
               placeholder="Any profile"
               maxLength={128}
             />
@@ -900,9 +1065,9 @@ export function PolicyEditor({
               <label className="checkbox-field" key={item.value}>
                 <input
                   type="checkbox"
-                  disabled={!canManage}
+                  disabled={busy || !canManage}
                   checked={lines(approvals).includes(item.value)}
-                  onChange={(event) =>
+                  onChange={(event) => {
                     setApprovals(
                       (event.target.checked
                         ? [...lines(approvals), item.value]
@@ -910,8 +1075,9 @@ export function PolicyEditor({
                             (value) => value !== item.value,
                           )
                       ).join("\n"),
-                    )
-                  }
+                    );
+                    changed();
+                  }}
                 />
                 {item.label}
               </label>
@@ -921,8 +1087,11 @@ export function PolicyEditor({
             <input
               type="checkbox"
               checked={toolLimit}
-              onChange={(e) => setToolLimit(e.target.checked)}
-              disabled={!canManage}
+              onChange={(e) => {
+                setToolLimit(e.target.checked);
+                changed();
+              }}
+              disabled={busy || !canManage}
             />
             Monitor a tool ceiling
           </label>
@@ -933,8 +1102,11 @@ export function PolicyEditor({
                 className="ui-input"
                 rows={4}
                 value={tools}
-                onChange={(e) => setTools(e.target.value)}
-                disabled={!canManage}
+                onChange={(e) => {
+                  setTools(e.target.value);
+                  changed();
+                }}
+                disabled={busy || !canManage}
               />
             </label>
           ) : null}

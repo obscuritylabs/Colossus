@@ -1,4 +1,5 @@
 import type { CredentialTarget } from "./credential-types";
+import type { SettingsEditorLocation } from "./settings-editor";
 import { Button } from "@colossus/ui";
 import { projectPath } from "./api";
 import { CredentialStoreSettings } from "./CredentialStoreSettings";
@@ -9,6 +10,10 @@ export function ChatCredentials({
   onConnections,
   onSaved,
   initialConnection,
+  editorLocation,
+  onOpenEditor,
+  onCloseEditor,
+  onDirtyChange,
 }: {
   project: string;
   identity: string;
@@ -16,6 +21,10 @@ export function ChatCredentials({
   onConnections: () => void;
   onSaved: () => void;
   initialConnection?: CredentialTarget | undefined;
+  editorLocation?: SettingsEditorLocation | undefined;
+  onOpenEditor?: ((location: SettingsEditorLocation) => void) | undefined;
+  onCloseEditor?: (() => void) | undefined;
+  onDirtyChange?: ((dirty: boolean) => void) | undefined;
 }) {
   return (
     <>
@@ -25,8 +34,14 @@ export function ChatCredentials({
         canEdit={canConnect}
         onSaved={onSaved}
         initialConnection={initialConnection}
+        editorLocation={editorLocation}
+        onOpenEditor={onOpenEditor}
+        onCloseEditor={onCloseEditor}
+        onDirtyChange={onDirtyChange}
       />
-      <Button onClick={onConnections}>Manage connected accounts</Button>
+      {!editorLocation ? (
+        <Button onClick={onConnections}>Manage connected accounts</Button>
+      ) : null}
     </>
   );
 }

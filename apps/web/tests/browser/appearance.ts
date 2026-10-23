@@ -4,6 +4,7 @@ export const appearanceCases = [
   { id: "dark", label: "dark", theme: "dark", palette: "colossus" },
   { id: "light", label: "light", theme: "light", palette: "colossus" },
   { id: "neutral", label: "neutral dark", theme: "dark", palette: "neutral" },
+  { id: "black", label: "Black", theme: "dark", palette: "black" },
   { id: "hacker", label: "Hacker dark", theme: "dark", palette: "hacker" },
 ] as const;
 
@@ -28,7 +29,9 @@ export async function selectAppearance(
         name:
           appearance.palette === "neutral"
             ? "Neutral dark (Dark+)"
-            : "Hacker (TUI)",
+            : appearance.palette === "black"
+              ? "Black (shadcn)"
+              : "Hacker (TUI)",
         exact: true,
       })
       .click();
@@ -63,4 +66,30 @@ export async function openConversationList(page: Page) {
       .getByRole("button", { name: "Toggle conversation list", exact: true })
       .click();
   await expect(history).toBeVisible();
+}
+
+export async function chooseProjectSettingsSection(page: Page, name: string) {
+  const navigation = page.getByRole("navigation", {
+    name: "Project Admin sections",
+    exact: true,
+  });
+  const toggle = page.getByRole("button", {
+    name: "Toggle administration navigation",
+    exact: true,
+  });
+  await expect(toggle).toHaveAttribute("aria-expanded", /^(true|false)$/u);
+  if ((await toggle.getAttribute("aria-expanded")) === "false")
+    await toggle.click();
+  await expect(navigation).toBeVisible();
+  await navigation
+    .getByRole("link", {
+      name:
+        name === "Role routing"
+          ? "Model routing"
+          : name === "MCP connections"
+            ? "MCP servers"
+            : name,
+      exact: true,
+    })
+    .click();
 }

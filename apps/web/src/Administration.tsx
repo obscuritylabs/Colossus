@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, DropdownSelect, TextInput } from "@colossus/ui";
 import { DataTable, type DataTableColumn } from "@colossus/ui/data-table";
 import { IconPlus, IconSettings, IconShieldLock } from "@tabler/icons-react";
-import { request } from "./api";
+import { ApiFailure, request } from "./api";
 import type {
   AdminSettings,
   AuthConfig,
@@ -13,9 +13,9 @@ import type {
 } from "./control-api";
 import { errorMessage, useResource } from "./resources";
 import { LoadState } from "./Home";
-import { ProjectEditor } from "./Projects";
 import {
   adminUserHref,
+  projectHref,
   connectionSettingsSections,
   type ConnectionSettingsSection,
   type AdminView,
@@ -23,10 +23,19 @@ import {
 } from "./routes";
 import { AdminUserDetails } from "./AdminUserDetails";
 import { UserEditor } from "./AdminUserEditor";
+import { useUserInventory } from "./admin-user-data";
 import { GlobalConfiguration } from "./GlobalConfiguration";
 import { EnvironmentAppearance } from "./Appearance";
 import { projectCreateHref } from "./routes";
-import { RouteLink } from "./navigation";
+import {
+  RouteLink,
+  useNavigation,
+  useSettingsNavigationGuard,
+} from "./navigation";
+import {
+  SettingsEditorPage,
+  type SettingsEditorNavigation,
+} from "./settings-editor";
 import { AdminAnnouncements } from "./AdminAnnouncements";
 import { classificationColorVariables } from "@colossus/ui/lib/classification-colors";
 export function Administration({
@@ -41,7 +50,12 @@ export function Administration({
   identity,
   projects,
   selectedProject,
-}: {
+  onProjectChange,
+  editorLocation,
+  onOpenEditor,
+  onCloseEditor,
+  onDirtyChange,
+}: SettingsEditorNavigation & {
   authConfig: AuthConfig | null;
   onRefresh: () => void;
   onSettings: (settings: PublicSettings) => void;
@@ -52,10 +66,27 @@ export function Administration({
   identity: string;
   projects: Project[];
   selectedProject: string;
+  onProjectChange?: ((project: string) => void) | undefined;
   view?: AdminView;
   onView?: (value: AdminView) => void;
 }) {
   const tab = view ?? "users";
+  const editorNavigation = {
+    editorLocation,
+    onOpenEditor,
+    onCloseEditor,
+    onDirtyChange,
+  };
+  if (tab === "users" && editorLocation)
+    return (
+      <UserSettingsEditorRoute
+        key={`${identity}:${editorLocation.action}:${editorLocation.id ?? ""}`}
+        authConfig={authConfig}
+        identity={identity}
+        {...editorNavigation}
+        onSaved={onRefresh}
+      />
+    );
   if (userId)
     return (
       <AdminUserDetails
@@ -70,57 +101,72 @@ export function Administration({
     );
   return (
     <section className="control-page">
-      <header
-        className={
-          (connectionSettingsSections as readonly string[]).includes(tab)
-            ? "sr-only"
-            : "page-heading"
-        }
-      >
-        <div>
-          <span className="eyebrow">Administration</span>
-          <h1>Control Plane administration</h1>
-          <p>
-            Manage identities, projects, announcements, and environment
-            settings.
-          </p>
-        </div>
+      <header className="sr-only">
+        <h1>
+          {tab === "appearance"
+            ? "Appearance"
+            : tab === "settings"
+              ? "Authentication and classification"
+              : tab === "users"
+                ? "Users"
+                : tab === "projects"
+                  ? "Project hierarchy"
+                  : tab === "announcements"
+                    ? "Announcements"
+                    : `Control Plane ${tab}`}
+        </h1>
       </header>
       {tab === "users" ? (
-        <Users authConfig={authConfig} />
+        <Users
+          identity={identity}
+          onCreate={() => onOpenEditor?.({ action: "new" })}
+        />
       ) : tab === "projects" ? (
-        <AdminProjects onRefresh={onRefresh} />
+        <AdminProjects key={identity} identity={identity} />
       ) : tab === "announcements" ? (
-        <AdminAnnouncements />
+        <AdminAnnouncements {...editorNavigation} identity={identity} />
       ) : tab === "appearance" ? (
-        <EnvironmentAppearance onSaved={onSettings} />
+        <>
+          <header className="catalog-heading">
+            <div>
+              <h2>Appearance</h2>
+              <p>Publish classification banner colors for this instance.</p>
+            </div>
+          </header>
+          <EnvironmentAppearance onSaved={onSettings} />
+        </>
       ) : (connectionSettingsSections as readonly string[]).includes(tab) ? (
         <GlobalConfiguration
+          {...editorNavigation}
           section={tab as ConnectionSettingsSection}
           identity={identity}
           projects={projects}
           selectedProject={selectedProject}
+          onProjectChange={onProjectChange}
           onSaved={onRefresh}
         />
       ) : (
-        <EnvironmentSettings onSaved={onSettings} />
+        <EnvironmentSettings
+          key={identity}
+          identity={identity}
+          onSaved={onSettings}
+        />
       )}
     </section>
   );
 }
-function Users({ authConfig }: { authConfig: AuthConfig | null }) {
-  const resource = useResource<{ users: User[]; next_cursor?: string | null }>(
-      "/api/admin/users",
-    ),
-    [extra, setExtra] = useState<User[]>([]),
-    [cursor, setCursor] = useState<string | null>(null),
-    [creating, setCreating] = useState(false),
-    [error, setError] = useState(""),
-    [busy, setBusy] = useState(false);
-  useEffect(() => {
-    setExtra([]);
-    setCursor(resource.data?.next_cursor ?? null);
-  }, [resource.data]);
+function Users({
+  identity,
+  onCreate,
+}: {
+  identity: string;
+  onCreate: () => void;
+}) {
+  const resource = useUserInventory<User, "users">(
+    "/api/admin/users",
+    "users",
+    identity,
+  );
   const columns = useMemo<DataTableColumn<User>[]>(
     () => [
       {
@@ -187,29 +233,19 @@ function Users({ authConfig }: { authConfig: AuthConfig | null }) {
             Provision login identities and control access to the Control Plane.
           </p>
         </div>
-        <Button variant="primary" onClick={() => setCreating(true)}>
+        <Button variant="primary" onClick={onCreate}>
           <IconPlus size={16} aria-hidden="true" />
           Create user
         </Button>
       </header>
       <LoadState {...resource} retry={resource.refresh} />
-      {error ? (
-        <div className="alert" role="alert">
-          {error}
-        </div>
-      ) : null}
-      {creating ? (
-        <UserEditor
-          authConfig={authConfig}
-          onCancel={() => setCreating(false)}
-          onSaved={() => {
-            setCreating(false);
-            resource.refresh();
-          }}
-        />
+      {resource.moreError ? (
+        <p className="alert" role="alert">
+          {resource.moreError}
+        </p>
       ) : null}
       <DataTable
-        data={[...(resource.data?.users ?? []), ...extra]}
+        data={resource.rows}
         columns={columns}
         getRowId={(row) => row.id}
         search={{ columnId: "name", label: "Search loaded users" }}
@@ -217,28 +253,14 @@ function Users({ authConfig }: { authConfig: AuthConfig | null }) {
         loading={resource.loading}
         empty="No users found."
       />
-      {cursor ? (
+      {resource.cursor ? (
         <div className="load-more">
           <p className="field-help">
             Search and sorting apply to loaded users.
           </p>
           <Button
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                const data = await request<{
-                  users: User[];
-                  next_cursor?: string | null;
-                }>(`/api/admin/users?after=${encodeURIComponent(cursor)}`);
-                setExtra((value) => [...value, ...data.users]);
-                setCursor(data.next_cursor ?? null);
-              } catch (e) {
-                setError(errorMessage(e));
-              } finally {
-                setBusy(false);
-              }
-            }}
+            disabled={resource.moreBusy}
+            onClick={() => void resource.loadMore()}
           >
             Load more users
           </Button>
@@ -247,21 +269,13 @@ function Users({ authConfig }: { authConfig: AuthConfig | null }) {
     </>
   );
 }
-function AdminProjects({ onRefresh }: { onRefresh: () => void }) {
-  const resource = useResource<{
-      projects: Project[];
-      next_cursor?: string | null;
-    }>("/api/admin/projects"),
-    [selected, setSelected] = useState<Project | null>(null),
-    [extra, setExtra] = useState<Project[]>([]),
-    [cursor, setCursor] = useState<string | null>(null),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  useEffect(() => {
-    setExtra([]);
-    setCursor(resource.data?.next_cursor ?? null);
-  }, [resource.data]);
-  const projects = [...(resource.data?.projects ?? []), ...extra];
+function AdminProjects({ identity }: { identity: string }) {
+  const resource = useUserInventory<Project, "projects">(
+    "/api/admin/projects",
+    "projects",
+    identity,
+  );
+  const projects = resource.rows;
   return (
     <>
       <header className="catalog-heading">
@@ -278,23 +292,10 @@ function AdminProjects({ onRefresh }: { onRefresh: () => void }) {
         </RouteLink>
       </header>
       <LoadState {...resource} retry={resource.refresh} />
-      {error ? (
-        <div className="alert" role="alert">
-          {error}
-        </div>
-      ) : null}
-      {selected ? (
-        <ProjectEditor
-          key={`${selected.id}:${selected.revision}`}
-          project={selected}
-          projects={projects}
-          onCancel={() => setSelected(null)}
-          onSaved={() => {
-            setSelected(null);
-            resource.refresh();
-            onRefresh();
-          }}
-        />
+      {resource.moreError ? (
+        <p className="alert" role="alert">
+          {resource.moreError}
+        </p>
       ) : null}
       <div className="access-list">
         {projects.map((project) => (
@@ -308,50 +309,151 @@ function AdminProjects({ onRefresh }: { onRefresh: () => void }) {
                 {project.archived ? " · Archived" : ""}
               </small>
             </span>
-            <Button onClick={() => setSelected(project)}>Edit project</Button>
+            <RouteLink
+              className="ui-button"
+              href={projectHref(project.id, "settings")}
+            >
+              Edit project
+            </RouteLink>
           </div>
         ))}
       </div>
-      {cursor ? (
-        <Button
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              const data = await request<{
-                projects: Project[];
-                next_cursor?: string | null;
-              }>(`/api/admin/projects?after=${encodeURIComponent(cursor)}`);
-              setExtra((value) => [...value, ...data.projects]);
-              setCursor(data.next_cursor ?? null);
-            } catch (e) {
-              setError(errorMessage(e));
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          Load more projects
-        </Button>
+      {resource.cursor ? (
+        <div className="load-more">
+          <p className="field-help">
+            Showing loaded projects. Load more to review additional hierarchy
+            entries.
+          </p>
+          <Button
+            disabled={resource.moreBusy}
+            onClick={() => void resource.loadMore()}
+          >
+            Load more projects
+          </Button>
+        </div>
       ) : null}
     </>
   );
 }
 function EnvironmentSettings({
   onSaved,
+  identity,
 }: {
-  onSaved: (settings: AdminSettings) => void;
+  onSaved: (settings: PublicSettings) => void;
+  identity: string;
 }) {
-  const resource = useResource<AdminSettings>("/api/admin/settings"),
-    [draft, setDraft] = useState<Classification | null>(null),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState(""),
-    [notice, setNotice] = useState("");
+  const resource = useResource<AdminSettings>(
+    "/api/admin/settings",
+    0,
+    identity,
+  );
+  const [draft, setDraft] = useState<Classification | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [needsReload, setNeedsReload] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const dirty = useRef(false),
+    pending = useRef(false),
+    alive = useRef(true);
+  const reviewedRevision = useRef<number | null>(null);
+  const reloadSource = useRef<AdminSettings | null>(null);
+  const markDirty = useSettingsNavigationGuard();
   useEffect(() => {
-    if (resource.data) setDraft(resource.data.classification);
-  }, [resource.data]);
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    markDirty(dirty.current || busy || needsReload);
+  }, [busy, needsReload, markDirty]);
+  useEffect(() => {
+    if (
+      resource.data &&
+      resource.data.revision >= (reviewedRevision.current ?? 0) &&
+      ((!dirty.current && !pending.current) ||
+        (reloadSource.current && resource.data !== reloadSource.current))
+    ) {
+      setDraft(resource.data.classification);
+      reviewedRevision.current = resource.data.revision;
+      dirty.current = false;
+      markDirty(false);
+      setNeedsReload(false);
+      setRefreshing(false);
+      setError("");
+      reloadSource.current = null;
+    }
+  }, [resource.data, markDirty]);
+  useEffect(() => {
+    if (resource.error) setRefreshing(false);
+  }, [resource.error]);
+  function changeDraft(value: Classification) {
+    setDraft(value);
+    dirty.current = true;
+    markDirty(true);
+  }
+  async function save() {
+    if (!draft || pending.current || needsReload || refreshing) return;
+    if (draft.enabled && !draft.text.trim()) {
+      setError("Enter classification text before enabling the banner.");
+      return;
+    }
+    pending.current = true;
+    setBusy(true);
+    markDirty(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await request<PublicSettings & { revision: number }>(
+        "/api/admin/settings",
+        { revision: reviewedRevision.current, classification: draft },
+        undefined,
+        "PATCH",
+      );
+      if (!alive.current) return;
+      dirty.current = false;
+      markDirty(false);
+      reviewedRevision.current = result.revision;
+      setDraft(result.classification);
+      onSaved(result);
+      resource.refresh();
+      setNotice("Classification banner settings saved.");
+    } catch (cause) {
+      if (!alive.current) return;
+      const uncertain = !(cause instanceof ApiFailure) || cause.status >= 500;
+      setNeedsReload(
+        uncertain || (cause instanceof ApiFailure && cause.status === 409),
+      );
+      setError(
+        uncertain
+          ? "The save could not be confirmed. Reload current settings before making another change."
+          : cause instanceof ApiFailure && cause.status === 409
+            ? "These settings changed. Reload the current version before saving again."
+            : errorMessage(cause),
+      );
+    } finally {
+      pending.current = false;
+      if (alive.current) {
+        setBusy(false);
+      }
+    }
+  }
+  function reload() {
+    reloadSource.current = resource.data;
+    setRefreshing(true);
+    resource.refresh();
+  }
   return (
     <>
+      <header className="catalog-heading">
+        <div>
+          <h2>Authentication and classification</h2>
+          <p>
+            Review instance login methods and publish classification markings.
+          </p>
+        </div>
+      </header>
       <LoadState {...resource} retry={resource.refresh} />
       {resource.data ? (
         <section className="control-card">
@@ -389,26 +491,10 @@ function EnvironmentSettings({
           </header>
           <form
             className="management-form"
-            onSubmit={async (event) => {
+            aria-busy={busy || refreshing}
+            onSubmit={(event) => {
               event.preventDefault();
-              setBusy(true);
-              setError("");
-              setNotice("");
-              try {
-                const result = await request<AdminSettings>(
-                  "/api/admin/settings",
-                  { revision: resource.data!.revision, classification: draft },
-                  undefined,
-                  "PATCH",
-                );
-                onSaved(result);
-                resource.refresh();
-                setNotice("Environment settings saved.");
-              } catch (e) {
-                setError(errorMessage(e));
-              } finally {
-                setBusy(false);
-              }
+              void save();
             }}
           >
             {error ? (
@@ -421,74 +507,161 @@ function EnvironmentSettings({
                 {notice}
               </p>
             ) : null}
-            <label className="checkbox-field">
-              <input
-                type="checkbox"
-                checked={draft.enabled}
-                onChange={(e) =>
-                  setDraft({ ...draft, enabled: e.target.checked })
-                }
-              />
-              Display classification banner
-            </label>
-            <label>
-              <span>Classification text</span>
-              <TextInput
-                required={draft.enabled}
-                maxLength={160}
-                value={draft.text}
-                onChange={(e) => setDraft({ ...draft, text: e.target.value })}
-              />
-            </label>
-            <div className="form-pair">
-              <label>
-                <span>Tone</span>
-                <DropdownSelect
-                  value={draft.tone}
-                  onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      tone: e.target.value as Classification["tone"],
-                    })
-                  }
-                >
-                  <option value="neutral">Neutral</option>
-                  <option value="info">Information</option>
-                  <option value="warning">Warning</option>
-                  <option value="danger">Danger</option>
-                </DropdownSelect>
-              </label>
-              <label>
-                <span>Placement</span>
-                <DropdownSelect
-                  value={draft.position}
-                  onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      position: e.target.value as Classification["position"],
-                    })
-                  }
-                >
-                  <option value="top">Top</option>
-                  <option value="top_and_bottom">Top and bottom</option>
-                </DropdownSelect>
-              </label>
-            </div>
-            {draft.enabled ? (
-              <div
-                className={`control-classification classification-${draft.tone}${classificationColorVariables(draft.colors) ? " classification-custom-colors" : ""}`}
-                style={classificationColorVariables(draft.colors)}
-                aria-label="Banner preview"
-              >
-                {draft.text || "Classification preview"}
-              </div>
+            {needsReload ? (
+              <Button disabled={busy || refreshing} onClick={reload}>
+                Reload current settings
+              </Button>
             ) : null}
-            <Button variant="primary" type="submit" disabled={busy}>
-              {busy ? "Saving…" : "Save environment settings"}
-            </Button>
+            <fieldset
+              className="settings-editor-fields"
+              disabled={busy || refreshing || needsReload}
+            >
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={draft.enabled}
+                  onChange={(e) =>
+                    changeDraft({ ...draft, enabled: e.target.checked })
+                  }
+                />
+                Display classification banner
+              </label>
+              <label>
+                <span>Classification text</span>
+                <TextInput
+                  required={draft.enabled}
+                  maxLength={160}
+                  value={draft.text}
+                  onChange={(e) =>
+                    changeDraft({ ...draft, text: e.target.value })
+                  }
+                />
+              </label>
+              <div className="form-pair">
+                <label>
+                  <span>Tone</span>
+                  <DropdownSelect
+                    value={draft.tone}
+                    onChange={(e) =>
+                      changeDraft({
+                        ...draft,
+                        tone: e.target.value as Classification["tone"],
+                      })
+                    }
+                  >
+                    <option value="neutral">Neutral</option>
+                    <option value="info">Information</option>
+                    <option value="warning">Warning</option>
+                    <option value="danger">Danger</option>
+                  </DropdownSelect>
+                </label>
+                <label>
+                  <span>Placement</span>
+                  <DropdownSelect
+                    value={draft.position}
+                    onChange={(e) =>
+                      changeDraft({
+                        ...draft,
+                        position: e.target.value as Classification["position"],
+                      })
+                    }
+                  >
+                    <option value="top">Top</option>
+                    <option value="top_and_bottom">Top and bottom</option>
+                  </DropdownSelect>
+                </label>
+              </div>
+              {draft.enabled ? (
+                <div
+                  className={`control-classification classification-${draft.tone}${classificationColorVariables(draft.colors) ? " classification-custom-colors" : ""}`}
+                  style={classificationColorVariables(draft.colors)}
+                  aria-label="Banner preview"
+                >
+                  {draft.text || "Classification preview"}
+                </div>
+              ) : null}
+              <Button variant="primary" type="submit" disabled={busy}>
+                {busy ? "Saving…" : "Save environment settings"}
+              </Button>
+            </fieldset>
           </form>
         </section>
       ) : null}
     </>
+  );
+}
+
+function UserSettingsEditorRoute({
+  authConfig,
+  identity,
+  editorLocation,
+  onCloseEditor,
+  onSaved,
+  onDirtyChange,
+}: SettingsEditorNavigation & {
+  authConfig: AuthConfig | null;
+  identity: string;
+  onSaved: () => void;
+}) {
+  const navigation = useNavigation();
+  const resource = useResource<{ user: User }>(
+    editorLocation?.action === "edit" && editorLocation.id
+      ? `/api/admin/users/${encodeURIComponent(editorLocation.id)}`
+      : null,
+    0,
+    identity,
+  );
+  const [busy, setBusy] = useState(false);
+  const [snapshot, setSnapshot] = useState<{ user: User } | null>(null);
+  const [generation, setGeneration] = useState(0);
+  const reloadSource = useRef<{ user: User } | null>(null);
+  useEffect(() => {
+    if (
+      resource.data &&
+      (!snapshot ||
+        (reloadSource.current && resource.data !== reloadSource.current))
+    ) {
+      setSnapshot(resource.data);
+      setGeneration((value) => value + 1);
+      reloadSource.current = null;
+    }
+  }, [resource.data, snapshot]);
+  function reload() {
+    reloadSource.current = resource.data;
+    resource.refresh();
+  }
+  function close() {
+    if (editorLocation?.action === "edit" && editorLocation.id)
+      navigation.go(adminUserHref(editorLocation.id));
+    else onCloseEditor?.();
+  }
+  return (
+    <section className="control-page">
+      <SettingsEditorPage
+        title={editorLocation?.action === "new" ? "Create user" : "Edit user"}
+        backLabel={editorLocation?.action === "edit" ? "user" : "users"}
+        onBack={close}
+        busy={busy}
+      >
+        <LoadState {...resource} retry={resource.refresh} />
+        {editorLocation?.action === "new" || snapshot ? (
+          <UserEditor
+            key={generation}
+            user={editorLocation?.action === "new" ? undefined : snapshot?.user}
+            authConfig={authConfig}
+            showHeading={false}
+            onBusyChange={setBusy}
+            onDirtyChange={onDirtyChange}
+            onReload={reload}
+            onCancel={close}
+            onSaved={() => {
+              onSaved();
+              if (snapshot) navigation.go(adminUserHref(snapshot.user.id));
+              else onCloseEditor?.();
+            }}
+          />
+        ) : null}
+      </SettingsEditorPage>
+    </section>
   );
 }

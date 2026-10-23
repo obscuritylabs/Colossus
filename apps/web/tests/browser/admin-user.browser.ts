@@ -259,17 +259,20 @@ test("a user has a keyboard accessible profile with linkable resource tabs and b
   const edit = page.getByRole("button", { name: "Edit user", exact: true });
   await edit.focus();
   await edit.press("Enter");
+  await expect(page).toHaveURL(`${profileUrl()}/edit`);
+  await page.reload();
   await expect(
     page.getByRole("textbox", { name: "Display name", exact: true }),
   ).toHaveValue(user.display_name);
   await expect(
     page.getByRole("checkbox", { name: /^Active user/u }),
   ).toBeChecked();
-  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(
     page.getByRole("textbox", { name: "Display name", exact: true }),
   ).toHaveCount(0);
-  await expect(edit).toHaveAttribute("aria-expanded", "false");
+  await expect(page).toHaveURL(profileUrl());
+  await expect(edit).toBeVisible();
 
   await openTab(page, "Projects");
   await expect(page).toHaveURL(profileUrl(selfId, "projects"));
@@ -463,10 +466,7 @@ test("a project administrator cannot read a profile through a copied URL", async
   fixture.verify();
 });
 
-for (const appearance of [
-  ...appearanceCases,
-  { id: "black", label: "Black dark", theme: "dark", palette: "black" },
-]) {
+for (const appearance of appearanceCases) {
   test(`user details and resource tables fit narrow ${appearance.label} Large text`, async ({
     page,
   }, testInfo) => {

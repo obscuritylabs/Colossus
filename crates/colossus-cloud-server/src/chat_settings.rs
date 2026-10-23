@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, sync::Arc};
 
 const MANAGED_REFERENCE: &str = "host:managed";
+pub(crate) mod availability;
 mod credentials;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -53,6 +54,8 @@ pub(crate) struct SettingsInput {
     // Released runtime status is accepted for GET/PUT compatibility and ignored.
     #[serde(default, skip_serializing, rename = "telemetry")]
     _telemetry: Option<serde_json::Value>,
+    #[serde(default, skip_serializing, rename = "execution")]
+    _execution: Option<serde_json::Value>,
 }
 #[derive(Serialize)]
 struct SettingsOutput {
@@ -60,6 +63,7 @@ struct SettingsOutput {
     configuration: SettingsInput,
     credential_status: CredentialStatus,
     inheritance: crate::global_settings::types::Inheritance,
+    execution: availability::ExecutionAvailability,
     #[serde(skip_serializing_if = "Option::is_none")]
     telemetry: Option<crate::telemetry_host::TelemetryStatus>,
 }
@@ -135,10 +139,22 @@ async fn settings(
     let caller = state.auth.caller(&headers, &project, false).await?;
     caller.require(CloudPermission::Administer)?;
     let host = hosted(&state)?;
-    let configuration = host
-        .project_config(&project)
-        .await?
-        .ok_or(CloudError::NotFound)?;
+    let Some(configuration) = host.project_config(&project).await? else {
+        // Cloud project creation grants no runtime or network authority. Release
+        // the reusable definitions so administrators can review inherited setup
+        // without confusing an unprovisioned project with a missing resource.
+        let catalog = crate::global_settings::catalog(host)?;
+        let projection = crate::global_settings::inheritance::catalog_only(&catalog);
+        let mut output = public_configuration(projection);
+        output.execution = availability::ExecutionAvailability::dormant();
+        output.credential_status = CredentialStatus::default();
+        output.telemetry = Some(
+            state
+                .telemetry
+                .configure(&catalog.observability, catalog.revision),
+        );
+        return Ok(Json(output));
+    };
     let mut output = public_configuration(configuration.clone());
     output.telemetry = Some(state.telemetry.configure(
         &configuration.runtime.observability,
@@ -287,9 +303,11 @@ fn public_configuration(configuration: ChatProjectConfig) -> SettingsOutput {
             inheritance: None,
             global_revision: None,
             _telemetry: None,
+            _execution: None,
         },
         credential_status,
         inheritance: configuration.inheritance,
+        execution: availability::ExecutionAvailability::enabled(),
         telemetry: None,
     }
 }

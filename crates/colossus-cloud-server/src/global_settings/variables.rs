@@ -17,6 +17,8 @@ use std::{collections::BTreeMap, sync::Arc};
 struct Variables {
     revision: u64,
     variables: BTreeMap<String, String>,
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    execution: Option<crate::chat_settings::availability::ExecutionAvailability>,
 }
 pub(super) fn router() -> Router<Arc<State>> {
     Router::new().route(
@@ -42,7 +44,10 @@ async fn read(
     caller.require(CloudPermission::Read)?;
     let host = state.hosted.as_deref().ok_or(CloudError::NotFound)?;
     if host.project_config(&project).await?.is_none() {
-        return Err(CloudError::NotFound.into());
+        return Ok(Json(Variables {
+            execution: Some(crate::chat_settings::availability::ExecutionAvailability::dormant()),
+            ..Variables::default()
+        }));
     }
     Ok(Json(load(
         host.user_vault(&project, caller.subject())?.as_ref(),

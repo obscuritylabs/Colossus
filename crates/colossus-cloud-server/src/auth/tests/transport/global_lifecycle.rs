@@ -12,6 +12,7 @@ use colossus_cloud_chat::{
 use colossus_contracts::HostSecret;
 use std::collections::BTreeMap;
 use tower::ServiceExt;
+mod dormant;
 
 const CHILD: &str = "COLOSSUS_GLOBAL_LIFECYCLE_TEST_CHILD";
 const WRAPPING: &str = "COLOSSUS_GLOBAL_LIFECYCLE_TEST_WRAPPING";
@@ -347,6 +348,7 @@ async fn global_updates_refresh_inheritance_and_refuse_cold_accepted_work() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{saved}");
+    dormant::exercise(&router, &admin, &user, &server.state).await;
     assert_eq!(
         host.project_config("project-a")
             .await

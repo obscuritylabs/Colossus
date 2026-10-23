@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, DropdownSelect } from "@colossus/ui";
 import { IconShield } from "@tabler/icons-react";
 import {
@@ -41,7 +41,13 @@ export function ChatProviderSettings({
   onCancel,
   onCredentials,
   onPersonalCredentials,
+  busy = false,
+  instanceScope = false,
+  onDirtyChange,
 }: {
+  busy?: boolean;
+  instanceScope?: boolean;
+  onDirtyChange?: ((dirty: boolean) => void) | undefined;
   id: string;
   draft: ChatSettingsWrite;
   project: string;
@@ -65,6 +71,12 @@ export function ChatProviderSettings({
     draft.provider_authentication[id] ?? "personal",
   );
   const [error, setError] = useState("");
+  const formValue = JSON.stringify([value, auth]);
+  const openingValue = useRef(formValue);
+  useEffect(() => {
+    onDirtyChange?.(formValue !== openingValue.current);
+  }, [formValue, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const presets = useResource<{
     presets: ProviderPreset[];
     availability?: Record<string, PresetAvailability>;
@@ -103,12 +115,39 @@ export function ChatProviderSettings({
     JSON.stringify(draft) === JSON.stringify(settingsWrite(saved)),
   );
   function apply(continueToCredential = false) {
+    if (busy) return;
     if (!validProfile(value.profile) || !value.label.trim()) {
       setError("Enter a display label and a valid profile ID.");
       return;
     }
     if (!id && Object.hasOwn(draft.providers.profiles, value.profile)) {
       setError("That profile ID already exists.");
+      return;
+    }
+    if (value.kind !== "echo" && value.kind !== "open_ai_codex") {
+      try {
+        const endpoint = new URL(value.baseUrl.trim());
+        if (
+          !["http:", "https:"].includes(endpoint.protocol) ||
+          endpoint.username ||
+          endpoint.password ||
+          endpoint.hash
+        )
+          throw new Error();
+      } catch {
+        setError(
+          "Enter an HTTP or HTTPS endpoint without embedded credentials or a fragment.",
+        );
+        return;
+      }
+    }
+    if (
+      value.timeoutMs !== null &&
+      (!Number.isSafeInteger(value.timeoutMs) ||
+        value.timeoutMs < 1 ||
+        value.timeoutMs > 3600000)
+    ) {
+      setError("Use a request timeout between 1 and 3,600,000 milliseconds.");
       return;
     }
     if (unavailable) {
@@ -148,7 +187,7 @@ export function ChatProviderSettings({
       {error ? <p role="alert">{error}</p> : null}
       <ProviderSettingsEditor
         draft={value}
-        busy={false}
+        busy={busy}
         profileReadOnly={Boolean(id)}
         onChange={(next) => {
           if (next.kind !== value.kind || next.baseUrl !== value.baseUrl)
@@ -164,7 +203,7 @@ export function ChatProviderSettings({
             <ProviderPresetPicker
               presets={presets.data?.presets ?? []}
               selected={selected?.id ?? ""}
-              disabled={presets.loading}
+              disabled={busy || presets.loading}
               placeholder={
                 presets.error ? "Providers unavailable" : "Choose a provider"
               }
@@ -192,7 +231,9 @@ export function ChatProviderSettings({
               }}
             />
             {presets.error ? (
-              <Button onClick={presets.refresh}>Reload providers</Button>
+              <Button disabled={busy} onClick={presets.refresh}>
+                Reload providers
+              </Button>
             ) : null}
             {availability?.reason ? (
               <p className="field-help" role="status">
@@ -224,6 +265,7 @@ export function ChatProviderSettings({
                 <label>
                   <span>Authentication</span>
                   <DropdownSelect
+                    disabled={busy}
                     aria-label="Authentication"
                     value={auth}
                     onChange={(event) =>
@@ -242,13 +284,17 @@ export function ChatProviderSettings({
               )}
               {!codex ? (
                 <small>
-                  Each person connects their own account unless a project
-                  credential is explicitly selected.
+                  {instanceScope
+                    ? "Projects inherit this definition. Each person connects privately, or an administrator explicitly assigns a shared credential."
+                    : "Each person connects their own account unless a shared credential is explicitly assigned."}
                 </small>
               ) : null}
-              {!codex && auth !== "none" ? (
+              {!codex &&
+              auth !== "none" &&
+              (auth === "shared" ? onCredentials : onPersonalCredentials) ? (
                 <Button
                   disabled={
+                    busy ||
                     unavailable ||
                     !(auth === "shared" ? onCredentials : onPersonalCredentials)
                   }
@@ -258,7 +304,6 @@ export function ChatProviderSettings({
                       apply(true);
                       return;
                     }
-                    onCancel();
                     if (auth === "shared")
                       onCredentials?.({ kind: "provider", id: value.profile });
                     else
@@ -273,7 +318,10 @@ export function ChatProviderSettings({
                     : "Save and choose credential"}
                 </Button>
               ) : null}
-              {!destinationSaved && !codex && auth !== "none" ? (
+              {!destinationSaved &&
+              !codex &&
+              auth !== "none" &&
+              (auth === "shared" ? onCredentials : onPersonalCredentials) ? (
                 <small>
                   Save this connection and continue to choose an existing
                   credential or create one.
@@ -287,8 +335,10 @@ export function ChatProviderSettings({
                   {codex
                     ? "Codex account"
                     : auth === "shared"
-                      ? "Project credential"
-                      : "Personal credential"}
+                      ? "Explicit shared credential"
+                      : auth === "none"
+                        ? "No authentication"
+                        : "Personal credential"}
                 </strong>
                 <small>
                   Credentials are encrypted in SQL storage. Settings contain

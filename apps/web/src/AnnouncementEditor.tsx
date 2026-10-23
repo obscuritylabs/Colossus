@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Button, DropdownSelect, TextInput } from "@colossus/ui";
 import { AnnouncementBanner } from "@colossus/ui/components/Announcements";
 import {
@@ -9,6 +9,7 @@ import {
 import { useAnnouncementEditor } from "./useAnnouncementEditor";
 import { SectionTabs } from "./Projects";
 import { WebLink } from "./WebLink";
+import { useSettingsNavigationGuard } from "./navigation";
 
 const MarkdownPreview = lazy(() =>
   import("@colossus/ui/components/MarkdownContent").then((module) => ({
@@ -40,14 +41,40 @@ export function AnnouncementEditor({
   onSaved,
   onCancel,
   onReload,
+  showHeading = true,
+  onBusyChange,
+  onDirtyChange,
 }: {
   announcement: Announcement | null;
+  showHeading?: boolean;
+  onBusyChange?: ((busy: boolean) => void) | undefined;
+  onDirtyChange?: ((dirty: boolean) => void) | undefined;
   onSaved: (value: Announcement) => void;
   onCancel: () => void;
   onReload: (id: string) => void;
 }) {
-  const editor = useAnnouncementEditor(announcement, onSaved);
+  const localDirty = useSettingsNavigationGuard();
+  const dirty = onDirtyChange ?? localDirty;
+  const changed = useRef(false);
+  const editor = useAnnouncementEditor(announcement, (value) => {
+    changed.current = false;
+    dirty(false);
+    onSaved(value);
+  });
+  useEffect(() => {
+    onBusyChange?.(editor.busy);
+    dirty(changed.current || editor.busy || Boolean(editor.uncertain));
+    return () => {
+      onBusyChange?.(false);
+      dirty(false);
+    };
+  }, [editor.busy, editor.uncertain, dirty, onBusyChange]);
   const { content } = editor;
+  const setContent: typeof editor.setContent = (value) => {
+    changed.current = true;
+    dirty(true);
+    editor.setContent(value);
+  };
   const [mode, setMode] = useState("write");
   const bytes = new TextEncoder().encode(content.body).length;
   const expired =
@@ -57,9 +84,11 @@ export function AnnouncementEditor({
       className="control-card announcement-editor"
       aria-label="Announcement editor"
     >
-      <header>
-        <h2>{announcement ? "Edit announcement" : "New announcement"}</h2>
-      </header>
+      {showHeading ? (
+        <header>
+          <h2>{announcement ? "Edit announcement" : "New announcement"}</h2>
+        </header>
+      ) : null}
       <p className="field-help">
         Published announcements are visible to everyone signed in to this
         Control Plane. Drafts stay private to administrators.
@@ -71,6 +100,10 @@ export function AnnouncementEditor({
       ) : null}
       <form
         className="management-form"
+        onChange={() => {
+          changed.current = true;
+          dirty(true);
+        }}
         onSubmit={(event) => {
           event.preventDefault();
           editor.save("publish");
@@ -83,7 +116,7 @@ export function AnnouncementEditor({
               value={content.title}
               required
               onChange={(event) =>
-                editor.setContent({
+                setContent({
                   ...content,
                   title: limitCharacters(event.target.value, 120),
                 })
@@ -96,7 +129,7 @@ export function AnnouncementEditor({
             <TextInput
               value={content.summary}
               onChange={(event) =>
-                editor.setContent({
+                setContent({
                   ...content,
                   summary: limitCharacters(event.target.value, 240),
                 })
@@ -113,7 +146,7 @@ export function AnnouncementEditor({
               <DropdownSelect
                 value={content.tone}
                 onChange={(event) =>
-                  editor.setContent({
+                  setContent({
                     ...content,
                     tone: event.target.value as AnnouncementTone,
                   })
@@ -130,7 +163,7 @@ export function AnnouncementEditor({
               <DropdownSelect
                 value={String(content.priority)}
                 onChange={(event) =>
-                  editor.setContent({
+                  setContent({
                     ...content,
                     priority: Number(event.target.value),
                   })
@@ -152,7 +185,7 @@ export function AnnouncementEditor({
               type="checkbox"
               checked={content.banner}
               onChange={(event) =>
-                editor.setContent({ ...content, banner: event.target.checked })
+                setContent({ ...content, banner: event.target.checked })
               }
             />
             <span>Show a dismissible banner</span>
@@ -167,7 +200,7 @@ export function AnnouncementEditor({
                 const date = event.target.value
                   ? new Date(event.target.value)
                   : null;
-                editor.setContent({
+                setContent({
                   ...content,
                   expires_at:
                     date && Number.isFinite(date.getTime())
@@ -206,7 +239,7 @@ export function AnnouncementEditor({
                 value={content.body}
                 disabled={editor.locked}
                 onChange={(event) =>
-                  editor.setContent({ ...content, body: event.target.value })
+                  setContent({ ...content, body: event.target.value })
                 }
                 required
               />

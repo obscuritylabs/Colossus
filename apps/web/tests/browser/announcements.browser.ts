@@ -163,6 +163,8 @@ test("administrator previews, drafts, publishes, revises and archives an instanc
   await page
     .getByRole("button", { name: "New announcement", exact: true })
     .click();
+  await expect(page).toHaveURL(/\/admin\/announcements\/new$/u);
+  await page.reload();
   const editor = page.getByRole("region", {
     name: "Announcement editor",
     exact: true,
@@ -192,6 +194,9 @@ test("administrator previews, drafts, publishes, revises and archives an instanc
   await page
     .getByRole("button", { name: "A cleaner workspace", exact: true })
     .click();
+  await expect(page).toHaveURL(/\/admin\/announcements\/[^/]+\/edit$/u);
+  await page.reload();
+  await expect(editor.getByLabel(/^Title/)).toHaveValue("A cleaner workspace");
   await editor
     .getByRole("button", { name: "Publish to everyone", exact: true })
     .click();
@@ -402,8 +407,18 @@ test("the administrator editor and Markdown preview fit narrow Large-text layout
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     ).toBe(true);
-    await editor.getByRole("heading", { name: "New announcement", exact: true }).scrollIntoViewIfNeeded();
-    await page.screenshot({path: testInfo.outputPath(`announcement-admin-mobile-${appearance.id}.png`)});
+    await page
+      .getByRole("heading", { name: "New announcement", exact: true, level: 2 })
+      .scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: testInfo.outputPath(
+        `announcement-admin-mobile-${appearance.id}.png`,
+      ),
+    });
+    page.once("dialog", (dialog) => dialog.accept());
+    await editor
+      .getByRole("button", { name: "Back to announcements", exact: true })
+      .click();
   }
   expect(state.writes).toEqual([]);
   fixture.verify();

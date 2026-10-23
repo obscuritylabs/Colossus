@@ -12,6 +12,19 @@ Use **Control Plane Admin** to manage users and projects. A global administrator
 manage the service and shared project resources; personal hosted conversations and
 execution remain private to their owners.
 
+The application sidebar has two administration entry points: **Project Admin** for the
+selected project's settings and **Control Plane Admin** for instance administrators.
+Each opens a secondary section list. Collapse either sidebar independently; on narrow
+screens, **Toggle administration navigation** opens the section list without covering
+the page permanently. Entries follow the signed-in account's current permissions.
+
+Create and edit forms have their own addresses. Copy the browser address to share a
+provider, model, MCP, Search, variable, secret, user, or announcement form with another
+authorized person. Opening a link or refreshing loads the saved resource in its exact
+scope. Unsaved changes require a discard decision before leaving; drafts and secret
+values are never included in the address. Failed saves retain the proposal, and conflicts
+require reviewing the current settings before another write.
+
 ## Create a project and grant access
 
 1. Open **Control Plane Admin → Projects** and choose **New project**.
@@ -69,7 +82,7 @@ Changing the issuer or client ID requires users to sign in again.
 
 Global administrators configure **Providers**, **Models**, **MCP servers**, **Search**,
 and **Model routing** under **Control Plane Admin**. Projects inherit these definitions.
-Under **Project Administration**, project administrators can customize an inherited
+Under **Project Admin**, project administrators can customize an inherited
 definition, add a project definition, or remove one from the project. Expand the
 inherited configuration list to reset an override or enable a removed global definition.
 Saving requires the revision that was reviewed; reload if another administrator has
@@ -80,7 +93,7 @@ when each user supplies their own key, shared authentication when an administrat
 attach a shared key, or no authentication for an anonymous service. Users manage their
 private keys in **Settings → Personal → Credentials** and account connections in
 **Connected accounts**. Project administrators manage project keys in
-**Project Administration → Secrets**. A global administrator can save an instance key
+**Project Admin → Secrets**. A global administrator can save an instance key
 in **Control Plane Admin → Secrets**, choose a project, and explicitly assign it to
 an eligible shared connection. That assignment takes precedence over project keys;
 project administrators cannot replace it. Rotation or removal of an instance key affects
@@ -100,6 +113,13 @@ allowed origins.
 
 Deployment owners configure the immutable network ceiling and external keys in
 [hosted chat deployment](deployment/hosted-chat.md).
+
+A newly created project can review inherited definitions before Hosted execution is
+configured. Those settings remain read-only until a deployment operator supplies that
+project's runtime and allowed origins. Creating a child project does not copy its
+parent's execution authority or credentials. Secrets, personal variables, and connected
+accounts show the same setup requirement; they cannot be edited or connected through
+an unconfigured project.
 
 ## Configure instance telemetry
 

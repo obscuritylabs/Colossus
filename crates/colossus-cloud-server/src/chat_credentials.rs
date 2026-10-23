@@ -139,10 +139,9 @@ async fn list(
     let caller = state.auth.caller(&headers, &project, false).await?;
     scope.authorize(&caller, false)?;
     let host = hosted(&state)?;
-    let config = host
-        .project_config(&project)
-        .await?
-        .ok_or(CloudError::NotFound)?;
+    let Some(config) = host.project_config(&project).await? else {
+        return Ok(Json(inventory::dormant_snapshot()));
+    };
     let vault = host.selected_vault(&caller, scope.authentication())?;
     let store = CredentialStore::load(vault.as_ref()).map_err(custody)?;
     Ok(Json(snapshot(
@@ -386,10 +385,12 @@ async fn accounts(
 ) -> Result<Json<serde_json::Value>> {
     let caller = state.auth.caller(&headers, &project, false).await?;
     caller.require(CloudPermission::Read)?;
-    let config = hosted(&state)?
-        .project_config(&project)
-        .await?
-        .ok_or(CloudError::NotFound)?;
+    let Some(config) = hosted(&state)?.project_config(&project).await? else {
+        return Ok(Json(serde_json::json!({
+            "accounts":[],
+            "execution":crate::chat_settings::availability::ExecutionAvailability::dormant(),
+        })));
+    };
     let managed = config.codex_auth_path.is_some() || config.codex_auth_shared;
     Ok(Json(serde_json::json!({"accounts":[{
         "id":"chatgpt", "label":"ChatGPT / Codex", "kind":"chatgpt",

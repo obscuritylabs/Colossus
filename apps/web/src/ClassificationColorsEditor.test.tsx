@@ -16,7 +16,10 @@ vi.mock("./api", async (original) => ({
   request: vi.fn(),
 }));
 
-afterEach(() => vi.clearAllMocks());
+afterEach(() => {
+  vi.resetAllMocks();
+  vi.unstubAllGlobals();
+});
 
 const appearance = {
   colorTheme: "dark" as const,
@@ -179,7 +182,7 @@ it("publishes a revision-checked global color change while preserving marking po
           colors: { background: "#008000", text: "#ffffff" },
         },
       },
-      undefined,
+      expect.any(AbortSignal),
       "PATCH",
     );
     expect(onEnvironmentSettings).toHaveBeenCalledWith({
@@ -197,7 +200,7 @@ it("publishes a revision-checked global color change while preserving marking po
   }
 });
 
-it("keeps a rejected global publication out of the live frame and reloads the current revision", async () => {
+it("retains a rejected global proposal until the administrator explicitly reloads the current revision", async () => {
   const classification = {
     enabled: true,
     text: "INTERNAL",
@@ -238,15 +241,32 @@ it("keeps a rejected global publication out of the live frame and reloads the cu
     expect(onEnvironmentSettings).not.toHaveBeenCalled();
     expect(
       view.container.querySelector('[role="alert"]')?.textContent,
-    ).toContain("Review its current settings");
+    ).toContain("Another administrator changed these settings");
     expect(view.container.textContent).not.toContain(
       "colors published for this Control Plane",
     );
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(button(view.container, "Publish banner colors").disabled).toBe(true);
+    expect(
+      view.container.querySelector<HTMLInputElement>(
+        'input[aria-label="Classification background color"]',
+      )!.value,
+    ).toBe("#008000");
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirm);
+    await act(() =>
+      button(view.container, "Reload current banner settings").click(),
+    );
+    expect(confirm).toHaveBeenCalledWith(
+      "Discard your proposed banner colors and reload current settings?",
+    );
+    expect(request).toHaveBeenCalledTimes(3);
     expect(
       view.container.querySelector<HTMLInputElement>(
         'input[aria-label="Classification background color"]',
       )!.value,
     ).toBe("#000000");
+    expect(onEnvironmentSettings).not.toHaveBeenCalled();
   } finally {
     await view.dispose();
   }

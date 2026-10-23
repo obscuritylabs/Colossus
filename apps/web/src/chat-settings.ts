@@ -95,6 +95,11 @@ export interface ChatSettingsWrite {
   inheritance?: SettingsInheritance;
 }
 export interface ChatSettingsSnapshot extends ChatSettingsWrite {
+  execution?: {
+    enabled: boolean;
+    settings_editable: boolean;
+    reason?: string;
+  };
   inheritance?: SettingsInheritanceSnapshot;
   telemetry?: {
     state: "active" | "disabled" | "restart_required";

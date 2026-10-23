@@ -1,5 +1,6 @@
-import { createContext, useEffect, useState } from "react";
-import { DropdownSelect } from "@colossus/ui";
+import { useSettingsNavigationGuard } from "./navigation";
+import { createContext, useCallback, useEffect, useRef, useState } from "react";
+import { Button, DropdownSelect } from "@colossus/ui";
 import {
   AppearanceSettings as SharedAppearanceSettings,
   ClassificationColorsEditor,
@@ -203,50 +204,158 @@ export function EnvironmentAppearance({
 }: {
   onSaved: (settings: PublicSettings) => void;
 }) {
+  const markDirty = useSettingsNavigationGuard();
   const resource = useResource<AdminSettings>("/api/admin/settings");
+  const [reviewed, setReviewed] = useState<AdminSettings | null>(null);
   const [busy, setBusy] = useState(false);
+  const [locked, setLocked] = useState(false);
+  const [resetKey, setResetKey] = useState(0);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [saved, setSaved] = useState<AdminSettings | null>(null);
-  const settings =
-    saved && saved.revision >= (resource.data?.revision ?? 0)
-      ? saved
-      : resource.data;
+  const pending = useRef<AbortController | null>(null);
+  const alive = useRef(true);
+  const draftDirty = useRef(false);
+  const lockedRef = useRef(false);
+  const onDraftChange = useCallback(
+    (dirty: boolean) => {
+      draftDirty.current = dirty;
+      markDirty(dirty || Boolean(pending.current) || lockedRef.current);
+    },
+    [markDirty],
+  );
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      pending.current?.abort();
+    };
+  }, []);
+  useEffect(() => {
+    if (resource.data && !reviewed) {
+      setReviewed(resource.data);
+      setResetKey((value) => value + 1);
+    }
+  }, [resource.data, reviewed]);
+  function lock() {
+    lockedRef.current = true;
+    setLocked(true);
+  }
+  function acknowledge(settings: AdminSettings) {
+    setReviewed(settings);
+    setResetKey((value) => value + 1);
+    draftDirty.current = false;
+    lockedRef.current = false;
+    setLocked(false);
+    markDirty(Boolean(pending.current));
+  }
   async function saveColors(colors: ClassificationColors | null) {
-    if (!settings || busy) return;
+    if (!reviewed || pending.current || lockedRef.current) return;
+    const operation = new AbortController();
+    pending.current = operation;
     setBusy(true);
+    markDirty(true);
     setError("");
     setNotice("");
     try {
       const updated = await request<PublicSettings & { revision: number }>(
         "/api/admin/settings",
         {
-          revision: settings.revision,
-          classification: { ...settings.classification, colors },
+          revision: reviewed.revision,
+          classification: { ...reviewed.classification, colors },
         },
-        undefined,
+        operation.signal,
         "PATCH",
       );
-      setSaved({ ...settings, ...updated });
-      onSaved(updated);
+      if (
+        !alive.current ||
+        pending.current !== operation ||
+        operation.signal.aborted
+      )
+        return;
+      acknowledge({ ...reviewed, ...updated });
       setNotice(
         "Classification banner colors published for this Control Plane.",
       );
-      resource.refresh();
+      onSaved(updated);
     } catch (cause) {
+      if (
+        !alive.current ||
+        pending.current !== operation ||
+        operation.signal.aborted
+      )
+        return;
+      const uncertain = !(cause instanceof ApiFailure) || cause.status >= 500;
+      if (uncertain || (cause instanceof ApiFailure && cause.status === 409))
+        lock();
       setError(
-        cause instanceof ApiFailure &&
-          [400, 401, 403, 409].includes(cause.status)
-          ? errorMessage(cause)
-          : "Could not confirm whether banner colors were published. Current settings are reloading; review them before publishing again.",
+        uncertain
+          ? "Publication could not be confirmed. Reload current banner settings before publishing again. Your proposed colors are retained."
+          : cause instanceof ApiFailure && cause.status === 409
+            ? "Another administrator changed these settings. Reload current banner settings before publishing again. Your proposed colors are retained."
+            : errorMessage(cause),
       );
-      resource.refresh();
     } finally {
-      setBusy(false);
+      if (pending.current === operation) {
+        pending.current = null;
+        if (alive.current) {
+          setBusy(false);
+          markDirty(draftDirty.current || lockedRef.current);
+        }
+      }
+    }
+  }
+  async function reload() {
+    if (pending.current) return;
+    if (
+      (draftDirty.current || lockedRef.current) &&
+      !window.confirm(
+        "Discard your proposed banner colors and reload current settings?",
+      )
+    )
+      return;
+    const operation = new AbortController();
+    pending.current = operation;
+    setBusy(true);
+    markDirty(true);
+    setError("");
+    setNotice("");
+    try {
+      const settings = await request<AdminSettings>(
+        "/api/admin/settings",
+        undefined,
+        operation.signal,
+      );
+      if (
+        !alive.current ||
+        pending.current !== operation ||
+        operation.signal.aborted
+      )
+        return;
+      acknowledge(settings);
+      setNotice("Current banner settings loaded.");
+    } catch {
+      if (
+        !alive.current ||
+        pending.current !== operation ||
+        operation.signal.aborted
+      )
+        return;
+      lock();
+      setError(
+        "Current banner settings could not be reloaded. Your proposed colors are retained. Try reloading again before publishing.",
+      );
+    } finally {
+      if (pending.current === operation) {
+        pending.current = null;
+        if (alive.current) {
+          setBusy(false);
+          markDirty(draftDirty.current || lockedRef.current);
+        }
+      }
     }
   }
   return (
-    <div className="appearance-environment-settings">
+    <div className="appearance-environment-settings" aria-busy={busy}>
       <LoadState {...resource} retry={resource.refresh} />
       {error ? (
         <p className="alert" role="alert">
@@ -258,15 +367,27 @@ export function EnvironmentAppearance({
           {notice}
         </p>
       ) : null}
-      {settings ? (
-        <ClassificationColorsEditor
-          colors={parseClassificationColors(settings.classification.colors)}
-          onChange={(colors) => void saveColors(colors)}
-          previewText={settings.classification.text || "Classification banner"}
-          description={`Publish background and text colors for everyone in this Control Plane, including sign-in. Only global administrators can edit these colors.${settings.classification.enabled ? "" : " The classification banner is currently hidden."}`}
-          disabled={busy || resource.loading}
-          applyLabel="Publish banner colors"
-        />
+      {reviewed ? (
+        <>
+          <ClassificationColorsEditor
+            headingLevel={3}
+            onDraftChange={onDraftChange}
+            resetKey={resetKey}
+            colors={parseClassificationColors(reviewed.classification.colors)}
+            onChange={(colors) => void saveColors(colors)}
+            previewText={
+              reviewed.classification.text || "Classification banner"
+            }
+            description={`Publish background and text colors for everyone in this Control Plane, including sign-in. Only global administrators can edit these colors.${reviewed.classification.enabled ? "" : " The classification banner is currently hidden."}`}
+            disabled={busy || locked || resource.loading}
+            applyLabel="Publish banner colors"
+          />
+          <div className="form-actions">
+            <Button disabled={busy} onClick={() => void reload()}>
+              Reload current banner settings
+            </Button>
+          </div>
+        </>
       ) : null}
     </div>
   );

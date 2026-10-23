@@ -14,8 +14,12 @@ import { LoadState } from "./Home";
 import { useNavigation, RouteLink } from "./navigation";
 import { SectionTabs } from "./Projects";
 import { useResource } from "./resources";
-import { adminUserHref, globalHref, type AdminUserView } from "./routes";
-import { UserEditor } from "./AdminUserEditor";
+import {
+  adminUserHref,
+  globalHref,
+  settingsEditorHref,
+  type AdminUserView,
+} from "./routes";
 import {
   InventoryContinuation,
   UserProjectsTable,
@@ -34,8 +38,6 @@ export function AdminUserDetails({
   currentUserId,
   view,
   project,
-  authConfig,
-  onChanged,
 }: {
   userId: string;
   currentUserId: string;
@@ -55,7 +57,6 @@ export function AdminUserDetails({
     "projects",
     currentUserId,
   );
-  const [editing, setEditing] = useState(false);
   const [resourceGeneration, setResourceGeneration] = useState(0);
   const user = profile.error ? undefined : profile.data?.user;
   const selectedProject = project ?? projects.rows[0]?.project.id ?? "";
@@ -111,26 +112,19 @@ export function AdminUserDetails({
               </Button>
               <Button
                 variant="primary"
-                onClick={() => setEditing(!editing)}
-                aria-expanded={editing}
+                onClick={() =>
+                  navigation.go(
+                    settingsEditorHref(
+                      globalHref("admin", undefined, "users"),
+                      { action: "edit", id: user.id },
+                    ),
+                  )
+                }
               >
                 Edit user
               </Button>
             </div>
           </header>
-          {editing ? (
-            <UserEditor
-              key={`${user.id}:${user.revision}`}
-              user={user}
-              authConfig={authConfig}
-              onCancel={() => setEditing(false)}
-              onSaved={() => {
-                setEditing(false);
-                refresh();
-                onChanged();
-              }}
-            />
-          ) : null}
           <SectionTabs
             current={view}
             onChange={(value) =>

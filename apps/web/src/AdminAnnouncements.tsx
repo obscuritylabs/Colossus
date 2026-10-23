@@ -2,53 +2,47 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@colossus/ui";
 import { DataTable, type DataTableColumn } from "@colossus/ui/data-table";
 import { IconPlus } from "@tabler/icons-react";
-import { request } from "./api";
-import { useResource, errorMessage } from "./resources";
+import { useResource } from "./resources";
 import { LoadState } from "./Home";
 import { AnnouncementEditor } from "./AnnouncementEditor";
 import { announcementPath } from "./announcement-mutation";
+import { useUserInventory } from "./admin-user-data";
+import { navigate } from "./navigation";
+import { globalHref, settingsEditorHref } from "./routes";
+import {
+  SettingsEditorPage,
+  type SettingsEditorNavigation,
+  type SettingsEditorLocation,
+} from "./settings-editor";
 import type { Announcement } from "./announcements";
 
-interface Inventory {
-  announcements: Announcement[];
-  next_cursor: string | null;
-}
-export function AdminAnnouncements() {
-  const resource = useResource<Inventory>("/api/admin/announcements?limit=50");
-  const [extra, setExtra] = useState<Announcement[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Announcement | "new" | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+export function AdminAnnouncements({
+  editorLocation,
+  onOpenEditor,
+  onCloseEditor,
+  onDirtyChange,
+  identity = "",
+}: SettingsEditorNavigation & { identity?: string } = {}) {
+  const resource = useUserInventory<Announcement, "announcements">(
+    editorLocation ? null : "/api/admin/announcements?limit=50",
+    "announcements",
+    identity,
+  );
   const [notice, setNotice] = useState("");
-  const alive = useRef(true);
-  const operation = useRef<AbortController | null>(null);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-      operation.current?.abort();
-    };
-  }, []);
-  useEffect(() => {
-    setExtra([]);
-    setCursor(resource.data?.next_cursor ?? null);
-  }, [resource.data]);
-  const selectEditor = useCallback((value: Announcement | "new" | null) => {
-    operation.current?.abort();
-    operation.current = null;
-    setBusy(false);
-    setError("");
-    setSelected(value);
-  }, []);
-  const rows = useMemo(() => {
-    const byId = new Map<string, Announcement>();
-    for (const row of [...(resource.data?.announcements ?? []), ...extra]) {
-      const previous = byId.get(row.id);
-      if (!previous || row.revision > previous.revision) byId.set(row.id, row);
-    }
-    return [...byId.values()];
-  }, [resource.data, extra]);
+  const openEditor = useCallback(
+    (location: SettingsEditorLocation) => {
+      setNotice("");
+      if (onOpenEditor) onOpenEditor(location);
+      else
+        navigate(
+          settingsEditorHref(
+            globalHref("admin", undefined, "announcements"),
+            location,
+          ),
+        );
+    },
+    [onOpenEditor],
+  );
   const columns = useMemo<DataTableColumn<Announcement>[]>(
     () => [
       {
@@ -59,7 +53,7 @@ export function AdminAnnouncements() {
           <button
             type="button"
             className="catalog-name"
-            onClick={() => selectEditor(row)}
+            onClick={() => openEditor({ action: "edit", id: row.id })}
           >
             {row.title}
           </button>
@@ -100,31 +94,28 @@ export function AdminAnnouncements() {
         ),
       },
     ],
-    [selectEditor],
+    [openEditor],
   );
-  async function reload(id: string) {
-    if (operation.current) return;
-    const abort = new AbortController();
-    operation.current = abort;
-    setBusy(true);
-    setError("");
-    try {
-      const result = await request<{ announcement: Announcement }>(
-        announcementPath(id),
-        undefined,
-        abort.signal,
-      );
-      if (alive.current && !abort.signal.aborted)
-        setSelected(result.announcement);
-    } catch (cause) {
-      if (alive.current && !abort.signal.aborted) setError(errorMessage(cause));
-    } finally {
-      if (operation.current === abort) {
-        operation.current = null;
-        if (alive.current) setBusy(false);
-      }
-    }
-  }
+  if (editorLocation)
+    return (
+      <AnnouncementSettingsEditorRoute
+        key={`${identity}:${editorLocation.action}:${editorLocation.id ?? ""}`}
+        identity={identity}
+        editorLocation={editorLocation}
+        onCloseEditor={onCloseEditor}
+        onDirtyChange={onDirtyChange}
+        onChanged={(value) => {
+          setNotice(
+            value.status === "published"
+              ? "Announcement published to everyone in this instance."
+              : value.status === "archived"
+                ? "Announcement archived."
+                : "Draft saved.",
+          );
+          resource.refresh();
+        }}
+      />
+    );
   return (
     <>
       <header className="catalog-heading">
@@ -134,23 +125,15 @@ export function AdminAnnouncements() {
             Publish Markdown updates and notices to everyone in this instance.
           </p>
         </div>
-        {!selected ? (
-          <Button
-            variant="primary"
-            onClick={() => {
-              setNotice("");
-              selectEditor("new");
-            }}
-          >
-            <IconPlus size={16} aria-hidden="true" />
-            New announcement
-          </Button>
-        ) : null}
+        <Button variant="primary" onClick={() => openEditor({ action: "new" })}>
+          <IconPlus size={16} aria-hidden="true" />
+          New announcement
+        </Button>
       </header>
       <LoadState {...resource} retry={resource.refresh} />
-      {error ? (
+      {resource.moreError ? (
         <p role="alert" className="alert">
-          {error}
+          {resource.moreError}
         </p>
       ) : null}
       {notice ? (
@@ -158,88 +141,108 @@ export function AdminAnnouncements() {
           {notice}
         </p>
       ) : null}
-      {selected ? (
+      <DataTable
+        data={resource.rows}
+        columns={columns}
+        getRowId={(row) => row.id}
+        label="Instance announcements"
+        search={{ columnId: "title", label: "Search announcements" }}
+        loading={resource.loading}
+        empty="No announcements yet. Create a draft to get started."
+      />
+      {resource.cursor ? (
+        <div className="load-more">
+          <p className="field-help">
+            Search and sorting apply to the announcements shown.
+          </p>
+          <Button
+            disabled={resource.moreBusy}
+            onClick={() => void resource.loadMore()}
+          >
+            Load more announcements
+          </Button>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function AnnouncementSettingsEditorRoute({
+  editorLocation,
+  onCloseEditor,
+  onDirtyChange,
+  onChanged,
+  identity,
+}: SettingsEditorNavigation & {
+  onChanged: (value: Announcement) => void;
+  identity: string;
+}) {
+  const resource = useResource<{ announcement: Announcement }>(
+    editorLocation?.action === "edit" && editorLocation.id
+      ? announcementPath(editorLocation.id)
+      : null,
+    0,
+    identity,
+  );
+  const [busy, setBusy] = useState(false);
+  const [snapshot, setSnapshot] = useState<{
+    announcement: Announcement;
+  } | null>(null);
+  const [generation, setGeneration] = useState(0);
+  const reloadSource = useRef<{ announcement: Announcement } | null>(null);
+  useEffect(() => {
+    if (
+      resource.data &&
+      (!snapshot ||
+        (reloadSource.current && resource.data !== reloadSource.current))
+    ) {
+      setSnapshot(resource.data);
+      setGeneration((value) => value + 1);
+      reloadSource.current = null;
+    }
+  }, [resource.data, snapshot]);
+  function reload() {
+    reloadSource.current = resource.data;
+    resource.refresh();
+  }
+  function close() {
+    if (onCloseEditor) onCloseEditor();
+    else navigate(globalHref("admin", undefined, "announcements"));
+  }
+  return (
+    <SettingsEditorPage
+      title={
+        editorLocation?.action === "new"
+          ? "New announcement"
+          : "Edit announcement"
+      }
+      backLabel="announcements"
+      onBack={close}
+      busy={busy}
+    >
+      <LoadState {...resource} retry={resource.refresh} />
+      {editorLocation?.action === "new" || snapshot ? (
         <AnnouncementEditor
-          key={
-            selected === "new" ? "new" : `${selected.id}:${selected.revision}`
+          key={generation}
+          announcement={
+            editorLocation?.action === "new"
+              ? null
+              : (snapshot?.announcement ?? null)
           }
-          announcement={selected === "new" ? null : selected}
-          onCancel={() => selectEditor(null)}
-          onReload={(id) => void reload(id)}
+          showHeading={false}
+          onBusyChange={setBusy}
+          onDirtyChange={onDirtyChange}
+          onCancel={close}
+          onReload={reload}
           onSaved={(value) => {
-            selectEditor(null);
-            setNotice(
-              value.status === "published"
-                ? "Announcement published to everyone in this instance."
-                : value.status === "archived"
-                  ? "Announcement archived."
-                  : "Draft saved.",
-            );
-            resource.refresh();
+            onChanged(value);
             window.dispatchEvent(
               new Event("colossus:web:announcements-changed"),
             );
+            close();
           }}
         />
       ) : null}
-      {!selected ? (
-        <>
-          <DataTable
-            data={rows}
-            columns={columns}
-            getRowId={(row) => row.id}
-            label="Instance announcements"
-            search={{ columnId: "title", label: "Search announcements" }}
-            loading={resource.loading}
-            empty="No announcements yet. Create a draft to get started."
-          />
-          {cursor ? (
-            <div className="load-more">
-              <p className="field-help">
-                Search and sorting apply to the announcements shown.
-              </p>
-              <Button
-                disabled={busy}
-                onClick={async () => {
-                  if (operation.current) return;
-                  const abort = new AbortController();
-                  operation.current = abort;
-                  setBusy(true);
-                  setError("");
-                  try {
-                    const result = await request<Inventory>(
-                      `/api/admin/announcements?limit=50&after=${encodeURIComponent(cursor)}`,
-                      undefined,
-                      abort.signal,
-                    );
-                    if (alive.current && !abort.signal.aborted) {
-                      setExtra((old) => [
-                        ...new Map(
-                          [...old, ...result.announcements].map((row) => [
-                            row.id,
-                            row,
-                          ]),
-                        ).values(),
-                      ]);
-                      setCursor(result.next_cursor);
-                    }
-                  } catch (cause) {
-                    if (alive.current && !abort.signal.aborted)
-                      setError(errorMessage(cause));
-                  } finally {
-                    if (operation.current === abort) {
-                      operation.current = null;
-                      if (alive.current) setBusy(false);
-                    }
-                  }
-                }}
-              >
-                Load more announcements
-              </Button>
-            </div>
-          ) : null}
-        </>
-      ) : null}
-    </>
+    </SettingsEditorPage>
   );
 }

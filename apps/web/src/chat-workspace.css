@@ -293,3 +293,17 @@
     flex: 1;
   }
 }
+
+/* Project administration already receives scoped navigation from the shared frame. */
+.web-settings-window--project {
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+}
+.web-settings-window--project .chat-settings,
+.web-settings-window--project
+  .chat-settings
+  > div
+  > .managed-settings-body.catalog-settings {
+  padding: 0;
+}

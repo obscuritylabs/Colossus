@@ -39,6 +39,17 @@ pub(super) struct Snapshot {
     revision: u64,
     credentials: Vec<Credential>,
     connections: Vec<Destination>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution: Option<crate::chat_settings::availability::ExecutionAvailability>,
+}
+
+pub(super) fn dormant_snapshot() -> Snapshot {
+    Snapshot {
+        revision: 0,
+        credentials: Vec::new(),
+        connections: Vec::new(),
+        execution: Some(crate::chat_settings::availability::ExecutionAvailability::dormant()),
+    }
 }
 
 pub(super) fn connections(
@@ -198,5 +209,6 @@ pub(super) fn snapshot(
         revision: store.revision(),
         credentials,
         connections: destinations,
+        execution: None,
     })
 }

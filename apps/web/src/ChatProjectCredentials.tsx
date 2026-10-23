@@ -1,4 +1,5 @@
 import type { CredentialTarget } from "./credential-types";
+import type { SettingsEditorLocation } from "./settings-editor";
 import { CredentialStoreSettings } from "./CredentialStoreSettings";
 export function ChatProjectCredentials({
   path,
@@ -6,12 +7,20 @@ export function ChatProjectCredentials({
   disabled,
   onSaved,
   initialConnection,
+  editorLocation,
+  onOpenEditor,
+  onCloseEditor,
+  onDirtyChange,
 }: {
   path: string;
   identity: string;
   disabled: boolean;
   onSaved: () => void;
   initialConnection?: CredentialTarget | undefined;
+  editorLocation?: SettingsEditorLocation | undefined;
+  onOpenEditor?: ((location: SettingsEditorLocation) => void) | undefined;
+  onCloseEditor?: (() => void) | undefined;
+  onDirtyChange?: ((dirty: boolean) => void) | undefined;
 }) {
   return (
     <CredentialStoreSettings
@@ -21,6 +30,10 @@ export function ChatProjectCredentials({
       projectScope
       onSaved={onSaved}
       initialConnection={initialConnection}
+      editorLocation={editorLocation}
+      onOpenEditor={onOpenEditor}
+      onCloseEditor={onCloseEditor}
+      onDirtyChange={onDirtyChange}
     />
   );
 }

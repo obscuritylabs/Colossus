@@ -118,6 +118,10 @@ test("global administrators publish and reset readable classification colors fro
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`appearance-${appearance.id}-large-mobile.png`),
+      fullPage: true,
+    });
   }
   await editor.screenshot({
     path: testInfo.outputPath("classification-colors-large-mobile.png"),
@@ -221,3 +225,50 @@ test("both public sign-in classification banners use the published color pair", 
   });
   expect(unexpected).toEqual([]);
 });
+
+for (const appearance of appearanceCases) {
+  test(`personal Appearance keeps readable copy and controls in ${appearance.label} Large layouts`, async ({
+    page,
+  }, testInfo) => {
+    const fixture = await browserFixture(page);
+    await selectAppearance(page, appearance);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const copies = page.locator(".appearance-control-copy");
+      await expect(copies).toHaveCount(3);
+      for (const copy of await copies.all()) {
+        const bounds = await copy.boundingBox();
+        expect(bounds?.width).toBeGreaterThanOrEqual(180);
+        const metrics = await copy.locator("small").evaluate((element) => ({
+          height: element.getBoundingClientRect().height,
+          lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+        }));
+        expect(metrics.height).toBeLessThanOrEqual(metrics.lineHeight * 6);
+      }
+      for (const name of [
+        "appearance-color-theme",
+        "appearance-dark-palette",
+        "appearance-text-size",
+      ]) {
+        const control = page.locator(`#${name}`);
+        await control.scrollIntoViewIfNeeded();
+        await expect(control).toBeInViewport();
+        const bounds = await control.boundingBox();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      }
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBe(true);
+      await page.screenshot({
+        path: testInfo.outputPath(
+          `personal-appearance-${appearance.id}-${width}.png`,
+        ),
+        fullPage: true,
+      });
+    }
+    fixture.verify();
+  });
+}

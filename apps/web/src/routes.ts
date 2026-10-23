@@ -1,3 +1,4 @@
+import type { SettingsEditorLocation } from "./settings-editor";
 export type Surface =
   "home" | "chat" | "hosted" | "fleet" | "projects" | "admin" | "settings";
 export type ProjectView =
@@ -44,6 +45,7 @@ export type Route =
       user?: string;
       userView?: AdminUserView;
       section?: PersonalSettingsSection;
+      editor?: SettingsEditorLocation;
     }
   | { kind: "project-create"; project?: undefined }
   | { kind: "project"; project: string; view: ProjectView }
@@ -51,6 +53,7 @@ export type Route =
       kind: "project-settings";
       project: string;
       section: ConnectionSettingsSection;
+      editor?: SettingsEditorLocation;
     }
   | { kind: "host"; project: string; host: string }
   | { kind: "hosted-agent"; project: string; node: string }
@@ -148,6 +151,35 @@ export const personalSettingsHref = (
   section: PersonalSettingsSection = "appearance",
   project?: string,
 ) => `/settings/${section}${project ? `?project=${id(project)}` : ""}`;
+/** Editor URLs contain identifiers only. Credentials and drafts never enter history. */
+export function settingsEditorHref(
+  base: string,
+  editor: SettingsEditorLocation,
+) {
+  const url = new URL(base, "https://control.invalid");
+  if (editor.target) {
+    if (editor.action !== "new" || !url.pathname.endsWith("/credentials"))
+      throw new Error("Connection targets require a new credential form.");
+    if (!validId(editor.target.id))
+      throw new Error("Invalid connection identifier.");
+    url.searchParams.set("kind", editor.target.kind);
+    url.searchParams.set("connection", editor.target.id);
+  }
+  url.pathname = `${url.pathname.replace(/\/$/, "")}/${editor.action === "new" ? "new" : editor.id ? `${id(editor.id)}/edit` : "edit"}`;
+  return `${url.pathname}${url.search}`;
+}
+function editorParts(
+  parts: string[],
+  singleton: boolean,
+): SettingsEditorLocation | null {
+  if (parts.length === 1 && parts[0] === "new" && !singleton)
+    return { action: "new" };
+  if (parts.length === 1 && parts[0] === "edit" && singleton)
+    return { action: "edit" };
+  if (parts.length === 2 && parts[1] === "edit" && !singleton)
+    return { action: "edit", id: parts[0]! };
+  return null;
+}
 export const hostHref = (project: string, host: string) =>
   `/projects/${id(project)}/hosts/${id(host)}`;
 export const hostedAgentHref = (project: string, node: string) =>
@@ -182,6 +214,85 @@ export function parseRoute(href: string, origin: string): Route {
     if ([...query.keys()].some((key) => query.getAll(key).length !== 1))
       return invalid();
     const first = parts[0];
+    const editorSection =
+      first === "admin"
+        ? parts[1]
+        : first === "settings"
+          ? parts[1]
+          : first === "projects" && parts[2] === "settings"
+            ? parts[3]
+            : undefined;
+    const editorTail = first === "projects" ? parts.slice(4) : parts.slice(2);
+    const editable =
+      first === "admin"
+        ? ["users", "announcements", ...connectionSettingsSections]
+        : first === "settings"
+          ? ["credentials", "variables"]
+          : connectionSettingsSections;
+    if (
+      editorSection &&
+      (editable as readonly string[]).includes(editorSection) &&
+      editorTail.length
+    ) {
+      const singleton = ["routing", "telemetry"].includes(editorSection);
+      const editor: SettingsEditorLocation | null =
+        editorSection === "search" &&
+        editorTail.length === 1 &&
+        editorTail[0] === "edit"
+          ? { action: "edit" as const }
+          : editorParts(editorTail, singleton);
+      if (editor) {
+        const kind = query.get("kind");
+        const connection = query.get("connection");
+        const hasTarget = query.has("kind") || query.has("connection");
+        if (hasTarget) {
+          if (first !== "projects" && !query.get("project")) return invalid();
+          if (
+            editorSection !== "credentials" ||
+            editor.action !== "new" ||
+            !kind ||
+            !["provider", "mcp", "search"].includes(kind) ||
+            !connection ||
+            !validId(connection)
+          )
+            return invalid();
+          editor.target = {
+            kind: kind as "provider" | "mcp" | "search",
+            id: connection,
+          };
+        }
+        if (first === "projects")
+          return [...query.keys()].some(
+            (key) => key !== "kind" && key !== "connection",
+          )
+            ? invalid()
+            : {
+                kind: "project-settings",
+                project: parts[1]!,
+                section: editorSection as ConnectionSettingsSection,
+                editor,
+              };
+        if (
+          [...query.keys()].some(
+            (key) => !["project", "kind", "connection"].includes(key),
+          )
+        )
+          return invalid();
+        const project = query.get("project");
+        if (project !== null && !validId(project)) return invalid();
+        return {
+          kind: "global",
+          surface: first === "admin" ? "admin" : "settings",
+          ...(first === "admin"
+            ? { view: editorSection as AdminView }
+            : { section: editorSection as PersonalSettingsSection }),
+          ...(project ? { project } : {}),
+          editor,
+        };
+      }
+      // User detail tabs are also recognized below; all other editor tails fail closed.
+      if (!(first === "admin" && editorSection === "users")) return invalid();
+    }
     if (
       first === "admin" &&
       parts[1] === "users" &&

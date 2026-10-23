@@ -69,44 +69,39 @@ export function SettingsInheritancePanel({
         ),
     },
   ];
+  if (!rows.length) return null;
   return (
     <section
-      className="control-card"
+      className="settings-inheritance"
       aria-label={
         roleFamily === "search"
           ? "Inherited search routing"
           : "Inherited configuration"
       }
     >
-      <p className="field-help">
-        Control Plane defaults flow into this project. Editing an inherited
-        definition creates a project override. Secrets require an explicit
-        attachment and remain separate from definition inheritance.
-      </p>
-      {rows.length ? (
-        <details>
-          <summary>
-            {rows.length} global{" "}
-            {roleFamily === "search" ? "search routes" : "definitions"} ·
-            revision {inheritance.global_revision}
-          </summary>
-          <DataTable
-            data={rows}
-            columns={columns}
-            getRowId={(row) => row.id}
-            label="Inherited definitions"
-            search={{
-              columnId: "profile",
-              label: "Search inherited definitions",
-            }}
-          />
-        </details>
-      ) : (
+      <details>
+        <summary>
+          Control Plane defaults · {rows.length}{" "}
+          {roleFamily === "search" ? "search routes" : "definitions"} · revision{" "}
+          {inheritance.global_revision}
+        </summary>
         <p className="field-help">
-          No global definitions in this section. New definitions belong to this
-          project.
+          Editing an inherited definition creates a project override. Reset an
+          override to use the current Control Plane default, or re-enable a
+          disabled definition. Credentials require a separate explicit
+          assignment.
         </p>
-      )}
+        <DataTable
+          data={rows}
+          columns={columns}
+          getRowId={(row) => row.id}
+          label="Inherited definitions"
+          search={{
+            columnId: "profile",
+            label: "Search inherited definitions",
+          }}
+        />
+      </details>
     </section>
   );
 }

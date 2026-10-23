@@ -54,6 +54,26 @@ fn settings(config: &crate::config::ChatProjectConfig, revision: u64) -> Value {
 }
 
 #[test]
+fn catalog_only_projection_inherits_definitions_without_operator_authority() {
+    let global = catalog(&configuration());
+    let projection = inheritance::catalog_only(&global);
+    assert_eq!(
+        projection.runtime.models.profiles["shared"].model,
+        "global-model"
+    );
+    assert_eq!(projection.variables["REGION"], "global");
+    assert_eq!(projection.inheritance.global_revision, global.revision);
+    assert_eq!(
+        projection.inheritance.provenance.providers["shared"],
+        "global"
+    );
+    assert!(projection.inheritance.overrides.providers.is_empty());
+    assert!(projection.runtime.sandbox.network_destinations.is_empty());
+    assert!(projection.codex_auth_path.is_none());
+    assert!(!projection.codex_auth_shared);
+}
+
+#[test]
 fn definitions_inherit_while_project_overrides_and_resets_remain_explicit() {
     let seed = configuration();
     let mut global = catalog(&seed);

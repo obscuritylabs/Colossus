@@ -1,5 +1,5 @@
 import { IconRefresh } from "@tabler/icons-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   DEFAULT_CLASSIFICATION_COLORS,
@@ -17,6 +17,10 @@ export interface ClassificationColorsControls {
   description?: string;
   disabled?: boolean;
   applyLabel?: string;
+  headingLevel?: 2 | 3 | 4;
+  onDraftChange?: ((dirty: boolean) => void) | undefined;
+  /** A host acknowledgement or explicit reload may replace a reviewed draft. */
+  resetKey?: string | number;
 }
 
 /** A host-controlled color override; publishing, persistence and marking policy stay in the host. */
@@ -27,20 +31,37 @@ export function ClassificationColorsEditor({
   description = "Choose the banner background and text colors. The classification label and placement stay the same.",
   disabled = false,
   applyLabel = "Apply banner colors",
+  headingLevel = 4,
+  onDraftChange,
+  resetKey,
 }: ClassificationColorsControls) {
+  const Heading = `h${headingLevel}` as "h2" | "h3" | "h4";
   const background = parseClassificationColors(colors)?.background;
   const text = parseClassificationColors(colors)?.text;
   const [draft, setDraft] = useState<ClassificationColors>(
     () =>
       parseClassificationColors(colors) ?? { ...DEFAULT_CLASSIFICATION_COLORS },
   );
+  const draftDirty = useRef(false);
+  const baseline = useRef(draft);
+  const callback = useRef(onDraftChange);
+  callback.current = onDraftChange;
+  const lastResetKey = useRef(resetKey);
   useEffect(() => {
-    setDraft(
+    const resetRequested = lastResetKey.current !== resetKey;
+    lastResetKey.current = resetKey;
+    // Hosts that track a draft explicitly acknowledge replacement. Existing
+    // controlled Desktop consumers keep their original prop-driven behavior.
+    if (callback.current && draftDirty.current && !resetRequested) return;
+    const next =
       background && text
         ? { background, text }
-        : { ...DEFAULT_CLASSIFICATION_COLORS },
-    );
-  }, [background, text]);
+        : { ...DEFAULT_CLASSIFICATION_COLORS };
+    baseline.current = next;
+    draftDirty.current = false;
+    setDraft(next);
+    callback.current?.(false);
+  }, [background, text, resetKey]);
   const accepted = parseClassificationColors(draft);
   const changed = draft.background !== background || draft.text !== text;
   const previewStyle = classificationColorVariables(accepted);
@@ -52,7 +73,7 @@ export function ClassificationColorsEditor({
     >
       <div className="appearance-palette-heading">
         <div>
-          <h4>Classification banner colors</h4>
+          <Heading>Classification banner colors</Heading>
           <p>{description}</p>
           {!colors ? (
             <p>
@@ -79,11 +100,13 @@ export function ClassificationColorsEditor({
               value={draft[slot]}
               disabled={disabled}
               onInput={(event) => {
-                const value = event.currentTarget.value;
-                setDraft((current) => ({
-                  ...current,
-                  [slot]: value,
-                }));
+                const next = { ...draft, [slot]: event.currentTarget.value };
+                const dirty =
+                  next.background !== baseline.current.background ||
+                  next.text !== baseline.current.text;
+                draftDirty.current = dirty;
+                callback.current?.(dirty);
+                setDraft(next);
               }}
             />
             <code>{draft[slot]}</code>
