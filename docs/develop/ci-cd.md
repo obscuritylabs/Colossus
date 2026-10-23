@@ -98,7 +98,7 @@ root sidecar and independent Desktop, browser and native-computer graphs. The cu
 `cargo-audit` exception for `RUSTSEC-2026-0253` applies only to Tantivy 0.26.1's
 `LruCache<usize, Block>`: the panic requires a key destructor, which `usize` lacks.
 `cargo-deny` does not report this informational advisory. Remove the exception when
-Tantivy releases the [patched lru dependency](https://github.com/quickwit-oss/tantivy/pull/3034).
+a Tantivy release includes [Tantivy PR #3034](https://github.com/quickwit-oss/tantivy/pull/3034).
 Ratatui's independent path already uses `lru` 0.18.2. Any new exception must name the
 exact advisory in every reporting scanner, explain unreachability and define removal.
 
