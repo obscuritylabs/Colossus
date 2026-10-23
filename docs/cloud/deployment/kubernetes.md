@@ -62,7 +62,7 @@ and chart publishers to finish before using it.
 
 ```sh
 helm upgrade --install colossus-control-plane \
-  oci://registry-1.docker.io/obscuritylabs/colossus-control-plane-chart \
+  oci://ghcr.io/obscuritylabs/colossus-control-plane-chart \
   --version X.Y.Z --namespace colossus \
   -f deployment-values.yaml
 kubectl -n colossus rollout status deployment/colossus-control-plane

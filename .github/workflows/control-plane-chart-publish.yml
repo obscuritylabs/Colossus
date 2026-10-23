@@ -42,6 +42,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,11 +58,11 @@ jobs:
         run: bash scripts/ci/install-helm.sh
       - name: Isolate registry credentials
         run: printf 'HELM_REGISTRY_CONFIG=%s/chart-registry/config.json\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-      - name: Authenticate to Docker Hub
+      - name: Authenticate with a job-scoped registry token
         env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-        run: printf '%s' "$DOCKERHUB_TOKEN" | helm registry login registry-1.docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: printf '%s' "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GHCR_USER" --password-stdin
       - name: Publish the exact successful tag candidate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,4 +76,4 @@ jobs:
           retention-days: 30
       - name: Remove registry credentials
         if: always()
-        run: helm registry logout registry-1.docker.io
+        run: helm registry logout ghcr.io

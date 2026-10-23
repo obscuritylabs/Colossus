@@ -26,7 +26,7 @@ gh run download "$run" --name "colossus-control-plane-chart-$tag" --dir "$output
 node scripts/ci/control-plane-chart.mjs verify "$output/trusted" "$tag" "$commit"
 version=${tag#v}
 archive=colossus-control-plane-chart-${version}.tgz
-ref=oci://registry-1.docker.io/obscuritylabs/colossus-control-plane-chart
+ref=oci://ghcr.io/obscuritylabs/colossus-control-plane-chart
 if helm pull "$ref" --version "$version" --destination "$output/remote" 2> "$output/pull-error"; then
   cmp "$output/trusted/$archive" "$output/remote/$archive"
 else
@@ -35,7 +35,7 @@ else
     cat "$output/pull-error" >&2
     exit 1
   fi
-  helm push "$output/trusted/$archive" oci://registry-1.docker.io/obscuritylabs
+  helm push "$output/trusted/$archive" oci://ghcr.io/obscuritylabs
   helm pull "$ref" --version "$version" --destination "$output/remote"
   cmp "$output/trusted/$archive" "$output/remote/$archive"
 fi

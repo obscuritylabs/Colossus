@@ -549,17 +549,19 @@ pull requests and annotated release tags. It retains the exact packaged offline 
 and a source/digest manifest for thirty days on successful tag builds. It never installs
 or upgrades a cluster. A release archive also includes the chart source under `deploy/`.
 
-Before first publication, create the public Docker Hub repository
-`obscuritylabs/colossus-control-plane-chart`. Configure the GitHub environment
-`control-plane-chart-publication` to admit only approved publisher runs and provide
-`DOCKERHUB_USERNAME` and a `DOCKERHUB_TOKEN` with write access limited to that repository.
-Enable immutable release tags in the registry. The existing GHCR server/documentation
-image publication remains separate; both must succeed before advertising a chart that
-uses their release-matched tags.
+Configure the GitHub environment `control-plane-chart-publication` to admit only
+approved publisher runs. The workflow publishes to
+`ghcr.io/obscuritylabs/colossus-control-plane-chart` using its job-scoped
+`GITHUB_TOKEN` with `packages: write`; no Docker Hub credentials are required.
+After first publication, make the package public and link it to this repository in
+its GitHub package settings. Verify that this repository's Actions workflows have
+write access to the package. The GHCR server/documentation image publication remains
+separate; both must succeed before advertising a chart that uses their release-matched
+tags.
 
 Publishing the reviewed GitHub Release runs `control-plane-chart-publish.yml`. Protected
 main publisher code verifies the annotated tag's ancestry and exact successful tag
-candidate before using Docker Hub credentials. It pushes that candidate's unchanged
+candidate before publishing to GHCR. It pushes that candidate's unchanged
 bytes through Helm OCI, refuses conflicting existing version tags, and pulls the result
 back to verify the archive digest. Matching retries reuse the existing version. No
 moving alias is published. For an interrupted publication:
