@@ -2,7 +2,10 @@ use std::{
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    rc::Rc,
 };
+
+use crate::timing::Timings;
 
 #[cfg(windows)]
 use std::{
@@ -18,6 +21,7 @@ pub(super) struct Task {
     current_dir: PathBuf,
     env: Vec<(OsString, OsString)>,
     quiet_stdout: bool,
+    timings: Rc<Timings>,
 }
 
 impl Task {
@@ -29,7 +33,13 @@ impl Task {
             current_dir: root.to_path_buf(),
             env: Vec::new(),
             quiet_stdout: false,
+            timings: Rc::new(Timings::new()),
         }
+    }
+
+    pub(super) fn with_timings(mut self, timings: Rc<Timings>) -> Self {
+        self.timings = timings;
+        self
     }
 
     pub(super) fn arg(mut self, value: impl Into<OsString>) -> Self {
@@ -63,6 +73,10 @@ impl Task {
 
     pub(super) fn run(self) -> Result<(), String> {
         self.print();
+        let mut timer = self.timings.start(
+            display_command(&self.program, &self.args),
+            &self.current_dir,
+        );
         let mut command = self.command()?;
         if self.quiet_stdout {
             command.stdout(Stdio::null());
@@ -70,6 +84,7 @@ impl Task {
         let status = command
             .status()
             .map_err(|error| format!("could not start {}: {error}", display(&self.program)))?;
+        timer.outcome(status.to_string());
         if status.success() {
             Ok(())
         } else {
@@ -82,11 +97,16 @@ impl Task {
 
     pub(super) fn output(self) -> Result<String, String> {
         self.print();
+        let mut timer = self.timings.start(
+            display_command(&self.program, &self.args),
+            &self.current_dir,
+        );
         let mut command = self.command()?;
         let output = command
             .stderr(Stdio::inherit())
             .output()
             .map_err(|error| format!("could not start {}: {error}", display(&self.program)))?;
+        timer.outcome(output.status.to_string());
         if !output.status.success() {
             return Err(format!(
                 "{} exited with {}",
@@ -100,11 +120,16 @@ impl Task {
 
     pub(super) fn optional_output(self) -> Result<Option<String>, String> {
         self.print();
+        let mut timer = self.timings.start(
+            display_command(&self.program, &self.args),
+            &self.current_dir,
+        );
         let mut command = self.command()?;
         let output = command
             .stderr(Stdio::null())
             .output()
             .map_err(|error| format!("could not start {}: {error}", display(&self.program)))?;
+        timer.outcome(output.status.to_string());
         if !output.status.success() {
             return Ok(None);
         }

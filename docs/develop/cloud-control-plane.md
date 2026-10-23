@@ -395,16 +395,19 @@ policy and does not prune canonical history.
 ## Acceptance and completion checks
 
 ```sh
-cargo test --locked -p colossus-cloud -p colossus-cloud-chat -p colossus-cloud-protocol -p colossus-cloud-postgres
-cargo test --locked -p colossus-cloud-server --lib
-cargo test --locked -p colossus-credentials --test headless
+cargo xtask quick test -p colossus-cloud -p colossus-cloud-chat -p colossus-cloud-protocol -p colossus-cloud-postgres
+cargo xtask quick test -p colossus-cloud-server -- --lib
+cargo xtask quick test -p colossus-credentials -- --test headless
 cargo test --locked -p colossus-sidecar --test native_lifecycle -- --ignored
-cargo xtask check web
-cargo xtask check rust
-cargo xtask check desktop
-cargo xtask check docs
 cargo xtask pr --base origin/main
 ```
+
+Use the focused package commands while iterating. The final PR gate includes the
+complete Rust gate and other selected components; do not also run
+`cargo xtask check rust` on the same source. Control Plane acceptance also requires
+Desktop (which includes the web renderer) and documentation validation. Run
+`cargo xtask check desktop` and `cargo xtask check docs` separately if the PR gate
+did not select them; a cloud-crate-only change does not select those surfaces.
 
 The server acceptance owns a signed local OIDC issuer, real browser HTTP/SSE, encrypted
 native enrollment records, the production mutual-TLS transport and connector, and a

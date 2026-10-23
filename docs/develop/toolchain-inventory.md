@@ -32,8 +32,8 @@ use their own declarations.
 | ORAS and OPA | `release-image.yml` owns ORAS downloads; `premerge.yml` owns OPA download. | Explicit checksums; OCI roundtrip and live OPA acceptance. |
 | Containers and devcontainer features | Workflow service/acceptance images, devcontainer Docker stages and `devcontainer-lock.json` own immutable references. `oci-proxy.Dockerfile` uses `scratch`. | Preserve image digests and feature lock; live PostgreSQL, Chroma, OCI and OPA suites. |
 | Native build tools and container engines | Runner images and OS package installation supply Clang, CMake, pkg-config, Tauri libraries, Docker/Podman and platform packaging/signing tools. | Native CI/release acceptance; these are not supplied by `mise install`. |
-| Compiler caches and Actions | Workflow SHA pins own sccache/setup/cache actions; `scripts/cargo-sccache` is an optional local wrapper. | Plain Cargo must work without sccache; preserve cold/warm jobs and cache behavior. |
-| Git hooks and task dispatch | `.githooks/` and `scripts/install-git-hooks.sh` currently own hooks; `cargo xtask` owns check selection/execution. | Commit-message and pre-commit checks remain independent of hosted gates. |
+| Compiler caches and Actions | Workflow SHA pins own sccache/setup/cache actions; `scripts/cargo-sccache` optionally selects the local compiler wrapper while preserving inherited settings. | Plain Cargo must work without sccache. Keep local incremental defaults; compare measured editing performance before changing them. See [local cache guidance](setup-testing.md#optional-local-compiler-cache). |
+| Git hooks and task dispatch | `.githooks/` and `scripts/install-git-hooks.sh` own hooks; dependency-free `cargo xtask` owns focused checks, gate selection, execution and timings. | `quick` requires package selection; `pr` includes the complete Rust gate when selected. Commit-message and pre-commit checks remain independent of hosted gates. |
 
 ## Change selection contract
 

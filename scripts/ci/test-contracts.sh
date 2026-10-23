@@ -357,6 +357,7 @@ grep -Fx 'SCCACHE_S3_RW_MODE=READ_WRITE' "$r2_env_file" >/dev/null
 rm -f "$r2_env_file"
 trap - EXIT HUP INT TERM
 
+"${NODE:-node}" --test "$script_dir/cargo-sccache.test.mjs"
 "${NODE:-node}" --test "$script_dir/sdk-release.test.mjs"
 "${NODE:-node}" --test "$script_dir/homebrew-formula.test.mjs"
 "${NODE:-node}" --test "$script_dir/ripgrep-pin.test.mjs"

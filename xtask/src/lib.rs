@@ -5,6 +5,7 @@ mod cli;
 mod command;
 mod repository;
 mod selection;
+mod timing;
 
 use cli::Invocation;
 use repository::Repository;
@@ -18,5 +19,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> Result<(), String> {
     }
 
     let repository = Repository::discover()?;
-    checks::run(&repository, invocation)
+    let result = checks::run(&repository, invocation);
+    repository.report_timings();
+    result
 }

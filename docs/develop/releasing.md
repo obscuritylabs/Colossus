@@ -128,9 +128,11 @@ completion gates:
 ```bash
 ./sdk/scripts/install-codegen-tools
 ./sdk/scripts/generate
-cargo xtask check rust
 cargo xtask pr --base origin/main
 ```
+
+The version and generated-source changes select the complete Rust gate within `pr`;
+a separate `cargo xtask check rust` on the same source is unnecessary.
 
 Validate the hosted stable path from the release branch before merging. Manual dispatch
 cannot create a GitHub Release or publish a registry package:

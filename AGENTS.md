@@ -33,9 +33,12 @@ and the rendered screens as described in the [front-end guide](docs/develop/fron
 ## Validation and handoff
 
 Use `cargo xtask` for repository checks; run it without arguments to list commands.
-Use focused tests while iterating. Rust changes require `cargo xtask check rust`
-before completion; other component gates and pre-PR validation are described in
-[Source setup](docs/develop/setup-testing.md). Focused tests do not replace completion
+Iterate with `cargo xtask quick <check|clippy|test> -p <package>` and directly affected
+test targets. Rust changes require the complete Rust gate before completion:
+`cargo xtask check rust`, or `cargo xtask pr --base <revision>` when Rust is selected.
+The PR gate includes that same Rust gate; do not run both on unchanged source.
+Other component gates and pre-PR validation are described in
+[Source setup](docs/develop/setup-testing.md). Focused checks do not replace completion
 gates. Resolve actionable review findings and required checks before merging, following
 [Contributing](docs/develop/contributing.md).
 

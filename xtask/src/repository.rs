@@ -1,13 +1,15 @@
 use std::{
     env,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
-use crate::command::Task;
+use crate::{command::Task, timing::Timings};
 
 #[derive(Debug)]
 pub(super) struct Repository {
     root: PathBuf,
+    timings: Rc<Timings>,
 }
 
 impl Repository {
@@ -15,7 +17,10 @@ impl Repository {
         let current = env::current_dir()
             .map_err(|error| format!("could not read the current directory: {error}"))?;
         if let Some(root) = find_root(&current) {
-            return Ok(Self { root });
+            return Ok(Self {
+                root,
+                timings: Rc::new(Timings::new()),
+            });
         }
 
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -25,6 +30,7 @@ impl Repository {
             .ok_or_else(|| "could not locate the Colossus repository root".to_owned())?;
         Ok(Self {
             root: root.to_path_buf(),
+            timings: Rc::new(Timings::new()),
         })
     }
 
@@ -33,7 +39,11 @@ impl Repository {
     }
 
     pub(super) fn task(&self, program: impl Into<std::ffi::OsString>) -> Task {
-        Task::new(&self.root, program)
+        Task::new(&self.root, program).with_timings(Rc::clone(&self.timings))
+    }
+
+    pub(super) fn report_timings(&self) {
+        self.timings.report();
     }
 }
 
