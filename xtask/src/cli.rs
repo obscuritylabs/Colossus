@@ -6,6 +6,7 @@ Colossus repository tasks
 Usage:
   cargo xtask pre-commit
   cargo xtask dev
+  cargo xtask quick <check|clippy|test> -p <package>... [-- <cargo-args>...]
   cargo xtask pr [--base <git-revision>]
   cargo xtask check <component> [--base <git-revision>]
   cargo xtask desktop prepare --profile <debug|release> [--target <triple>]
@@ -20,6 +21,9 @@ Components:
   docs          Documentation build and verification
   dependencies  Root, fuzz, Desktop, and standalone native dependency policy
   workflows     CI classification contracts and workflow lint
+
+Quick checks require explicit package selection and do not replace completion gates.
+Pass Cargo target selectors after --, for example: quick test -p colossus-policy -- --lib
 ";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,6 +78,11 @@ pub(super) enum Invocation {
     Help,
     PreCommit,
     Dev,
+    Quick {
+        command: RustCommand,
+        packages: Vec<String>,
+        arguments: Vec<String>,
+    },
     Pr {
         base: Option<String>,
     },
@@ -85,6 +94,23 @@ pub(super) enum Invocation {
         profile: DesktopProfile,
         target: Option<String>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RustCommand {
+    Check,
+    Clippy,
+    Test,
+}
+
+impl fmt::Display for RustCommand {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Check => "check",
+            Self::Clippy => "clippy",
+            Self::Test => "test",
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,6 +128,7 @@ pub(super) fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation
         "-h" | "--help" | "help" => no_more(args, Invocation::Help),
         "pre-commit" => no_more(args, Invocation::PreCommit),
         "dev" => no_more(args, Invocation::Dev),
+        "quick" => parse_quick(args),
         "pr" => Ok(Invocation::Pr {
             base: parse_base(args)?,
         }),
@@ -117,6 +144,43 @@ pub(super) fn parse(args: impl IntoIterator<Item = String>) -> Result<Invocation
         "desktop" => parse_desktop(args),
         _ => Err(format!("unknown task `{command}`\n\n{USAGE}")),
     }
+}
+
+fn parse_quick(mut args: impl Iterator<Item = String>) -> Result<Invocation, String> {
+    let command = match args.next().as_deref() {
+        Some("check") => RustCommand::Check,
+        Some("clippy") => RustCommand::Clippy,
+        Some("test") => RustCommand::Test,
+        _ => return Err(format!("quick requires check, clippy, or test\n\n{USAGE}")),
+    };
+    let mut packages = Vec::new();
+    let mut arguments = Vec::new();
+    while let Some(flag) = args.next() {
+        match flag.as_str() {
+            "-p" | "--package" => {
+                let package = args
+                    .next()
+                    .filter(|value| !value.is_empty() && !value.starts_with('-'))
+                    .ok_or_else(|| format!("{flag} requires a package\n\n{USAGE}"))?;
+                packages.push(package);
+            }
+            "--" => {
+                arguments.extend(args);
+                break;
+            }
+            _ => return Err(format!("unexpected quick argument `{flag}`\n\n{USAGE}")),
+        }
+    }
+    if packages.is_empty() {
+        return Err(format!(
+            "quick requires at least one -p <package>\n\n{USAGE}"
+        ));
+    }
+    Ok(Invocation::Quick {
+        command,
+        packages,
+        arguments,
+    })
 }
 
 fn parse_desktop(mut args: impl Iterator<Item = String>) -> Result<Invocation, String> {
@@ -185,7 +249,7 @@ fn parse_base(mut args: impl Iterator<Item = String>) -> Result<Option<String>, 
 
 #[cfg(test)]
 mod tests {
-    use super::{Component, DesktopProfile, Invocation, parse};
+    use super::{Component, DesktopProfile, Invocation, RustCommand, parse};
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
@@ -251,5 +315,45 @@ mod tests {
                 .unwrap_err()
                 .contains("unexpected argument")
         );
+    }
+
+    #[test]
+    fn quick_requires_explicit_packages_and_preserves_cargo_arguments() {
+        assert_eq!(
+            parse(strings(&[
+                "quick",
+                "test",
+                "-p",
+                "colossus-policy",
+                "--package",
+                "colossus-access",
+                "--",
+                "--lib",
+                "policy::tests",
+                "--",
+                "--nocapture"
+            ]))
+            .unwrap(),
+            Invocation::Quick {
+                command: RustCommand::Test,
+                packages: strings(&["colossus-policy", "colossus-access"]),
+                arguments: strings(&["--lib", "policy::tests", "--", "--nocapture"]),
+            }
+        );
+        for invalid in [
+            strings(&["quick"]),
+            strings(&["quick", "build", "-p", "xtask"]),
+            strings(&["quick", "check"]),
+            strings(&["quick", "check", "--", "--workspace"]),
+            strings(&["quick", "check", "-p"]),
+            strings(&["quick", "check", "-p", "--workspace"]),
+            strings(&["quick", "check", "-p", ""]),
+            strings(&["quick", "check", "--workspace"]),
+        ] {
+            assert!(parse(invalid.clone()).is_err(), "accepted {invalid:?}");
+        }
+        for command in ["check", "clippy"] {
+            assert!(parse(strings(&["quick", command, "-p", "xtask"])).is_ok());
+        }
     }
 }

@@ -7,20 +7,8 @@ type: how-to
 
 # Contributing
 
-## Goal
-
-Prepare a focused change that respects dependency boundaries and is straightforward to
-review.
-
-## Prerequisites
-
-- A source checkout.
-- The toolchain and platform requirements in [Source setup and test tiers](setup-testing.md),
-  including optional mise provisioning. Direct Cargo and script commands remain supported.
-- Familiarity with [Architecture overview](architecture.md) and
-  [Security architecture](security-architecture.md) for boundary-sensitive work.
-
-## Steps
+Use [Source setup and test tiers](setup-testing.md) for toolchains, focused commands,
+component gates and local launchers.
 
 1. Create a focused branch and keep unrelated worktree changes intact.
 
@@ -30,40 +18,32 @@ review.
     ./scripts/install-git-hooks.sh
     ```
 
-3. Make the smallest coherent change. In particular:
+3. Make the smallest coherent change, following the [architecture](architecture.md),
+   [security boundaries](security-architecture.md) and [crate structure](crate-structure.md):
 
     - keep `colossus-domain` dependency-free;
     - keep CLI and TUI as request/render interfaces;
-    - follow the [Rust crate structure](crate-structure.md) contract and keep roots thin;
+    - keep crate roots thin;
     - put policy, tool, model, workflow, and state behavior in their owning services;
-    - keep tests focused on behavior and contracts that remain supported; when removing
-      a feature, remove its feature-specific tests, and retain rejection, migration, or
-      tombstone coverage only when the post-removal behavior is itself an intentional
-      compatibility or security contract.
+    - test supported behavior; remove a deleted feature's tests unless they protect an
+      intentional rejection, migration or compatibility contract.
 
-4. Iterate with the smallest relevant test tier:
+    Map unclear ownership before adding code. Repair security or state invariants
+    exposed by tests rather than weakening the assertions.
 
-    ```bash
-    cargo xtask dev
-    ```
-
-    Before opening or updating a pull request, run the change-selected local PR gate:
+4. Iterate with focused package checks and directly affected tests. Once the change
+   is finished, inspect the final diff and run the PR gate before opening or updating
+   the pull request:
 
     ```bash
+    git diff --check
     cargo xtask pr --base origin/main
     ```
 
-    The task uses the same fail-closed path classifier as hosted PR validation and
-    selects Rust, SDK, Desktop, documentation, and dependency checks. Missing required
-    toolchains fail explicitly instead of silently skipping a selected component.
+    This is the final local check, not the edit loop. It includes the full Rust gate
+    when Rust is selected; do not also run `cargo xtask check rust` on unchanged source.
 
-5. Before requesting full acceptance, inspect every unresolved pull-request review
-   thread and required check, including automated ChatGPT/Codex review. Address each
-   actionable finding in code and tests; do not treat a green build as a substitute for
-   review resolution. Once the PR gate is green on a conflict-free, non-draft PR, follow
-   the [`ci:full` procedure](ci-cd.md#request-pre-merge-acceptance).
-
-6. Use a Conventional Commit message:
+5. Use a Conventional Commit message:
 
     ```text
     <type>[optional scope][!]: <description>
@@ -72,31 +52,7 @@ review.
     Allowed types are `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`,
     `refactor`, `revert`, `security`, `style`, and `test`.
 
-## Expected result
-
-The diff has one clear purpose, tests describe the changed behavior, and no interface or
-crate root has absorbed unrelated application logic.
-
-## Verification
-
-Run the repository completion gate and inspect the final diff:
-
-```bash
-git diff --check
-cargo xtask check rust
-cargo xtask pr --base origin/main
-```
-
-## Failure path
-
-If a change crosses an unclear ownership boundary, stop and map the request, service,
-port, and adapter before adding code. If a test exposes a security or state invariant,
-repair the implementation rather than weakening the test. Preserve user-owned or
-unrelated worktree changes.
-
-## Next step
-
-Open a review with the behavioral outcome, affected boundaries, focused tests, and full
-local gate results in the description. Recheck unresolved human and automated review
-threads after the final push, then request hosted pre-merge acceptance once for the final
-head.
+6. Describe the behavioral outcome, affected boundaries and validation in the PR.
+   Resolve actionable human and automated review findings and required checks. With
+   the final head green, conflict-free and non-draft, request hosted acceptance once
+   through the [`ci:full` procedure](ci-cd.md#request-pre-merge-acceptance).

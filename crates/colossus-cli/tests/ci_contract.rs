@@ -1369,12 +1369,18 @@ fn local_test_tiers_and_sccache_wrapper_remain_optional() {
 
     let wrapper = fs::read_to_string(repository_root().join("scripts/cargo-sccache"))
         .expect("read local sccache wrapper");
-    for required in [
-        "RUSTC_WRAPPER",
-        "SCCACHE_BASEDIRS",
-        "exec \"$cargo_bin\" \"$@\"",
-    ] {
+    for required in ["RUSTC_WRAPPER", "exec \"$cargo_bin\" \"$@\""] {
         assert!(wrapper.contains(required));
+    }
+    for inherited_setting in [
+        "CARGO_INCREMENTAL",
+        "SCCACHE_CACHE_SIZE",
+        "SCCACHE_BASEDIRS",
+    ] {
+        assert!(
+            !wrapper.contains(inherited_setting),
+            "the optional wrapper must preserve inherited {inherited_setting}"
+        );
     }
 }
 

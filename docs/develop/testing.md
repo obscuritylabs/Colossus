@@ -7,8 +7,7 @@ type: reference
 
 # Test strategy and crate audit
 
-Tests are evidence for supported behavior, not a second implementation or a historical
-archive. Put each assertion at the lowest boundary that can prove the contract.
+Put each supported-behavior assertion at the lowest boundary that can prove it.
 
 ## Test levels
 
@@ -18,15 +17,14 @@ archive. Put each assertion at the lowest boundary that can prove the contract.
 | Integration | Public crate boundaries, persistence conformance, subprocess protocols, platform isolation, and live adapters | `<crate>/tests/` |
 | End to end | Installed CLI, worker, Desktop, SDK, release, and operator workflows | CLI/Desktop suites and CI workflows |
 
-Do not promote a unit test to a process test merely for realism. Do not replace a
-security, protocol, persistence, or packaging boundary test with a mock merely for speed.
-An ignored live test is acceptable only when its prerequisite is explicit and a named CI
-job or documented operator command owns its execution.
+Use process tests when the process boundary matters. Preserve security, protocol,
+persistence and packaging boundary tests; mocks do not replace them. An ignored live
+test needs explicit prerequisites and a named CI job or documented operator command.
 
 ## Crate-by-crate audit
 
-This inventory records the August 2026 Rust-cutover cleanup. “Keep” means the suite
-protects a current boundary; it does not mean every future assertion is permanent.
+These suites protect current boundaries; apply the [removal criteria](#removal-criteria)
+when those boundaries change.
 
 | Crate | Test ownership and disposition |
 | --- | --- |
@@ -62,11 +60,11 @@ protects a current boundary; it does not mean every future assertion is permanen
 | `colossus-bundles` | Keep retained release-bundle signature, inventory, no-clobber, and installation tests. |
 | `colossus-policy` | Keep built-in and OPA decision tests, including opt-in live and mTLS targets. |
 | `colossus-ports` | Keep reusable port-conformance helpers; avoid adapter behavior here. |
-| `colossus-presentation` | Keep pure document/theme/rendering tests; the obsolete Python theme-import test was removed. |
+| `colossus-presentation` | Keep pure document/theme/rendering tests. |
 | `colossus-projection` | Keep deterministic projection, checkpoint, and rebuild tests. |
 | `colossus-provider` | Keep provider translation, streaming, limits, malformed output, and redaction tests. |
 | `colossus-research` | Keep evidence bounds, citations, lane failures, and deterministic fallback tests. |
-| `colossus-runtime` | Keep composition and cross-service security tests; obsolete `research.search` compatibility assertions were removed. |
+| `colossus-runtime` | Keep composition and cross-service security tests. |
 | `colossus-sandbox` | Keep native/OCI/Windows contract, broker, cleanup, and hostile-input tests. |
 | `colossus-sdk` | Keep embedded/native-sidecar/gRPC parity and subprocess lifecycle tests. |
 | `colossus-app-host` | Keep bounded private framing checks; VS Code's `test:managed` exercises the bundled native lifecycle, authenticated turns, provider credentials, restart, writer conflicts, and recovery. |
@@ -87,109 +85,97 @@ protects a current boundary; it does not mean every future assertion is permanen
 | `colossus-worker` | Keep worker composition, authentication, shutdown, and restart tests. |
 | `colossus-workflow` | Keep parsing, control flow, recovery, triggers, idempotency, and compensation tests. |
 
-The CLI integration directory contains intentionally separate suites for agent,
-approval, audit export, authentication, bootstrap/install, bundles, configuration,
-context, documentation examples, integrations, MCP, native/OCI/Windows sandboxing,
-plugins, plans, providers, release installation, research, search, rejection,
-worker, and workflow behavior. Their separation lets CI select expensive prerequisites
-without weakening the public-boundary assertions.
+Separate CLI integration targets let CI select expensive prerequisites while retaining
+each public-boundary assertion.
 
-Linux workspace-identity changes require focused provider-seam tests in both
-`colossus-home` and `colossus-runtime`. Preserve a known version-4 birthtime digest;
-prove that missing NFS birthtime selects version 5; and prove that transient device,
-inode, mount-ID, and mount-point fields are not independently hashed when the filesystem
-scope and kernel-supplied opaque handle remain identical. Do not assume that the opaque
-handle itself remains stable across an inode remap. Prove separation across filesystem
-scope, handle type, length, and bytes. Cover bounded handle sizing, unsupported
-syscalls/filesystems, malformed or changing results, missing or ambiguous scope, and
-descriptor/stat metadata disagreement as fail-closed cases. Runtime tests must
-independently reproduce the expected identity kind and reject replacement before
-repository, tool, or effect access. An inode-only bootstrap token must not authorize a
-version-5 identity even when its device and inode match. Unsupported identity scope on
-an unrelated NFS volume must not prevent selecting a supported workspace, while
-malformed record structure and duplicate device matches remain rejected.
-Version-5 revalidation must accept the same scoped digest across changed client
-device/inode values, reject changed digests, and retain version-4 metadata checks.
-A live NFS acceptance test may supplement these
-contracts, but cannot replace the deterministic negative cases.
+Linux workspace-identity changes need provider-seam tests in `colossus-home` and
+`colossus-runtime`. Preserve a known version-4 birthtime digest and prove missing NFS
+birthtime selects version 5. With identical filesystem scope and kernel handle,
+transient device, inode, mount-ID and mount-point fields must not independently affect
+the hash; the handle itself need not survive inode remapping. Prove separation across
+scope, handle type, length and bytes. Fail closed on invalid handle sizing, unsupported
+syscalls/filesystems, malformed or changing results, missing/ambiguous scope, and
+descriptor/stat disagreement. Runtime tests must independently derive the identity kind
+and reject replacement before repository, tool or effect access. Reject inode-only
+bootstrap authorization for version 5 even when device/inode match. An unsupported
+unrelated NFS volume must not block a supported workspace; malformed records and
+duplicate device matches remain rejected. Version-5 revalidation accepts unchanged
+scoped digests across changed client device/inode values and rejects changed digests;
+retain version-4 metadata checks. Live NFS acceptance supplements these deterministic
+negative cases.
 
 ## Removal criteria
 
-Remove or rewrite a test when its product behavior has been deliberately removed, it
-duplicates stronger evidence at the same boundary, it asserts implementation detail
-without a contract, or its fixture describes a format Colossus explicitly rejects. Keep
-historical storage or protocol readers only while current deployments can present those
-formats; record a later removal decision before deleting that evidence.
+Remove or rewrite tests for deleted behavior, duplicate weaker evidence, implementation
+details without a contract, or fixtures in explicitly rejected formats. Retain historical
+storage/protocol coverage while current deployments can present those formats; record
+the removal decision before deleting it.
 
 ## Verification tiers
 
-During iteration, run the changed crate's library tests and directly affected targets.
-Then use `cargo xtask dev`, `cargo xtask check rust`, and finally
-`cargo xtask pr --base origin/main`. See [Source setup and test tiers](setup-testing.md)
-for prerequisites and CI mapping.
+During edits, check the changed package and directly affected targets. Run the full
+change-selected PR gate after implementation and focused validation are finished;
+it already includes the Rust gate when selected. [Source setup and test tiers](setup-testing.md)
+owns the commands, prerequisites, timings and CI mapping.
+
+Native browser results below establish only their stated source/fixture boundaries.
+[ADR 0008](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work)
+owns production readiness, containment, certificate custody and signed-installation
+requirements; each platform must supply its own native evidence.
 
 ### Portable CI contract prerequisites
 
-`scripts/ci/test-contracts.sh` runs the release, classification and offline native-browser
-fixtures as part of the repository gates. Select the repository Node toolchain and a
-Python 3.11+ environment with `cryptography` 50.x; set `NODE` and `PYTHON` to those
-executables when they differ from the ambient tools. The native fixture prerequisite
-is separate from the SDK's Python pin in the [toolchain inventory](toolchain-inventory.md).
-A missing cryptographic dependency is a setup failure, not permission to skip the suite.
+`scripts/ci/test-contracts.sh` runs release, classification and offline native-browser
+fixtures. Use the repository Node toolchain and Python 3.11+ with `cryptography` 50.x;
+set `NODE` and `PYTHON` if these differ from ambient tools. This prerequisite is separate
+from the SDK Python pin in the [toolchain inventory](toolchain-inventory.md). Missing
+cryptography is a setup failure; do not skip the suite.
 
-The Linux PR **Classify PR changes** job owns the complete POSIX fixture contracts.
-Tests requiring Unix executable modes, owner/private-mode checks, no-follow descriptors,
-descriptor-relative retirement or file symlinks declare that prerequisite explicitly.
-These tests also run when the same suite is invoked on macOS. ELF parsing, image/export
-metadata, compiler output, origin validation, evidence validation and other portable
-contracts remain enabled on Windows. Node release fixtures use real Windows junctions
-for link rejection while retaining file symlinks on POSIX.
+The Linux PR **Classify PR changes** job owns POSIX fixture contracts. Unix executable
+modes, owner/private modes, no-follow descriptors, descriptor-relative retirement and
+file-symlink tests declare their prerequisites and also run on macOS. Windows retains
+portable ELF, image/export metadata, compiler-output, origin and evidence validation.
+Node release fixtures use Windows junctions or POSIX file symlinks for link rejection.
 
-Windows native staging, handle/Job cleanup and input acceptance remain owned by the
-[Windows browser tiers](#desktop-chromium-development-acceptance-on-windows).
-POSIX fixture results do not substitute for those native checks or establish Windows
-certificate custody. Native Mac supervisor and PKI acceptance remain separate operator
-tiers documented in the [process-broker guide](https://github.com/obscuritylabs/Colossus/blob/main/native/browser/process-broker/README.md).
+Native staging, handle/Job cleanup and input belong to the
+[Windows browser tiers](#desktop-chromium-development-acceptance-on-windows);
+macOS supervisor and PKI acceptance belong to the
+[process-broker guide](https://github.com/obscuritylabs/Colossus/blob/main/native/browser/process-broker/README.md).
 
-When Git Bash supplies GNU tar on Windows, set `$env:TAR_OPTIONS = '--force-local'`
-in the PowerShell process running the gates. This makes drive-letter archive paths
-local filenames rather than remote-host requests. It changes no archive verification
-assertions or machine settings. Use the same selected Python environment for both
-native-browser and TLS-broker fixture discovery.
+For Git Bash GNU tar on Windows, set `$env:TAR_OPTIONS = '--force-local'` in the gate's
+PowerShell process so drive-letter paths are local filenames. Archive assertions and
+machine settings remain unchanged. Use the same Python environment for native-browser
+and TLS-broker fixture discovery.
 
 ### Desktop provider setup acceptance
 
 Prepare current bundled binaries with `cargo xtask desktop prepare --profile debug`,
 then run `cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib native_catalog_ -- --ignored`.
-This operator-owned native acceptance tier requires loopback access and the platform
-credential store. It uses disposable private homes, the verified bundled sidecar,
-authenticated worker IPC, and the production provider gateway. It proves first-run
-Chat Completions and Responses model discovery without a selected model, card limits,
-absent authorization for unauthenticated endpoints, real encrypted-vault credential
-forwarding on Windows/macOS, and successful retries after malformed catalogs and
-HTTP 401. Successful runs verify removal of their exact generated runtime keys and
-homes; cleanup failures fail the test. During an existing test failure, cleanup
-diagnostics preserve that original failure and may leave generated resources for
-inspection. It does not
-automate native consent or credential-entry dialogs; those still require on-screen
-acceptance. Browser mocks alone do not exercise this native boundary.
+This operator-owned tier needs loopback access and the platform credential store.
+Disposable private homes, the verified bundled sidecar, authenticated IPC and the
+production gateway prove first-run Chat Completions/Responses discovery without a
+selected model, card limits, no authorization for unauthenticated endpoints,
+Windows/macOS encrypted-vault forwarding, and retries after malformed catalogs or
+HTTP 401. Success requires removal of generated runtime keys and homes. Cleanup
+failures fail the test; cleanup during another failure preserves that failure and may
+retain resources for inspection. Native consent and credential-entry dialogs require
+separate on-screen acceptance.
 
 The Windows pre-merge lane also runs `native_catalog_` and `native_uninstall_` with
 `--ignored`. The reset regression retains an old secure anchor while recreating the
 same home path and verifies both restart stability and successful fresh discovery.
-Uninstall acceptance removes generated runtime keys, a real encrypted vault key, and
-read-only hard-linked plugin caches while preserving unrelated entries and external
-hard links. Native setup acceptance also tears down its actual sidecar-created homes
-through the Windows uninstall helper. These tests never target the operator's default
-Desktop home.
+Uninstall acceptance removes generated runtime/vault keys and read-only hard-linked
+plugin caches while preserving unrelated entries and external hard links. Setup
+acceptance removes its sidecar-created homes through the Windows uninstall helper.
+Neither targets the default Desktop home.
 
 ### Desktop setup package acceptance
 
 After preparing the Desktop sidecar, run
 `cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib native_setup_package_ -- --ignored`.
-This operator-owned check proves both provider-only packages and the documented
-provider/model example pass the real sidecar's YAML inspector without provider
-requests. Ordinary `setup_package::tests` cover offline ZIP bounds, credential
+The real sidecar's YAML inspector must accept provider-only packages and the documented
+provider/model example without provider requests. Ordinary `setup_package::tests` cover
+offline ZIP bounds, credential
 placeholders, metadata migration, export, CA handling, and activation conflicts.
 From `apps/desktop`, `npx playwright test tests/browser/setup-package.spec.ts`
 checks the import review, explicit trust/replacement choices, deferred credentials,
@@ -200,20 +186,17 @@ entry dialogs still require on-screen acceptance.
 
 The operator-owned Windows Desktop acceptance tier runs
 `cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib desktop_instance::native_tests::native_single_instance_restores_original_window -- --ignored --exact`.
-It requires WebView2 and an interactive desktop. It uses a temporary browser profile
-and a unique application identifier, starts a real second process, and verifies that
-the process exits successfully while the original hidden or minimized window is
-restored. It never opens the installed application's settings or credential vault.
-The ordinary Windows unit suite covers startup serialization and tray click routing.
+It requires WebView2 and an interactive desktop. A temporary browser profile and unique
+application identifier isolate a real second process: it must exit successfully and
+restore the original hidden/minimized window without opening installed settings or
+credentials. Unit tests cover startup serialization and tray click routing.
 
 ### Windows computer control acceptance
 
-The native computer adapter lives in the separate `native/computer` Cargo
-workspace so Windows FFI does not relax the runtime workspace's unsafe-code
-prohibition. `cargo xtask check rust` and `cargo xtask check desktop` both run its
-locked metadata, formatting, ordinary tests and Clippy checks. The PR Desktop
-job owns the Linux run, including the unavailable-platform implementation.
-Ordinary tests never capture a desktop or send input. To run only this boundary:
+The separate `native/computer` workspace keeps Windows FFI outside the runtime's
+unsafe-code prohibition. The Rust and Desktop gates run its locked metadata,
+formatting, tests and Clippy; the PR Desktop job owns the Linux unavailable-platform
+checks. Ordinary tests neither capture a desktop nor send input. To check this boundary:
 
 ```bash
 cargo fmt --manifest-path native/computer/Cargo.toml --all -- --check
@@ -230,13 +213,11 @@ $env:COLOSSUS_ACCEPTANCE_SIDECAR = (Resolve-Path apps/desktop/src-tauri/binaries
 cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --lib native_desktop_grant_discovers_computer_tools_without_computer_effects -- --ignored
 ```
 
-This Windows check requires the ordinary user's unlocked Default desktop, native
-credential storage and loopback access. It uses disposable private homes and a
-credential-free local provider to verify that the Desktop application grant
-offers all 13 computer tools and that `tool.search` returns them. It removes its
-generated runtime keys and homes, leaves the operator's profile untouched, and
-performs no computer operation or window activation. It can run in the
-background, but does not replace the capture and input acceptance below.
+This background-capable check needs the ordinary user's unlocked Default desktop,
+native credential storage and loopback. Disposable homes and a credential-free local
+provider verify the Desktop grant offers all 13 computer tools and `tool.search`
+returns them. It removes generated keys/homes, preserves the operator's profile and
+performs no computer operation or activation. Capture/input acceptance remains below.
 
 To verify that a persisted Minimal profile can return to Development and Allow All,
 use the prepared debug Desktop binaries and run:
@@ -245,18 +226,14 @@ use the prepared debug Desktop binaries and run:
 cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --lib native_reused_provider_profiles_restart_and_expose_authenticated_inventory -- --ignored
 ```
 
-This check reopens disposable Desktop settings, restarts the real Managed Local
-sidecar for each profile, and reads its authenticated tool, MCP, search and plugin
-inventories. It makes no external provider request and removes its generated runtime
-keys and home after closing the sidecar.
+The check reopens disposable settings, restarts Managed Local for each profile and
+reads authenticated tool, MCP, search and plugin inventories without external provider
+requests. It closes the sidecar before removing generated keys and home.
 
-Real Windows acceptance requires an unlocked interactive desktop under the
-ordinary user's token. Its disposable target must be a sibling process of the
-verified host: the adapter deliberately denies its host, controller and their
-descendants. Window titles and process names do not establish target authority.
-Missing Windows capture, accessibility or foreground prerequisites must fail the
-explicit acceptance command, rather than silently substitute a mock or report a
-portable test as native evidence.
+Native acceptance needs an unlocked interactive desktop under the ordinary user's
+token. Its disposable target must be the verified host's sibling: host, controller and
+descendants are denied. Titles/process names do not establish target authority.
+Missing capture, accessibility or foreground prerequisites must fail acceptance.
 
 From an ordinary PowerShell 7 session on Windows, run:
 
@@ -264,60 +241,45 @@ From an ordinary PowerShell 7 session on Windows, run:
 ./scripts/ci/computer-windows-native.ps1
 ```
 
-The harness builds the feature-gated `computer_window_fixture` and
-`computer_acceptance` examples, starts the green target and a magenta occluding
-window as siblings of the verified acceptance host, and requires a real capture
-of the selected target while the cover remains in front. The native receipt also
-covers accessibility, explicit focus and input, stale observations and run
-revocation, foreign-window denial, owned modal input, competing writers,
-cancellation and held-input cleanup after helper termination. If Windows does
-not activate the synthetic cover automatically, activate the exact nonce-named
-cover shown by the harness within its setup deadline. Actual capture and focus
-transition assertions remain required.
-Each child has a bounded lifetime; forced cleanup fails acceptance. Screenshots,
-JSON receipts and bounded stdout/stderr tails remain in a fresh private
-`ColossusComputerTest-*` directory under the user profile, whose path is printed
-by the harness. Remove that exact evidence directory after inspection.
+The harness builds feature-gated `computer_window_fixture` and `computer_acceptance`, then starts
+the green target and magenta occluding window as the verified host's siblings. It
+requires capture of the selected target while covered, accessibility, explicit focus
+and input, stale observations/run revocation, foreign-window denial, owned modal input,
+competing writers, cancellation and held-input cleanup after helper termination. If
+needed, activate the exact nonce-named cover within the setup deadline; capture and
+focus assertions still apply. Children have bounded lifetimes; forced cleanup fails.
+Screenshots, JSON receipts and bounded logs remain in the printed private
+`ColossusComputerTest-*` directory under the user profile. Remove it after inspection.
 
-The **Representative Windows runtime and sandbox** pre-merge job runs default
-tests, lints all targets/features and builds the native acceptance examples.
-GitHub-hosted Windows machines run as administrators; they cannot establish the
-ordinary-user interactive acceptance contract. These hosted checks report
-protocol and compilation evidence only.
+The **Representative Windows runtime and sandbox** job runs default tests, lints all
+targets/features and builds acceptance examples. Hosted Windows runners use administrator
+tokens, so this establishes protocol/compilation evidence, not ordinary-user acceptance.
 
-Before merging computer-control changes, a maintainer must run the explicit
-desktop command on the final clean commit and retain `harness.json`,
-`acceptance.json` and the selected-window screenshot for review. Require both
-receipts to report `passed: true`, `harness.json` to name that exact commit in
-`source_revision`, and `source_dirty: false`; retain its `acceptance_sha256` and
-`fixture_sha256` with the evidence. A successful dirty-worktree
-run remains development evidence and must be repeated on the final commit.
-Physical human takeover and Pause behavior need a separate manual check; injected
-fixture input does not prove that contract.
+Before merging computer-control changes, run native acceptance on the final clean
+commit. Retain `harness.json`, `acceptance.json` and the selected-window screenshot;
+both receipts must report `passed: true`, with the exact `source_revision`,
+`source_dirty: false`, `acceptance_sha256` and `fixture_sha256` in `harness.json`.
+Repeat dirty-worktree runs on that commit. Physical human takeover and Pause require
+a separate manual check.
 
 ### Desktop embedded browser preview
 
-From `apps/desktop`, run `npm run test:browser-native` to build and exercise the
-feature-gated native browser harness. It requires a graphical Windows/macOS session
-and loopback sockets. It creates an owner-private UUID home under the user profile,
-uses an isolated main WebView profile, and removes only that exact generated directory
-after the process exits. It never uses saved Desktop credentials or workspaces.
+From `apps/desktop`, run `npm run test:browser-native` in a graphical Windows/macOS
+session with loopback sockets. The feature-gated harness uses a private UUID home and
+isolated main WebView profile, removes only that directory after exit, and never uses
+saved Desktop credentials/workspaces.
 
-The harness checks real engine history, temporary cookie sharing/isolation, foreign
-workspace rejection, guest IPC/app-origin denial, native permission denial, suppressed
-script dialogs, popups, downloads, and clear/close behavior. Fixture evaluation is
-behind `browser-test-bridge` and the native adapter's `native-test-driver` feature;
-no generic evaluation IPC command exists. macOS probes call WebKit directly because
-the hardened guest replaces Wry's navigation delegate and its initial script queue
-is never drained. The harness also rejects script exceptions and verifies that a
-later probe still completes.
-The macOS and Windows pre-merge lanes own this acceptance tier.
+It checks engine history, temporary cookie sharing/isolation, foreign-workspace
+rejection, guest IPC/app-origin and native permission denial, suppressed script dialogs,
+popups, downloads, clear/close behavior, script exceptions and successful later probes.
+Evaluation requires `browser-test-bridge` and `native-test-driver`; no generic evaluation
+IPC exists. macOS probes call WebKit directly because the hardened guest replaces Wry's
+navigation delegate without draining its initial script queue. Both platform pre-merge
+lanes own this tier.
 
-Set `COLOSSUS_BROWSER_INTERACTIVE_ACCEPTANCE=1` in an interactive desktop session
-to additionally require foreground keyboard/focus acceptance. Ordinary CI can have no
-foreground OS window; it checks that this condition denies the viewport lease and
-reports the interactive gate as outstanding. That result does not establish on-device
-keyboard, overlay, or focus behavior.
+Set `COLOSSUS_BROWSER_INTERACTIVE_ACCEPTANCE=1` to require foreground keyboard/focus
+acceptance. CI without a foreground window must deny the viewport lease and report
+interactive acceptance outstanding; it cannot prove device keyboard, overlay or focus.
 
 Run native contracts from the repository root:
 
@@ -326,9 +288,9 @@ cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --workspac
 ```
 
 From `apps/desktop`, run `npm run test:browser -- tests/browser/browser-pane.spec.ts`
-for controls, composer preservation, responsive layout, and accessibility. Fixture
-pages do not prove native isolation or site compatibility. The remaining release
-matrix is recorded in [ADR 0003](adr/0003-desktop-browser-boundary.md).
+for controls, composer preservation, responsive layout and accessibility.
+[ADR 0003](adr/0003-desktop-browser-boundary.md) owns the native isolation,
+site-compatibility and release matrix.
 
 For developer review, the canonical launcher can prepare debug sidecars and enable
 Browser for the development build:
@@ -337,10 +299,9 @@ Browser for the development build:
 ./scripts/desktop-dev --browser-preview
 ```
 
-This flag can be combined with `--dev-credentials` for an already activated private
-development home. Direct Tauri launches still accept `--features browser-preview`.
-
-The feature is off in normal builds until the native release gates pass.
+Combine with `--dev-credentials` for an activated private development home. Direct
+Tauri launches accept `--features browser-preview`; normal builds keep it off pending
+native release acceptance.
 
 ### Desktop Chromium development acceptance on macOS
 
@@ -354,24 +315,20 @@ COLOSSUS_CEF_NATIVE_LIB_DIR=/absolute/path/to/native/build \
   npm --prefix apps/desktop run test:browser-chromium-native
 ```
 
-This operator-owned tier requires an unlocked interactive macOS session, loopback
-sockets, and native process inspection. Keep the test Desktop window in front.
-It builds the actual renderer assets and a debug CEF-linked Tauri acceptance app,
-stages and verifies its ad-hoc signatures, and launches through macOS LaunchServices.
-Its isolated UUID home never uses saved Desktop workspaces or credentials.
+Use an unlocked interactive macOS session with loopback and native process inspection;
+keep the test window in front. The runner builds renderer assets and a debug CEF-linked
+Tauri app, verifies staged ad-hoc signatures and launches through LaunchServices with
+an isolated UUID home, without saved workspaces or credentials.
 
-Acceptance first requires the actual main WebView document to pass the same native
-controller authorization used by browser IPC. It then checks rendered PNG pixels
-and native child geometry, CEF/Tauri AppKit coexistence,
-navigation/back/forward/reload, shared-session tabs and hidden siblings,
-resizing, controller overlay occlusion and restoration, expired viewport leases,
-workspace generations, privileged app-origin denial, and disabled agent control.
-It records live renderer seatbelt startup and rejects sandbox-disabling or remote
-debugging flags. It reopens a loaded visible tab before requesting AppKit quit,
-then requires the Desktop exit guard to acknowledge that live tab's closure.
-Success requires native close acknowledgements, successful `CefShutdown`, private
-cache removal, actual fixture HTTP requests, and no surviving owned helper processes.
-Failure cleanup does not turn an unsuccessful shutdown into acceptance.
+The main WebView document must pass browser IPC's native controller authorization.
+Assertions cover PNG pixels, child geometry, CEF/Tauri AppKit coexistence,
+navigation/back/forward/reload, shared tabs/hidden siblings, resizing, overlay
+occlusion/restoration, expired leases, workspace generations, privileged-origin denial
+and disabled agent control. The runner records live renderer seatbelt startup and
+rejects sandbox-disabling/remote-debugging flags. It reopens a visible tab before AppKit
+quit and requires the exit guard to acknowledge closure. Success requires native close
+acknowledgements, `CefShutdown`, cache removal, fixture HTTP requests and no surviving
+owned helpers; failure cleanup does not count as successful shutdown.
 
 Logs, the staged app, and `native-acceptance.json` remain in a generated
 `.local/chromium-acceptance-UUID` directory. Set
@@ -382,11 +339,8 @@ activation, set `COLOSSUS_BROWSER_ACCEPTANCE_FOREGROUND_WAIT_MS=60000` to allow
 up to one minute to activate the observed test window; the foreground check still
 must pass.
 
-These development results do not promote component modes or enable production
-automation. macOS preview rendering and lifecycle evidence cover the in-process
-human surface. Accepted separate-host Core composition, certificate custody and
-complete browser containment remain distinct requirements in
-[ADR 0008](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work).
+This tier covers the in-process human preview; separate-host Core acceptance remains
+in [ADR 0008](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work).
 
 ### Desktop Chromium development acceptance on Windows
 
@@ -406,33 +360,26 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/desktop-browser-windows.
 PowerShell 7 (`pwsh`). `-ExecutionPolicy Bypass` applies only to this invocation;
 the launcher does not change the machine or user execution policy.
 
-The command builds a fresh pinned CEF component and verifies its complete
-inventory, creates private development state and embeds the explicit selection
-in the Debug sidecar. It exercises real typed browser actions, native uploads and
-downloads with exact server-observed bytes, tab allocation/selection/close and
-full Job/pipe/profile cleanup. The Core fixture separately requires real semantic
-observations, clicks, navigation and a released PNG artifact.
+The command builds/verifies a pinned CEF inventory, creates private development state
+and embeds its selection in the Debug sidecar. Assertions cover typed browser actions,
+native transfers with exact server-observed bytes, tab allocation/selection/close and
+Job/pipe/profile cleanup. Core separately requires semantic observations, clicks,
+navigation and a released PNG artifact.
 
-The native fixture also freezes a page that sends timer-driven HTTP requests,
-requires server-observed silence after egress drain, and resumes the same DOM
-under a new writer generation. The natural-completion Desktop case runs a second
-agent turn in the same conversation, requires the same session/document with a
-fresh writer and native frame, replaces its old completed tab, and retains the
-second last view before shutdown.
+The fixture freezes timer-driven HTTP traffic, requires server-observed silence after
+egress drain and resumes the same DOM with a new writer generation. After natural
+completion, a second Desktop agent turn must reuse the session/document with a fresh
+writer/frame, replace the completed tab and retain its last view before shutdown.
 
-The actual Desktop fixture uses a deterministic local model provider through
-the ordinary authenticated SDK/sidecar/worker channels. It authorizes the real
-controller document, hands its human page to an agent and requires native click,
-navigation, screenshot, read-only viewer detachment and shutdown receipts. Core
-also opens, selects and closes owned tabs; each retarget must reach the foreground
-Windows HWND under the same writer and a fresh authenticated viewport.
-Both loss of the outer viewer stream and viewer closure after natural Core run
-completion require a separate authenticated detach or retained cleanup receipt.
-Windows screen probes read the foreground desktop DC for the exact owned HWND;
-an accepted frame buffer alone is insufficient. Native resize/current display
-DPI, overlay occlusion, mouse/key dispatch, Unicode surrogate commits and IME
-cancel use the real native presenter. This does not assert that every installed
-IME or a different monitor's DPI has been accepted.
+A deterministic local provider uses authenticated SDK/sidecar/worker channels to
+authorize the controller, hand its human page to an agent and require native click,
+navigation, screenshot, read-only detachment and shutdown receipts. Tab retargeting
+must reach the foreground HWND with the same writer and a fresh authenticated viewport.
+Viewer-stream loss and viewer closure after completion each need authenticated detach
+or retained cleanup evidence. Screen probes read the foreground desktop DC for that
+HWND; a frame buffer alone is insufficient. The real presenter checks resize/current
+display DPI, overlay occlusion, mouse/key dispatch, Unicode surrogate commits and IME
+cancel. Other installed IMEs and monitors need separate acceptance.
 
 Fresh logs, three foreground viewport PNGs and `acceptance.json` are preserved
 under the printed `.local/` evidence directory. Failed state remains available
@@ -462,12 +409,9 @@ logging. Both use the actual token's OS profile and the exclusive native allocat
 The existing owned Windows CI tier uses this profile with the same input,
 transfer, frame and cleanup assertions; it does not add another acceptance run.
 
-Both component release modes remain false. This functional development lane
-retains Chromium's built-in sandbox and reports no outer containment or private
-certificate capability. AppContainer/WFP, owned CA/client-key custody, additional
-IME/DPI coverage and installed signed-package acceptance remain separate gates.
-The existing `-Mode Containment` CI diagnostic remains independently selected;
-it does not make standard Colossus install or use require administrator access.
+Both release modes remain false. Chromium's sandbox stays enabled; this lane advertises
+no outer containment or private-certificate capability. The separate `-Mode Containment`
+CI diagnostic does not make standard installation/use require administrator access.
 
 #### Windows rich interactions and annotations
 
@@ -488,9 +432,8 @@ A successful attempt retains a bounded `native.log`, `annotations.png` and
 `acceptance.json`; failed attempts retain available evidence and their private state
 for diagnosis.
 
-These are Core source results. Live Desktop agent acceptance, whole-host containment,
-certificate custody and installed signed-package acceptance remain separate gates.
 The runner keeps production availability and all three release acceptance flags false.
+Live Desktop agent acceptance remains separate from this Core tier.
 See the [native component instructions](https://github.com/obscuritylabs/Colossus/blob/main/native/browser/README.md#windows-interaction-and-annotation-acceptance)
 for action limits and component preparation.
 
@@ -515,11 +458,11 @@ Renderer isolation evidence uses a retained native process handle and checks its
 executable and creation time. The live renderer's restricted token must receive
 an access denial when opening an operator-private file. The runner rejects
 sandbox-disabling and remote-debugging flags. Failed runs preserve their home and
-categorical cleanup evidence. The repository's `native/browser/README.md` explains
-bootstrap and staging details. This developer tier does not establish signed
-installed support or the browser process's complete network containment.
+categorical cleanup evidence. The
+[native component guide](https://github.com/obscuritylabs/Colossus/blob/main/native/browser/README.md)
+owns bootstrap and staging details.
 
-The existing premerge `windows-desktop` lane also runs
+The premerge `windows-desktop` lane also runs
 `scripts/ci/browser-windows-native.ps1` as a required owned-Chromium factory check.
 Its eligibility is unchanged: a non-draft PR, an authorized `ci:full` request, and
 a successful current-head Colossus PR gate. The script builds pinned sandboxed
@@ -528,12 +471,10 @@ private profile-label readback, actual multipart upload/download bytes, native
 presentation/input and complete owned cleanup. This is a separate browser path
 from the lane's WebView2 Desktop checks.
 
-The `windows-owned-chromium-source-acceptance` CI artifact contains only a bounded
-log, component inventory and diagnostic report; it excludes profiles, transferred
-content and keys. The report and component keep accepted modes and production
-containment false. This job is wired into the required aggregate but has not yet
-produced execution evidence; a future pass still does not establish signed
-installed or whole-host broker/network acceptance.
+The `windows-owned-chromium-source-acceptance` artifact contains a bounded log,
+inventory and diagnostic report, excluding profiles, transferred content and keys.
+Accepted modes and production containment stay false. Current execution evidence
+belongs to [browser readiness](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work).
 
 ### Native Chromium certificate acceptance
 
@@ -543,17 +484,14 @@ After preparing the pinned macOS or Windows preview, run:
 npm --prefix apps/desktop run test:browser-pki-native
 ```
 
-This interactive tier creates private, temporary CA and client-identity fixtures
-and asks the operator to provision them through the native certificate controls.
-It verifies server trust, an actual server-observed client leaf fingerprint,
-identity choice, dismissal, stale review, and negative TLS cases. Private keys and
-passwords remain outside the Desktop renderer and runtime tool arguments.
+Provision the private temporary CA/client-identity fixtures through native certificate
+controls. Assertions cover server trust, server-observed leaf fingerprint, identity
+choice, dismissal, stale review and TLS failures. Keys/passwords stay outside the
+Desktop renderer and tool arguments.
 
-Remove only the generated fixture certificates and private keys using the native
-store controls after the run. The evidence distinguishes operator-reported removal
-from verified key custody and does not claim signed installed PKI acceptance.
-Linux unattended provisioning uses a separate owned NSS store; real CEF acceptance
-of that path is independent of this operator-driven OS-store tier.
+Remove only generated fixture certificates/keys through native store controls. Evidence
+must distinguish operator-reported removal from verified custody. Linux's unattended
+owned-NSS-store provisioning requires independent real CEF acceptance.
 
 Windows ordinary-user source preview also has an authenticated native-review tier.
 Build the local TLS server and the explicit native test executable:
@@ -570,28 +508,23 @@ python -B native/browser/scripts/run_windows_pki_probe.py `
   --server-executable target/debug/examples/windows_pki_server.exe
 ```
 
-Run this explicitly as the ordinary user with OpenSSL and Python's `cryptography`
-package available. The runner creates an owner-private fixture directory, unique
-nonexportable user CNG signing keys, and fixture-only CurrentUser ROOT/MY entries.
-It records exact certificate and public-key digests before changing the stores.
-The local server advertises only the fixture CA. The native review driver uses the
-exact supervised request and accepts only generated public fixture identities. It first
-verifies automatic single-identity mTLS during initial navigation before a viewer lease
-exists, then provisions a second fixture identity for explicit choice. It checks actual
-server-observed login, alternate identity rejection, cancellation, changed-origin denial,
-run cancellation and TLS failures. It does not operate browser certificate-picker windows.
-Finally it removes and verifies absence of its exact certificates and key
-containers, and deletes generated private fixture files. Retain the immutable
-`store-ledger-*.json` checkpoints and `windows-pki-acceptance.json` receipt. An
-unverified cleanup is a failed run and must be resolved against that ledger.
+Run as the ordinary user with OpenSSL and Python `cryptography`. The runner creates
+private fixtures, unique nonexportable CNG signing keys and fixture-only CurrentUser
+ROOT/MY entries, recording certificate/public-key digests before store changes. The
+server advertises only the fixture CA; native review accepts only generated public
+identities for the exact supervised request. It checks automatic single-identity mTLS
+before a viewer lease, then adds a second identity for explicit choice. Server-observed
+login, alternate-identity rejection, cancellation, changed-origin denial, run cancellation
+and TLS failures must pass without operating browser certificate-picker windows.
+Cleanup must verify absence of the exact certificates/key containers and remove private
+fixture files. Retain `store-ledger-*.json` checkpoints and
+`windows-pki-acceptance.json`; resolve unverified cleanup as a failure against that ledger.
 
 For the same matrix through Core policy and browser tools, first build the runtime
 lib test with `cargo test --locked -p colossus-runtime --lib --no-run`, then pass its
 printed executable to the runner with
 `--test browser_tools::tests::native_windows::pki::core_authenticates_system_ca_and_reviewed_client_identity_after_policy`.
-This source-preview acceptance establishes native selection of OS-owned keys;
-private per-profile certificate custody, contained Windows execution and signed
-installed acceptance remain separate gates.
+This proves native selection of OS-owned keys, not per-profile custody.
 
 The trusted in-window picker has a separate synthetic Windows acceptance operator.
 After building the renderer and preparing the pinned Windows presenter library paths,
@@ -604,12 +537,11 @@ cargo run --locked --manifest-path apps/desktop/src-tauri/Cargo.toml `
   --example client-identity-review-acceptance
 ```
 
-This Debug-only operator creates a main test window and the real bundled review child.
-It checks native parent/bounds and resize, guest occlusion, exact-document IPC, one-use
-choice, Cancel, expiry and workspace invalidation, then exits. It uses synthetic public
-metadata, creates no certificate-store entries and proves no TLS or private-key use.
-It preserves the functional preview's prohibition on the unrelated native test-driver
-bridge. The server-observed matrix above supplies the independent real-key evidence.
+This Debug-only operator checks the main window and bundled review child's native
+parent/bounds, resize, guest occlusion, exact-document IPC, one-use choice, Cancel,
+expiry and workspace invalidation. Synthetic public metadata creates no store entries
+or TLS/private-key evidence; use the matrix above for that. The functional preview
+still prohibits the unrelated native test-driver bridge.
 
 ### Owned browser control conformance
 
@@ -627,15 +559,12 @@ cargo test --locked -p colossus-sandbox browser_profiles
 cargo test --locked -p colossus-sandbox protected_filesystem::native_profiles
 ```
 
-The profile tests include restart ownership, exclusive lease/reset rejection,
-unknown cleanup, version compatibility, replaced inode handling, and real granted
-filesystem operations against Chromium-shaped caches and aliases. They establish
-source contracts and private filesystem denial; they do not establish encrypted
-storage or a persistent disk quota.
+Profile tests cover restart ownership, exclusive lease/reset rejection, unknown cleanup,
+compatibility, replaced inodes and granted filesystem operations against Chromium-shaped
+caches/aliases. They prove private filesystem denial, not encryption or disk quota.
 
-Actual CEF/Core conformance is an explicit ignored native tier. Select a fresh
-inventoried host component, locally installed immutable OCI image and native Docker
-executable using `COLOSSUS_BROWSER_OCI_ACCEPTANCE_COMPONENT`,
+For ignored native CEF/Core conformance, select a fresh inventoried component, locally
+installed immutable OCI image and native Docker executable using `COLOSSUS_BROWSER_OCI_ACCEPTANCE_COMPONENT`,
 `COLOSSUS_BROWSER_OCI_ACCEPTANCE_IMAGE_ID` and
 `COLOSSUS_BROWSER_OCI_ACCEPTANCE_DOCKER`. The compatible host lane must support
 CEF's sandbox without disabling it and positively reap every owned helper.
@@ -676,26 +605,10 @@ cargo test --locked -p colossus-runtime --lib \
   -- --ignored --exact --nocapture
 ```
 
-This remains a diagnostic fixture; ordinary profile configuration is rejected
-pending encryption and quota acceptance. A restricted startup diagnostic completed
-CEF initialization with the identical component after the curated seccomp policy
-added its missing `sysinfo` allowance. The actual three-channel Core fixture then
-passed with real page observations and redaction. Four-channel read-only
-presentation, five-host persistent cookie restart/reset/temporary isolation and
-per-request PKI fixtures also passed. The PKI result checked seven exact owner
-enrollments and six immediate allocated-host graceful shutdowns. Every allocated
-host completed graceful CEF shutdown and physical state cleanup, and the component
-remained unchanged. These scoped results do not accept production containment or
-a signed installed package.
-The latest opt-in Linux renderer-custody experiment completed mTLS, page loading,
-shutdown and physical cleanup. Its bounded live-receipt attempt reached a native
-challenge, but reported `rejected` with `process_not_found` because the parent
-could not authenticate a matching live renderer. No valid direct-key-denial
-evidence was accepted. Renderer and broker key custody remain unaccepted.
-Native Windows/macOS compositor, broker,
-certificate custody and signed installed tests require their respective operating
-systems. See [current browser readiness](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work)
-for missing functionality as well as acceptance gates.
+Persistent profiles remain diagnostic-only until encryption and quota acceptance;
+ordinary configuration is rejected. [Current browser readiness](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work)
+records completed native fixtures, the rejected Linux renderer-custody attempt and
+remaining platform gates.
 
 ### Plan Mode acceptance
 
@@ -704,9 +617,8 @@ for non-mutation, durable draft writes, refinement, approval, and once-only cons
 The interactive suite covers line mode and a real PTY in embedded and worker-backed
 runtimes. From `apps/desktop`, run
 `npm run test:browser -- tests/browser/plan-workflow.spec.ts` for revision controls,
-execution mode handoff, and retained planning previews. These deterministic providers
-and browser fixtures prove contracts; they do not prove a live model follows the
-instructions or that a packaged native application is correctly connected.
+execution mode handoff and retained planning previews. Live-model and packaged-native
+acceptance are separate from these deterministic fixtures.
 
 `cargo test -p colossus-api-runtime --lib public_plan_question_resumes_after_answer_and_persists_one_draft`
 uses a loopback provider with the production runtime, event forwarding, public run
@@ -715,15 +627,13 @@ question, an answer reaches the next model request, and the run completes with e
 one draft. Run this tier when changing Plan Mode, interactive prompts, or event buffering;
 an isolated question-card fixture cannot expose an interaction overtaking queued events.
 
-For live acceptance, use a disposable workspace by default. When an operator explicitly
-requests their active configuration, use clearly named test sessions and record the
-resolved config source, model, reasoning, limits, access profile, state location, and
-binary version without exporting credentials. Resolve CLI and Desktop independently:
-workspace YAML and Desktop's saved provider/model resources may differ. Confirm the
-packaged CLI and sidecar match the source binaries. Run the CLI and Desktop checks
-sequentially when they share a workspace; workspace ownership is exclusive even with
-different state paths. Do not disable the lease or change provider/policy settings to
-make the test pass.
+Use a disposable workspace for live acceptance unless the operator requests active
+configuration. Name test sessions and record config source, model, reasoning, limits,
+access profile, state path and binary version without credentials. Resolve CLI and
+Desktop independently: YAML and saved provider/model resources can differ. Verify
+packaged CLI/sidecar match source binaries. Shared-workspace checks must run sequentially
+even with different state paths; do not bypass leases or change provider/policy settings
+to make them pass.
 
 | Live scenario | Evidence to retain |
 | --- | --- |
@@ -733,69 +643,54 @@ make the test pass.
 | Native UI clarification and refinement | Question answered through the UI; same plan ID advances revision; old revision has no continuation controls |
 | Native Run once for a harmless output-only plan | Plan becomes Executed, composer enters Execute mode, repeat execution controls retire, planning preview survives |
 
-Compare repository changes before and after each planning scenario. Retain canonical
-plan records, tool-call names, run results, and native screenshots separately from mock
-test results. Record model errors and cancellations as observed; do not turn retries
-into an unqualified first-attempt pass. Live samples supplement the deterministic
-negative cases and cannot guarantee every future model response.
+Compare repository changes before/after each scenario. Retain canonical plans, tool
+names, run results and native screenshots separately from mocks; report model errors,
+cancellations and retries. Live samples supplement deterministic negative cases.
 
 ### Command approval acceptance
 
-`cargo test -p colossus-cli --test approval_smoke` uses isolated homes and deterministic
-loopback providers to exercise missing-reason recovery, built-in full-command details,
-allow-once and denial, and real PTY Request-tab scrolling with both embedded and worker
-hosts. Marker files prove that no command executes while approval is pending and that
-accepted commands execute only once. Policy tests bind justification, executable,
-arguments, and working directory to the immutable proof and verify sanitized evidence
-is written before the decision is requested.
+`cargo test -p colossus-cli --test approval_smoke` uses isolated homes and loopback
+providers to test missing-reason recovery, full-command details, allow-once/denial and
+real PTY Request-tab scrolling in embedded/worker hosts. Markers prove no execution
+while pending and exactly one after acceptance. Policy tests bind justification,
+executable, arguments and working directory to immutable proof and require sanitized
+evidence before requesting a decision.
 
-From `apps/desktop`, `npm run test:approval-runtime` builds a feature-gated acceptance
-example and the real sidecar. It drives the production review component through the
-production native approval adapter, authenticated worker, and separate approval broker.
-Allow, deny, and cancellation use fresh private homes with a credential-free local
-provider. The test supplies only the human decision in the isolated review document; pending-interaction
-refetch, authorization, policy, permits, and process execution remain real. No test bridge
-is linked into production. Both foreground and managed commands cover Allow once,
-remembered exact-command approval, denial, and cancellation. The same tier runs real
-stdout/stderr at 1,024- and 4,096-byte limits, successful and nonzero exits, and a Windows
-loopback server on a dynamically assigned port. The server must survive a later turn,
-reappear after UI reconnect, expose its released logs, and stop from Active shells with
-its listener closed. A disposable occupied port separately proves visible startup
-failure without touching existing listeners. The macOS and Windows pre-merge lanes run this tier with no
-scenario retries. Screenshots are in `apps/desktop/output/playwright`, with browser traces
-retained on failure. Mocked browser tests separately cover keyboard operation, compact
-layouts, accessibility, redaction, full details, and stale review state.
+From `apps/desktop`, `npm run test:approval-runtime` builds a feature-gated example and
+sidecar, driving the production review component/native adapter, authenticated worker
+and separate broker. Fresh private homes and a credential-free local provider isolate
+each run. Only human decisions are supplied; refetch, authorization, policy, permits
+and execution stay real. Production links no test bridge. Foreground/managed commands
+cover Allow once, remembered exact-command approval, denial and cancellation;
+stdout/stderr at 1,024/4,096-byte limits; and zero/nonzero exits. A Windows server on
+a dynamic port must survive a later turn, reappear after UI reconnect, expose released
+logs and stop from Active shells with its listener closed. A disposable occupied port
+must produce visible startup failure without touching existing listeners. macOS/Windows
+pre-merge lanes run without scenario retries. Screenshots go to
+`apps/desktop/output/playwright`; failure traces are retained. Browser mocks cover
+keyboard, compact layouts, accessibility, redaction, full details and stale reviews.
 
-On Unix, the allowed command deliberately runs for more than ten seconds, then must
-exit successfully and append exactly one marker. Windows uses immediate markers:
-AppContainer setup and its seven-second cleanup reserve share the effect budget.
-The Windows fixture uses core PowerShell/.NET marker writes without cmdlet module
-autoload; the normal default interpreter, process isolation, and limits are unchanged.
-Both platforms retain zero-exit, exact-once, and no-execution-before-approval checks.
-The test-only activity collector allows
-45 seconds to observe the normal 30-second process budget and terminal publication;
-it does not extend runtime execution or approval limits. Collection failures report
-only categorical run status and pending-interaction count, not private challenges.
-The plugin and approval runners use separate `test-results/plugin-runtime` and
-`test-results/approval-runtime` directories so a subsequent suite cannot erase a
-failed suite's traces before the CI artifact upload.
-On process failure, the fixture reports only allowlisted failure categories,
-numeric exit codes, and whether its start/completion markers exist. Private
-provider error text, command arguments, bindings, and output are never echoed.
-The collector also retains the public terminal status, allowlisted reason, and
-outcome certainty, since a terminal timeout need not produce another model request.
+On Unix, the allowed command must run over ten seconds, exit zero and append one marker.
+Windows uses immediate PowerShell/.NET markers without cmdlet autoload: AppContainer
+setup and its seven-second cleanup reserve share the effect budget. Default interpreter,
+isolation, limits, exact-once and no-execution-before-approval assertions remain unchanged.
+The test collector waits 45 seconds for the normal 30-second process budget and terminal
+publication without extending execution/approval limits. Collection failures expose only
+categorical status and pending-interaction count. Process failures expose allowlisted
+categories, numeric exits and marker presence, never private provider errors, arguments,
+bindings or output. Retain public terminal status, allowlisted reason and outcome certainty;
+a timeout need not trigger another model request. Separate `test-results/plugin-runtime`
+and `test-results/approval-runtime` directories preserve each failed suite's CI traces.
 
-Both native acceptance scripts isolate Tauri's build output from the runtime under
-test. With `CARGO_TARGET_DIR` set, Tauri uses its `desktop-acceptance/` child: Tauri's
-external-binary staging must never overwrite the freshly compiled CLI or sidecar
-with a previously staged binary. Relative target paths resolve from the repository.
+Both scripts put Tauri output in the `desktop-acceptance/` child of `CARGO_TARGET_DIR`
+when set. External-binary staging must not overwrite the tested fresh CLI/sidecar with
+older staged binaries. Relative target paths resolve from the repository.
 
-Native on-screen smoke testing must additionally verify that the isolated command review
-window opens, external navigation is blocked, closing it invalidates review, and its
-Allow once / Always allow / Deny buttons are the final decision without another OS dialog.
-Verify the full command and working directory remain readable. Browser acceptance does
-not substitute for this check. Native remembered-command tests cover exact matching,
-workspace identity, redacted-command rejection, persistence across reopen, and clearing.
+On-screen smoke acceptance must verify the review window opens, blocks external
+navigation, invalidates review on close and makes Allow once / Always allow / Deny final
+without another OS dialog. Full command/working directory must remain readable. Native
+remembered-command tests cover exact matching, workspace identity, redacted-command
+rejection, reopen persistence and clearing.
 
 On Windows, the operator-driven
 `cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib command_review::native_tests::native_review_buttons_and_close -- --ignored --exact --nocapture`
@@ -808,30 +703,22 @@ executes a command or touches user settings. Build the renderer first and set
 ### Desktop plugin runtime acceptance
 
 From `apps/desktop`, run `npm run test:browser:install` once, then
-`npm run test:plugin-runtime`. The command builds the CLI and the explicitly opt-in
-`plugin-test-bridge` example. The test copies the CLI out of the checkout, creates a
-private temporary home, and drives production React components through the production
-native plugin adapter into an authenticated worker. Test-owned paths and approval
-responses replace only OS dialogs; runtime policy, journal, OCI packaging, trust, and
-IPC authentication stay real. The test has no registry prerequisite.
-The tier first checks that the bridge derives the worker's canonical state endpoint
-(including Windows verbatim paths), and tests bounded subprocess shutdown. Browser
-refresh is stopped and every owned process is closed before deleting the private
-fixture; cleanup diagnostics must not replace the original scenario failure.
-Management assertions wait for the matching native request to finish within its IPC
-bound before checking the rendered result. This tier disables scenario retries so a
-passing CI result cannot conceal a failed first attempt.
+`npm run test:plugin-runtime`. It builds the CLI and opt-in `plugin-test-bridge`, copies
+the CLI outside the checkout and drives production React/native components through an
+authenticated worker in a private temporary home. Test paths/approval responses replace
+OS dialogs only; policy, journal, OCI packaging, trust and IPC remain real, without a
+registry prerequisite. Assertions cover canonical worker endpoints (including Windows
+verbatim paths) and bounded subprocess shutdown. Stop refresh and close every owned
+process before deleting fixtures; preserve original failures during cleanup. Check
+rendered management results only after the matching request completes within its IPC
+bound. Scenario retries are disabled.
 
-Ordinary `npm run test:browser` runs mocked interface interaction cases separately.
-It also enters Plugins through the production Workspace sidebar at desktop and compact
-widths, using keyboard navigation and checking the explicit unavailable state for a
-target without discovery support. A standalone plugin-component fixture cannot prove
-that the management screen is reachable from the application shell.
-The macOS Desktop and Windows runtime pre-merge lanes also run the real-worker tier.
-Browser traces are retained on failure; plugin screenshots are written under
-`output/playwright`. Native adapter unit tests cover path replacement and cancellation.
-The driver is a feature-gated Cargo example, not a production binary or command;
-production renderer checks reject development bridge markers.
+`npm run test:browser` covers mocked interactions and entry through the production
+Workspace sidebar at desktop/compact widths, keyboard navigation and unavailable
+discovery state. macOS Desktop and Windows runtime pre-merge lanes own the real-worker
+tier. Retain failure traces and `output/playwright` screenshots. Native adapter tests
+cover path replacement/cancellation. The driver is a feature-gated example; production
+renderer checks reject development bridge markers.
 
 ### Embedded plugin and selection acceptance
 
@@ -844,7 +731,7 @@ portable directory artifact, including the skill's references and helper.
 
 `cargo test -p colossus-cli --test plugins_tui_smoke` exercises a real PTY against
 both embedded and authenticated-worker hosts with private offline homes. It covers
-completion, rendered core names (including the former `Item 1` regression), skill and
+completion, rendered core names, skill and
 resource inspection, conversation selection removal, lifecycle refresh, errors, and
 terminal resizing.
 
@@ -854,11 +741,10 @@ metadata-only discovery, selected instruction loading, unchanged tool definition
 snapshot-bound reads during a global disable, rejected stale selections on later runs,
 and selected IDs plus exact manifest digests in audit evidence.
 
-Native Desktop checks need an unlocked platform credential store. A credential-store
-failure is a blocked native check, not an offline-runtime pass; do not replace encryption
-or platform credentials to hide it. Use a fresh explicit `COLOSSUS_HOME` and a scratch
-workspace for manual acceptance. The browser-to-worker bridge is separate evidence and
-does not substitute for native dialogs or operating-system integration.
+Native Desktop checks need an unlocked platform credential store, a fresh explicit
+`COLOSSUS_HOME` and scratch workspace. Store failure blocks acceptance; do not replace
+encryption/credentials to hide it. The browser-worker bridge cannot replace native
+dialog or OS integration evidence.
 
 The credential-vault matrix in pre-merge acceptance runs deterministic conformance on
 Windows, macOS, and Linux, then runs

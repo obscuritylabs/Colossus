@@ -1,5 +1,6 @@
 use std::{env, ffi::OsString};
 
+use super::stages::{CompletedStages, Stage};
 use crate::repository::Repository;
 
 // OpenID Connect validates provider signatures with public keys only. No RSA
@@ -28,9 +29,12 @@ pub(super) fn sidecar(repository: &Repository) -> Result<(), String> {
         .run()
 }
 
-pub(super) fn desktop(repository: &Repository) -> Result<(), String> {
+pub(super) fn desktop(
+    repository: &Repository,
+    completed: &mut CompletedStages,
+) -> Result<(), String> {
     browser_driver(repository)?;
-    computer(repository)?;
+    completed.run(Stage::Computer, || computer(repository))?;
     web(repository)?;
     repository
         .task("node")
