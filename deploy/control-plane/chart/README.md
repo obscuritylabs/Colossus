@@ -18,7 +18,7 @@ values examples below provide starting points.
 
 ```sh
 helm upgrade --install colossus-control-plane \
-  oci://registry-1.docker.io/obscuritylabs/colossus-control-plane-chart \
+  oci://ghcr.io/obscuritylabs/colossus-control-plane-chart \
   --version X.Y.Z --namespace colossus --create-namespace \
   --set browserHost=colossus.example.com \
   --set connectorHost=runtimes.colossus.example.com \
@@ -275,4 +275,4 @@ helm package deploy/control-plane/chart --destination .local/helm
 The gate runs strict lint, a render matrix, negative cases, real Rust configuration
 validation, certificate parsing and offline package rendering. It does not install or
 upgrade a release. Helm's generated passwords/keys are synthetic test data and are not
-printed by the render tests. See `docs/develop/releasing.md` for Docker Hub publication.
+printed by the render tests. See `docs/develop/releasing.md` for GHCR publication.

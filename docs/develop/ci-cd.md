@@ -317,6 +317,7 @@ release tags. The static gate covers Kubernetes 1.34 rendering, routing variants
 OpenShift security contexts, authentication, external database trust, version parity,
 and packaging with vendored dependencies. It does not install or upgrade a cluster.
 Successful annotated tag builds retain the exact chart candidate for thirty days.
-`control-plane-chart-publish.yml` publishes those bytes to Docker Hub after reviewed
-release publication using protected-main code and a dedicated registry environment.
+`control-plane-chart-publish.yml` publishes those bytes to GHCR after reviewed
+release publication using protected-main code, a dedicated registry environment,
+and a job-scoped `GITHUB_TOKEN` with `packages: write`.
 See [Helm release operations](releasing.md#control-plane-helm-chart).
