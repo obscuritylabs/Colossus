@@ -52,6 +52,7 @@ include breaking changes while the public API is still settling.
 
 - **deps:** update ctutils to patched 0.4.4 ([a7cb848](https://github.com/obscuritylabs/Colossus/commit/a7cb848067e68fc8f065b7de0afab10fe44b4036))
 - **ui:** update Vitest and isolate grammar contract cases ([32df279](https://github.com/obscuritylabs/Colossus/commit/32df279a2a8e065c1542258581900e8d3dea76d7))
+- **deps:** update Tokio to patched 1.53.3 ([9749a76](https://github.com/obscuritylabs/Colossus/commit/9749a76b76d30923e4354a7509c11922660e01de))
 
 #### Maintenance
 
@@ -62,8 +63,9 @@ include breaking changes while the public API is still settling.
 - **release:** include settings audit fixes in preview notes ([4aa0141](https://github.com/obscuritylabs/Colossus/commit/4aa01411353f685b834933d062be872079d47a19))
 - **web:** align settings fixtures with canonical inputs ([005eb6e](https://github.com/obscuritylabs/Colossus/commit/005eb6e1c4c066e14ec8b7f4d8077744bf9a6002))
 - **cloud:** exercise administrator settings over HTTP ([194d82c](https://github.com/obscuritylabs/Colossus/commit/194d82cc43b57fca44c0a886f02829c0f9fbd84e))
+- **release:** document hosted runtime lifecycle repair ([1c1555e](https://github.com/obscuritylabs/Colossus/commit/1c1555e300d238067c4e568f14e3398c74071d90))
 
-**Source:** [194d82c](https://github.com/obscuritylabs/Colossus/commit/194d82cc43b57fca44c0a886f02829c0f9fbd84e)
+**Source:** [9749a76](https://github.com/obscuritylabs/Colossus/commit/9749a76b76d30923e4354a7509c11922660e01de)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.2](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.2)
 
