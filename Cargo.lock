@@ -1490,6 +1490,7 @@ dependencies = [
  "tower-http",
  "url",
  "uuid",
+ "vt100",
  "zeroize",
 ]
 

@@ -3,9 +3,6 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use colossus_api::{
     ApiErrorReason, HumanTerminalFrameKind, HumanTerminalOperation as Op, HumanTerminalRequest,
 };
-#[cfg(target_os = "macos")]
-#[path = "tests/macos_readiness.rs"]
-mod macos_readiness;
 
 fn request(operation: Op) -> HumanTerminalRequest {
     HumanTerminalRequest {
@@ -122,8 +119,6 @@ async fn native_terminal_preserves_process_across_attach_and_deduplicates_input(
     });
     wrong_owner.owner = "human-b".into();
     assert!(service.execute("app:a", wrong_owner).await.is_err());
-    #[cfg(target_os = "macos")]
-    macos_readiness::wait_for_line_editor(&service, &id).await;
     #[cfg(windows)]
     let command = "[IO.File]::AppendAllText('once.txt','x')\r";
     #[cfg(not(windows))]
@@ -390,8 +385,6 @@ async fn eight_quiet_reads_preserve_input_interrupt_and_close_admission() {
             .await
             .unwrap();
         let id = opened.session.unwrap().terminal_id;
-        #[cfg(target_os = "macos")]
-        macos_readiness::wait_for_line_editor(&service, &id).await;
         let mut cursor = 0;
         let mut tail = Vec::new();
         // Poll all eight real requests in one task turn so VM scheduling cannot
@@ -536,12 +529,13 @@ async fn natural_shell_exit_cleans_jobs_even_when_a_job_retains_the_pty() {
         .await
         .unwrap();
     let id = opened.session.unwrap().terminal_id;
-    #[cfg(target_os = "macos")]
-    macos_readiness::wait_for_line_editor(&service, &id).await;
     #[cfg(windows)]
     let command = "$s=[Diagnostics.ProcessStartInfo]::new([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName);$s.UseShellExecute=$false;$s.CreateNoWindow=$true;$s.Arguments='-NoLogo -NoProfile -NonInteractive -Command Start-Sleep -Seconds 60';$p=[Diagnostics.Process]::Start($s);[IO.File]::WriteAllText('background.pid',[string]$p.Id);exit 0\r";
     #[cfg(target_os = "macos")]
-    let command = "unsetopt CHECK_JOBS; sleep 60 & printf '%s' \"$!\" > background.pid; exit 0\r";
+    // Interactive zsh removes bang+quote as a history directive. The numeric
+    // background PID needs no quotes; a following blank preserves `$!`.
+    // https://zsh.sourceforge.io/Doc/Release/Expansion.html#History-Expansion
+    let command = "unsetopt CHECK_JOBS; sleep 60 & printf '%s' $! > background.pid; exit 0\r";
     #[cfg(not(any(windows, target_os = "macos")))]
     let command = "sleep 60 & printf '%s' \"$!\" > background.pid; exit 0\r";
     service

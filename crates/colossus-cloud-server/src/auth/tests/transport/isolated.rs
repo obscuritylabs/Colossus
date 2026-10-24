@@ -17,6 +17,11 @@ pub(super) fn directory() -> tempfile::TempDir {
 
 /// Return true in the parent after the isolated child completed the acceptance.
 pub(super) async fn run(test: &str, ignored: bool) -> bool {
+    run_with_timeout(test, ignored, Duration::from_secs(120)).await
+}
+
+/// Give a native acceptance its explicit outer budget without changing other fixtures.
+pub(super) async fn run_with_timeout(test: &str, ignored: bool, timeout: Duration) -> bool {
     const ISOLATED: &str = "COLOSSUS_CLOUD_TRANSPORT_TEST_ISOLATED";
     if std::env::var(ISOLATED).as_deref() == Ok(test) {
         return false;
@@ -36,7 +41,7 @@ pub(super) async fn run(test: &str, ignored: bool) -> bool {
     if ignored {
         command.arg("--ignored");
     }
-    let output = tokio::time::timeout(Duration::from_secs(120), command.output())
+    let output = tokio::time::timeout(timeout, command.output())
         .await
         .expect("isolated transport acceptance deadline")
         .unwrap();

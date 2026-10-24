@@ -68,6 +68,7 @@ p256.workspace = true
 colossus-api-runtime.workspace = true
 colossus-policy.workspace = true
 colossus-sdk = { workspace = true, features = ["embedded", "serialization", "sidecar"] }
+vt100.workspace = true
 
 [lints]
 workspace = true

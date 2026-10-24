@@ -14,9 +14,9 @@ use tokio_tungstenite::{
     tungstenite::{Message, client::IntoClientRequest},
 };
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+mod display;
 mod public;
-#[cfg(target_os = "macos")]
-mod readiness;
+use display::TerminalDisplay;
 
 async fn socket(
     address: std::net::SocketAddr,
@@ -69,44 +69,41 @@ async fn ok(socket: &mut Socket, operation: HumanTerminalOperation) -> HumanTerm
 async fn output_until(
     socket: &mut Socket,
     terminal: &str,
-    after: &mut u64,
-    marker: &str,
+    display: &mut TerminalDisplay,
+    timeout: Duration,
 ) -> Vec<colossus_sdk::HumanTerminalFrame> {
-    let mut text = String::new();
     let mut frames = Vec::new();
-    tokio::time::timeout(Duration::from_secs(15), async {
-        while !text.contains(marker) {
+    let result = tokio::time::timeout(timeout, async {
+        while !display.marker_visible() {
             let reply = ok(
                 socket,
                 HumanTerminalOperation::Read {
                     terminal_id: terminal.into(),
-                    after_sequence: *after,
+                    after_sequence: display.cursor(),
                     max_bytes: 65536,
                     wait_ms: 200,
                 },
             )
             .await;
-            assert!(!reply.gap, "complete retained display history expected");
-            for frame in &reply.frames {
-                assert_eq!(frame.sequence, *after + 1);
-                *after = frame.sequence;
-                if let HumanTerminalFrameKind::Output { data_base64 } = &frame.kind {
-                    text.push_str(&String::from_utf8_lossy(
-                        &STANDARD.decode(data_base64).unwrap(),
-                    ));
-                }
-            }
-            assert_eq!(reply.next_sequence, *after);
+            display.observe(&reply);
             frames.extend(reply.frames);
         }
     })
-    .await
-    .expect("real shell must emit marker");
+    .await;
+    assert!(
+        result.is_ok(),
+        "real shell display marker deadline: {}",
+        display.diagnostics()
+    );
     frames
 }
-async fn write(socket: &mut Socket, terminal: &str, epoch: u64, sequence: u64, command: &str) {
-    #[cfg(target_os = "macos")]
-    readiness::wait_for_line_editor(socket, terminal).await;
+async fn write(
+    socket: &mut Socket,
+    terminal: &str,
+    epoch: u64,
+    sequence: u64,
+    command: &str,
+) -> HumanTerminalReply {
     let reply = ok(
         socket,
         HumanTerminalOperation::Write {
@@ -118,6 +115,7 @@ async fn write(socket: &mut Socket, terminal: &str, epoch: u64, sequence: u64, c
     )
     .await;
     assert_eq!(reply.input_sequence, Some(sequence));
+    reply
 }
 async fn wait_connected(online: &mut watch::Receiver<ConnectorStatus>) {
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -132,7 +130,9 @@ async fn wait_connected(online: &mut watch::Receiver<ConnectorStatus>) {
 #[tokio::test]
 async fn web_terminal_cross_replica_reconnect_keeps_the_actual_shell_and_checks_authority() {
     const TEST: &str = "auth::tests::transport::terminal::web_terminal_cross_replica_reconnect_keeps_the_actual_shell_and_checks_authority";
-    if isolated::run(TEST, false).await {
+    // Windows Server can cold-start PowerShell slowly. The outer process budget
+    // also covers two Fleet connections, reconnect output and authority teardown.
+    if isolated::run_with_timeout(TEST, false, Duration::from_secs(180)).await {
         return;
     }
     let (auth, issuer, oidc) = fixture().await;
@@ -403,13 +403,21 @@ async fn web_terminal_cross_replica_reconnect_keeps_the_actual_shell_and_checks_
     let session = opened.session.unwrap();
     let terminal = session.terminal_id.clone();
     let epoch = session.writer_epoch;
+    let mut display = TerminalDisplay::new(&opened.incarnation, &session);
+    display.begin_phase("initial shell output", "COLOSSUS-REMOTE-ONE");
     #[cfg(windows)]
     let command = "$env:COLOSSUS_TERMINAL_TEST='kept'; Write-Output ('COLOSSUS-' + 'REMOTE-ONE')\r";
     #[cfg(not(windows))]
     let command = "export COLOSSUS_TERMINAL_TEST=kept; printf '%s%s\\n' 'COLOSSUS-' 'REMOTE-ONE'\r";
-    write(&mut browser, &terminal, epoch, 1, command).await;
-    let mut cursor = 0;
-    output_until(&mut browser, &terminal, &mut cursor, "COLOSSUS-REMOTE-ONE").await;
+    let written = write(&mut browser, &terminal, epoch, 1, command).await;
+    display.record_write(&written, epoch);
+    // Match the displayed VT screen, as xterm does, rather than requiring a
+    // contiguous substring in ConPTY's legal cursor-edit/repaint byte stream.
+    #[cfg(windows)]
+    let startup_timeout = Duration::from_secs(90);
+    #[cfg(not(windows))]
+    let startup_timeout = Duration::from_secs(15);
+    output_until(&mut browser, &terminal, &mut display, startup_timeout).await;
     browser.close(None).await.unwrap();
 
     // Stop only Fleet transport: the native owner and same shell remain live.
@@ -452,6 +460,7 @@ async fn web_terminal_cross_replica_reconnect_keeps_the_actual_shell_and_checks_
     .await;
     assert_eq!(attached.incarnation, context.incarnation);
     let epoch_after = attached.session.unwrap().writer_epoch;
+    display.begin_phase("same shell after Fleet reconnect", "COLOSSUS-STATE-kept");
     ok(
         &mut browser,
         HumanTerminalOperation::Resize {
@@ -466,7 +475,7 @@ async fn web_terminal_cross_replica_reconnect_keeps_the_actual_shell_and_checks_
     let command = "Write-Output ('COLOSSUS-STATE-' + $env:COLOSSUS_TERMINAL_TEST)\r";
     #[cfg(not(windows))]
     let command = "printf 'COLOSSUS-STATE-%s\\n' \"$COLOSSUS_TERMINAL_TEST\"\r";
-    write(
+    let written = write(
         &mut browser,
         &terminal,
         epoch_after,
@@ -474,7 +483,14 @@ async fn web_terminal_cross_replica_reconnect_keeps_the_actual_shell_and_checks_
         command,
     )
     .await;
-    let frames = output_until(&mut browser, &terminal, &mut cursor, "COLOSSUS-STATE-kept").await;
+    display.record_write(&written, epoch_after);
+    let frames = output_until(
+        &mut browser,
+        &terminal,
+        &mut display,
+        Duration::from_secs(15),
+    )
+    .await;
     assert!(frames.iter().any(|frame| matches!(
         frame.kind,
         HumanTerminalFrameKind::Resize {
