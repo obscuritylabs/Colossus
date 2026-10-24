@@ -66,10 +66,12 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
 mod communication;
 mod image_continuation;
 mod observation_projection;
+mod plan_recovery;
 
 struct ScriptedProvider {
     turns: Mutex<VecDeque<Result<ProviderTurn, ModelProviderError>>>,
     requests: Mutex<Vec<ModelRequest>>,
+    finished_runs: Mutex<Vec<String>>,
 }
 
 #[tokio::test]
@@ -198,12 +200,16 @@ impl ScriptedProvider {
         Self {
             turns: Mutex::new(turns.into()),
             requests: Mutex::new(Vec::new()),
+            finished_runs: Mutex::new(Vec::new()),
         }
     }
 }
 
 #[async_trait]
 impl ModelProvider for ScriptedProvider {
+    fn finish_run_candidates(&self, run_id: &str) {
+        self.finished_runs.lock().unwrap().push(run_id.into());
+    }
     fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
         Ok(test_route(role, "scripted"))
     }
@@ -1145,7 +1151,7 @@ async fn plan_mode_allows_one_missing_write_correction_then_fails_closed() {
         requests[1]
             .messages
             .iter()
-            .any(|message| message.role == ModelMessageRole::System
+            .any(|message| message.role == ModelMessageRole::User
                 && message.content.contains("Call the required tool now"))
     );
     assert_eq!(
@@ -3266,6 +3272,55 @@ async fn explicit_diagnostics_capture_a_post_tool_failure_without_persisting_the
 }
 
 struct RejectRunOwnership(AtomicUsize);
+
+#[derive(Default)]
+struct PendingCleanupProvider {
+    started: AtomicUsize,
+    finished: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl ModelProvider for PendingCleanupProvider {
+    fn route(&self, role: &str) -> Result<ProviderRoute, ModelProviderError> {
+        Ok(test_route(role, "pending-cleanup"))
+    }
+    fn finish_run_candidates(&self, run_id: &str) {
+        self.finished.lock().unwrap().push(run_id.into());
+    }
+    async fn turn(
+        &self,
+        _role: &str,
+        _request: ModelRequest,
+        _context: ExecutionContext,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn dropping_an_owned_run_without_lifecycle_releases_provider_candidates() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let provider = Arc::new(PendingCleanupProvider::default());
+    let service = AgentService::new(
+        journal.clone(),
+        provider.clone(),
+        Arc::new(StaticToolRegistry::builtins(&["echo".into()]).unwrap()),
+        Arc::new(EchoTools),
+        Arc::new(EventSourcedSessionRepository::new(journal)),
+    );
+    let mut running = Box::pin(service.run("primary", "test", "pending", 1));
+    tokio::select! {
+        result = &mut running => panic!("pending provider unexpectedly finished: {result:?}"),
+        () = tokio::task::yield_now() => {}
+    }
+    assert_eq!(provider.started.load(Ordering::SeqCst), 1);
+    drop(running);
+    let finished = provider.finished.lock().unwrap();
+    assert_eq!(finished.len(), 1);
+    assert!(!finished[0].is_empty());
+}
+
 #[async_trait]
 impl colossus_ports::AgentRunLifecycle for RejectRunOwnership {
     fn begin_run(
@@ -3287,9 +3342,10 @@ impl colossus_ports::AgentRunLifecycle for RejectRunOwnership {
 async fn rejected_run_registration_never_cancels_another_owners_sessions() {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
     let lifecycle = Arc::new(RejectRunOwnership(AtomicUsize::new(0)));
+    let provider = Arc::new(ScriptedProvider::new(vec![]));
     let service = AgentService::new(
         Arc::clone(&journal),
-        Arc::new(ScriptedProvider::new(vec![])),
+        provider.clone(),
         Arc::new(StaticToolRegistry::builtins(&["echo".into()]).expect("catalog")),
         Arc::new(EchoTools),
         Arc::new(EventSourcedSessionRepository::new(journal)),
@@ -3297,4 +3353,8 @@ async fn rejected_run_registration_never_cancels_another_owners_sessions() {
     .with_run_lifecycle(lifecycle.clone());
     assert!(service.run("primary", "test", "test", 1).await.is_err());
     assert_eq!(lifecycle.0.load(Ordering::SeqCst), 0);
+    assert!(
+        provider.finished_runs.lock().unwrap().is_empty(),
+        "rejected duplicate registration cannot release another run's provider state"
+    );
 }

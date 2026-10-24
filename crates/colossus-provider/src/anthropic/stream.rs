@@ -97,6 +97,9 @@ impl AnthropicStream {
                         let fragment = delta["partial_json"]
                             .as_str()
                             .ok_or_else(|| invalid("invalid Messages input delta"))?;
+                        if fragment.is_empty() {
+                            return Ok(Vec::new());
+                        }
                         let json = self.partial_json.entry(index).or_default();
                         if json.len().saturating_add(fragment.len()) > MAX_PROVIDER_REQUEST_BYTES {
                             return Err(invalid("Messages tool arguments exceed bound"));
@@ -125,10 +128,6 @@ impl AnthropicStream {
                 let index = index(&value)?;
                 if !self.open.remove(&index) {
                     return Err(invalid("Messages duplicate or unknown block stop"));
-                }
-                if let Some(json) = self.partial_json.remove(&index) {
-                    self.blocks[index]["input"] = serde_json::from_str(&json)
-                        .map_err(|_| invalid("invalid Messages tool JSON"))?;
                 }
             }
             "message_delta" => {
@@ -160,14 +159,27 @@ impl AnthropicStream {
 
     pub(crate) fn finish(&mut self) -> Result<Vec<ProviderEvent>, ProviderError> {
         if !self.stopped {
-            return Err(invalid("Messages stream ended before message_stop"));
+            return Err(ProviderError::Transport(
+                "Messages stream ended before message_stop".into(),
+            ));
         }
-        let events = block_events(&self.blocks, &self.names)?;
-        let calls = events
+        let calls = self
+            .blocks
             .iter()
-            .filter(|e| matches!(e, ProviderEvent::ToolCallRequested { .. }))
+            .filter(|block| block["type"] == "tool_use")
             .count();
         validate_stop(&self.stop, calls)?;
+        // Wait for the terminal stop reason before rejecting arguments. An output
+        // limit can truncate JSON, and an interrupted stream is not a correction.
+        for (index, json) in &self.partial_json {
+            self.blocks[*index]["input"] = serde_json::from_str(json).map_err(|error| {
+                ProviderError::InvalidToolArguments(format!(
+                    "invalid Messages tool JSON; block={index} position={}",
+                    error.column()
+                ))
+            })?;
+        }
+        let events = block_events(&self.blocks, &self.names)?;
         let text = events
             .iter()
             .filter_map(|e| match e {

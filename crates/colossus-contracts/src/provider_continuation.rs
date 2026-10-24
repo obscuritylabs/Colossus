@@ -54,6 +54,12 @@ pub struct ProviderContinuation {
     pub settled_hash: String,
     /// Last normalized assistant message, for exact settlement and tool pairing.
     pub assistant: crate::ModelMessage,
+    /// Exact released request for an unfinished native exchange; image references only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay_request: Option<crate::ModelRequest>,
+    /// Provider route and reasoning binding, independent of frozen instructions/tools.
+    #[serde(default)]
+    pub route_binding: String,
     /// Responses compaction items or native Messages replay overlays. Never display.
     pub hidden_reasoning: Vec<Value>,
 }

@@ -134,6 +134,68 @@ async fn anthropic_sse_crosses_gateway_with_exact_text_and_cumulative_usage() {
     assert_builtin_tool_wire(&wire);
 }
 
+#[tokio::test]
+async fn anthropic_invalid_arguments_are_recoverable_only_after_a_confirmed_stream() {
+    for (stop, completed) in [
+        ("tool_use", true),
+        ("max_tokens", true),
+        ("tool_use", false),
+    ] {
+        let mut frames = vec![
+            json!({"type":"message_start","message":{"id":"msg-invalid","type":"message","role":"assistant","usage":{"input_tokens":1,"output_tokens":1}}}),
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"must-not-start","name":"lookup","input":{}}}),
+            json!({"type":"content_block_stop","index":0}),
+            json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call-1","name":"lookup","input":{}}}),
+            json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"PRIVATE_ARGUMENT\":"}}),
+            json!({"type":"content_block_stop","index":1}),
+        ];
+        if completed {
+            frames.extend([
+                json!({"type":"message_delta","delta":{"stop_reason":stop},"usage":{"output_tokens":2}}),
+                json!({"type":"message_stop"}),
+            ]);
+        }
+        let body = frames
+            .into_iter()
+            .map(|frame| format!("data: {frame}\n\n"))
+            .collect();
+        let (url, server) = one_sse_server_with_chunk_size(body, 1).await;
+        let profile = ProviderProfile::new(
+            "native",
+            ProviderKind::AnthropicMessages,
+            Some(url),
+            None,
+            5000,
+        )
+        .unwrap();
+        let executor = ProviderExecutor::new(profile.clone());
+        let mut released = ReleasedItems::default();
+        let error = gateway(&profile, true)
+            .execute_stream(provider_request(&profile), &executor, &mut released)
+            .await
+            .unwrap_err();
+        if !completed {
+            assert!(matches!(&error, GatewayError::OutcomeUnknown(_)));
+        } else if stop == "max_tokens" {
+            assert!(matches!(&error, GatewayError::ProviderRejected(failure)
+                if failure.reason == colossus_contracts::ProviderFailureReason::OutputLimitExceeded));
+        } else {
+            assert!(
+                matches!(&error, GatewayError::RecoverableExecution { code, .. }
+                if code == "provider.invalid_tool_arguments")
+            );
+        }
+        assert!(!error.to_string().contains("PRIVATE_ARGUMENT"));
+        assert!(released.0.iter().all(|item| !matches!(
+            item,
+            ProviderStreamItem::Event {
+                event: ProviderEvent::ToolCallRequested { .. }
+            } | ProviderStreamItem::Completed { .. }
+        )));
+        server.await.unwrap();
+    }
+}
+
 #[test]
 fn anthropic_images_and_private_replay_are_omitted_from_diagnostics() {
     let payload = json!({"messages":[{"content":[

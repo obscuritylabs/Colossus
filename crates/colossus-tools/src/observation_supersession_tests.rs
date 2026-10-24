@@ -1,6 +1,50 @@
 use super::*;
 use colossus_contracts::{ModelImageDetail, ModelImageReference};
 
+#[test]
+fn exact_replay_bounds_check_does_not_rewrite_or_expire_observations() {
+    let mut source = vec![message(ModelMessageRole::User, "original")];
+    for _ in 0..5 {
+        source.push(message(ModelMessageRole::Tool, &"x".repeat(55 * 1024)));
+    }
+    let canonical = source.clone();
+    assert!(!model_tool_observations_within_bounds(&source));
+    assert_eq!(source, canonical);
+    source.insert(4, message(ModelMessageRole::User, "new guidance"));
+    assert!(
+        model_tool_observations_within_bounds(&source),
+        "real human input starts another observation budget"
+    );
+    source.push(message(
+        ModelMessageRole::Tool,
+        &"x".repeat(MAX_MODEL_TOOL_MESSAGE_BYTES),
+    ));
+    assert!(
+        !model_tool_observations_within_bounds(&source),
+        "serialized message overhead counts toward the per-observation bound"
+    );
+}
+
+#[test]
+fn exact_replay_bounds_check_preserves_the_shared_image_envelope() {
+    let mut source = Vec::new();
+    for _ in 0..17 {
+        let mut user = message(ModelMessageRole::User, "new input");
+        user.content = ModelContent::Parts(vec![ModelContentPart::Image { image: image(1) }]);
+        source.push(user);
+    }
+    let canonical = source.clone();
+    assert!(!model_tool_observations_within_bounds(&source));
+    assert_eq!(source, canonical);
+    source.truncate(1);
+    if let ModelContent::Parts(parts) = &mut source[0].content
+        && let ModelContentPart::Image { image } = &mut parts[0]
+    {
+        image.size_bytes = 32 * 1_048_576 + 1;
+    }
+    assert!(!model_tool_observations_within_bounds(&source));
+}
+
 fn message(role: ModelMessageRole, content: &str) -> ModelMessage {
     ModelMessage {
         agent_message_origin: None,

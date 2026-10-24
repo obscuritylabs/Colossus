@@ -9,7 +9,7 @@ pub(super) struct GatewayModelProvider {
     pub(super) sessions: Arc<dyn SessionRepository>,
     pub(super) snapshots: Arc<dyn ContextRepository>,
     pub(super) continuations: Arc<dyn colossus_ports::ProviderContinuationRepository>,
-    pub(super) pending: StdMutex<BTreeMap<String, String>>,
+    pub(super) pending: StdMutex<BTreeMap<(String, Option<String>), String>>,
 }
 
 pub(super) struct GatewaySearchProvider {
@@ -432,7 +432,11 @@ impl GatewayModelProvider {
     ) -> Result<ProviderTurn, ModelProviderError> {
         let resolved = self.resolve_workflow_model(role, &options.agent_options)?;
         let route = self.route_with_options(role, &options.agent_options)?;
-        self.remember_candidate(context.session_id.as_deref(), None)?;
+        self.remember_candidate(
+            context.session_id.as_deref(),
+            context.run_id.as_deref(),
+            None,
+        )?;
         let mut continuation_plan = options.continuation.clone();
         if let Some(plan) = &mut continuation_plan {
             plan.snapshot_epoch = self
@@ -450,6 +454,7 @@ impl GatewayModelProvider {
                 });
         let request_evidence = request.clone();
         let session_id = context.session_id.clone();
+        let run_id = context.run_id.clone();
         let provider = resolved.provider();
         validate_route_image_inputs(&route, provider.profile().kind, &request)?;
         let max_output_tokens = resolved_output_limit(&route, &request)?;
@@ -513,7 +518,14 @@ impl GatewayModelProvider {
             false,
             output.continuation_id.is_some(),
         );
-        self.remember_candidate(session_id.as_deref(), output.continuation_id)?;
+        self.remember_released_candidate(
+            session_id.as_deref(),
+            run_id.as_deref(),
+            output.continuation_id,
+            &request_evidence,
+            &resolved,
+            route.reasoning_effort,
+        )?;
         Ok(output.turn)
     }
 }
@@ -540,9 +552,67 @@ impl ModelProvider for GatewayModelProvider {
     fn settle_continuation(&self, context: &ExecutionContext) -> Result<(), ModelProviderError> {
         self.settle(context)
     }
+    fn tool_turn_admission_events(
+        &self,
+        context: &ExecutionContext,
+    ) -> Result<Vec<NewEvent>, ModelProviderError> {
+        self.admission_events(context)
+    }
+    fn tool_turn_settlement_events(
+        &self,
+        context: &ExecutionContext,
+        canonical_after: &[ModelMessage],
+    ) -> Result<Vec<NewEvent>, ModelProviderError> {
+        self.settlement_events(context, canonical_after)
+    }
+    fn replay_request_with_options(
+        &self,
+        role: &str,
+        request: &ModelRequest,
+        context: &ExecutionContext,
+        options: &colossus_contracts::WorkflowAgentOptions,
+    ) -> Result<
+        Option<(ModelRequest, colossus_contracts::ProviderContinuationPlan)>,
+        ModelProviderError,
+    > {
+        self.replay_request(role, request, context, options)
+    }
+    fn finish_run_candidates(&self, run_id: &str) {
+        let Ok(mut pending) = self.pending.lock() else {
+            return;
+        };
+        let owned = pending
+            .iter()
+            .filter(|((_, owner), _)| owner.as_deref() == Some(run_id))
+            .map(|(key, id)| (key.clone(), id.clone()))
+            .collect::<Vec<_>>();
+        for (key, _) in &owned {
+            pending.remove(key);
+        }
+        drop(pending);
+        for (_, id) in owned {
+            let _ = self.continuations.take_staged(&id);
+        }
+    }
     fn discard_continuation(&self, context: &ExecutionContext) -> Result<(), ModelProviderError> {
-        self.remember_candidate(context.session_id.as_deref(), None)?;
+        self.remember_candidate(
+            context.session_id.as_deref(),
+            context.run_id.as_deref(),
+            None,
+        )?;
         if let Some(session) = &context.session_id {
+            // An interrupted generation does not invalidate already committed native
+            // assistant blocks. They are required to continue its exact tool results.
+            if self
+                .continuations
+                .load(session)
+                .map_err(|_| {
+                    ModelProviderError::Failed("unable to inspect protected provider state".into())
+                })?
+                .is_some_and(|state| state.view.replay)
+            {
+                return Ok(());
+            }
             self.continuations.clear(session, context).map_err(|_| {
                 ModelProviderError::Failed("unable to retire Responses state".into())
             })?;
@@ -612,7 +682,11 @@ impl ModelProvider for GatewayModelProvider {
     ) -> Result<ProviderTurn, ModelProviderError> {
         let resolved = self.resolve_workflow_model(role, &options.agent_options)?;
         let route = self.route_with_options(role, &options.agent_options)?;
-        self.remember_candidate(context.session_id.as_deref(), None)?;
+        self.remember_candidate(
+            context.session_id.as_deref(),
+            context.run_id.as_deref(),
+            None,
+        )?;
         let mut continuation_plan = options.continuation.clone();
         if let Some(plan) = &mut continuation_plan {
             plan.snapshot_epoch = self
@@ -630,6 +704,7 @@ impl ModelProvider for GatewayModelProvider {
                 });
         let request_evidence = request.clone();
         let session_id = context.session_id.clone();
+        let run_id = context.run_id.clone();
         let provider = resolved.provider();
         validate_route_image_inputs(&route, provider.profile().kind, &request)?;
         let max_output_tokens = resolved_output_limit(&route, &request)?;
@@ -678,7 +753,14 @@ impl ModelProvider for GatewayModelProvider {
             route.capabilities.streaming,
             candidate.is_some(),
         );
-        self.remember_candidate(session_id.as_deref(), candidate)?;
+        self.remember_released_candidate(
+            session_id.as_deref(),
+            run_id.as_deref(),
+            candidate,
+            &request_evidence,
+            &resolved,
+            route.reasoning_effort,
+        )?;
         Ok(turn)
     }
 }

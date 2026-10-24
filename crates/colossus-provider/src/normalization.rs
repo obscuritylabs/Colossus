@@ -954,13 +954,13 @@ pub(super) fn function_call_event(
     let name = tool_names.canonical_name(name)?.to_owned();
     let arguments_text = arguments.and_then(Value::as_str).unwrap_or("{}");
     let arguments: Value = serde_json::from_str(arguments_text).map_err(|error| {
-        ProviderError::Malformed(format!(
+        ProviderError::InvalidToolArguments(format!(
             "tool call arguments are invalid JSON; call_id={call_id} tool={name} position={}",
             error.column()
         ))
     })?;
     if !arguments.is_object() {
-        return Err(ProviderError::Malformed(format!(
+        return Err(ProviderError::InvalidToolArguments(format!(
             "tool call arguments are not an object; call_id={call_id} tool={name}"
         )));
     }
@@ -969,11 +969,6 @@ pub(super) fn function_call_event(
         name,
         arguments,
     })
-}
-
-pub(super) fn invalid_tool_argument_message(message: &str) -> bool {
-    message.starts_with("tool call arguments are invalid JSON")
-        || message.starts_with("tool call arguments are not an object")
 }
 
 pub(super) fn reasoning_summary_events(message: &Map<String, Value>) -> Vec<ProviderEvent> {

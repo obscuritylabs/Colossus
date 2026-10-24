@@ -94,7 +94,14 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
                     );
                 }
                 Event::Mouse(mouse) => {
-                    if handle_mouse(&mut state, mouse) {
+                    if let Some(action) = provider_recovery_mouse(&state, mouse) {
+                        apply_provider_recovery_action(
+                            &mut state,
+                            action,
+                            Arc::clone(&host),
+                            event_tx.clone(),
+                        );
+                    } else if handle_mouse(&mut state, mouse) {
                         request_older_page(&mut state, Arc::clone(&host), event_tx.clone());
                     }
                 }
@@ -422,6 +429,14 @@ fn handle_key(
         handle_overlay_key(state, key);
         return;
     }
+    match provider_recovery_key(state, key) {
+        ProviderRecoveryKey::Handled => return,
+        ProviderRecoveryKey::Action(action) => {
+            apply_provider_recovery_action(state, action, host, event_tx);
+            return;
+        }
+        ProviderRecoveryKey::Ignored => {}
+    }
     match key.code {
         KeyCode::Esc => {
             state.hide_completion();
@@ -510,6 +525,21 @@ fn handle_key(
             }
         }
         _ => {}
+    }
+}
+
+pub(super) fn apply_provider_recovery_action(
+    state: &mut TuiState,
+    action: ProviderRecoveryAction,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+) {
+    if !provider_recovery_visible(state) {
+        return;
+    }
+    state.provider_recovery = None;
+    if action == ProviderRecoveryAction::Retry {
+        submit_line(state, "Continue".into(), host, event_tx);
     }
 }
 
@@ -1138,6 +1168,7 @@ pub(super) fn start_line(
                 &state.pending_images,
                 TranscriptKind::User,
             ));
+            state.provider_recovery = None;
             state.operation = Some(OperationKind::Run);
             state.started_at = Some(Instant::now());
             state.activity = Some("waiting for model".into());
@@ -1163,6 +1194,7 @@ fn start_host_command(
     host: Arc<dyn InteractiveHost>,
     event_tx: mpsc::Sender<HostEvent>,
 ) {
+    state.provider_recovery = None;
     state.operation = Some(OperationKind::Command);
     state.started_at = Some(Instant::now());
     state.activity = Some(format!("running /{}", runtime_command_name(&command)));
@@ -1671,6 +1703,8 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 state.cancel_overlay();
             }
             let result = *result;
+            let failed_run = state.operation == Some(OperationKind::Run) && result.is_err();
+            finish_provider_failure(state, failed_run);
             state.operation = None;
             state.control = None;
             state.activity = None;
@@ -1910,6 +1944,7 @@ fn offer_plan_execution_choice(state: &mut TuiState) {
 }
 
 pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope) {
+    observe_provider_failure(state, &envelope);
     let event = envelope.event;
     if !matches!(
         &event,
@@ -2055,6 +2090,7 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
             state.sticky_skills.clear();
         }
         state.session_id = session_id;
+        state.provider_recovery = None;
         state.pending_sandbox_boundary_acknowledgement = pending_sandbox_boundary_acknowledgement;
         state.selected_plan = None;
         let (transcript, transcript_sources) =

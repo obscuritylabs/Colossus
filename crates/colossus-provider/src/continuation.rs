@@ -200,6 +200,8 @@ impl ProviderExecutor {
             },
             plan: plan.clone(),
             settled_hash: String::new(),
+            replay_request: None,
+            route_binding: String::new(),
             assistant,
             hidden_reasoning: items,
         };
