@@ -70,7 +70,12 @@ fn exercise_mouse_selection(monochrome: bool, inline: bool) {
         #[cfg(windows)]
         answer_cursor_position_query(&output, &mut writer);
     }
-    wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    let initial_composer = if inline {
+        "Execute · Enter sends"
+    } else {
+        "Message · Enter sends"
+    };
+    wait_for_screen(&output, 24, 80, initial_composer);
     writer.write_all(b"inspect\r").expect("submit");
     writer.flush().expect("flush");
     wait_for_screen(&output, 24, 80, "commentary-before-tool");
