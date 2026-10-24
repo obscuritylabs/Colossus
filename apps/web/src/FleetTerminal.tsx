@@ -330,8 +330,9 @@ export default function FleetTerminal({
       />
       <p id="fleet-shell-help" className="fleet-terminal-help">
         Ctrl-C interrupts. With text selected, Ctrl-C copies. Shift-Escape
-        detaches; the shell keeps running. Close Shell ends it. Reconnect never
-        replays typed commands.
+        detaches. Shells close after 2 minutes without a viewer, or 8 hours
+        total. Close Shell ends the session. Reconnect never replays typed
+        commands.
       </p>
     </dialog>
   );
