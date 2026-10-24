@@ -695,27 +695,98 @@ fn temporary_lru_advisory_exception_is_exact_documented_and_consistent() {
 
 #[test]
 fn oidc_public_verification_exception_is_exact_and_scoped() {
-    const ADVISORY: &str = "RUSTSEC-2023-0071";
+    const ADVISORIES: [&str; 2] = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0387"];
     let root = repository_root();
     let deny = fs::read_to_string(root.join("deny.toml")).unwrap();
     assert_eq!(
         deny.matches("RUSTSEC-").count(),
-        1,
-        "the policy permits only the reviewed RSA exception"
+        ADVISORIES.len(),
+        "the policy permits only the reviewed RSA and EC verification exceptions"
     );
-    assert!(deny.contains(ADVISORY));
+    for advisory in ADVISORIES {
+        assert!(deny.contains(&format!("id = \"{advisory}\"")));
+    }
     assert!(deny.contains("no application RSA private-key operations"));
+    assert!(deny.contains("application secret signing uses patched crypto-bigint"));
     for path in [
         "xtask/src/checks/surfaces.rs",
         "release/verify-release-readiness.sh",
         "docs/develop/adr/0006-cloud-control-plane.md",
     ] {
-        assert!(
-            fs::read_to_string(root.join(path))
-                .unwrap()
-                .contains(ADVISORY),
-            "{path} must document the exact exception"
+        let source = fs::read_to_string(root.join(path)).unwrap();
+        for advisory in ADVISORIES {
+            assert!(
+                source.contains(advisory),
+                "{path} must document the exact exception {advisory}"
+            );
+        }
+    }
+
+    let verifier = fs::read_to_string(root.join("release/verify-release-readiness.sh")).unwrap();
+    let audit = verifier
+        .lines()
+        .find(|line| line.starts_with("run cargo audit ") && line.ends_with("--file Cargo.lock"))
+        .expect("root release audit command");
+    let arguments = audit.split_whitespace().collect::<Vec<_>>();
+    let mut ignored = arguments
+        .windows(2)
+        .filter_map(|pair| (pair[0] == "--ignore").then_some(pair[1]))
+        .collect::<Vec<_>>();
+    ignored.sort_unstable();
+    assert_eq!(
+        ignored,
+        [
+            "RUSTSEC-2023-0071",
+            "RUSTSEC-2026-0253",
+            "RUSTSEC-2026-0387"
+        ],
+        "the release audit must carry only the reviewed OIDC and Tantivy exceptions"
+    );
+    let xtask = fs::read_to_string(root.join("xtask/src/checks/surfaces.rs")).unwrap();
+    for name in [
+        "OIDC_RSA_PRIVATE_KEY_ADVISORY",
+        "OIDC_EC_PRIVATE_KEY_ADVISORY",
+    ] {
+        assert_eq!(
+            xtask.matches(name).count(),
+            2,
+            "{name} belongs only in its declaration and root audit command"
         );
+    }
+}
+
+#[test]
+fn oidc_legacy_ec_exception_keeps_its_wrappers_and_removal_condition() {
+    let root = repository_root();
+    let deny = fs::read_to_string(root.join("deny.toml")).unwrap();
+    let wrappers = [
+        ("crypto-bigint:<0.7.6", "\"elliptic-curve\""),
+        (
+            "elliptic-curve:<0.14",
+            "\"ecdsa\", \"primeorder\", \"p256\", \"p384\"",
+        ),
+        ("ecdsa:<0.17", "\"p256\", \"p384\""),
+        ("primeorder:<0.14", "\"p256\", \"p384\""),
+        ("p256:<0.14", "\"openidconnect\""),
+        ("p384:<0.14", "\"openidconnect\""),
+    ];
+    for (crate_spec, parents) in wrappers {
+        let rule = format!("{{ crate = \"{crate_spec}\", wrappers = [{parents}],");
+        assert!(deny.contains(&rule), "missing scoped legacy ban {rule}");
+    }
+    let adr = fs::read_to_string(root.join("docs/develop/adr/0006-cloud-control-plane.md"))
+        .unwrap()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for required in [
+        "client-secret checks use HMAC and access-token hashes use SHA",
+        "No application path supplies EC private scalars or signing nonces to it",
+        "The Desktop dependency graph contains no affected arithmetic",
+        "wrapper rules do not pin parent versions",
+        "Remove the exception and wrapper rules when OpenID Connect adopts patched arithmetic",
+    ] {
+        assert!(adr.contains(required), "ADR 0006 must retain {required}");
     }
 }
 

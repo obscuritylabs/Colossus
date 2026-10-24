@@ -142,8 +142,10 @@ run cargo deny --locked check -D warnings advisories
 # with that upgrade. cargo-deny does not report this informational advisory, so
 # its advisory policy remains unmodified.
 # OpenID Connect verifies public signatures only; no RSA private-key operations.
-# Keep this exact exception aligned with deny.toml and ADR 0006.
-run cargo audit -D warnings --ignore RUSTSEC-2026-0253 --ignore RUSTSEC-2023-0071 --file Cargo.lock
+# Its legacy EC arithmetic also handles public verification only; secret signing
+# uses p256 0.14 / crypto-bigint 0.7.6. Keep these exact OIDC exceptions aligned
+# with deny.toml and ADR 0006, including the legacy arithmetic wrapper bans.
+run cargo audit -D warnings --ignore RUSTSEC-2026-0253 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0387 --file Cargo.lock
 
 run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -A license-not-encountered licenses sources bans
 run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings -A advisory-not-detected advisories
