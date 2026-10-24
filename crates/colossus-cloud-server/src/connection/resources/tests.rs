@@ -1,6 +1,7 @@
 use super::*;
 use colossus_cloud::storage::MemoryCloudStore;
 use colossus_cloud::{CloudCaller, CloudNode, CloudPermission, CloudRepository};
+use futures::{FutureExt, StreamExt};
 use std::{collections::BTreeSet, sync::Arc};
 
 #[tokio::test]
@@ -47,7 +48,7 @@ async fn legacy_connector_never_receives_additive_model_catalog_operation() {
         .await
         .unwrap();
     store.resource_connect(&lease, true).await.unwrap();
-    let (sender, mut receiver) = mpsc::channel(4);
+    let (sender, mut receiver) = crate::connection::outbound::channel();
     for (operation, supported, forwarded) in [
         (ResourceOperation::ModelCatalog {}, false, false),
         (ResourceOperation::Context, false, true),
@@ -67,7 +68,7 @@ async fn legacy_connector_never_receives_additive_model_catalog_operation() {
             .await
             .unwrap();
         if forwarded {
-            let frame = receiver.try_recv().unwrap().unwrap();
+            let frame = receiver.next().await.unwrap().unwrap();
             let Some(control_frame::Body::ResourceRequest(frame)) = frame.body else {
                 panic!("resource frame expected");
             };
@@ -78,7 +79,7 @@ async fn legacy_connector_never_receives_additive_model_catalog_operation() {
                 operation
             );
         } else {
-            assert!(receiver.try_recv().is_err());
+            assert!(receiver.next().now_or_never().is_none());
             let Some(ResourceReply::Failed { error }) =
                 store.resource_read(&caller, &id).await.unwrap()
             else {

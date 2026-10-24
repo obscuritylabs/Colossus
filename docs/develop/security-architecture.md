@@ -1335,6 +1335,37 @@ Security-boundary changes require focused negative tests, permit-claim/replay te
 adapter quarantine tests, journal evidence tests, and the relevant live platform
 acceptance suite.
 
+## Fleet human terminal authority
+
+[ADR 0011](adr/0011-fleet-human-terminals.md) defines a human shell surface distinct
+from agent tool effects. Native worker enablement and the application's
+`terminals:control` scope intersect the authenticated account's explicit project
+`terminal` permission. Existing execution, approval, administration, and Desktop
+local-terminal choices do not imply this grant. The public SDK adapter checks scope
+before dispatch; the worker supervisor binds an application's opaque human ownership
+partition and a native-selected workspace.
+
+The Control Plane authenticates the browser, checks exact Origin, rechecks current
+membership and node visibility, and derives ownership rather than accepting it from
+JSON. A socket gains writer authority only after successful Open or Attach. Epochs
+fence old controllers, and input sequences detect duplicate input. Unknown input
+outcomes are not retryable. Read-only history cannot authorize input or restore a
+lost process. Bounded readers and the host's idle deadline retain detached shells.
+
+Remote human shells have the worker OS account's authority and do not pass each typed
+command through agent policy or journaling. Native environments exclude worker and
+connector credentials; terminal output is stripped of OSC authority. Terminal bytes
+do not enter models, telemetry payloads, or default transcripts. POSIX process-group
+cleanup and Windows Job Object supervision clean up ordinary descendants; this human
+surface is not a sandbox containment claim against a hostile same-user process.
+
+Replica forwarding uses native gRPC with verified TLS and purpose-separated relay
+authentication derived from the shared Control Plane CA custody. Possession of a
+Fleet client certificate alone grants no relay access. The directory contains only
+operator-advertised addresses, expires stale processes, and dispatch verifies the
+exact connector generation before and after replies. Arbitrary URLs and browser
+credentials cannot become relay routing or native authority.
+
 ## Bundled Control Plane database transport
 
 [ADR 0010](adr/0010-control-plane-helm-database-boundary.md) records this deployment

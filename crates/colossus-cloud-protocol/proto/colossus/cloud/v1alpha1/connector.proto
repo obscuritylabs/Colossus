@@ -39,6 +39,8 @@ message RuntimeFrame {
     ReleasedOutputLimit output_limit = 6;
     ReleasedDiscoveryPage discovery = 7;
     ResourceResponse resource_response = 8;
+    // Independent human terminal lane. Never persisted as task events or replayed.
+    TerminalResponse terminal_response = 9;
   }
 }
 // The local SDK released an event larger than the cloud frame budget. The host
@@ -106,6 +108,7 @@ message ControlFrame {
     DiscoverRuns discover = 4;
     DiscoveryAcknowledgement discovery_acknowledgement = 5;
     ResourceRequest resource_request = 6;
+    TerminalRequest terminal_request = 7;
   }
 }
 message ConnectionWelcome {
@@ -130,6 +133,17 @@ message ResourceRequest {
   bytes operation_json = 2;
 }
 message ResourceResponse {
+  string request_id = 1;
+  bytes reply_json = 2;
+}
+
+// Closed public SDK operations under an independently enrolled terminal scope.
+// The controller binds human ownership; payloads never contain worker credentials.
+message TerminalRequest {
+  string request_id = 1;
+  bytes request_json = 2;
+}
+message TerminalResponse {
   string request_id = 1;
   bytes reply_json = 2;
 }

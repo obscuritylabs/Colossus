@@ -624,6 +624,12 @@ impl AgentRunClient for WindowsAgentRuns {
     ) -> ApiResult<crate::ListVisibleRunsResponse> {
         self.transports.primary.list_visible_runs(request).await
     }
+    async fn human_terminal(
+        &self,
+        request: crate::HumanTerminalRequest,
+    ) -> ApiResult<crate::HumanTerminalReply> {
+        self.transports.primary.human_terminal(request).await
+    }
     async fn list_process_sessions(
         &self,
         request: crate::ListProcessSessionsRequest,

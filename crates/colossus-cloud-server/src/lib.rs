@@ -19,8 +19,11 @@ mod global_settings;
 mod http;
 mod observability;
 mod resources;
+mod runtime_connection_limit;
 /// Composed HTTP/OIDC and mutual-TLS server lifecycle.
 pub mod server;
 mod settings;
 mod telemetry_host;
+mod terminal;
+mod terminal_relay;
 mod tls;

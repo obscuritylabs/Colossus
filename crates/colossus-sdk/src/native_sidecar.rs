@@ -1494,6 +1494,12 @@ impl AgentRunClient for SwitchingAgentRunClient {
             .list_visible_runs(request)
             .await
     }
+    async fn human_terminal(
+        &self,
+        request: crate::HumanTerminalRequest,
+    ) -> ApiResult<crate::HumanTerminalReply> {
+        self.current().await?.primary.human_terminal(request).await
+    }
     async fn list_process_sessions(
         &self,
         request: crate::ListProcessSessionsRequest,

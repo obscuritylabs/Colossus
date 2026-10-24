@@ -261,6 +261,7 @@ impl RuntimeConnector {
             .max_decoding_message_size(MAX_PAYLOAD_BYTES + 16384)
             .max_encoding_message_size(MAX_PAYLOAD_BYTES + 16384);
         let (sender, receiver) = crate::outbound::channel();
+        let terminal_available = crate::terminal::available(self.runs.as_ref()).await;
         send(
             &sender,
             runtime_frame::Body::Hello(wire::RuntimeHello {
@@ -273,6 +274,12 @@ impl RuntimeConnector {
                     capabilities.push(colossus_cloud_protocol::RESOURCE_CAPABILITY.into());
                     capabilities.retain(|c| c != colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY);
                     capabilities.push(colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY.into());
+                    capabilities.retain(|capability| {
+                        capability != colossus_cloud_protocol::TERMINAL_CAPABILITY
+                    });
+                    if terminal_available {
+                        capabilities.push(colossus_cloud_protocol::TERMINAL_CAPABILITY.into());
+                    }
                     capabilities
                 },
                 project_id: self.config.project_id.clone(),
@@ -310,6 +317,7 @@ impl RuntimeConnector {
         let resource_permits = Arc::new(Semaphore::new(
             colossus_cloud_protocol::MAX_RESOURCE_REQUESTS,
         ));
+        let terminal_admission = crate::terminal::Admission::default();
         let mut watched = HashSet::new();
         let mut discovery: Option<wire::ReleasedDiscoveryPage> = None;
         let mut acknowledged_discovery: Option<(String, String)> = None;
@@ -336,6 +344,17 @@ impl RuntimeConnector {
                 frame=stream.message()=>{
                     let Some(frame)=frame? else{return Ok(());};
                     match frame.body {
+                        Some(control_frame::Body::TerminalRequest(request)) => {
+                            if !terminal_available { return Err(Status::permission_denied("human terminal capability is unavailable")); }
+                            let request = crate::terminal::decode_request(request)?;
+                            let permit = terminal_admission.acquire(request.is_read())?;
+                            let runs = self.runs.clone(); let sender = sender.clone();
+                            watchers.spawn(async move {
+                                let _permit = permit;
+                                let reply = crate::terminal::execute(runs.as_ref(), request).await?;
+                                send(&sender, runtime_frame::Body::TerminalResponse(reply)).await
+                            });
+                        },
                         Some(control_frame::Body::Command(command))=>{
                             let operation:Command=decode(&command.command_json).map_err(|_|Status::invalid_argument("invalid cloud command"))?;
                             if let Command::Watch{run_id,snapshot_only}=operation {

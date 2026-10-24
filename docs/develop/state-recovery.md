@@ -109,6 +109,17 @@ A runtime task owns the supervisor, isolated directory, and workspace lease thro
 cleanup. Run completion stops run-owned and unlaunched sessions; explicitly launched
 workspace sessions remain supervised until their original deadline or runtime shutdown.
 
+## Human terminals
+
+Human PTYs are process-local, independently supervised resources, not durable agent
+runs or managed `shell.run` sessions. Browser/connector disconnects detach their readers;
+bounded host leases retain the same process. Output frames and resize events have
+monotonic cursors and a bounded replay window. A fresh emulator cannot reconstruct a
+screen from an arbitrary retained suffix; missing history is explicit. An input receipt
+lost after dispatch is uncertain and must never trigger automatic command replay.
+Worker restart ends sessions and changes the incarnation. Colossus never adopts a
+stored PID. [ADR 0011](adr/0011-fleet-human-terminals.md) owns this contract.
+
 ## Recovery states
 
 | Condition | Required behavior |

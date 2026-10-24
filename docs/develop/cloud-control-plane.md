@@ -488,6 +488,17 @@ That test owns a generated `cloud_acceptance_` schema. It verifies atomic state/
 commits, optimistic contention, chronological pages, notification fanout, shared browser
 sessions, one-use consumption, lease fencing and changed retained-record detection.
 
+The hosted PostgreSQL acceptance tier also runs every ignored Control Plane repository
+test, including terminal role migration, replica route lookup, and fenced capability
+replacement. Run that suite serially against the disposable database because notification
+hints are database-wide even when rows use separate generated schemas. Supply the
+additional synthetic `COLOSSUS_CLOUD_TEST_AUDIT_SIGNING_SEED` (64 hex characters) for the
+checkpoint fixture:
+
+```sh
+cargo test --locked -p colossus-cloud-postgres --lib -- --ignored --test-threads=1
+```
+
 Repository tests additionally cover thread continuation and read-only session sharing,
 exact idempotent receipts, project isolation,
 contiguous output and changed-duplicate rejection, role ceilings, admission bounds,

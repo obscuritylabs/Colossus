@@ -11,6 +11,7 @@ mod headless;
 mod inventory;
 pub use inventory::native_host_label;
 mod outbound;
+mod terminal;
 pub use cli::{
     ConnectorCommand, EnrollArguments, LocalArguments, ShareWorkspaceArguments, StorageArguments,
     run_cli,

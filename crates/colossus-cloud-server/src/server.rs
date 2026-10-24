@@ -29,6 +29,8 @@ pub(crate) struct State {
     pub sse_permits: Arc<tokio::sync::Semaphore>,
     pub shutdown: tokio::sync::watch::Sender<bool>,
     pub replica_id: String,
+    pub terminal: crate::terminal::TerminalHub,
+    pub relay: crate::terminal_relay::RelayTransport,
     pub hosted: Option<Arc<crate::hosted::HostedExecution>>,
     pub telemetry: Arc<crate::telemetry_host::CloudTelemetry>,
 }
@@ -116,6 +118,7 @@ impl ControlPlaneServer {
             collector.0,
             collector.1,
         )?);
+        let relay = crate::terminal_relay::RelayTransport::new(&config)?;
         let server = Self {
             state: Arc::new(State {
                 config,
@@ -123,6 +126,8 @@ impl ControlPlaneServer {
                 auth,
                 ca,
                 presence: Mutex::new(HashMap::new()),
+                terminal: crate::terminal::TerminalHub::default(),
+                relay,
                 http_permits: Arc::new(tokio::sync::Semaphore::new(256)),
                 sse_permits: Arc::new(tokio::sync::Semaphore::new(1024)),
                 shutdown: tokio::sync::watch::channel(false).0,
@@ -161,11 +166,23 @@ impl ControlPlaneServer {
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<(), &'static str> {
         let config = &self.state.config;
+        self.state.relay.local_listener(
+            grpc_listener
+                .local_addr()
+                .map_err(|_| "replica listener unavailable")?,
+            config.local_development,
+        );
+        self.state.relay.publish(&self.state).await?;
         let incoming = crate::tls::incoming(grpc_listener, config, &self.state.ca.pem)?;
         let grpc = tonic::transport::Server::builder()
-            .concurrency_limit_per_connection(2)
+            // Relay long-polls must leave room for interactive input on the same
+            // HTTP/2 channel. The relay, browser and per-node queues have separate caps.
+            .concurrency_limit_per_connection(128)
             .timeout(std::time::Duration::from_secs(3600))
-            .add_service(crate::connection::service(self.state.clone()));
+            .add_service(crate::runtime_connection_limit::limit(
+                crate::connection::service(self.state.clone()),
+            ))
+            .add_service(crate::terminal_relay::service(self.state.clone()));
         let http = axum::serve(listener, crate::http::router(self.state.clone()))
             .with_graceful_shutdown(wait_shutdown(shutdown.clone()));
         let shutdown_for_streams = shutdown.clone();
@@ -204,9 +221,23 @@ impl ControlPlaneServer {
             }
         };
         tokio::pin!(upkeep);
+        let replica_state = self.state.clone();
+        let routes = async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                if replica_state.relay.publish(&replica_state).await.is_err() {
+                    eprintln!(
+                        "Replica route publication unavailable; retained terminal processes remain on their hosts."
+                    );
+                }
+            }
+        };
+        tokio::pin!(routes);
         let result = tokio::select! {
             result = &mut drain => result,
             _ = &mut upkeep => Err("cloud maintenance stopped"),
+            _ = &mut routes => Err("replica route upkeep stopped"),
             _ = &mut forward => {
                 tokio::time::timeout(std::time::Duration::from_secs(30), &mut drain)
                     .await.map_err(|_| "cloud shutdown drain deadline exceeded").and_then(|result|result)

@@ -745,6 +745,60 @@ impl AgentRunClient for GrpcAgentRunClient {
             }),
         })
     }
+    async fn human_terminal(
+        &self,
+        request: crate::HumanTerminalRequest,
+    ) -> ApiResult<crate::HumanTerminalReply> {
+        if !request.validate() {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "terminal",
+                "invalid human terminal request",
+            ));
+        }
+        let mutation = !matches!(
+            request.operation,
+            crate::HumanTerminalOperation::Context | crate::HumanTerminalOperation::Read { .. }
+        );
+        let bytes = serde_json::to_vec(&request).map_err(|_| protocol_error())?;
+        let request = self
+            .request(proto::HumanTerminalRequest {
+                request_json: bytes,
+            })
+            .await?;
+        // Mutations are never automatically retried. A lost response can mean PTY input escaped.
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            self.client().human_terminal(request),
+        )
+        .await
+        .map_err(|_| {
+            human_terminal_error(
+                Status::deadline_exceeded("terminal operation deadline elapsed"),
+                mutation,
+            )
+        })?
+        .map_err(|error| human_terminal_error(error, mutation))?
+        .into_inner();
+        if response.reply_json.len() > 128 * 1024 {
+            return Err(human_terminal_error(
+                Status::unknown("invalid terminal response"),
+                mutation,
+            ));
+        }
+        let response: crate::HumanTerminalReply = serde_json::from_slice(&response.reply_json)
+            .map_err(|_| {
+                human_terminal_error(Status::unknown("invalid terminal response"), mutation)
+            })?;
+        if !response.validate() {
+            return Err(human_terminal_error(
+                Status::unknown("invalid terminal response"),
+                mutation,
+            ));
+        }
+        Ok(response)
+    }
+
     async fn list_process_sessions(
         &self,
         request: crate::ListProcessSessionsRequest,
@@ -2353,6 +2407,32 @@ fn authentication_error() -> ApiError {
     }
 }
 
+fn human_terminal_error(status: Status, mutation: bool) -> ApiError {
+    if mutation
+        && status.details().is_empty()
+        && !matches!(
+            status.code(),
+            Code::Unauthenticated
+                | Code::PermissionDenied
+                | Code::InvalidArgument
+                | Code::NotFound
+                | Code::Unimplemented
+                | Code::ResourceExhausted
+        )
+    {
+        return ApiError {
+            code: ApiErrorCode::OutcomeUnknown,
+            reason: ApiErrorReason::OutcomeUnknown,
+            message: "terminal operation delivery is uncertain; do not resend automatically".into(),
+            correlation_id: None,
+            retryable: false,
+            outcome: colossus_api::OutcomeCertainty::Unknown,
+            violations: Vec::new(),
+        };
+    }
+    api_error_from_status(status)
+}
+
 fn unavailable_error() -> ApiError {
     ApiError {
         code: ApiErrorCode::Unavailable,
@@ -2561,6 +2641,27 @@ mod tests {
         assert_eq!(error.code, ApiErrorCode::Unavailable);
         assert!(!error.retryable);
         assert!(stream.next().await.is_none());
+    }
+
+    #[test]
+    fn terminal_transport_loss_preserves_input_uncertainty() {
+        for status in [
+            Status::unavailable("lost"),
+            Status::deadline_exceeded("lost"),
+            Status::unknown("lost"),
+        ] {
+            let error = human_terminal_error(status, true);
+            assert_eq!(error.outcome, colossus_api::OutcomeCertainty::Unknown);
+            assert!(!error.retryable);
+        }
+        assert_eq!(
+            human_terminal_error(Status::unauthenticated("denied"), true).outcome,
+            colossus_api::OutcomeCertainty::Known
+        );
+        assert_eq!(
+            human_terminal_error(Status::unavailable("lost"), false).outcome,
+            colossus_api::OutcomeCertainty::Known
+        );
     }
 
     #[test]

@@ -16,6 +16,16 @@ export default defineConfig({
             "utf8",
           ),
         });
+        for (const name of ["xterm", "addon-fit"]) {
+          this.emitFile({
+            type: "asset",
+            fileName: `xterm-${name}-LICENSE.txt`,
+            source: readFileSync(
+              new URL(`./node_modules/@xterm/${name}/LICENSE`, import.meta.url),
+              "utf8",
+            ),
+          });
+        }
       },
     },
     tailwindcss(),
