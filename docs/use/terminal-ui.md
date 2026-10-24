@@ -35,6 +35,11 @@ security warnings, alongside readiness, approval handling, the model route, and
 context budget. Smaller widths shorten or omit runtime details to keep status
 and warnings readable. Compact terminals omit the top bar.
 
+On wider terminals, a slim right sidebar shows subagents and workspace status,
+including open tasks, goals, plans, retained memory, and configured MCP servers.
+It scrolls independently from the conversation and hides when the terminal is narrow.
+MCP indicators distinguish configured availability from successful use in this session.
+
 Use `--no-alt-screen` for an inline interface that leaves completed output in your
 terminal's normal scrollback:
 
@@ -86,6 +91,16 @@ that send Shift-Enter as plain Enter. Use `/multiline` to choose Enter behavior:
 Enter can add lines while Ctrl-D sends the prompt. Direct shortcuts such as
 `/multiline on` and `/multiline off` remain available.
 
+Start a draft with `!` to run a shell command directly, such as `!git status`.
+It uses the existing approval, sandbox, cancellation, and audit path without asking
+the model. Each command starts in the workspace; directory and environment changes
+last only for that invocation.
+
+Drag across rendered text to select it, then press Ctrl-C or Ctrl-Insert to copy.
+The selected view stays still while work continues. Esc clears the selection and
+shows new output. See [TUI commands and keys](../reference/tui.md) for terminal-native
+selection and independent sidebar scrolling.
+
 `/permissions` opens an approval-mode chooser with the current mode highlighted.
 Up/Down moves the selection, Enter applies it, and Esc returns without changing
 anything. This changes approval handling for subsequent operations in this TUI
@@ -97,6 +112,14 @@ available alongside the theme picker.
 
 You can continue typing while a run is active. Colossus queues up to eight future
 turns; after a failure or cancellation, it pauses the queue for your decision.
+
+After a known provider failure, an inline **Retry** and **Dismiss** notice appears
+above the composer. Tab selects an action and Enter activates it; ordinary slash
+completion keeps priority. Retry sends **Continue** in the same session and keeps
+your draft. You can also type your own continuation with additional guidance.
+Completed tools keep their recorded results. A retry does not repeat their effects.
+Uncertain tool outcomes require reconciliation and do not offer this action.
+
 Use Ctrl-R to open full-screen prompt history. Type to filter, use Up/Down to
 choose, and press Enter to place a prompt in your draft. Esc keeps the draft you
 had before opening history. To include a supported image, use `/attach PATH`,

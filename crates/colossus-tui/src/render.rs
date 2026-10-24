@@ -11,6 +11,9 @@ pub(super) fn render(
     transcript_start: usize,
     screen_mode: ScreenMode,
 ) {
+    if let Some(recovery) = state.provider_recovery.as_mut() {
+        recovery.clear_hit_areas();
+    }
     if state.text_selection.render(frame.buffer_mut()) {
         let area = frame.area();
         if area.height > 0 {
@@ -108,8 +111,18 @@ fn render_content(
 
     prepare_image_previews(state, content_area);
 
-    let composer_height = composer_height(state, content_area.width);
     let activity_height = u16::from(state.operation.is_some());
+    let recovery_height = provider_recovery_height(state);
+    let composer_height = if recovery_height > 0 {
+        composer_height(state, content_area.width).min(
+            content_area
+                .height
+                .saturating_sub(recovery_height + FOOTER_HEIGHT + 3)
+                .max(3),
+        )
+    } else {
+        composer_height(state, content_area.width)
+    };
     let approval_height =
         approval_dock_height(state, content_area.height, composer_height, activity_height);
     let plan_execution_height =
@@ -122,7 +135,7 @@ fn render_content(
             state,
             content_area.width,
             content_area.height,
-            composer_height,
+            composer_height.saturating_add(recovery_height),
             activity_height,
         )
     };
@@ -137,16 +150,17 @@ fn render_content(
             Constraint::Length(activity_height),
             Constraint::Length(completion_height),
             Constraint::Length(decision_height),
+            Constraint::Length(recovery_height),
             Constraint::Length(composer_height),
             Constraint::Length(FOOTER_HEIGHT),
         ])
         .split(content_area);
     state.text_selection.regions.push(rows[0]);
     state.text_selection.regions.push(Rect::new(
-        rows[4].x + 1,
-        rows[4].y + 1,
-        rows[4].width.saturating_sub(2),
-        rows[4].height.saturating_sub(2),
+        rows[5].x + 1,
+        rows[5].y + 1,
+        rows[5].width.saturating_sub(2),
+        rows[5].height.saturating_sub(2),
     ));
     state.transcript_height = usize::from(
         rows[0]
@@ -179,8 +193,11 @@ fn render_content(
             render_plan_execution_dock(frame, state, rows[3]);
         }
     }
-    render_composer(frame, state, rows[4]);
-    render_footer(frame, state, rows[5], header_height == 0);
+    if recovery_height > 0 {
+        render_provider_recovery(frame, state, rows[4]);
+    }
+    render_composer(frame, state, rows[5]);
+    render_footer(frame, state, rows[6], header_height == 0);
     if state.overlay.is_some() && decision_height == 0 {
         render_overlay(frame, state, area);
     }
@@ -323,6 +340,7 @@ pub(super) fn desired_inline_viewport_height(
     let completion_height = 0;
     let chrome_height = activity_height
         .saturating_add(completion_height)
+        .saturating_add(provider_recovery_height(state))
         .saturating_add(composer_height)
         .saturating_add(FOOTER_HEIGHT);
     let mut transcript_line_count = transcript_lines_range(

@@ -3,6 +3,7 @@ use super::*;
 mod command_approval;
 mod layout;
 mod model_picker;
+mod provider_recovery;
 mod shell;
 
 #[test]

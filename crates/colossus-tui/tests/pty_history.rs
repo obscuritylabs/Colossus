@@ -1014,16 +1014,16 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
         .expect("pasted Unicode row");
     #[cfg(windows)]
     {
-        writer.write_all(b"\x1b[H!").expect("edit recalled draft");
+        writer.write_all(b"\x1b[Hx").expect("edit recalled draft");
         writer.flush().expect("flush recalled draft edit");
-        wait_for_screen(&output, 24, 80, "│!# Heading ");
+        wait_for_screen(&output, 24, 80, "│x# Heading ");
         writer
             .write_all(&[127])
             .expect("remove recalled draft edit");
         writer.flush().expect("flush recalled draft edit removal");
-        // The border followed by '#' cannot match the pre-delete '!'.
+        // The border followed by '#' cannot match the pre-delete 'x'.
         wait_for_screen(&output, 24, 80, "│# Heading ");
-        assert!(!screen_contents(&output, 24, 80).contains("│!# Heading "));
+        assert!(!screen_contents(&output, 24, 80).contains("│x# Heading "));
     }
     assert_eq!(nested_row, heading_row + 2, "blank line was not preserved");
     assert_eq!(unicode_row, nested_row + 1, "composed lines changed");
@@ -1150,9 +1150,11 @@ fn unicode_history_draft_roundtrip(restore_edit: bool) {
     writer.write_all(b"\x1b[A").expect("recall Unicode draft");
     writer.flush().expect("flush Unicode draft recall");
     wait_for_screen(&output, 24, 80, "界 e\u{301}");
-    writer.write_all(b"\x1b[H!").expect("edit Unicode draft");
+    // Keep the marker ordinary prompt text so the negative roundtrip still
+    // reaches the model-turn host boundary instead of selecting !shell.
+    writer.write_all(b"\x1b[Hx").expect("edit Unicode draft");
     writer.flush().expect("flush Unicode draft edit");
-    wait_for_screen(&output, 24, 80, "│!# Heading ");
+    wait_for_screen(&output, 24, 80, "│x# Heading ");
     if restore_edit {
         writer.write_all(&[127]).expect("restore Unicode draft");
         writer.flush().expect("flush Unicode draft restoration");

@@ -237,12 +237,12 @@ pub(super) fn normalize(
     let blocks = value["content"]
         .as_array()
         .ok_or_else(|| invalid("missing Messages content"))?;
-    let mut events = block_events(blocks, names)?;
-    let calls = events
+    let calls = blocks
         .iter()
-        .filter(|e| matches!(e, ProviderEvent::ToolCallRequested { .. }))
+        .filter(|block| block["type"] == "tool_use")
         .count();
     validate_stop(&value["stop_reason"], calls)?;
+    let mut events = block_events(blocks, names)?;
     let text = events
         .iter()
         .filter_map(|e| match e {
@@ -293,8 +293,13 @@ fn block_events(
                     .as_str()
                     .filter(|id| !id.is_empty() && id.len() <= 256)
                     .ok_or_else(|| invalid("invalid Messages tool ID"))?;
-                if !ids.insert(id) || !block["input"].is_object() {
-                    return Err(invalid("invalid Messages tool input or duplicate ID"));
+                if !ids.insert(id) {
+                    return Err(invalid("duplicate Messages tool ID"));
+                }
+                if !block["input"].is_object() {
+                    return Err(ProviderError::InvalidToolArguments(
+                        "Messages tool input is not an object".into(),
+                    ));
                 }
                 let name = block["name"]
                     .as_str()

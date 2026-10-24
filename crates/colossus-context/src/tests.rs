@@ -25,6 +25,21 @@ struct BudgetSummaryProvider {
 
 struct StaticMemories(Vec<MemoryRecord>);
 
+struct UnexpectedReplayRetrieval;
+
+#[async_trait]
+impl MemoryRetriever for UnexpectedReplayRetrieval {
+    async fn relevant(
+        &self,
+        _query: &str,
+        _session_id: &str,
+        _context: ExecutionContext,
+        _limit: usize,
+    ) -> Result<Vec<MemoryRecord>, StoreError> {
+        panic!("a frozen exchange must not retrieve a new context prefix")
+    }
+}
+
 #[async_trait]
 impl MemoryRetriever for StaticMemories {
     async fn relevant(
@@ -1467,6 +1482,95 @@ async fn anthropic_replay_reserves_budget_without_replacing_canonical_messages()
     assert!(!prepared.compacted);
     request.continuation.as_mut().unwrap().reserved_tokens = u64::MAX;
     assert!(service.prepare(request).await.is_err());
+}
+
+#[tokio::test]
+async fn frozen_replay_keeps_images_bindings_and_observations_across_human_turns() {
+    let provider = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_, _, snapshots, service) = fixture(ContextConfig::default(), provider.clone());
+    let service = service.with_memory_retriever(Arc::new(UnexpectedReplayRetrieval));
+    let mut assistant = message(ModelMessageRole::Assistant, "original tool request");
+    assistant.tool_calls.push(ModelToolCall {
+        call_id: "saved-call".into(),
+        name: "filesystem.read".into(),
+        arguments: json!({"path":"saved"}),
+    });
+    let mut result = message(ModelMessageRole::Tool, "exact saved observation");
+    result.tool_call_id = Some("saved-call".into());
+    let messages = vec![
+        message(ModelMessageRole::System, "original retrieved memories"),
+        image_message([image(0, 1)]),
+        assistant,
+        result,
+        message(ModelMessageRole::User, "continue with this new guidance"),
+    ];
+    let mut request = preparation_request(messages.clone(), false);
+    request.route.limits.input_budget_tokens = 100_000;
+    request.route.capabilities.image_inputs = true;
+    request.continuation = Some(ProviderContinuationView {
+        replay: true,
+        id: "saved-replay".into(),
+        covered_count: 3,
+        context_binding_hash: "f".repeat(64),
+        reserved_tokens: 100,
+        bytes: 300,
+    });
+    let prepared = service
+        .prepare_replay(request)
+        .await
+        .expect("frozen replay fits");
+    assert_eq!(prepared.messages, messages);
+    assert_eq!(prepared.context_binding_hash, "f".repeat(64));
+    assert_eq!(prepared.continuation_id.as_deref(), Some("saved-replay"));
+    assert!(!prepared.snapshot_created);
+    assert!(snapshots.list("session-1").unwrap().is_empty());
+    assert_eq!(provider.calls.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
+async fn frozen_replay_enforces_both_budgets_without_retrieval_or_compaction() {
+    let provider = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let (_, _, snapshots, service) = fixture(ContextConfig::default(), provider.clone());
+    let service = service.with_memory_retriever(Arc::new(UnexpectedReplayRetrieval));
+    let mut request = preparation_request(vec![message(ModelMessageRole::User, "continue")], false);
+    request.continuation = Some(ProviderContinuationView {
+        replay: true,
+        id: "saved-replay".into(),
+        covered_count: 1,
+        context_binding_hash: "f".repeat(64),
+        reserved_tokens: u64::MAX,
+        bytes: 300,
+    });
+    assert!(matches!(
+        service.prepare_replay(request.clone()).await,
+        Err(ContextError::BudgetExceeded(ContextBudgetExceeded {
+            resource: colossus_ports::ContextBudgetResource::Tokens,
+            ..
+        }))
+    ));
+    request.continuation.as_mut().unwrap().reserved_tokens = 1;
+    request.continuation.as_mut().unwrap().bytes = MAX_PREPARED_MODEL_REQUEST_BYTES;
+    assert!(matches!(
+        service.prepare_replay(request.clone()).await,
+        Err(ContextError::BudgetExceeded(ContextBudgetExceeded {
+            resource: colossus_ports::ContextBudgetResource::RequestBytes,
+            ..
+        }))
+    ));
+    request.continuation.as_mut().unwrap().bytes = 1;
+    request.force = true;
+    assert!(matches!(
+        service.prepare_replay(request).await,
+        Err(ContextError::Configuration(_))
+    ));
+    assert!(snapshots.list("session-1").unwrap().is_empty());
+    assert_eq!(provider.calls.load(Ordering::Acquire), 0);
 }
 
 #[tokio::test]

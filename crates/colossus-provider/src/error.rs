@@ -33,6 +33,9 @@ pub enum ProviderError {
     /// Provider response failed the normalized contract.
     #[error("malformed provider output: {0}")]
     Malformed(String),
+    /// A confirmed provider response supplied invalid tool arguments; no tool may dispatch.
+    #[error("malformed provider tool arguments: {0}")]
+    InvalidToolArguments(String),
 }
 
 impl From<CredentialResolutionError> for ProviderError {

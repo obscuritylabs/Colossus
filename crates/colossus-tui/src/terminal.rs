@@ -86,10 +86,11 @@ impl OwnedTerminal {
     }
 
     fn draw_current_frame(&mut self, state: &mut TuiState) -> Result<(), io::Error> {
-        if self.mode == ScreenMode::Alternate {
-            self.terminal.draw(|frame| {
-                render_terminal_frame(frame, state, 0, ScreenMode::Alternate, self.monochrome)
-            })?;
+        if self.mode == ScreenMode::Alternate || state.text_selection.active() {
+            // Keep the captured viewport and native history fixed while still
+            // redrawing selection highlights and servicing clipboard requests.
+            self.terminal
+                .draw(|frame| render_terminal_frame(frame, state, 0, self.mode, self.monochrome))?;
             return Ok(());
         }
 

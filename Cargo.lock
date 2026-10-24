@@ -1059,6 +1059,7 @@ dependencies = [
  "colossus-session",
  "colossus-testkit",
  "colossus-tools",
+ "colossus-work",
  "hex",
  "opentelemetry",
  "opentelemetry_sdk",

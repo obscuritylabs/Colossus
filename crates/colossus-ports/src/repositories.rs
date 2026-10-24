@@ -83,6 +83,21 @@ pub trait SessionRepository: Send + Sync {
         pending: PendingSessionToolTurn,
         actor: Actor,
     ) -> Result<(), StoreError>;
+    /// Atomically admit private application state with the pre-effect replay guard.
+    fn begin_tool_turn_with_events(
+        &self,
+        session_id: &str,
+        pending: PendingSessionToolTurn,
+        actor: Actor,
+        events: Vec<NewEvent>,
+    ) -> Result<(), StoreError> {
+        if !events.is_empty() {
+            return Err(StoreError::Adapter(
+                "atomic tool-turn admission unavailable".into(),
+            ));
+        }
+        self.begin_tool_turn(session_id, pending, actor)
+    }
 
     /// Atomically append every call/result message and settle its write-ahead marker.
     fn complete_tool_turn(
@@ -92,6 +107,22 @@ pub trait SessionRepository: Send + Sync {
         messages: Vec<SessionMessageAppend>,
         actor: Actor,
     ) -> Result<Vec<SessionMessage>, StoreError>;
+    /// Commit complete tool messages, their guard and private state in one transaction.
+    fn complete_tool_turn_with_events(
+        &self,
+        session_id: &str,
+        pending: &PendingSessionToolTurn,
+        messages: Vec<SessionMessageAppend>,
+        actor: Actor,
+        events: Vec<NewEvent>,
+    ) -> Result<Vec<SessionMessage>, StoreError> {
+        if !events.is_empty() {
+            return Err(StoreError::Adapter(
+                "atomic tool-turn settlement unavailable".into(),
+            ));
+        }
+        self.complete_tool_turn(session_id, pending, messages, actor)
+    }
 
     /// Reconstruct every append-only message in sequence order.
     fn list_messages(&self, session_id: &str) -> Result<Vec<SessionMessage>, StoreError>;
@@ -215,6 +246,16 @@ pub struct ContextPreparationRequest {
 /// Shared context preparation boundary used by every agent provider turn.
 #[async_trait]
 pub trait ContextPreparer: Send + Sync {
+    /// Validate a frozen unfinished exchange without refreshing or rewriting its prefix.
+    async fn prepare_replay(
+        &self,
+        _request: ContextPreparationRequest,
+    ) -> Result<PreparedContext, ContextError> {
+        Err(ContextError::Configuration(
+            "this context service cannot preserve an unfinished provider exchange".into(),
+        ))
+    }
+
     /// Apply an active snapshot or create one when the configured budget requires it.
     async fn prepare(
         &self,

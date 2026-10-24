@@ -376,6 +376,78 @@ fn bounded_summary_request(
 
 #[async_trait]
 impl ContextPreparer for ContextService {
+    async fn prepare_replay(
+        &self,
+        request: ContextPreparationRequest,
+    ) -> Result<PreparedContext, ContextError> {
+        let view = request
+            .continuation
+            .filter(|view| view.replay)
+            .ok_or_else(|| {
+                ContextError::Configuration(
+                    "unfinished provider replay reference is missing".into(),
+                )
+            })?;
+        if request.force {
+            return Err(ContextError::Configuration(
+                "an unfinished provider exchange cannot be compacted".into(),
+            ));
+        }
+        if !colossus_tools::model_tool_observations_within_bounds(&request.messages) {
+            return Err(ContextError::Configuration(
+                "Messages tool replay requires its unchanged observation prefix; observation or image bounds prevent continuation".into(),
+            ));
+        }
+        validate_newest_image_turn(&request.messages)?;
+        let tokens = estimate_tokens_for_model(
+            &request.route.model,
+            &request.instructions,
+            &request.messages,
+            &request.tools,
+        )
+        .saturating_add(view.reserved_tokens);
+        let bytes = model_request_bytes(&request.instructions, &request.messages, &request.tools)
+            .saturating_add(view.bytes);
+        if tokens > request.route.limits.input_budget_tokens {
+            return Err(ContextBudgetExceeded::tokens(
+                tokens,
+                request.route.limits.input_budget_tokens,
+                ContextBudgetScope::PreservedMessages,
+            )
+            .into());
+        }
+        if bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
+            return Err(ContextBudgetExceeded::request_bytes(
+                bytes,
+                MAX_PREPARED_MODEL_REQUEST_BYTES,
+                ContextBudgetScope::PreservedMessages,
+            )
+            .into());
+        }
+        Ok(PreparedContext {
+            context_binding_hash: view.context_binding_hash,
+            continuation_id: Some(view.id),
+            messages: request.messages,
+            token_estimate: tokens,
+            original_token_estimate: tokens,
+            model_profile: request.route.model_profile,
+            context_window_tokens: request.route.limits.context_window_tokens,
+            max_output_tokens: request.route.limits.max_output_tokens,
+            safety_margin_tokens: request.route.limits.safety_margin_tokens,
+            input_budget_tokens: request.route.limits.input_budget_tokens,
+            threshold_tokens: self
+                .config
+                .threshold_tokens(request.route.limits.input_budget_tokens),
+            target_tokens: self
+                .config
+                .target_tokens(request.route.limits.input_budget_tokens),
+            snapshot_id: None,
+            compacted: false,
+            snapshot_created: false,
+            strategy: Some("anthropic_replay".into()),
+        })
+    }
+
     async fn prepare(
         &self,
         request: ContextPreparationRequest,

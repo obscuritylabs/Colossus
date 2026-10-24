@@ -278,6 +278,16 @@ impl SessionRepository for EventSourcedSessionRepository {
         pending: PendingSessionToolTurn,
         actor: Actor,
     ) -> Result<(), StoreError> {
+        self.begin_tool_turn_with_events(session_id, pending, actor, Vec::new())
+    }
+
+    fn begin_tool_turn_with_events(
+        &self,
+        session_id: &str,
+        pending: PendingSessionToolTurn,
+        actor: Actor,
+        additional_events: Vec<NewEvent>,
+    ) -> Result<(), StoreError> {
         validate_session_id(session_id)?;
         validate_pending_tool_turn(&pending)?;
         let stream_id = Self::stream(session_id);
@@ -293,7 +303,7 @@ impl SessionRepository for EventSourcedSessionRepository {
                 "session already has an unsettled provider tool turn".into(),
             ));
         }
-        self.journal.append(NewEvent {
+        let mut batch = vec![NewEvent {
             event_version: 1,
             stream_id,
             expected_stream_version: events.last().map_or(0, |event| event.stream_version),
@@ -308,7 +318,9 @@ impl SessionRepository for EventSourcedSessionRepository {
             },
             payload: serde_json::to_value(pending)
                 .map_err(|error| StoreError::Adapter(error.to_string()))?,
-        })?;
+        }];
+        batch.extend(additional_events);
+        self.journal.append_batch(batch)?;
         Ok(())
     }
 
@@ -318,6 +330,17 @@ impl SessionRepository for EventSourcedSessionRepository {
         pending: &PendingSessionToolTurn,
         messages: Vec<SessionMessageAppend>,
         actor: Actor,
+    ) -> Result<Vec<SessionMessage>, StoreError> {
+        self.complete_tool_turn_with_events(session_id, pending, messages, actor, Vec::new())
+    }
+
+    fn complete_tool_turn_with_events(
+        &self,
+        session_id: &str,
+        pending: &PendingSessionToolTurn,
+        messages: Vec<SessionMessageAppend>,
+        actor: Actor,
+        additional_events: Vec<NewEvent>,
     ) -> Result<Vec<SessionMessage>, StoreError> {
         validate_session_id(session_id)?;
         validate_pending_tool_turn(pending)?;
@@ -414,11 +437,15 @@ impl SessionRepository for EventSourcedSessionRepository {
             payload: serde_json::to_value(pending)
                 .map_err(|error| StoreError::Adapter(error.to_string()))?,
         });
-        let mut envelopes = self.journal.append_batch(batch)?;
-        let completion = envelopes.pop().ok_or_else(|| {
+        let expected_envelopes = batch.len().saturating_add(additional_events.len());
+        batch.extend(additional_events);
+        let envelopes = self.journal.append_batch(batch)?;
+        let completion = envelopes.get(messages.len()).ok_or_else(|| {
             StoreError::Adapter("tool-turn append returned no completion marker".into())
         })?;
-        if completion.event_type != TOOL_TURN_COMPLETED_EVENT || envelopes.len() != messages.len() {
+        if completion.event_type != TOOL_TURN_COMPLETED_EVENT
+            || envelopes.len() != expected_envelopes
+        {
             return Err(StoreError::Adapter(
                 "tool-turn append returned an unexpected event batch".into(),
             ));

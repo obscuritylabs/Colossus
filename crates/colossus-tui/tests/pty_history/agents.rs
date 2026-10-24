@@ -120,8 +120,11 @@ fn agent_screen(output: &Arc<Mutex<Vec<u8>>>, resizes: &[(usize, u16)], needle: 
         let parser = agent_parser(&bytes, resizes);
         let screen = parser.screen().contents();
         let composer_closed = resizes.last().is_none_or(|&(_, width)| width != 80)
-            || screen
-                .lines()
+            // ConPTY can mark full-width rows as soft-wrapped, so contents()
+            // joins their logical lines. Check the physical composer row.
+            || parser
+                .screen()
+                .rows(0, 80)
                 .any(|line| line.contains("Message · Enter sends") && line.ends_with('┐'));
         if screen.contains(needle) && composer_closed {
             return screen;

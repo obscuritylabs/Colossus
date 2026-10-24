@@ -195,3 +195,15 @@ fn unknown_chat_finish_reason_never_enters_failure_text() {
     assert!(matches!(&error, ProviderError::Malformed(_)));
     assert!(!error.to_string().contains("PRIVATE"));
 }
+
+#[test]
+fn invalid_tool_argument_recovery_depends_on_type_instead_of_message_text() {
+    let message = "tool call arguments are invalid JSON";
+    assert!(matches!(
+        crate::executor::provider_execution_error(ProviderError::Malformed(message.into())),
+        ExecutionError::Failed(_)
+    ));
+    assert!(matches!(crate::executor::provider_execution_error(
+        ProviderError::InvalidToolArguments("invalid Messages tool JSON".into())),
+        ExecutionError::Recoverable { code, .. } if code == "provider.invalid_tool_arguments"));
+}

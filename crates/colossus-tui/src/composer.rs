@@ -163,6 +163,7 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
         .saturating_add(u16::try_from(preview_rows).unwrap_or(u16::MAX))
         .saturating_add(u16::try_from(cursor_row).unwrap_or(u16::MAX));
     if state.overlay.is_none()
+        && !provider_recovery_focused(state)
         && x < area.right().saturating_sub(1)
         && y < area.bottom().saturating_sub(1)
     {

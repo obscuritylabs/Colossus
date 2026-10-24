@@ -94,6 +94,7 @@ impl AgentService {
         let owns_run = AtomicBool::new(false);
         let guard = RunOwnershipGuard {
             owns_run: &owns_run,
+            provider: self.provider.as_ref(),
             lifecycle: self.lifecycle.as_deref(),
             inbox: self.inbox.as_deref(),
             run_id: &owned_run_id,
@@ -179,7 +180,7 @@ impl AgentService {
             .map(str::to_owned)
             .unwrap_or_else(|| Uuid::now_v7().to_string());
         tracing::Span::current().record("colossus.run.id", &run_id);
-        let plan_target = match &scope.mode {
+        let mut plan_target = match &scope.mode {
             AgentRunMode::Execute => None,
             AgentRunMode::Plan(target) => Some(target.clone()),
         };
@@ -253,6 +254,12 @@ impl AgentService {
                 "image inputs exceed the 16-image or 32 MiB bound".into(),
             ));
         }
+        let mut recovered_plan_was_written = false;
+        if let Some(recovered) = self.recover_unfinished_plan(&session_id, &scope.mode)? {
+            recovered_plan_was_written = recovered.written.is_some();
+            plan_target = Some(recovered.target);
+            written_plan = recovered.written;
+        }
         let mut context = ExecutionContext {
             correlation_id: run_id.clone(),
             session_id: Some(session_id.clone()),
@@ -322,6 +329,9 @@ impl AgentService {
             inbox.begin_run(&context, &initiator, control.cloned().unwrap_or_default())?;
             owns_run.store(true, Ordering::Release);
         }
+        // Embedded agents without lifecycle adapters still own their provider
+        // candidates once registration has succeeded. A rejected duplicate never does.
+        owns_run.store(true, Ordering::Release);
         if let Some(pending) = self.sessions.pending_tool_turn(&session_id)? {
             return Err(AgentError::SessionIntegrity {
                 session_id: session_id.clone(),
@@ -391,13 +401,6 @@ impl AgentService {
                 ),
             }
         }
-        self.sessions.append_message(
-            &session_id,
-            &run_id,
-            user_message.clone(),
-            initiator.clone(),
-        )?;
-        messages.push(user_message);
         let instructions = if needs_initial_title
             && definitions
                 .iter()
@@ -409,6 +412,42 @@ impl AgentService {
         } else {
             instructions.to_owned()
         };
+        // Validate the complete prospective replay before admitting new input.
+        // Rejected guidance must not poison the canonical conversation's budgets.
+        let mut prospective_messages = messages.clone();
+        prospective_messages.push(user_message.clone());
+        if let Some((replay, plan)) = self.provider.replay_request_with_options(
+            role,
+            &ModelRequest {
+                instructions: instructions.clone(),
+                messages: prospective_messages,
+                tools: definitions.clone(),
+                max_output_tokens: None,
+            },
+            &context,
+            &scope.agent_options,
+        )? && let Some(preparer) = &self.context_preparer
+        {
+            preparer
+                .prepare_replay(ContextPreparationRequest {
+                    continuation: plan.selected,
+                    session_id: session_id.clone(),
+                    instructions: replay.instructions,
+                    messages: replay.messages,
+                    tools: replay.tools,
+                    route: route.clone(),
+                    context: context.clone(),
+                    force: false,
+                })
+                .await?;
+        }
+        self.sessions.append_message(
+            &session_id,
+            &run_id,
+            user_message.clone(),
+            initiator.clone(),
+        )?;
+        messages.push(user_message);
         if let Some(lifecycle) = &self.lifecycle {
             lifecycle.tools_offered(&context)?;
         }
@@ -434,7 +473,8 @@ impl AgentService {
                 "streaming": route.capabilities.streaming,
                 "max_turns": max_turns,
                 "active_skills": context.skill_ids,
-                "mode": &scope.mode,
+                "mode": plan_target.as_ref().map_or(AgentRunMode::Execute, |target| AgentRunMode::Plan(target.clone())),
+                "recovered_plan": written_plan.as_ref().map(|plan| json!({"plan_id": &plan.id, "revision": plan.revision})),
             }),
         )?;
         emit_run_event(
@@ -462,14 +502,11 @@ impl AgentService {
                 };
                 turn_definitions.retain(|definition| definition.name == required_tool);
             }
-            let turn_offered_tools = turn_definitions
+            let mut turn_offered_tools = turn_definitions
                 .iter()
-                .map(|definition| definition.name.as_str())
+                .map(|definition| definition.name.clone())
                 .collect::<BTreeSet<_>>();
-            context.offered_tools = turn_offered_tools
-                .iter()
-                .map(|name| (*name).to_owned())
-                .collect();
+            context.offered_tools = turn_offered_tools.iter().cloned().collect();
             if let Some(lifecycle) = &self.lifecycle {
                 lifecycle.tools_offered(&context)?;
             }
@@ -523,29 +560,66 @@ impl AgentService {
                 }
                 // Keep canonical evidence for persistence and provider-state checks.
                 // Select required signed replay before shedding current-turn state.
-                let mut observation_source = messages.clone();
-                if !route.capabilities.image_inputs {
-                    colossus_tools::omit_unsupported_model_tool_images(&mut observation_source);
-                }
-                let mut projected =
-                    colossus_tools::project_model_tool_observations_preserving_current_turn(
-                        &observation_source,
-                    );
-                let mut continuation_plan = self.provider.continuation_plan_with_options(
+                let replay = self.provider.replay_request_with_options(
                     role,
                     &ModelRequest {
                         instructions: instructions.clone(),
-                        messages: projected.clone(),
+                        messages: messages.clone(),
                         tools: turn_definitions.clone(),
                         max_output_tokens: None,
                     },
                     &context,
                     &scope.agent_options,
                 )?;
-                if !continuation_plan
-                    .as_ref()
-                    .and_then(|plan| plan.selected.as_ref())
-                    .is_some_and(|selected| selected.replay)
+                let replaying = replay.is_some();
+                let mut turn_instructions = instructions.clone();
+                let mut turn_max_output_tokens = None;
+                let mut observation_source = messages.clone();
+                if !route.capabilities.image_inputs {
+                    colossus_tools::omit_unsupported_model_tool_images(&mut observation_source);
+                }
+                let (mut projected, mut continuation_plan) = if let Some((request, plan)) = replay {
+                    turn_instructions = request.instructions;
+                    turn_max_output_tokens = request.max_output_tokens;
+                    turn_definitions = request.tools;
+                    turn_offered_tools = turn_definitions
+                        .iter()
+                        .map(|definition| definition.name.clone())
+                        .collect();
+                    context.offered_tools = turn_offered_tools.iter().cloned().collect();
+                    if let Some(lifecycle) = &self.lifecycle {
+                        lifecycle.tools_offered(&context)?;
+                    }
+                    (request.messages, Some(plan))
+                } else {
+                    if recovered_plan_was_written && let Some(plan) = &written_plan {
+                        turn_instructions.push_str(&format!(
+                            "\n\n[Colossus interrupted Plan recovery]\nThis run resumes the original Plan operation. Canonical Draft plan {} at revision {} already satisfies that operation's one required write. This recovery instruction supersedes any earlier mandatory plan.create or plan.update requirement for this run. Do not create or update a plan again in this run. Finish the response for this persisted Draft, using read-only inspection only if needed.",
+                            plan.id, plan.revision,
+                        ));
+                    }
+                    let projected =
+                        colossus_tools::project_model_tool_observations_preserving_current_turn(
+                            &observation_source,
+                        );
+                    let plan = self.provider.continuation_plan_with_options(
+                        role,
+                        &ModelRequest {
+                            instructions: turn_instructions.clone(),
+                            messages: projected.clone(),
+                            tools: turn_definitions.clone(),
+                            max_output_tokens: None,
+                        },
+                        &context,
+                        &scope.agent_options,
+                    )?;
+                    (projected, plan)
+                };
+                if !replaying
+                    && !continuation_plan
+                        .as_ref()
+                        .and_then(|plan| plan.selected.as_ref())
+                        .is_some_and(|selected| selected.replay)
                 {
                     let compacted = project_model_tool_observations(&observation_source);
                     if compacted != projected {
@@ -553,7 +627,7 @@ impl AgentService {
                         continuation_plan = self.provider.continuation_plan_with_options(
                             role,
                             &ModelRequest {
-                                instructions: instructions.clone(),
+                                instructions: turn_instructions.clone(),
                                 messages: projected.clone(),
                                 tools: turn_definitions.clone(),
                                 max_output_tokens: None,
@@ -564,20 +638,23 @@ impl AgentService {
                     }
                 }
                 let prepared = if let Some(preparer) = &self.context_preparer {
-                    let prepared = preparer
-                        .prepare(ContextPreparationRequest {
-                            continuation: continuation_plan
-                                .as_ref()
-                                .and_then(|plan| plan.selected.clone()),
-                            session_id: session_id.clone(),
-                            instructions: instructions.clone(),
-                            messages: projected.clone(),
-                            tools: turn_definitions.clone(),
-                            route: route.clone(),
-                            context: context.clone(),
-                            force: false,
-                        })
-                        .await;
+                    let preparation = ContextPreparationRequest {
+                        continuation: continuation_plan
+                            .as_ref()
+                            .and_then(|plan| plan.selected.clone()),
+                        session_id: session_id.clone(),
+                        instructions: turn_instructions.clone(),
+                        messages: projected.clone(),
+                        tools: turn_definitions.clone(),
+                        route: route.clone(),
+                        context: context.clone(),
+                        force: false,
+                    };
+                    let prepared = if replaying {
+                        preparer.prepare_replay(preparation).await
+                    } else {
+                        preparer.prepare(preparation).await
+                    };
                     let prepared = match prepared {
                         Ok(prepared) => prepared,
                         Err(error) => {
@@ -675,10 +752,10 @@ impl AgentService {
                         .await;
                 }
                 let request = ModelRequest {
-                    instructions: instructions.clone(),
+                    instructions: turn_instructions,
                     messages: prepared,
                     tools: turn_definitions.clone(),
-                    max_output_tokens: None,
+                    max_output_tokens: turn_max_output_tokens,
                 };
                 if let Some(batch) = &inbox_batch
                     && let Some(inbox) = &self.inbox
@@ -1076,7 +1153,7 @@ impl AgentService {
                         messages.push(assistant_message);
                         let correction = ModelMessage {
             agent_message_origin: None,
-                            role: ModelMessageRole::System,
+                            role: ModelMessageRole::User,
                             content: format!(
                                 "{message}. Call the required tool now; do not provide final output first."
                             )
@@ -1234,10 +1311,12 @@ impl AgentService {
                 turn,
                 call_ids: calls.iter().map(|call| call.call_id.clone()).collect(),
             };
-            self.sessions.begin_tool_turn(
+            let admission_events = self.provider.tool_turn_admission_events(&context)?;
+            self.sessions.begin_tool_turn_with_events(
                 &session_id,
                 pending_tool_turn.clone(),
                 system_actor(),
+                admission_events,
             )?;
             let mut tool_results = Vec::with_capacity(calls.len());
             let mut post_commit_events = Vec::<RunEvent>::new();
@@ -1773,18 +1852,27 @@ impl AgentService {
                         actor: system_actor(),
                     }),
             );
-            self.sessions.complete_tool_turn(
+            let mut canonical_after = self
+                .sessions
+                .list_messages(&session_id)?
+                .into_iter()
+                .map(|record| record.message)
+                .collect::<Vec<_>>();
+            canonical_after.extend(appends.iter().map(|append| append.message.clone()));
+            let settlement_events = self
+                .provider
+                .tool_turn_settlement_events(&context, &canonical_after)?;
+            self.sessions.complete_tool_turn_with_events(
                 &session_id,
                 &pending_tool_turn,
                 appends,
                 system_actor(),
+                settlement_events,
             )?;
-            if terminal.is_none() {
-                self.provider.settle_continuation(&context)?;
-            } else {
-                self.provider.discard_continuation(&context)?;
-            }
-            messages = next_messages;
+            // Stopping the run does not retire state needed by the committed
+            // assistant/tool messages, including denied or cancelled observations.
+            self.provider.tool_turn_committed(&context)?;
+            messages = canonical_after;
 
             for event in post_commit_events {
                 emit_run_event(&mut released_observer, &run_id, &session_id, event).await?;
@@ -2000,12 +2088,16 @@ async fn emit_run_event(
 
 struct RunOwnershipGuard<'a> {
     owns_run: &'a AtomicBool,
+    provider: &'a dyn ModelProvider,
     lifecycle: Option<&'a dyn colossus_ports::AgentRunLifecycle>,
     inbox: Option<&'a dyn colossus_ports::AgentInbox>,
     run_id: &'a str,
 }
 impl Drop for RunOwnershipGuard<'_> {
     fn drop(&mut self) {
+        if self.owns_run.load(Ordering::Acquire) {
+            self.provider.finish_run_candidates(self.run_id);
+        }
         if self.owns_run.load(Ordering::Acquire)
             && let Some(inbox) = self.inbox
         {

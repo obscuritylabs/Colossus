@@ -53,9 +53,18 @@ Thinking blocks and signatures are replayed privately during tool exchanges and 
 not enter visible conversation history or ordinary diagnostics. With protected
 storage, replay state is encrypted; keyless development storage retains it only in
 bounded process memory. Missing or oversized required state stops the tool exchange
-explicitly. Finish or restart that turn before continuing after a keyless process
-restart, restore, or route change. Local compaction cannot replace required replay
-state in an active tool exchange.
+explicitly. Local compaction cannot replace required replay state in an active tool
+exchange.
+
+After a provider failure, continue in the same session with **Continue** or new
+guidance. Colossus preserves the unfinished exchange's original context and sends
+its recorded tool results back to the provider. Completed tools do not execute again.
+Protected storage retains this checkpoint across runtime restarts; keyless storage
+can continue only while its process still holds the private state. A changed provider,
+model, reasoning effort, tool catalog, or restored context snapshot can prevent exact
+continuation; the checkpoint is retained when those checks fail. Older affected
+protected sessions recover only when retained private state still matches their
+original context. Missing signatures cannot be recreated from visible history.
 
 ## Connection failures and limits
 

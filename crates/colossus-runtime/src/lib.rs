@@ -50,6 +50,8 @@ mod memory;
 mod model_selection;
 pub use mcp_diagnostics::McpHealthCheck;
 #[cfg(test)]
+mod anthropic_recovery_tests;
+#[cfg(test)]
 mod anthropic_tests;
 mod development_journal;
 mod memory_gateway;
