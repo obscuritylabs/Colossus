@@ -15,6 +15,8 @@ use tokio_tungstenite::{
 };
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 mod public;
+#[cfg(target_os = "macos")]
+mod readiness;
 
 async fn socket(
     address: std::net::SocketAddr,
@@ -103,6 +105,8 @@ async fn output_until(
     frames
 }
 async fn write(socket: &mut Socket, terminal: &str, epoch: u64, sequence: u64, command: &str) {
+    #[cfg(target_os = "macos")]
+    readiness::wait_for_line_editor(socket, terminal).await;
     let reply = ok(
         socket,
         HumanTerminalOperation::Write {

@@ -3,6 +3,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use colossus_api::{
     ApiErrorReason, HumanTerminalFrameKind, HumanTerminalOperation as Op, HumanTerminalRequest,
 };
+#[cfg(target_os = "macos")]
+#[path = "tests/macos_readiness.rs"]
+mod macos_readiness;
 
 fn request(operation: Op) -> HumanTerminalRequest {
     HumanTerminalRequest {
@@ -119,6 +122,8 @@ async fn native_terminal_preserves_process_across_attach_and_deduplicates_input(
     });
     wrong_owner.owner = "human-b".into();
     assert!(service.execute("app:a", wrong_owner).await.is_err());
+    #[cfg(target_os = "macos")]
+    macos_readiness::wait_for_line_editor(&service, &id).await;
     #[cfg(windows)]
     let command = "[IO.File]::AppendAllText('once.txt','x')\r";
     #[cfg(not(windows))]
@@ -327,58 +332,87 @@ async fn foreground_interrupt_and_close_reach_distinct_shell_job_groups() {
 #[tokio::test]
 async fn eight_quiet_reads_preserve_input_interrupt_and_close_admission() {
     use colossus_api::HumanTerminalSignal;
+    use std::{
+        future::{Future as _, poll_fn},
+        task::Poll,
+    };
+    fn observe_setup(
+        read: &colossus_api::HumanTerminalReply,
+        phase: &str,
+        after: u64,
+        cursor: &mut u64,
+        tail: &mut Vec<u8>,
+    ) {
+        assert!(!read.gap, "{phase} fixture output must remain complete");
+        let mut sequence = after;
+        for frame in &read.frames {
+            assert_eq!(
+                frame.sequence,
+                sequence + 1,
+                "{phase} output must be contiguous"
+            );
+            sequence = frame.sequence;
+            if let HumanTerminalFrameKind::Output { data_base64 } = &frame.kind {
+                tail.extend(STANDARD.decode(data_base64).unwrap());
+                if tail.len() > 8192 {
+                    tail.drain(..tail.len() - 8192);
+                }
+            }
+        }
+        let session = read.session.as_ref().unwrap();
+        assert_eq!(
+            session.status,
+            colossus_api::HumanTerminalStatus::Running,
+            "{phase} setup requires a running shell, exit {:?}; terminal tail: {:?}",
+            session.exit_code,
+            String::from_utf8_lossy(tail)
+        );
+        assert_eq!(
+            read.next_sequence, sequence,
+            "{phase} read cursor must match output"
+        );
+        *cursor = (*cursor).max(read.next_sequence);
+    }
     let workspace = tempfile::tempdir().unwrap();
     let service = HumanTerminalService::new(workspace.path()).unwrap();
-    let opened = service
-        .execute(
-            "app:a",
-            request(Op::Open {
-                request_id: "admission".into(),
-                controller_id: "page".into(),
-                rows: 24,
-                cols: 80,
-            }),
-        )
-        .await
-        .unwrap();
-    let id = opened.session.unwrap().terminal_id;
-    let mut cursor = 0;
-    for operation in [
-        Op::Write {
-            terminal_id: id.clone(),
-            writer_epoch: 1,
-            input_sequence: 1,
-            data_base64: STANDARD.encode("\r"),
-        },
-        Op::Signal {
-            terminal_id: id.clone(),
-            writer_epoch: 1,
-            signal: HumanTerminalSignal::Interrupt,
-        },
-        Op::Close {
-            terminal_id: id.clone(),
-            writer_epoch: 1,
-        },
-    ] {
-        // Prompt output can arrive in separate batches during platform startup.
-        // Retry setup if output races the quiet interval; the control assertion
-        // below always runs while all eight real long polls remain pending.
+    // Admission is independent of whether a previous interrupt ended its shell.
+    for phase in ["write", "interrupt", "close"] {
+        let opened = service
+            .execute(
+                "app:a",
+                request(Op::Open {
+                    request_id: phase.into(),
+                    controller_id: "page".into(),
+                    rows: 24,
+                    cols: 80,
+                }),
+            )
+            .await
+            .unwrap();
+        let id = opened.session.unwrap().terminal_id;
+        #[cfg(target_os = "macos")]
+        macos_readiness::wait_for_line_editor(&service, &id).await;
+        let mut cursor = 0;
+        let mut tail = Vec::new();
+        // Poll all eight real requests in one task turn so VM scheduling cannot
+        // consume their entire wait interval before setup observes admission.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let readers = loop {
             loop {
+                let after = cursor;
                 let read = service
                     .execute(
                         "app:a",
                         request(Op::Read {
                             terminal_id: id.clone(),
-                            after_sequence: cursor,
+                            after_sequence: after,
                             max_bytes: 65536,
                             wait_ms: 200,
                         }),
                     )
                     .await
                     .unwrap();
-                cursor = read.next_sequence;
+                observe_setup(&read, phase, after, &mut cursor, &mut tail);
                 if read.frames.is_empty() {
                     break;
                 }
@@ -387,44 +421,101 @@ async fn eight_quiet_reads_preserve_input_interrupt_and_close_admission() {
                     "native fixture never became quiet"
                 );
             }
-            let mut readers = Vec::new();
-            for _ in 0..8 {
-                let service = service.clone();
-                let id = id.clone();
-                readers.push(tokio::spawn(async move {
-                    service
-                        .execute(
-                            "app:a",
-                            request(Op::Read {
-                                terminal_id: id,
-                                after_sequence: cursor,
-                                max_bytes: 65536,
-                                wait_ms: 1000,
-                            }),
-                        )
-                        .await
-                }));
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            if readers.iter().all(|reader| !reader.is_finished()) {
+            let after = cursor;
+            let mut readers = (0..8)
+                .map(|_| {
+                    Box::pin(service.execute(
+                        "app:a",
+                        request(Op::Read {
+                            terminal_id: id.clone(),
+                            after_sequence: after,
+                            max_bytes: 65536,
+                            wait_ms: 1000,
+                        }),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            let polled = poll_fn(|context| {
+                Poll::Ready(
+                    readers
+                        .iter_mut()
+                        .map(|reader| reader.as_mut().poll(context))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .await;
+            if polled.iter().all(Poll::is_pending) {
                 break readers;
             }
-            for reader in readers {
-                reader.abort();
-                let _ = reader.await;
+            drop(readers);
+            for result in polled {
+                if let Poll::Ready(result) = result {
+                    let read = result.unwrap_or_else(|error| {
+                        panic!(
+                            "{phase} setup read failed: {:?}/{:?}",
+                            error.code, error.reason
+                        )
+                    });
+                    observe_setup(&read, phase, after, &mut cursor, &mut tail);
+                }
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "all eight reads must hold admission while quiet"
+                "all eight {phase} reads must hold admission while quiet; terminal tail: {:?}",
+                String::from_utf8_lossy(&tail)
             );
+        };
+        let ninth = service
+            .execute(
+                "app:a",
+                request(Op::Read {
+                    terminal_id: id.clone(),
+                    after_sequence: cursor,
+                    max_bytes: 65536,
+                    wait_ms: 0,
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            ninth.reason,
+            ApiErrorReason::CapacityExceeded,
+            "{phase} must execute while all eight real reads hold admission"
+        );
+        let operation = match phase {
+            "write" => Op::Write {
+                terminal_id: id.clone(),
+                writer_epoch: 1,
+                input_sequence: 1,
+                data_base64: STANDARD.encode("\r"),
+            },
+            "interrupt" => Op::Signal {
+                terminal_id: id.clone(),
+                writer_epoch: 1,
+                signal: HumanTerminalSignal::Interrupt,
+            },
+            _ => Op::Close {
+                terminal_id: id.clone(),
+                writer_epoch: 1,
+            },
         };
         service
             .execute("app:a", request(operation))
             .await
             .expect("quiet reads must leave native input and stop controls available");
         for reader in readers {
-            reader.await.unwrap().unwrap();
+            reader.await.unwrap();
         }
+        service
+            .execute(
+                "app:a",
+                request(Op::Close {
+                    terminal_id: id,
+                    writer_epoch: 1,
+                }),
+            )
+            .await
+            .expect("fixture shell cleanup");
     }
 }
 
@@ -445,6 +536,8 @@ async fn natural_shell_exit_cleans_jobs_even_when_a_job_retains_the_pty() {
         .await
         .unwrap();
     let id = opened.session.unwrap().terminal_id;
+    #[cfg(target_os = "macos")]
+    macos_readiness::wait_for_line_editor(&service, &id).await;
     #[cfg(windows)]
     let command = "$s=[Diagnostics.ProcessStartInfo]::new([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName);$s.UseShellExecute=$false;$s.CreateNoWindow=$true;$s.Arguments='-NoLogo -NoProfile -NonInteractive -Command Start-Sleep -Seconds 60';$p=[Diagnostics.Process]::Start($s);[IO.File]::WriteAllText('background.pid',[string]$p.Id);exit 0\r";
     #[cfg(target_os = "macos")]
