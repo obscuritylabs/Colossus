@@ -288,7 +288,7 @@
     "typescript": "5.9.3"
   },
   "overrides": {
-    "@vscode/vsce@4.0.0": {
+    "@azure/identity": {
       "@azure/msal-node": "7.1.0"
     },
     "playwright-core": "1.62.0"
