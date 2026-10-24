@@ -90,6 +90,10 @@ Native sessions, retained output, pending transport messages, dimensions, and li
 are bounded. Separate terminal admission prevents a noisy stream from exhausting agent
 approval, cancellation, or heartbeat capacity.
 
+Shell completion is observed independently of PTY output reaching EOF. A descendant
+retaining an output handle must not keep an exited shell marked Running or retain an
+unbounded output reader.
+
 Transport loss detaches the subscriber rather than killing the shell. A bounded idle
 lease allows reattachment while the worker survives. Explicit Close requests process
 termination. Worker or machine restart ends the shell; the next worker incarnation must

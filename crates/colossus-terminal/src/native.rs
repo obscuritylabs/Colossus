@@ -1,8 +1,12 @@
 use colossus_api::{ApiError, ApiErrorReason, ApiResult, HumanTerminalSignal};
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(unix)]
+mod reader;
 #[cfg(any(unix, windows))]
 use std::sync::Mutex;
+#[cfg(unix)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -145,7 +149,9 @@ fn spawn(workspace: &Workspace, rows: u16, cols: u16) -> ApiResult<Spawned> {
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     // Allocate fallible I/O handles before any child exists.
-    let reader = pair.master.try_clone_reader().map_err(|_| failure())?;
+    let reader_closed = Arc::new(AtomicBool::new(false));
+    let reader =
+        reader::Reader::new(pair.master.as_ref(), reader_closed.clone()).map_err(|_| failure())?;
     let writer = pair.master.take_writer().map_err(|_| failure())?;
     workspace.revalidate()?;
     let mut child = pair.slave.spawn_command(command).map_err(|_| failure())?;
@@ -190,11 +196,12 @@ fn spawn(workspace: &Workspace, rows: u16, cols: u16) -> ApiResult<Spawned> {
         killer: Mutex::new(child.clone_killer()),
         group,
         closed: Mutex::new(false),
+        reader_closed,
         #[cfg(target_os = "macos")]
         exit_events,
     });
     Ok(Spawned {
-        reader,
+        reader: Box::new(reader),
         writer,
         control,
         wait: Box::new(move || child.wait().ok().map(|v| v.exit_code())),
@@ -207,6 +214,7 @@ struct UnixControl {
     killer: Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
     group: i32,
     closed: Mutex<bool>,
+    reader_closed: Arc<AtomicBool>,
     #[cfg(target_os = "macos")]
     exit_events: nix::sys::event::Kqueue,
 }
@@ -302,6 +310,9 @@ impl Control for UnixControl {
             if let Ok(mut killer) = self.killer.lock() {
                 let _ = killer.kill();
             }
+            // The reader can now drain a bounded tail and finish even when an
+            // inherited slave remains open. Cleanup precedes child reaping.
+            self.reader_closed.store(true, Ordering::Release);
         }
     }
 }

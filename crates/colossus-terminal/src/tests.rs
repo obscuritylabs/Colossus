@@ -464,7 +464,10 @@ async fn natural_shell_exit_cleans_jobs_even_when_a_job_retains_the_pty() {
         .await
         .unwrap();
     let mut cursor = 0;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut output = Vec::new();
+    let marker = workspace.path().join("background.pid");
+    let start_deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut exit_deadline = None;
     loop {
         let read = service
             .execute(
@@ -479,23 +482,56 @@ async fn natural_shell_exit_cleans_jobs_even_when_a_job_retains_the_pty() {
             .await
             .unwrap();
         cursor = read.next_sequence;
+        for frame in read.frames {
+            if let HumanTerminalFrameKind::Output { data_base64 } = frame.kind {
+                output.extend(STANDARD.decode(data_base64).unwrap());
+                if output.len() > 8192 {
+                    output.drain(..output.len() - 8192);
+                }
+            }
+        }
+        if marker.exists() && exit_deadline.is_none() {
+            // Prove the command actually started before measuring child-exit
+            // handling; retain only a bounded diagnostic output tail.
+            exit_deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(15));
+        }
         let session = read.session.unwrap();
         if session.status != colossus_api::HumanTerminalStatus::Running {
-            assert_eq!(session.status, colossus_api::HumanTerminalStatus::Exited);
+            assert!(
+                exit_deadline.is_some(),
+                "fixture never started its background job; terminal tail: {:?}",
+                String::from_utf8_lossy(&output)
+            );
+            assert_eq!(
+                session.status,
+                colossus_api::HumanTerminalStatus::Exited,
+                "terminal tail: {:?}",
+                String::from_utf8_lossy(&output)
+            );
             assert_eq!(
                 session.exit_code,
                 Some(0),
-                "natural completion must preserve the shell exit status"
+                "natural completion must preserve the shell exit status; terminal tail: {:?}",
+                String::from_utf8_lossy(&output)
             );
             break;
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "live browser reads must not keep a terminal Running after its shell exited"
-        );
+        if let Some(deadline) = exit_deadline {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "live browser reads kept a terminal Running after the command started; terminal tail: {:?}",
+                String::from_utf8_lossy(&output)
+            );
+        } else {
+            assert!(
+                std::time::Instant::now() < start_deadline,
+                "fixture command did not start; terminal tail: {:?}",
+                String::from_utf8_lossy(&output)
+            );
+        }
     }
     assert!(
-        workspace.path().join("background.pid").exists(),
+        marker.exists(),
         "fixture must launch an ordinary background job before shell exit"
     );
     #[cfg(target_os = "linux")]

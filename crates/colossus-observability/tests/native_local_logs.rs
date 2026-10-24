@@ -109,6 +109,31 @@ fn child(case: &str, root: Option<&Path>) -> Output {
     output
 }
 
+fn log_custody_busy(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::Other
+        && error.to_string() == "operational logs are already in use"
+}
+
+fn reopen_after_shutdown(root: &ConfinedRoot) -> LocalLogSink {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match LocalLogSink::open(root, "sidecar", LocalLogLevel::Info) {
+            Ok(sink) => return sink,
+            Err(error) if log_custody_busy(&error) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "native guard did not release local log custody before the deadline"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!(
+                "unexpected local log reopen error category: {:?}",
+                error.kind()
+            ),
+        }
+    }
+}
+
 #[test]
 fn disabled_otlp_still_installs_and_flushes_private_native_logs() {
     let directory = private_directory();
@@ -170,11 +195,15 @@ fn native_logging_child() {
                 tracing::error!(target: "reqwest", body = "PRIVATE_DEPENDENCY_BODY");
                 tracing::info!(target: "colossus.journal", body = "PRIVATE_JOURNAL_BODY");
             }
+            let Err(busy) = LocalLogSink::open(&root, "sidecar", LocalLogLevel::Info) else {
+                panic!("active native guard must retain exclusive local log custody");
+            };
+            assert!(log_custody_busy(&busy));
             drop(guard);
-            // Drop must drain the writer and release its file lock even though
-            // the process-global subscriber still retains its sender clone.
-            let _reopened = LocalLogSink::open(&root, "sidecar", LocalLogLevel::Info)
-                .expect("native guard released local log custody");
+            // WorkerGuard's flush rendezvous does not join its worker. The final
+            // writer and lock destruction may finish after the guard returns,
+            // while the process-global subscriber retains its sender clone.
+            let _reopened = reopen_after_shutdown(&root);
         }
         "console_only" => {
             let mut config = ObservabilityConfig {

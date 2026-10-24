@@ -18,6 +18,7 @@ tokio.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [target.'cfg(unix)'.dependencies]
+filedescriptor.workspace = true
 nix = { workspace = true, features = ["signal", "process", "event"] }
 
 [target.'cfg(windows)'.dependencies]

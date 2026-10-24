@@ -2444,6 +2444,7 @@ dependencies = [
  "base64 0.22.1",
  "colossus-api",
  "colossus-windows-native",
+ "filedescriptor",
  "nix 0.31.3",
  "portable-pty",
  "rustix 1.1.4",
