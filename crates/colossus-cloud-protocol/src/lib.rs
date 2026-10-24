@@ -2,8 +2,10 @@
 
 mod messages;
 mod resources;
+mod terminal;
 pub use messages::*;
 pub use resources::*;
+pub use terminal::*;
 
 /// Generated Protobuf connection envelope. Authentication is outside the payload.
 pub mod v1alpha1 {

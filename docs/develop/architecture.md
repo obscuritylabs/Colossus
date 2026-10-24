@@ -92,6 +92,13 @@ primary or approval-broker credential. Cloud roles intersect that grant and neve
 expand local tool, policy, or sandbox authority. The closed remote operation set does
 not expose private worker RPC, arbitrary network forwarding, or renderer credentials.
 
+Fleet human terminals add a separately opted-in public SDK operation, not an agent
+tool or private worker tunnel. The native `colossus-terminal` supervisor owns PTYs
+outside provider/run lifetimes. Browser WebSockets use the fenced connector owner;
+an authenticated internal gRPC relay joins different replicas without sticky sessions.
+Expiring SQL replica routes contain metadata only. See
+[ADR 0011](adr/0011-fleet-human-terminals.md) for authority and reconnect decisions.
+
 Hosted Execution is an optional application composition consumed by Chat and task
 submission. `colossus-cloud-chat` opens the ordinary runtime separately for each
 authenticated project/user and exposes its caller-bound SDK. The server's `hosted`

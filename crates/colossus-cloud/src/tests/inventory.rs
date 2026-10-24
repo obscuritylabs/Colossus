@@ -298,6 +298,34 @@ async fn unchanged_inventory_still_checks_placement_enrollment_and_connection_fe
         .claim_lease(&node.project_id, &node.node_id, "replica-a", now, 30)
         .await
         .unwrap();
+    let capabilities = vec![colossus_cloud_protocol::TERMINAL_CAPABILITY.to_owned()];
+    store
+        .publish_lease_capabilities(&lease, capabilities.clone(), now)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .read_lease(&node.project_id, &node.node_id, now)
+            .await
+            .unwrap()
+            .capabilities,
+        capabilities
+    );
+    assert_eq!(
+        store
+            .renew_lease(&lease, now, 30)
+            .await
+            .unwrap()
+            .capabilities,
+        capabilities
+    );
+    assert_eq!(
+        store
+            .publish_lease_capabilities(&lease, vec!["x".repeat(129)], now)
+            .await
+            .unwrap_err(),
+        CloudError::InvalidArgument
+    );
     let fenced = repo.with_lease(lease.clone());
     assert_eq!(
         fenced
@@ -311,6 +339,21 @@ async fn unchanged_inventory_still_checks_placement_enrollment_and_connection_fe
         .claim_lease(&node.project_id, &node.node_id, "replica-b", now, 30)
         .await
         .unwrap();
+    assert!(
+        store
+            .read_lease(&node.project_id, &node.node_id, now)
+            .await
+            .unwrap()
+            .capabilities
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .publish_lease_capabilities(&lease, capabilities, now)
+            .await
+            .unwrap_err(),
+        CloudError::Conflict
+    );
     assert_eq!(
         fenced
             .register_inventory(&node, inventory.clone(), 103)

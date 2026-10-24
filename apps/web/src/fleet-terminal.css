@@ -1,0 +1,96 @@
+.fleet-workspace-actions,
+.fleet-terminal-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.fleet-terminal-dialog {
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  width: min(76rem, calc(100vw - 2rem));
+  height: min(52rem, calc(100dvh - 2rem));
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  overflow: hidden;
+}
+.fleet-terminal-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.fleet-terminal-dialog::backdrop {
+  background: var(--surface-overlay);
+}
+.fleet-terminal-header,
+.fleet-terminal-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.fleet-terminal-header h2 {
+  margin: 0;
+  font-size: var(--font-size-heading);
+}
+.fleet-terminal-header p,
+.fleet-terminal-help {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+  margin: 0.25rem 0 0;
+  max-width: 70ch;
+}
+.fleet-terminal-toolbar {
+  font-size: var(--font-size-body-sm);
+}
+.fleet-terminal-session {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  max-width: 100%;
+}
+.fleet-terminal-session select {
+  min-width: 0;
+  max-width: 16rem;
+}
+.fleet-terminal-screen {
+  flex: 1;
+  min-height: 8rem;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0.5rem;
+  background: var(--surface-inset);
+  font: var(--font-size-body) / var(--line-height-body) var(--font-mono);
+}
+.fleet-terminal-screen .xterm {
+  height: 100%;
+}
+.fleet-terminal-help {
+  padding: 0.5rem 1rem;
+  max-width: none;
+  margin: 0;
+}
+.fleet-terminal-error {
+  color: var(--red-text);
+  margin: 0.5rem 1rem;
+}
+@media (max-width: 600px) {
+  .fleet-terminal-dialog {
+    width: 100vw;
+    height: 100dvh;
+    border-radius: 0;
+  }
+  .fleet-terminal-header,
+  .fleet-terminal-toolbar {
+    padding: 0.5rem;
+  }
+  .fleet-terminal-actions {
+    gap: 0.25rem;
+  }
+}

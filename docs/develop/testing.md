@@ -76,6 +76,7 @@ when those boundaries change.
 | `colossus-testkit` | Keep shared conformance tests and fixtures used by adapter crates. |
 | `colossus-tools` | Keep schema-first validation, gateway adapters, confinement, output, and mutation tests. |
 | `colossus-tui` | Keep reducer, layout, input, theme, restoration, and PTY history tests; they cover behavior not proved by snapshots alone. |
+| `colossus-terminal` | Keep real PTY ownership, input deduplication, controller fencing, output-gap, slow-reader headroom, and native process cleanup tests. Control Plane acceptance proves the authenticated cross-replica browser-to-Fleet path. |
 | `colossus-update` | Keep release metadata, signature, channel, and atomic-update tests. |
 | `colossus-windows-native` | Keep AppContainer/native binding tests on Windows CI. |
 | `colossus-windows-process` | Keep Job Object, memory pressure, cleanup, and process-tree tests on Windows CI. |

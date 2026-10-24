@@ -1,5 +1,6 @@
 export type Permission =
-  "read" | "execute" | "control" | "approve" | "administer";
+  "read" | "execute" | "control" | "approve" | "administer" | "terminal";
+export type * from "./human-terminal";
 export interface Membership {
   subject: string;
   project_id: string;

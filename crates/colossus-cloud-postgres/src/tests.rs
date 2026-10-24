@@ -282,6 +282,34 @@ async fn postgres_atomic_recovery_and_replica_conformance() {
         .claim_lease("acceptance-project", "runtime", "replica-one", now, 30)
         .await
         .unwrap();
+    let capabilities = vec!["human_terminal.v1".to_owned()];
+    store
+        .publish_lease_capabilities(&lease, capabilities.clone(), now)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .read_lease("acceptance-project", "runtime", now)
+            .await
+            .unwrap()
+            .capabilities,
+        capabilities
+    );
+    assert_eq!(
+        store
+            .renew_lease(&lease, now, 30)
+            .await
+            .unwrap()
+            .capabilities,
+        capabilities
+    );
+    assert_eq!(
+        store
+            .publish_lease_capabilities(&lease, vec!["x".repeat(129)], now)
+            .await
+            .unwrap_err(),
+        CloudError::InvalidArgument
+    );
     assert_eq!(
         store
             .claim_lease("acceptance-project", "runtime", "replica-two", now, 30)
@@ -294,6 +322,14 @@ async fn postgres_atomic_recovery_and_replica_conformance() {
         .await
         .unwrap();
     assert!(fenced.generation > lease.generation);
+    assert!(fenced.capabilities.is_empty());
+    assert_eq!(
+        store
+            .publish_lease_capabilities(&lease, capabilities, now)
+            .await
+            .unwrap_err(),
+        CloudError::Conflict
+    );
     assert_eq!(
         store.verify_lease(&lease, now).await.unwrap_err(),
         CloudError::Conflict

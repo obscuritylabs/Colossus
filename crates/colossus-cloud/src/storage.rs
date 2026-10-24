@@ -3,7 +3,9 @@
 //! Each transaction commits domain records, released output, audit metadata and delivery
 //! outbox entries together. Versions and cursors are local to their entity or stream.
 
+mod replicas;
 mod resources;
+pub use replicas::{ReplicaRoute, validate_replica_route};
 pub use resources::{RuntimeResourceRequest, validate_resource_request};
 
 use crate::{CloudError, CloudResult};
@@ -444,6 +446,9 @@ pub struct ConnectionLease {
     pub generation: u64,
     /// UTC Unix expiry.
     pub expires_at: u64,
+    /// Bounded authenticated Hello metadata for this exact connection generation.
+    /// Advertisement never grants application or human authority.
+    pub capabilities: Vec<String>,
 }
 
 /// Bounded operational metadata retention, independent of canonical history/audit retention.
@@ -481,6 +486,14 @@ pub struct CloudMaintenanceReport {
 /// Object-safe asynchronous cloud persistence boundary.
 #[async_trait::async_trait]
 pub trait CloudStore: Send + Sync {
+    /// Publish operator-owned internal routing metadata for at most ninety seconds.
+    async fn publish_replica_route(&self, _route: ReplicaRoute, _now: u64) -> CloudResult<()> {
+        Err(CloudError::Storage)
+    }
+    /// Resolve only a live process incarnation; absence never falls back to a public URL.
+    async fn read_replica_route(&self, _replica: &str, _now: u64) -> CloudResult<ReplicaRoute> {
+        Err(CloudError::NotFound)
+    }
     /// Advertise only an authenticated peer's additive resource-envelope support.
     async fn resource_connect(&self, _lease: &ConnectionLease, _enabled: bool) -> CloudResult<()> {
         Err(CloudError::Storage)
@@ -608,6 +621,15 @@ pub trait CloudStore: Send + Sync {
         now: u64,
         ttl: u64,
     ) -> CloudResult<ConnectionLease>;
+    /// Publish bounded authenticated metadata only while this exact lease is live.
+    async fn publish_lease_capabilities(
+        &self,
+        _lease: &ConnectionLease,
+        _capabilities: Vec<String>,
+        _now: u64,
+    ) -> CloudResult<()> {
+        Err(CloudError::Storage)
+    }
     /// Read live ownership for cross-replica fleet presence.
     async fn read_lease(&self, project: &str, node: &str, now: u64)
     -> CloudResult<ConnectionLease>;
@@ -641,6 +663,7 @@ impl Default for MemoryCloudStore {
 
 #[derive(Clone, Default)]
 struct MemoryState {
+    replica_routes: BTreeMap<String, ReplicaRoute>,
     entities: BTreeMap<EntityKey, EntityRecord>,
     deleted: std::collections::BTreeSet<EntityKey>,
     events: BTreeMap<(String, String, u64), ReleasedEvent>,
@@ -697,6 +720,25 @@ fn connected_inventory(state: &MemoryState, record: &EntityRecord) -> bool {
 
 #[async_trait::async_trait]
 impl CloudStore for MemoryCloudStore {
+    async fn publish_replica_route(&self, route: ReplicaRoute, now: u64) -> CloudResult<()> {
+        validate_replica_route(&route, now)?;
+        let mut state = self.state.lock().await;
+        state
+            .replica_routes
+            .retain(|_, value| value.expires_at > now);
+        state.replica_routes.insert(route.replica_id.clone(), route);
+        Ok(())
+    }
+    async fn read_replica_route(&self, replica: &str, now: u64) -> CloudResult<ReplicaRoute> {
+        self.state
+            .lock()
+            .await
+            .replica_routes
+            .get(replica)
+            .filter(|route| route.expires_at > now)
+            .cloned()
+            .ok_or(CloudError::NotFound)
+    }
     async fn resource_connect(&self, lease: &ConnectionLease, enabled: bool) -> CloudResult<()> {
         self.memory_resource_connect(lease, enabled).await
     }
@@ -1321,9 +1363,34 @@ impl CloudStore for MemoryCloudStore {
             owner_id: owner.into(),
             generation: old.map_or(1, |l| l.generation + 1),
             expires_at: now.saturating_add(ttl),
+            capabilities: Vec::new(),
         };
         state.leases.insert(key, lease.clone());
         Ok(lease)
+    }
+    async fn publish_lease_capabilities(
+        &self,
+        lease: &ConnectionLease,
+        capabilities: Vec<String>,
+        now: u64,
+    ) -> CloudResult<()> {
+        validate_connection_capabilities(&capabilities)?;
+        let mut state = self.state.lock().await;
+        if !enrolled_live(&state, &lease.project_id, &lease.node_id) {
+            return Err(CloudError::Conflict);
+        }
+        let current = state
+            .leases
+            .get_mut(&(lease.project_id.clone(), lease.node_id.clone()))
+            .ok_or(CloudError::Conflict)?;
+        if current.owner_id != lease.owner_id
+            || current.generation != lease.generation
+            || current.expires_at <= now
+        {
+            return Err(CloudError::Conflict);
+        }
+        current.capabilities = capabilities;
+        Ok(())
     }
     async fn read_lease(
         &self,
@@ -1425,6 +1492,18 @@ pub fn validate_session(session: &AuthSession) -> CloudResult<()> {
     }
     Ok(())
 }
+/// Bound authenticated presence metadata before persistence or replica discovery.
+pub fn validate_connection_capabilities(capabilities: &[String]) -> CloudResult<()> {
+    if capabilities.len() > 64
+        || capabilities.iter().any(|value| {
+            value.is_empty() || value.len() > 128 || value.chars().any(char::is_control)
+        })
+    {
+        return Err(CloudError::InvalidArgument);
+    }
+    Ok(())
+}
+
 /// Connection ownership expires promptly and renewal cannot create unbounded leases.
 pub fn validate_lease_ttl(ttl: u64) -> CloudResult<()> {
     if !(5..=120).contains(&ttl) {

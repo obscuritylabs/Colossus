@@ -19,6 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	AgentRunService_HumanTerminal_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/HumanTerminal"
 	AgentRunService_ListProcessSessions_FullMethodName     = "/colossus.api.v1alpha1.AgentRunService/ListProcessSessions"
 	AgentRunService_ReadProcessSession_FullMethodName      = "/colossus.api.v1alpha1.AgentRunService/ReadProcessSession"
 	AgentRunService_StopProcessSession_FullMethodName      = "/colossus.api.v1alpha1.AgentRunService/StopProcessSession"
@@ -42,6 +43,8 @@ const (
 //
 // AgentRunService manages durable asynchronous runs and one-use interactions.
 type AgentRunServiceClient interface {
+	// HumanTerminal operates a separately authorized fixed native shell.
+	HumanTerminal(ctx context.Context, in *HumanTerminalRequest, opts ...grpc.CallOption) (*HumanTerminalResponse, error)
 	// ListProcessSessions discovers caller-owned managed shells in this runtime.
 	ListProcessSessions(ctx context.Context, in *ListProcessSessionsRequest, opts ...grpc.CallOption) (*ListProcessSessionsResponse, error)
 	// ReadProcessSession reads released logs, with a bounded optional wait.
@@ -80,6 +83,16 @@ type agentRunServiceClient struct {
 
 func NewAgentRunServiceClient(cc grpc.ClientConnInterface) AgentRunServiceClient {
 	return &agentRunServiceClient{cc}
+}
+
+func (c *agentRunServiceClient) HumanTerminal(ctx context.Context, in *HumanTerminalRequest, opts ...grpc.CallOption) (*HumanTerminalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HumanTerminalResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_HumanTerminal_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *agentRunServiceClient) ListProcessSessions(ctx context.Context, in *ListProcessSessionsRequest, opts ...grpc.CallOption) (*ListProcessSessionsResponse, error) {
@@ -247,6 +260,8 @@ func (c *agentRunServiceClient) GetRuntimePolicyPosture(ctx context.Context, in 
 //
 // AgentRunService manages durable asynchronous runs and one-use interactions.
 type AgentRunServiceServer interface {
+	// HumanTerminal operates a separately authorized fixed native shell.
+	HumanTerminal(context.Context, *HumanTerminalRequest) (*HumanTerminalResponse, error)
 	// ListProcessSessions discovers caller-owned managed shells in this runtime.
 	ListProcessSessions(context.Context, *ListProcessSessionsRequest) (*ListProcessSessionsResponse, error)
 	// ReadProcessSession reads released logs, with a bounded optional wait.
@@ -287,6 +302,9 @@ type AgentRunServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedAgentRunServiceServer struct{}
 
+func (UnimplementedAgentRunServiceServer) HumanTerminal(context.Context, *HumanTerminalRequest) (*HumanTerminalResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method HumanTerminal not implemented")
+}
 func (UnimplementedAgentRunServiceServer) ListProcessSessions(context.Context, *ListProcessSessionsRequest) (*ListProcessSessionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListProcessSessions not implemented")
 }
@@ -351,6 +369,24 @@ func RegisterAgentRunServiceServer(s grpc.ServiceRegistrar, srv AgentRunServiceS
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&AgentRunService_ServiceDesc, srv)
+}
+
+func _AgentRunService_HumanTerminal_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HumanTerminalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).HumanTerminal(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_HumanTerminal_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).HumanTerminal(ctx, req.(*HumanTerminalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _AgentRunService_ListProcessSessions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -623,6 +659,10 @@ var AgentRunService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "colossus.api.v1alpha1.AgentRunService",
 	HandlerType: (*AgentRunServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "HumanTerminal",
+			Handler:    _AgentRunService_HumanTerminal_Handler,
+		},
 		{
 			MethodName: "ListProcessSessions",
 			Handler:    _AgentRunService_ListProcessSessions_Handler,

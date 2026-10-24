@@ -213,6 +213,9 @@ pub(super) struct WorkerCommand {
     /// Absolute current-user 0700 directory for public API discovery.
     #[arg(long, value_name = "ABS_OWNER_PRIVATE_DIR")]
     pub(super) public_api_dir: Option<PathBuf>,
+    /// Allow separately enrolled terminal applications to open human OS shells.
+    #[arg(long, requires = "public_api_dir", conflicts_with_all = ["enroll_application", "revoke_credential", "once", "shutdown", "status"])]
+    pub(super) enable_human_terminals: bool,
     /// Explicit headless wrapping-key reference for sealed public API credentials.
     /// The bearer itself is never supplied in environment or argv.
     #[arg(long, requires = "public_api_dir")]

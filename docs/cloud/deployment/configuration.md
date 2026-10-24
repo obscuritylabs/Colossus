@@ -27,6 +27,23 @@ Preserve browser `/api`, `/auth`, `/docs/`, direct page links, and SSE streams.
 Disable response buffering and streaming request deadlines. Send connector traffic
 to port 8443 without terminating its client-certificate TLS session.
 
+Web terminals also require WebSocket upgrades on the browser route. Preserve idle
+connections with heartbeat traffic and suitable load-balancer/controller timeouts.
+Verify the chosen Gateway controller supports WebSocket forwarding; ordinary HTTP/3
+support alone does not establish terminal support.
+
+Terminal requests may arrive at a replica other than the Fleet connection owner.
+The chart advertises each pod's internal address through the Downward API and routes
+the authenticated relay over port 8443. Permit server-to-server traffic on that port
+in deployment-specific NetworkPolicies. Do not terminate its mutual TLS in a mesh
+proxy. The relay checks its own purpose-specific authentication in addition to TLS;
+an enrolled Fleet certificate alone cannot call it. Sticky sessions are unnecessary.
+
+For a multi-process deployment outside Kubernetes, set
+`COLOSSUS_CONTROL_PLANE_RELAY_ADDRESS` to each process's reachable internal `IP:port`
+for its existing gRPC listener. Local development derives a loopback address from the
+listener. The expiring route directory contains only process metadata, not shell bytes.
+
 Use `mesh.mode: sidecar` or `ambient` with the corresponding chart example. Ambient
 mode disables sidecar injection; cluster mesh and network policy must permit its
 traffic. Gateway/listener examples are platform manifests, not Helm values.

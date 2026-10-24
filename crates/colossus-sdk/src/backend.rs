@@ -128,6 +128,16 @@ pub trait AgentRunClient: Send + Sync {
             page: page.page,
         })
     }
+    /// Operate an explicitly granted human terminal independently of agent runs.
+    async fn human_terminal(
+        &self,
+        _request: crate::HumanTerminalRequest,
+    ) -> ApiResult<crate::HumanTerminalReply> {
+        Err(crate::ApiError::failed_precondition(
+            crate::ApiErrorReason::InvalidRunTransition,
+            "human terminals are unavailable",
+        ))
+    }
     /// List caller-owned managed shells.
     async fn list_process_sessions(
         &self,
@@ -393,6 +403,13 @@ impl AgentRunClient for ContextBoundAgentRunClient {
         request: crate::ListProcessSessionsRequest,
     ) -> ApiResult<crate::ProcessSessionPage> {
         self.api.list_process_sessions(&self.caller, request).await
+    }
+
+    async fn human_terminal(
+        &self,
+        request: crate::HumanTerminalRequest,
+    ) -> ApiResult<crate::HumanTerminalReply> {
+        self.api.human_terminal(&self.caller, request).await
     }
     async fn read_process_session(
         &self,

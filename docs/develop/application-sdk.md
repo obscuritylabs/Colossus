@@ -460,6 +460,27 @@ is accepted only for CI structure checks; Managed Local rejects it. Debug builds
 channels are mutually exclusive, so enabling the preview does not relax stable-channel
 identity or notarization requirements.
 
+## Remote human terminal boundary
+
+The public `HumanTerminal` operation is a separate, explicitly granted human surface.
+It requires `terminals:control` and native worker opt-in; ordinary run execution and
+agent tool grants do not imply it. The additive `human_terminal.v1` capability appears
+only when both conditions hold. Applications bind a bounded opaque human owner below
+their own authenticated application identity. See [ADR 0011](adr/0011-fleet-human-terminals.md)
+for Fleet routing and the distinction from agent policy.
+
+The SDK's closed request supports context, open, attach, bounded output read, sequenced
+input, resize, process signal, and close. It carries no executable, cwd, environment,
+PID, or native credential. Replies contain bounded session metadata, output/resize
+frames, cursors, history-gap evidence, and the host incarnation. A browser uses the
+Control Plane's authenticated WebSocket; it never receives a daemon credential or
+connects directly to the worker.
+
+The worker's native supervisor retains sessions across caller disconnects, within
+bounded idle and absolute deadlines. Restart does not adopt PIDs or replay commands.
+Input loss after dispatch has an unknown outcome; do not retry it automatically.
+Generated transport envelopes remain independently size-bounded and strictly decoded.
+
 ## Local terminal boundary
 
 Terminal commands are available only to a dedicated local Tauri window capability.

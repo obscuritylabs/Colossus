@@ -63,6 +63,8 @@ pub enum ProjectRole {
     Viewer,
     /// Read, submit tasks and control ordinary task interactions.
     Operator,
+    /// Submit tasks and explicitly open privileged human shells on opted-in hosts.
+    TerminalOperator,
     /// Read/control and answer exact native effect approvals.
     Approver,
     /// Configure and operate the project; approval requires a separate explicit grant.
@@ -75,6 +77,7 @@ impl ProjectRole {
         match self {
             Self::Viewer => [Read].into(),
             Self::Operator => [Read, Execute, Control].into(),
+            Self::TerminalOperator => [Read, Execute, Control, Terminal].into(),
             Self::Approver => [Read, Control, Approve].into(),
             Self::ProjectAdmin => [Read, Execute, Control, Administer].into(),
         }

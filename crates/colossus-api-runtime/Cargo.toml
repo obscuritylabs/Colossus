@@ -19,6 +19,7 @@ colossus-policy.workspace = true
 colossus-ports.workspace = true
 colossus-projection.workspace = true
 colossus-runtime.workspace = true
+colossus-terminal.workspace = true
 colossus-workflow.workspace = true
 futures.workspace = true
 getrandom.workspace = true

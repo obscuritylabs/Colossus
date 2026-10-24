@@ -133,6 +133,27 @@ async fn postgres_identity_membership_hierarchy_and_administrator_invariants() {
         .unwrap();
     assert!(restored.permissions.contains(&CloudPermission::Execute));
     assert!(!restored.permissions.contains(&CloudPermission::Approve));
+    assert!(!restored.permissions.contains(&CloudPermission::Terminal));
+    let terminal = repo
+        .save_membership(
+            &caller,
+            "operator",
+            ProjectRole::TerminalOperator,
+            restored.revision,
+        )
+        .await
+        .unwrap();
+    assert!(terminal.permissions.contains(&CloudPermission::Terminal));
+    let retained = store
+        .read(&colossus_cloud::membership_key(
+            caller.project_id(),
+            "operator",
+        ))
+        .await
+        .unwrap();
+    let retained: colossus_cloud::ProjectMembership = retained.value.try_into().unwrap();
+    assert_eq!(retained.role, ProjectRole::TerminalOperator);
+    assert_eq!(retained.permissions, terminal.permissions);
     let mut disabled = admin.clone();
     disabled.active = false;
     assert_eq!(
@@ -174,6 +195,28 @@ async fn postgres_identity_membership_hierarchy_and_administrator_invariants() {
     let reopened = CloudPostgresStore::open(config.clone(), &AdditionalRootCertificates::default())
         .await
         .unwrap();
+    let now = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp()).unwrap();
+    let route = colossus_cloud::storage::ReplicaRoute {
+        replica_id: "0123456789abcdef0123456789abcdef".into(),
+        address: "127.0.0.1:8443".parse().unwrap(),
+        expires_at: now + 30,
+    };
+    store
+        .publish_replica_route(route.clone(), now)
+        .await
+        .unwrap();
+    let found = reopened
+        .read_replica_route(&route.replica_id, now)
+        .await
+        .unwrap();
+    assert_eq!(found.address, route.address);
+    assert_eq!(found.replica_id, route.replica_id);
+    assert!(
+        reopened
+            .read_replica_route("unknown-replica", now)
+            .await
+            .is_err()
+    );
     assert!(
         CloudRepository::new(Arc::new(reopened))
             .unwrap()

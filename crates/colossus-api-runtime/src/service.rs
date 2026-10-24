@@ -137,6 +137,7 @@ struct BranchSource {
 /// Durable public agent-run facade backed by the real Colossus runtime.
 #[derive(Clone)]
 pub struct RuntimeAgentRunApi {
+    human_terminals: Option<colossus_terminal::HumanTerminalService>,
     runtime: Arc<Runtime>,
     repository: Arc<dyn RunRepository>,
     artifacts: Arc<dyn ArtifactApi>,
@@ -237,6 +238,7 @@ impl RuntimeAgentRunApi {
         let shell_reads = ListAdmission::new(&admission);
         let shell_controls = ListAdmission::new(&admission);
         Self {
+            human_terminals: None,
             artifacts: Arc::new(EventSourcedArtifactApi::new(runtime.journal())),
             runtime,
             repository,
@@ -260,6 +262,15 @@ impl RuntimeAgentRunApi {
             #[cfg(test)]
             next_execution_fault: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Explicitly enable human PTYs in the already bound native workspace.
+    /// This does not grant terminal scopes to any application or expose an agent tool.
+    pub fn with_human_terminals(mut self) -> ApiResult<Self> {
+        self.human_terminals = Some(colossus_terminal::HumanTerminalService::new(
+            self.runtime.workspace(),
+        )?);
+        Ok(self)
     }
 
     /// Attach an opaque project correlation label supplied by trusted host composition.
@@ -1675,6 +1686,29 @@ impl AgentRunApi for RuntimeAgentRunApi {
             .map_err(|AdmissionLimitReached| capacity_error(caller))?;
         self.discover_visible_runs(caller, request)
     }
+    async fn human_terminal(
+        &self,
+        caller: &CallerContext,
+        request: colossus_api::HumanTerminalRequest,
+    ) -> ApiResult<colossus_api::HumanTerminalReply> {
+        caller.require_scope(colossus_api::HUMAN_TERMINAL_SCOPE)?;
+        if !request.validate() {
+            return Err(ApiError::invalid(
+                ApiErrorReason::InvalidArgument,
+                "terminal",
+                "invalid human terminal request",
+            ));
+        }
+        match &self.human_terminals {
+            Some(service) => {
+                service
+                    .execute(caller.principal().application_id(), request)
+                    .await
+            }
+            None => Ok(colossus_api::HumanTerminalReply::default()),
+        }
+    }
+
     async fn list_process_sessions(
         &self,
         caller: &CallerContext,

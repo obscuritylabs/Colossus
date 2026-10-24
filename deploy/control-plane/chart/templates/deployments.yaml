@@ -95,6 +95,10 @@ spec:
             {{- end }}
           {{- if $server }}
           env:
+            - name: COLOSSUS_CONTROL_PLANE_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
             - name: COLOSSUS_CONTROL_PLANE_DATABASE
               valueFrom:
                 secretKeyRef:

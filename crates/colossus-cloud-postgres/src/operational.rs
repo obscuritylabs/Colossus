@@ -2,14 +2,14 @@ use super::entities::{db_error, digest, integer};
 use colossus_cloud::{
     CloudError, CloudResult,
     storage::{
-        AuthSession, ConnectionLease, CursorMutation, ReleasedEvent, validate_lease_ttl,
-        validate_session,
+        AuthSession, ConnectionLease, CursorMutation, ReleasedEvent,
+        validate_connection_capabilities, validate_lease_ttl, validate_session,
     },
 };
 use colossus_ports::StoreError;
 use diesel::{
     sql_query,
-    sql_types::{BigInt, Jsonb, Text},
+    sql_types::{Array, BigInt, Jsonb, Text},
 };
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde_json::Value;
@@ -309,6 +309,8 @@ struct LeaseRow {
     generation: i64,
     #[diesel(sql_type=BigInt)]
     expires_at: i64,
+    #[diesel(sql_type=Array<Text>)]
+    capabilities: Vec<String>,
 }
 impl From<LeaseRow> for ConnectionLease {
     fn from(row: LeaseRow) -> Self {
@@ -318,6 +320,7 @@ impl From<LeaseRow> for ConnectionLease {
             owner_id: row.owner_id,
             generation: row.generation as u64,
             expires_at: row.expires_at as u64,
+            capabilities: row.capabilities,
         }
     }
 }
@@ -330,7 +333,7 @@ pub(super) async fn claim(
     ttl: u64,
 ) -> CloudResult<ConnectionLease> {
     validate_lease_ttl(ttl)?;
-    let row=sql_query("INSERT INTO connection_leases(project_id,node_id,owner_id,generation,expires_at) SELECT project_id,id,$3,1,$4 FROM (SELECT project_id,id FROM runtime_agents WHERE project_id=$1 AND parent_id='' AND id=$2 AND NOT revoked AND NOT deleted FOR SHARE) enrolled WHERE TRUE ON CONFLICT(project_id,node_id) DO UPDATE SET owner_id=$3,generation=connection_leases.generation+1,expires_at=$4 WHERE connection_leases.expires_at <= $5 OR connection_leases.owner_id=$3 RETURNING project_id,node_id,owner_id,generation,expires_at")
+    let row=sql_query("INSERT INTO connection_leases(project_id,node_id,owner_id,generation,expires_at) SELECT project_id,id,$3,1,$4 FROM (SELECT project_id,id FROM runtime_agents WHERE project_id=$1 AND parent_id='' AND id=$2 AND NOT revoked AND NOT deleted FOR SHARE) enrolled WHERE TRUE ON CONFLICT(project_id,node_id) DO UPDATE SET owner_id=$3,generation=connection_leases.generation+1,expires_at=$4,capabilities='{}' WHERE connection_leases.expires_at <= $5 OR connection_leases.owner_id=$3 RETURNING project_id,node_id,owner_id,generation,expires_at,capabilities")
         .bind::<Text,_>(project).bind::<Text,_>(node).bind::<Text,_>(owner).bind::<BigInt,_>(integer(now.saturating_add(ttl)).map_err(|_|CloudError::InvalidArgument)?).bind::<BigInt,_>(integer(now).map_err(|_|CloudError::InvalidArgument)?).get_result::<LeaseRow>(conn).await;
     let row = match row {
         Ok(row) => row,
@@ -351,13 +354,27 @@ pub(super) async fn claim(
     };
     Ok(row.into())
 }
+pub(super) async fn publish_capabilities(
+    conn: &mut AsyncPgConnection,
+    lease: &ConnectionLease,
+    capabilities: Vec<String>,
+) -> CloudResult<()> {
+    validate_connection_capabilities(&capabilities)?;
+    let changed = sql_query("UPDATE connection_leases l SET capabilities=$5 FROM runtime_agents n WHERE n.project_id=l.project_id AND n.parent_id='' AND n.id=l.node_id AND NOT n.revoked AND NOT n.deleted AND l.project_id=$1 AND l.node_id=$2 AND l.owner_id=$3 AND l.generation=$4 AND l.expires_at>EXTRACT(EPOCH FROM clock_timestamp())")
+        .bind::<Text,_>(&lease.project_id).bind::<Text,_>(&lease.node_id).bind::<Text,_>(&lease.owner_id).bind::<BigInt,_>(integer(lease.generation).map_err(|_|CloudError::InvalidArgument)?).bind::<Array<Text>,_>(&capabilities).execute(conn).await.map_err(|_|CloudError::Storage)?;
+    if changed != 1 {
+        return Err(CloudError::Conflict);
+    }
+    Ok(())
+}
+
 pub(super) async fn read_lease(
     conn: &mut AsyncPgConnection,
     project: &str,
     node: &str,
     now: u64,
 ) -> CloudResult<ConnectionLease> {
-    let row=sql_query("SELECT l.project_id,l.node_id,l.owner_id,l.generation,l.expires_at FROM connection_leases l JOIN runtime_agents n ON n.project_id=l.project_id AND n.parent_id='' AND n.id=l.node_id WHERE l.project_id=$1 AND l.node_id=$2 AND l.expires_at>$3 AND NOT n.revoked AND NOT n.deleted").bind::<Text,_>(project).bind::<Text,_>(node).bind::<BigInt,_>(integer(now).map_err(|_|CloudError::InvalidArgument)?).get_result::<LeaseRow>(conn).await.map_err(|e|if matches!(e,diesel::result::Error::NotFound){CloudError::NotFound}else{CloudError::Storage})?;
+    let row=sql_query("SELECT l.project_id,l.node_id,l.owner_id,l.generation,l.expires_at,l.capabilities FROM connection_leases l JOIN runtime_agents n ON n.project_id=l.project_id AND n.parent_id='' AND n.id=l.node_id WHERE l.project_id=$1 AND l.node_id=$2 AND l.expires_at>$3 AND NOT n.revoked AND NOT n.deleted").bind::<Text,_>(project).bind::<Text,_>(node).bind::<BigInt,_>(integer(now).map_err(|_|CloudError::InvalidArgument)?).get_result::<LeaseRow>(conn).await.map_err(|e|if matches!(e,diesel::result::Error::NotFound){CloudError::NotFound}else{CloudError::Storage})?;
     Ok(row.into())
 }
 pub(super) async fn renew(
@@ -367,7 +384,7 @@ pub(super) async fn renew(
     ttl: u64,
 ) -> CloudResult<ConnectionLease> {
     validate_lease_ttl(ttl)?;
-    let row=sql_query("UPDATE connection_leases l SET expires_at=$5 FROM runtime_agents n WHERE n.project_id=l.project_id AND n.parent_id='' AND n.id=l.node_id AND NOT n.revoked AND NOT n.deleted AND l.project_id=$1 AND l.node_id=$2 AND l.owner_id=$3 AND l.generation=$4 AND l.expires_at>$6 RETURNING l.project_id,l.node_id,l.owner_id,l.generation,l.expires_at")
+    let row=sql_query("UPDATE connection_leases l SET expires_at=$5 FROM runtime_agents n WHERE n.project_id=l.project_id AND n.parent_id='' AND n.id=l.node_id AND NOT n.revoked AND NOT n.deleted AND l.project_id=$1 AND l.node_id=$2 AND l.owner_id=$3 AND l.generation=$4 AND l.expires_at>$6 RETURNING l.project_id,l.node_id,l.owner_id,l.generation,l.expires_at,l.capabilities")
         .bind::<Text,_>(&lease.project_id).bind::<Text,_>(&lease.node_id).bind::<Text,_>(&lease.owner_id).bind::<BigInt,_>(integer(lease.generation).map_err(|_|CloudError::InvalidArgument)?).bind::<BigInt,_>(integer(now.saturating_add(ttl)).map_err(|_|CloudError::InvalidArgument)?).bind::<BigInt,_>(integer(now).map_err(|_|CloudError::InvalidArgument)?).get_result::<LeaseRow>(conn).await.map_err(lease_error)?;
     Ok(row.into())
 }

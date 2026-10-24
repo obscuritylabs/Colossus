@@ -19,6 +19,13 @@ pub struct Colossus {
 }
 
 impl Colossus {
+    /// Operate a separately authorized human terminal, independently of agent runs.
+    pub async fn human_terminal(
+        &self,
+        request: crate::HumanTerminalRequest,
+    ) -> ApiResult<crate::HumanTerminalReply> {
+        self.backend.agent_runs().human_terminal(request).await
+    }
     /// List caller-owned managed shells.
     pub async fn list_process_sessions(
         &self,

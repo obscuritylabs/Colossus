@@ -36,6 +36,7 @@ mod resources;
 mod retained;
 mod settings_matrix;
 mod telemetry;
+mod terminal;
 mod thread_metadata;
 mod user_inventory;
 

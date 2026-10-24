@@ -6,6 +6,32 @@ use colossus_api::{
 
 pub(super) async fn inspection_and_control_require_current_scopes(runtime: Arc<Runtime>) {
     let service = service(runtime, RunAdmissionConfig::default());
+    let terminal_request = colossus_api::HumanTerminalRequest {
+        owner: "human-a".into(),
+        operation: colossus_api::HumanTerminalOperation::Context,
+    };
+    let legacy = caller("app:legacy", "no-terminal-scope");
+    assert_eq!(
+        service
+            .human_terminal(&legacy, terminal_request.clone())
+            .await
+            .unwrap_err()
+            .reason,
+        ApiErrorReason::ScopeDenied
+    );
+    let terminal = caller_with_exact_scopes(
+        "app:terminal",
+        "terminal-host-disabled",
+        &[colossus_api::HUMAN_TERMINAL_SCOPE],
+    );
+    assert!(
+        !service
+            .human_terminal(&terminal, terminal_request)
+            .await
+            .unwrap()
+            .available,
+        "scope cannot opt the host into human shell access"
+    );
     let read_only =
         caller_with_exact_scopes("app:shell-reader", "shell-reader", &[scopes::RUNS_READ]);
     let no_read =

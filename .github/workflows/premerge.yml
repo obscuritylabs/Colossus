@@ -184,6 +184,11 @@ jobs:
       - name: Run native isolation and escape acceptance
         run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
 
+      - name: Exercise macOS Fleet human terminals and cross-replica recovery
+        run: |
+          cargo test --locked -p colossus-terminal --lib
+          cargo test --locked -p colossus-cloud-server --lib auth::tests::transport::terminal::web_terminal_cross_replica_reconnect_keeps_the_actual_shell_and_checks_authority -- --exact
+
   linux-desktop:
     name: Linux Desktop package and native credential entry
     if: needs.eligibility.result == 'success'
@@ -467,6 +472,12 @@ jobs:
         run: >-
           cargo test --locked -p colossus-cli --test worker_smoke
           --test windows_sandbox --test mcp_smoke --test release_install_smoke -- --nocapture
+      - name: Exercise Windows Fleet human terminals and cross-replica recovery
+        shell: pwsh
+        run: |
+          cargo test --locked -p colossus-terminal --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p colossus-cloud-server --lib auth::tests::transport::terminal::web_terminal_cross_replica_reconnect_keeps_the_actual_shell_and_checks_authority -- --exact
       - name: Validate Windows computer protocol and compile native acceptance
         id: computer_portable
         continue-on-error: true
@@ -880,6 +891,12 @@ jobs:
           COLOSSUS_TEST_POSTGRES_URL: postgresql://colossus:colossus-ci-only@127.0.0.1:5432/colossus?sslmode=disable
           COLOSSUS_TEST_POSTGRES_OUTAGE_URL: postgresql://colossus:credential-must-not-appear@127.0.0.1:1/colossus?sslmode=disable
         run: cargo test --locked -p colossus-journal-postgres -- --nocapture
+      - name: Run Control Plane PostgreSQL migration and replica acceptance
+        env:
+          COLOSSUS_CLOUD_TEST_DATABASE_URL: postgresql://colossus:colossus-ci-only@127.0.0.1:5432/colossus?sslmode=disable
+          COLOSSUS_CLOUD_TEST_AUDIT_SIGNING_SEED: '1111111111111111111111111111111111111111111111111111111111111111'
+        # Notification hints are database-wide; generated schemas isolate durable rows.
+        run: cargo test --locked -p colossus-cloud-postgres --lib -- --ignored --test-threads=1
 
   live-security:
     name: OCI and OPA security acceptance

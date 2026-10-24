@@ -128,6 +128,8 @@ pub(super) async fn seed_accounts(store: &Arc<dyn CloudStore>, config: &Config) 
                 ProjectRole::ProjectAdmin
             } else if member.permissions.contains(&CloudPermission::Approve) {
                 ProjectRole::Approver
+            } else if member.permissions.contains(&CloudPermission::Terminal) {
+                ProjectRole::TerminalOperator
             } else if member.permissions.contains(&CloudPermission::Execute) {
                 ProjectRole::Operator
             } else {

@@ -242,6 +242,7 @@ impl CloudPostgresStore {
             owner_id: row.owner_id,
             generation: u64::try_from(row.generation).map_err(|_| CloudError::Storage)?,
             expires_at: 0,
+            capabilities: Vec::new(),
         };
         if row.digest
             != request_digest(

@@ -47,6 +47,7 @@ import { RunComposer, type RunRequest } from "./RunComposer";
 import { RouteLink } from "./navigation";
 import { agentHref, globalHref, type AgentView } from "./routes";
 import { conversationHref } from "./conversation-route";
+import { FleetShell } from "./FleetShell";
 export function AgentSidebar({
   project,
   nodes,
@@ -672,16 +673,23 @@ export function AgentWorkspace({
               : "Open a conversation from the sidebar or start new work."}
           </p>
         </div>
-        <Button
-          variant="primary"
-          disabled={
-            !permissions.includes("execute") || !agent || agent.node.revoked
-          }
-          onClick={onNew}
-        >
-          <IconPlus size={16} aria-hidden="true" />
-          New conversation
-        </Button>
+        <div className="fleet-workspace-actions">
+          <FleetShell
+            project={project}
+            agent={agent}
+            permissions={permissions}
+          />
+          <Button
+            variant="primary"
+            disabled={
+              !permissions.includes("execute") || !agent || agent.node.revoked
+            }
+            onClick={onNew}
+          >
+            <IconPlus size={16} aria-hidden="true" />
+            New conversation
+          </Button>
+        </div>
       </header>
       <SectionTabs
         current={tab}

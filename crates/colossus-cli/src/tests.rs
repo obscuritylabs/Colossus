@@ -1608,6 +1608,46 @@ fn ephemeral_storage_refuses_worker_modes_that_need_a_separate_process() {
 }
 
 #[test]
+fn worker_human_terminal_opt_in_requires_public_host_and_separate_scope() {
+    assert!(Cli::try_parse_from(["colossus", "worker", "--enable-human-terminals"]).is_err());
+    let parsed = Cli::try_parse_from([
+        "colossus",
+        "worker",
+        "--public-api-dir",
+        "/private/api",
+        "--enable-human-terminals",
+    ])
+    .unwrap();
+    assert!(matches!(
+        parsed.command,
+        Command::Worker(WorkerCommand {
+            enable_human_terminals: true,
+            ..
+        })
+    ));
+    let parsed = Cli::try_parse_from([
+        "colossus",
+        "worker",
+        "--public-api-dir",
+        "/private/api",
+        "--enroll-application",
+        "app:fleet",
+        "--scope",
+        "terminals:control",
+        "--role",
+        "primary",
+        "--credential-keyring-service",
+        "fixture",
+        "--credential-keyring-account",
+        "fixture",
+    ])
+    .unwrap();
+    assert!(
+        matches!(parsed.command, Command::Worker(WorkerCommand { enable_human_terminals: false, scope, .. }) if scope == ["terminals:control"])
+    );
+}
+
+#[test]
 fn worker_public_api_cli_preserves_legacy_modes_and_requires_explicit_enrollment_bounds() {
     let legacy = Cli::try_parse_from(["colossus", "worker", "--once"]).expect("legacy once");
     assert!(matches!(

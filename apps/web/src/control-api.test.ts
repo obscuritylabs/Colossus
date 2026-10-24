@@ -14,7 +14,9 @@ it("unions administrator management rights with explicit membership and strips a
     new Set(["read", "execute", "control", "administer"]),
   );
   expect(projectPermissions(me, "project")).not.toContain("approve");
-  me.memberships[0]!.permissions = ["read", "control", "approve"];
+  expect(projectPermissions(me, "project")).not.toContain("terminal");
+  me.memberships[0]!.permissions = ["read", "control", "approve", "terminal"];
+  expect(projectPermissions(me, "project")).toContain("terminal");
   expect(projectPermissions(me, "project")).not.toContain("execute");
   expect(projectPermissions(me, "project")).toContain("administer");
   me.projects[0]!.archived = true;
