@@ -147,6 +147,24 @@ path. Keep the exact documented supply-chain exception limited to that use and r
 it when the dependency no longer contains the affected version. Adding any RSA
 private-key operation requires revisiting this decision and exception.
 
+OpenID Connect 4.0.1 also retains `crypto-bigint` 0.5.5 through its P-256/P-384
+verification stack, affected by
+[RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387.html).
+Colossus passes public JWKS coordinates, message hashes and supplied signatures to
+that stack; client-secret checks use HMAC and access-token hashes use SHA. No
+application path supplies EC private scalars or signing nonces to it. Local TLS
+certificate signing uses P-256 0.14 with patched `crypto-bigint` 0.7.6, and a fixed-seed
+certificate fingerprint regression preserves existing identity pins across the upgrade.
+The Desktop dependency graph contains no affected arithmetic.
+
+Keep the exact advisory exception in both dependency scanners limited to the residual
+OIDC verification path. The `cargo-deny` wrapper bans reject direct application imports
+at each legacy arithmetic layer and constrain their parent crate names to the reviewed
+OIDC chain; wrapper rules do not pin parent versions. Review the resolved graph when
+updating these dependencies. Remove the exception and wrapper rules when OpenID Connect
+adopts patched arithmetic. Adding any legacy EC secret operation requires revisiting
+this decision and exception.
+
 Sandbox provisioning, scheduling and cloud artifact/context transfer remain separate
 extensions. Registered fleet size and replica count are not capacity evidence;
 representative concurrent stream, history-query and failover measurements are required. See [cloud development](../cloud-control-plane.md)
