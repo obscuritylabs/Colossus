@@ -1109,7 +1109,7 @@ pub(super) fn submit_line(
     host: Arc<dyn InteractiveHost>,
     event_tx: mpsc::Sender<HostEvent>,
 ) {
-    let line = line.trim().to_owned();
+    let line = crate::contract::normalized_interactive_input(&line).to_owned();
     if line.is_empty() {
         return;
     }

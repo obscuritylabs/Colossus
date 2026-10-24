@@ -313,9 +313,19 @@ pub enum InteractiveCommand {
     Turn(String),
 }
 
+pub(super) fn normalized_interactive_input(input: &str) -> &str {
+    let input = input.trim_start();
+    if input.starts_with('!') {
+        // Trailing whitespace can be shell syntax, including an escaped space.
+        input
+    } else {
+        input.trim_end()
+    }
+}
+
 /// Parse terminal input once for both embedded and worker-backed hosts.
 pub fn parse_interactive_command(input: &str) -> InteractiveCommand {
-    let input = input.trim();
+    let input = normalized_interactive_input(input);
     if input.is_empty() {
         return InteractiveCommand::Empty;
     }
