@@ -14,7 +14,31 @@ pub(super) fn render(
     if let Some(recovery) = state.provider_recovery.as_mut() {
         recovery.clear_hit_areas();
     }
+    if state.text_selection.render(frame.buffer_mut()) {
+        let area = frame.area();
+        if area.height > 0 {
+            let palette = TerminalPalette::for_preferences(&state.preferences);
+            frame.render_widget(
+                Paragraph::new(" Selection · Ctrl+C copy · Esc clear ")
+                    .style(ratatui_style(palette.meta_style())),
+                Rect::new(area.x, area.bottom() - 1, area.width, 1),
+            );
+        }
+        return;
+    }
+    state.text_selection.regions.clear();
+    render_content(frame, state, transcript_start, screen_mode);
+    state.text_selection.remember(frame.buffer_mut());
+}
+
+fn render_content(
+    frame: &mut Frame<'_>,
+    state: &mut TuiState,
+    transcript_start: usize,
+    screen_mode: ScreenMode,
+) {
     let area = frame.area();
+    state.agents.area = None;
     let minimum_height = match screen_mode {
         ScreenMode::Alternate => MINIMUM_TERMINAL_HEIGHT,
         ScreenMode::Inline => MINIMUM_INLINE_VIEWPORT_HEIGHT,
@@ -68,21 +92,36 @@ pub(super) fn render(
     if header_height > 0 {
         render_header(frame, state, chrome[0]);
     }
-    let content_area = chrome[1];
+    let columns = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(state.sidebar_width(chrome[1].width)),
+    ])
+    .split(chrome[1]);
+    let content_area = columns[0];
+    if columns[1].width > 0 && columns[1].height >= 4 {
+        state.agents.area = Some(columns[1]);
+        state.text_selection.regions.push(Rect::new(
+            columns[1].x + 1,
+            columns[1].y + 1,
+            columns[1].width.saturating_sub(2),
+            columns[1].height.saturating_sub(2),
+        ));
+        crate::agents::render_agent_tree(frame, state, columns[1]);
+    }
 
     prepare_image_previews(state, content_area);
 
     let activity_height = u16::from(state.operation.is_some());
     let recovery_height = provider_recovery_height(state);
     let composer_height = if recovery_height > 0 {
-        composer_height(state, area.width).min(
+        composer_height(state, content_area.width).min(
             content_area
                 .height
                 .saturating_sub(recovery_height + FOOTER_HEIGHT + 3)
                 .max(3),
         )
     } else {
-        composer_height(state, area.width)
+        composer_height(state, content_area.width)
     };
     let approval_height =
         approval_dock_height(state, content_area.height, composer_height, activity_height);
@@ -94,7 +133,7 @@ pub(super) fn render(
     } else {
         completion_menu_height(
             state,
-            area.width,
+            content_area.width,
             content_area.height,
             composer_height.saturating_add(recovery_height),
             activity_height,
@@ -116,6 +155,13 @@ pub(super) fn render(
             Constraint::Length(FOOTER_HEIGHT),
         ])
         .split(content_area);
+    state.text_selection.regions.push(rows[0]);
+    state.text_selection.regions.push(Rect::new(
+        rows[5].x + 1,
+        rows[5].y + 1,
+        rows[5].width.saturating_sub(2),
+        rows[5].height.saturating_sub(2),
+    ));
     state.transcript_height = usize::from(
         rows[0]
             .height
@@ -286,7 +332,8 @@ pub(super) fn desired_inline_viewport_height(
         return screen_height;
     }
 
-    let composer_height = composer_height(state, width);
+    let chat_width = width.saturating_sub(state.sidebar_width(width));
+    let composer_height = composer_height(state, chat_width);
     let activity_height = u16::from(state.operation.is_some());
     // Inline completion is rendered on a transient alternate screen. The main
     // screen viewport must therefore remain independent of completion chrome.
@@ -298,7 +345,7 @@ pub(super) fn desired_inline_viewport_height(
         .saturating_add(FOOTER_HEIGHT);
     let mut transcript_line_count = transcript_lines_range(
         state,
-        usize::from(width).max(20),
+        usize::from(chat_width).max(20),
         transcript_start.min(state.transcript.len()),
         state.transcript.len(),
         false,
@@ -314,7 +361,7 @@ pub(super) fn desired_inline_viewport_height(
         transcript_line_count = transcript_line_count.saturating_add(
             welcome_lines(
                 state,
-                usize::from(width).max(20),
+                usize::from(chat_width).max(20),
                 usize::from(screen_height),
             )
             .len(),
@@ -324,6 +371,7 @@ pub(super) fn desired_inline_viewport_height(
 
     chrome_height
         .saturating_add(transcript_height)
+        .max(state.sidebar_inline_height(width))
         .min(screen_height)
 }
 

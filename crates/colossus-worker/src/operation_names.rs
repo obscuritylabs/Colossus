@@ -37,6 +37,7 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::RunModel { .. } => "run_model",
         WorkerOperation::RunInteractive { request, .. } => match request {
             InteractiveWorkerRequest::PluginManage { .. } => "run_interactive.plugin_manage",
+            InteractiveWorkerRequest::ShellRun { .. } => "run_interactive.shell_run",
             InteractiveWorkerRequest::SandboxBoundaryAcknowledge { .. } => {
                 "run_interactive.sandbox_boundary_acknowledge"
             }
@@ -100,6 +101,7 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::AgentCancel { .. } => "agent_cancel",
         WorkerOperation::AgentRequeue { .. } => "agent_requeue",
         WorkerOperation::MemoryList { .. } => "memory_list",
+        WorkerOperation::MemoryCount => "memory_count",
         WorkerOperation::MemoryGet { .. } => "memory_get",
         WorkerOperation::MemorySearch { .. } => "memory_search",
         WorkerOperation::MemoryCreate { .. } => "memory_create",

@@ -15,6 +15,11 @@ ignore = [
     # Ed25519. No application path performs RSA private-key operations.
     # See ADR 0006. Remove when OpenID Connect drops the affected dependency.
     { id = "RUSTSEC-2023-0071", reason = "OIDC public-key verification is outside the private-key timing attack; no application RSA private-key operations" },
+    # Only OpenID Connect retains crypto-bigint 0.5.5, for public P-256/P-384
+    # signature verification. Secret signing uses p256 0.14 / crypto-bigint 0.7.6.
+    # The wrapper bans below reject direct imports of the legacy arithmetic.
+    # See ADR 0006; remove when OpenID Connect adopts patched arithmetic.
+    { id = "RUSTSEC-2026-0387", reason = "Legacy EC arithmetic is confined to OIDC public-key verification; application secret signing uses patched crypto-bigint" },
 ]
 
 [licenses]
@@ -50,6 +55,12 @@ workspace-default-features = "allow"
 external-default-features = "allow"
 allow-workspace = true
 deny = [
+    { crate = "crypto-bigint:<0.7.6", wrappers = ["elliptic-curve"], reason = "Legacy arithmetic is reserved for OIDC public-key verification; see ADR 0006" },
+    { crate = "elliptic-curve:<0.14", wrappers = ["ecdsa", "primeorder", "p256", "p384"], reason = "Legacy EC APIs must remain inside the reviewed OIDC verification chain" },
+    { crate = "ecdsa:<0.17", wrappers = ["p256", "p384"], reason = "Legacy EC APIs must remain inside the reviewed OIDC verification chain" },
+    { crate = "primeorder:<0.14", wrappers = ["p256", "p384"], reason = "Legacy EC APIs must remain inside the reviewed OIDC verification chain" },
+    { crate = "p256:<0.14", wrappers = ["openidconnect"], reason = "Application secret signing must use patched arithmetic; legacy P-256 is only for OIDC verification" },
+    { crate = "p384:<0.14", wrappers = ["openidconnect"], reason = "Legacy P-384 is only for OIDC public-key verification" },
     { crate = "birdcage", reason = "GPL-3.0-only is incompatible with Apache-2.0 distribution" },
     { crate = "native-tls", reason = "network adapters must use pinned rustls trust instead of platform TLS defaults" },
     { crate = "openssl", reason = "network adapters use rustls and must not introduce an OpenSSL runtime dependency" },

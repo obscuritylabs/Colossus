@@ -26,7 +26,7 @@ async fn discovery(State(state): State<Arc<IssuerState>>) -> Json<Value> {
     )
 }
 async fn jwks(State(state): State<Arc<IssuerState>>) -> Json<Value> {
-    let point = signing_key(&state).verifying_key().to_encoded_point(false);
+    let point = signing_key(&state).verifying_key().to_sec1_point(false);
     Json(
         json!({"keys":[{"kty":"EC","crv":"P-256","kid":"test","use":"sig","alg":"ES256","x":URL_SAFE_NO_PAD.encode(point.x().unwrap()),"y":URL_SAFE_NO_PAD.encode(point.y().unwrap())}]}),
     )

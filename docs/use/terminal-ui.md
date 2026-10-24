@@ -35,6 +35,11 @@ security warnings, alongside readiness, approval handling, the model route, and
 context budget. Smaller widths shorten or omit runtime details to keep status
 and warnings readable. Compact terminals omit the top bar.
 
+On wider terminals, a slim right sidebar shows subagents and workspace status,
+including open tasks, goals, plans, retained memory, and configured MCP servers.
+It scrolls independently from the conversation and hides when the terminal is narrow.
+MCP indicators distinguish configured availability from successful use in this session.
+
 Use `--no-alt-screen` for an inline interface that leaves completed output in your
 terminal's normal scrollback:
 
@@ -85,6 +90,16 @@ reports that key combination. Ctrl-J also adds a new line, including in terminal
 that send Shift-Enter as plain Enter. Use `/multiline` to choose Enter behavior:
 Enter can add lines while Ctrl-D sends the prompt. Direct shortcuts such as
 `/multiline on` and `/multiline off` remain available.
+
+Start a draft with `!` to run a shell command directly, such as `!git status`.
+It uses the existing approval, sandbox, cancellation, and audit path without asking
+the model. Each command starts in the workspace; directory and environment changes
+last only for that invocation.
+
+Drag across rendered text to select it, then press Ctrl-C or Ctrl-Insert to copy.
+The selected view stays still while work continues. Esc clears the selection and
+shows new output. See [TUI commands and keys](../reference/tui.md) for terminal-native
+selection and independent sidebar scrolling.
 
 `/permissions` opens an approval-mode chooser with the current mode highlighted.
 Up/Down moves the selection, Enter applies it, and Esc returns without changing

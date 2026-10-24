@@ -1408,6 +1408,47 @@ impl WorkerInteractiveHost {
 
 #[async_trait]
 impl InteractiveHost for WorkerInteractiveHost {
+    async fn sidebar_status(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<colossus_tui::SidebarSnapshot>, String> {
+        let (work, memory, servers) = tokio::join!(
+            self.value(WorkerOperation::WorkState {
+                session_id: session_id.into()
+            }),
+            self.value(WorkerOperation::MemoryCount),
+            self.value(WorkerOperation::McpServers),
+        );
+        let work = serde_json::from_value(work?).map_err(|error| error.to_string())?;
+        let servers = super::sidebar::mcp_servers(servers?)?;
+        let memory_count = memory.ok().and_then(|value| {
+            Some((
+                usize::try_from(value["count"].as_u64()?).ok()?,
+                value["capped"].as_bool()?,
+            ))
+        });
+        Ok(Some(super::sidebar::sidebar_snapshot(
+            work,
+            memory_count,
+            servers,
+        )))
+    }
+
+    async fn subagents(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<colossus_contracts::SubagentJob>, String> {
+        serde_json::from_value(
+            self.value(WorkerOperation::AgentList {
+                session_id: Some(session_id.into()),
+                status: None,
+                limit: 100,
+            })
+            .await?,
+        )
+        .map_err(|error| error.to_string())
+    }
+
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
         let fresh_session = request.session_id.is_none() && !request.resume_latest;
         let session: SessionSummary = if let Some(session_id) = request.session_id {
@@ -1613,6 +1654,34 @@ impl InteractiveHost for WorkerInteractiveHost {
         control: RunControl,
     ) -> Result<HostCommandResult, String> {
         match command {
+            RuntimeCommand::Shell { command } => {
+                let mut observer = WorkerChannelObserver {
+                    sender: events.clone(),
+                };
+                let prompts = TuiWorkerPromptHandler { sender: events };
+                let result: Value = self
+                    .client
+                    .call_interactive(
+                        WorkerOperation::RunInteractive {
+                            model_options: None,
+                            request: InteractiveWorkerRequest::ShellRun {
+                                session_id: session_id.into(),
+                                command,
+                            },
+                            approval_mode: self.interactive_approval_mode()?,
+                            sandbox_boundary_acknowledgement: self
+                                .sandbox_boundary_acknowledgement(session_id)?,
+                        },
+                        &mut observer,
+                        &prompts,
+                        &control,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(HostCommandResult::document(super::shell::shell_document(
+                    &result,
+                )))
+            }
             RuntimeCommand::Known { name, arguments } => {
                 self.execute_known(
                     &name,

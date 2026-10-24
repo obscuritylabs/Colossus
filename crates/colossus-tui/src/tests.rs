@@ -4,6 +4,7 @@ mod command_approval;
 mod layout;
 mod model_picker;
 mod provider_recovery;
+mod shell;
 
 #[test]
 fn lifecycle_observer_tracks_busy_decisions_and_session_changes() {

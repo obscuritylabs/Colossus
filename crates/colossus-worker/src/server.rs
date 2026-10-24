@@ -608,6 +608,12 @@ async fn dispatch_interactive(
     control: &RunControl,
 ) -> Result<Value, WorkerError> {
     match request {
+        InteractiveWorkerRequest::ShellRun {
+            session_id,
+            command,
+        } => Ok(runtime
+            .run_user_shell(&session_id, &command, control)
+            .await?),
         InteractiveWorkerRequest::PluginManage { request } => {
             Ok(Box::pin(runtime.manage_plugin(request)).await?)
         }

@@ -92,6 +92,7 @@ mod sessions_context;
 mod shared_storage;
 mod shared_storage_fence;
 mod storage_composition;
+mod user_shell;
 pub use shared_storage::RuntimeSharedStorage;
 mod subagents;
 mod tool_arguments;

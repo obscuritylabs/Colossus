@@ -31,6 +31,158 @@ fn finish_failure(state: &mut TuiState, code: &str, status: Option<u16>) {
     );
 }
 
+fn load_sidebar(state: &mut TuiState) {
+    state.sidebar.refresh(Ok(Some(SidebarSnapshot {
+        tasks: vec![(
+            "sidebar-only".into(),
+            colossus_contracts::TaskStatus::InProgress,
+        )],
+        open_task_count: 1,
+        goals: vec![],
+        goal_count: 0,
+        memory_count: None,
+        plan_count: 0,
+        mcp_servers: vec![],
+    })));
+}
+
+fn find_text(buffer: &ratatui::buffer::Buffer, needle: &str) -> Position {
+    for y in buffer.area.top()..buffer.area.bottom() {
+        for x in buffer.area.left()..buffer.area.right() {
+            let suffix = (x..buffer.area.right())
+                .map(|column| buffer.cell((column, y)).unwrap().symbol())
+                .collect::<String>();
+            if suffix.starts_with(needle) {
+                return Position::new(x, y);
+            }
+        }
+    }
+    panic!("missing rendered text: {needle}");
+}
+
+fn mouse_at(kind: MouseEventKind, position: Position) -> MouseEvent {
+    MouseEvent {
+        kind,
+        column: position.x,
+        row: position.y,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+#[test]
+fn provider_recovery_wraps_the_draft_inside_the_sidebar_column() {
+    for mode in [ScreenMode::Inline, ScreenMode::Alternate] {
+        let mut state = TuiState::from_snapshot(snapshot());
+        load_sidebar(&mut state);
+        state
+            .composer
+            .insert(&format!("draft-start {} draft-end", "x".repeat(80)));
+        finish_failure(&mut state, "provider.failed", Some(404));
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &mut state, 0, mode))
+            .unwrap();
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("draft-start"), "{rendered}");
+        assert!(rendered.contains("draft-end"), "{rendered}");
+        assert!(rendered.contains("[ Retry ]  [ Dismiss ]"), "{rendered}");
+        assert_eq!(state.agents.area.unwrap().width, 28);
+    }
+}
+
+#[test]
+fn rendered_composer_selection_cannot_cross_into_recovery_or_sidebar() {
+    for recovery in [false, true] {
+        for mode in [ScreenMode::Inline, ScreenMode::Alternate] {
+            let mut state = TuiState::from_snapshot(snapshot());
+            load_sidebar(&mut state);
+            state.composer.insert("COMPOSER_ONLY");
+            if recovery {
+                finish_failure(&mut state, "provider.failed", Some(404));
+            }
+            let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+            terminal
+                .draw(|frame| render(frame, &mut state, 0, mode))
+                .unwrap();
+            let start = find_text(terminal.backend().buffer(), "COMPOSER_ONLY");
+            let end = Position::new(119, 0);
+            for (kind, position) in [
+                (
+                    MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                    start,
+                ),
+                (
+                    MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+                    end,
+                ),
+                (MouseEventKind::Up(crossterm::event::MouseButton::Left), end),
+            ] {
+                crate::app::handle_mouse(&mut state, mouse_at(kind, position));
+            }
+            state.text_selection.request_copy();
+            assert_eq!(
+                state.text_selection.take_copy().unwrap().trim(),
+                "COMPOSER_ONLY"
+            );
+            assert_eq!(state.draft(), "COMPOSER_ONLY");
+        }
+    }
+}
+
+#[test]
+fn frozen_text_selection_disables_stale_provider_recovery_pointer_targets() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    load_sidebar(&mut state);
+    state.composer.insert("preserved draft");
+    finish_failure(&mut state, "provider.failed", Some(404));
+    let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .unwrap();
+    let retry_button = find_text(terminal.backend().buffer(), "[ Retry ]");
+    let retry = Position::new(retry_button.x + 2, retry_button.y);
+    let start = find_text(terminal.backend().buffer(), "preserved draft");
+    let click = mouse_at(
+        MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        retry,
+    );
+    assert_eq!(
+        provider_recovery_mouse(&state, click),
+        Some(ProviderRecoveryAction::Retry)
+    );
+    crate::app::handle_mouse(
+        &mut state,
+        mouse_at(
+            MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            start,
+        ),
+    );
+    crate::app::handle_mouse(
+        &mut state,
+        mouse_at(
+            MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+            Position::new(start.x + 5, start.y),
+        ),
+    );
+    assert!(state.text_selection.active());
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .unwrap();
+    assert_eq!(provider_recovery_mouse(&state, click), None);
+    crate::app::handle_text_selection_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    );
+    terminal
+        .draw(|frame| render(frame, &mut state, 0, ScreenMode::Alternate))
+        .unwrap();
+    assert_eq!(
+        provider_recovery_mouse(&state, click),
+        Some(ProviderRecoveryAction::Retry)
+    );
+    assert_eq!(state.draft(), "preserved draft");
+}
+
 #[test]
 fn provider_failure_actions_require_known_provider_evidence_and_a_terminal_run() {
     for (code, status, offered) in [

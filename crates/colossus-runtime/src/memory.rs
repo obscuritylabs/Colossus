@@ -1,6 +1,15 @@
 use super::*;
 
 impl Runtime {
+    /// Count retained memory identities for local status displays without reading
+    /// or releasing memory payloads. Includes archived and superseded records.
+    /// The count is capped at 1,000; the second value reports additional records.
+    pub fn memory_record_count(&self) -> Result<(usize, bool), RuntimeError> {
+        self._workspace_lease.identity().revalidate()?;
+        let records = self.journal.list_stream_ids("memory:", None, 1_001)?;
+        Ok((records.len().min(1_000), records.len() > 1_000))
+    }
+
     pub(super) async fn execute_memory_operation(
         &self,
         operation: MemoryOperation,

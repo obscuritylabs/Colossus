@@ -66,6 +66,14 @@ Native development packaging uses the repository's `vscode` profile, which keeps
 assertions and omits linker debug symbols. It stages only the runnable executables
 reported by Cargo. macOS staging ad-hoc signs local native copies before hashing them.
 
+The VSIX packager temporarily overrides Azure Identity's `@azure/msal-node` dependency
+to 7.1.0 to address
+[GHSA-xcx6-jx8p-x3h5](https://github.com/advisories/GHSA-xcx6-jx8p-x3h5).
+Azure Identity 4.13.3 still requests MSAL 6; its calls do not use the interactive
+`responseMode` option removed in MSAL 7. Remove this override when the packager's
+Azure Identity dependency supports patched MSAL directly. This development dependency
+is excluded from the VSIX.
+
 ```sh
 cd sdk/typescript
 npm ci --ignore-scripts

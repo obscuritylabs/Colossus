@@ -8,8 +8,8 @@ use colossus_contracts::{
     AgentRunMode, AgentRunOutcome, ModelContent, ModelContentPart, ModelImageReference,
     ModelMessageRole, PlanDraftTarget, PlanExecutionStrategy, PlanRecord, PlanStatus,
     ProviderEvent, RunEvent, RunEventEnvelope, SandboxBoundaryMode, SecurityPostureReport,
-    SessionMessage, SessionMessagePage, SessionSummary, SubagentStatus, TerminalPreferences,
-    ThemeTextStyle,
+    SessionMessage, SessionMessagePage, SessionSummary, SubagentJob, SubagentStatus,
+    TerminalPreferences, ThemeTextStyle,
 };
 use colossus_ports::RunControl;
 use colossus_presentation::{
@@ -24,7 +24,8 @@ use crossterm::{
     cursor::{Hide, Show},
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+        Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -92,6 +93,7 @@ const MAX_NATIVE_HISTORY_MESSAGES: usize =
 /// Maximum rendered rows inserted into terminal scrollback in one operation.
 const HISTORY_INSERT_CHUNK_LINES: usize = 1_024;
 
+mod agents;
 mod app;
 pub use app::{sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt};
 mod branding;
@@ -109,8 +111,10 @@ mod plan_execution;
 mod preview;
 mod provider_recovery;
 mod render;
+mod selection;
 mod session_browser;
 mod settings_picker;
+mod sidebar;
 mod state;
 mod terminal;
 mod theme_picker;
@@ -126,7 +130,8 @@ pub use contract::{
     InteractiveSessionBrowserMessage, InteractiveSnapshot, InteractiveThemePicker,
     InteractiveThemePickerEntry, LocalCommand, OperationResult, PlanCommand, PlanHostCommand,
     PlanSelectionUpdate, PromptResponse, ResearchCommand, RuntimeCommand, ScreenMode,
-    TranscriptEntry, TranscriptKind, TuiError, TuiOptions, parse_interactive_command,
+    SidebarSnapshot, TranscriptEntry, TranscriptKind, TuiError, TuiOptions,
+    parse_interactive_command,
 };
 pub use state::TuiState;
 

@@ -463,6 +463,8 @@ mod model_selection;
 use model_selection::*;
 mod embedded;
 mod plugins;
+mod shell;
+mod sidebar;
 mod worker;
 
 pub(crate) use common::{TuiApprovalProvider, TuiPromptRouter, TuiUserPromptProvider};

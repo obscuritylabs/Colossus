@@ -42,12 +42,14 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
     schedule_visible_previews(&mut state, Arc::clone(&host), event_tx.clone());
     let mut terminal = OwnedTerminal::new(screen_mode)?;
+    let mut agent_refresh = crate::agents::AgentRefresh::default();
 
     loop {
         terminal.draw(&mut state)?;
         while let Ok(host_event) = event_rx.try_recv() {
             handle_host_event(&mut state, host_event);
         }
+        agent_refresh.schedule(&state, Arc::clone(&host), event_tx.clone());
         crate::dictation::tick(&mut state, event_tx.clone());
         if let Some(line) = crate::dictation::take_send(&mut state) {
             submit_line(&mut state, line, Arc::clone(&host), event_tx.clone());
@@ -110,9 +112,13 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
                         || (state.dictation.paused && !state.dictation.pending) =>
                 {
                     state.selecting_text = false;
+                    state.text_selection.clear();
                     insert_active_text(&mut state, &text)
                 }
-                Event::Resize(_, _) => state.selecting_text = false,
+                Event::Resize(_, _) => {
+                    state.selecting_text = false;
+                    state.text_selection.clear();
+                }
                 _ => {}
             }
             observe_lifecycle(&state, lifecycle.as_deref());
@@ -377,7 +383,13 @@ fn native_history_limit_entry() -> TranscriptEntry {
 
 /// Apply one captured mouse event and report whether an older transcript page is needed.
 pub(super) fn handle_mouse(state: &mut TuiState, mouse: MouseEvent) -> bool {
+    if !state.selecting_text && state.text_selection.handle_mouse(mouse) {
+        return false;
+    }
     if state.overlay.is_some() || state.selecting_text {
+        return false;
+    }
+    if state.agents.handle_mouse(mouse) {
         return false;
     }
     match mouse.kind {
@@ -394,6 +406,19 @@ pub(super) fn handle_mouse(state: &mut TuiState, mouse: MouseEvent) -> bool {
 }
 
 pub(super) fn handle_text_selection_key(state: &mut TuiState, key: KeyEvent) -> bool {
+    if state.text_selection.active() {
+        if matches!(key.code, KeyCode::Char('c' | 'C') | KeyCode::Insert)
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            state.text_selection.request_copy();
+            return true;
+        }
+        state.text_selection.clear();
+        // A decision may have arrived while the frozen view was selected.
+        if key.code == KeyCode::Esc || state.overlay.is_some() {
+            return true;
+        }
+    }
     if key.code == KeyCode::F(6) && (state.overlay.is_none() || state.selecting_text) {
         state.selecting_text = !state.selecting_text;
         state.hide_completion();
@@ -427,6 +452,9 @@ fn handle_key(
     }
     if state.overlay.is_some() {
         handle_overlay_key(state, key);
+        return;
+    }
+    if state.agents.handle_key(key) {
         return;
     }
     match provider_recovery_key(state, key) {
@@ -1081,7 +1109,7 @@ pub(super) fn submit_line(
     host: Arc<dyn InteractiveHost>,
     event_tx: mpsc::Sender<HostEvent>,
 ) {
-    let line = line.trim().to_owned();
+    let line = crate::contract::normalized_interactive_input(&line).to_owned();
     if line.is_empty() {
         return;
     }
@@ -1197,7 +1225,19 @@ fn start_host_command(
     state.provider_recovery = None;
     state.operation = Some(OperationKind::Command);
     state.started_at = Some(Instant::now());
-    state.activity = Some(format!("running /{}", runtime_command_name(&command)));
+    state.activity = Some(if let RuntimeCommand::Shell { command } = &command {
+        state.append_entry(TranscriptEntry {
+            sequence: None,
+            kind: TranscriptKind::Tool,
+            document: PresentationDocument::from_block(PresentationBlock::Verbatim(format!(
+                "!{command}"
+            ))),
+            temporary: false,
+        });
+        "running shell command".into()
+    } else {
+        format!("running /{}", runtime_command_name(&command))
+    });
     let session_id = state.session_id.clone();
     let sticky_skills = state.sticky_skills.clone();
     let control = RunControl::default();
@@ -1600,6 +1640,15 @@ pub(super) fn handle_local_command(
 
 pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
     match event {
+        HostEvent::Sidebar {
+            session_id,
+            session_epoch,
+            result,
+        } => {
+            if session_id == state.session_id && session_epoch == state.transcript_epoch {
+                state.sidebar.refresh(result);
+            }
+        }
         HostEvent::Dictation {
             generation,
             action,
@@ -1613,6 +1662,16 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             }
         }
         HostEvent::Run(envelope) => handle_run_event(state, envelope),
+        HostEvent::Subagents {
+            session_id,
+            revision,
+            session_epoch,
+            result,
+        } => {
+            if session_id == state.session_id && session_epoch == state.transcript_epoch {
+                state.agents.refresh(&session_id, revision, result);
+            }
+        }
         HostEvent::Notice(document) => {
             state.append_entry(TranscriptEntry {
                 sequence: None,
@@ -1696,6 +1755,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             }
         }
         HostEvent::OperationFinished(result) => {
+            state.sidebar.finish_calls();
             if matches!(
                 state.overlay,
                 Some(Overlay::Prompt { .. } | Overlay::SessionBrowser(_) | Overlay::ThemePicker(_))
@@ -1944,6 +2004,15 @@ fn offer_plan_execution_choice(state: &mut TuiState) {
 }
 
 pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope) {
+    if envelope.session_id == state.session_id {
+        state.sidebar.observe(&envelope.event);
+    }
+    if let RunEvent::SubagentUpdated { job } = &envelope.event {
+        if envelope.session_id != state.session_id || job.session_id != state.session_id {
+            return;
+        }
+        state.agents.update(job);
+    }
     observe_provider_failure(state, &envelope);
     let event = envelope.event;
     if !matches!(
@@ -2086,8 +2155,12 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
         });
     }
     if let Some((session_id, page, pending_sandbox_boundary_acknowledgement)) = result.session {
+        state.sidebar = crate::sidebar::SidebarState::default();
+        state.text_selection.clear();
+        state.selecting_text = false;
         if state.session_id != session_id {
             state.sticky_skills.clear();
+            state.agents = crate::agents::AgentTree::default();
         }
         state.session_id = session_id;
         state.provider_recovery = None;

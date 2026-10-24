@@ -40,6 +40,25 @@ pub struct FooterState {
     pub approval_mode: String,
 }
 
+/// Bounded status metadata for the active session and its workspace.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SidebarSnapshot {
+    /// Actionable tasks in this session; only titles and lifecycle state are retained.
+    pub tasks: Vec<(String, colossus_contracts::TaskStatus)>,
+    /// Total bounded open-task count, including rows omitted from the preview.
+    pub open_task_count: usize,
+    /// Active or blocked goal objectives and lifecycle states.
+    pub goals: Vec<(String, colossus_contracts::GoalStatus)>,
+    /// Total bounded active/blocked goal count.
+    pub goal_count: usize,
+    /// Retained memory identities in the workspace, including archived records.
+    pub memory_count: Option<(usize, bool)>,
+    /// Draft or approved plans in this session.
+    pub plan_count: usize,
+    /// Configured MCP names and local availability; this does not assert remote health.
+    pub mcp_servers: Vec<(String, bool)>,
+}
+
 /// Fully bounded state needed before terminal ownership begins.
 #[derive(Clone, Debug)]
 pub struct InteractiveSnapshot {
@@ -200,6 +219,11 @@ pub enum PlanHostCommand {
 /// One parsed terminal command whose behavior belongs to the application host.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuntimeCommand {
+    /// Run an explicit user shell command without a provider turn.
+    Shell {
+        /// Exact shell source after the leading bang, retaining quoting and newlines.
+        command: String,
+    },
     /// A known slash command and its bounded original arguments.
     Known {
         /// Stable command name without the slash.
@@ -289,11 +313,35 @@ pub enum InteractiveCommand {
     Turn(String),
 }
 
+pub(super) fn normalized_interactive_input(input: &str) -> &str {
+    let input = input.trim_start();
+    if input.starts_with('!') {
+        // Trailing whitespace can be shell syntax, including an escaped space.
+        input
+    } else {
+        input.trim_end()
+    }
+}
+
 /// Parse terminal input once for both embedded and worker-backed hosts.
 pub fn parse_interactive_command(input: &str) -> InteractiveCommand {
-    let input = input.trim();
+    let input = normalized_interactive_input(input);
     if input.is_empty() {
         return InteractiveCommand::Empty;
+    }
+    if let Some(command) = input.strip_prefix('!') {
+        let command = command.trim_start();
+        if command.is_empty() {
+            return InteractiveCommand::Invalid("Usage: !command (for example, !pwd)".into());
+        }
+        if command.contains('\0') || command.len() > 64 * 1024 {
+            return InteractiveCommand::Invalid(
+                "Shell commands must be at most 64 KiB and contain no NUL bytes.".into(),
+            );
+        }
+        return InteractiveCommand::Runtime(RuntimeCommand::Shell {
+            command: command.into(),
+        });
     }
     match input {
         "/exit" | "/quit" => InteractiveCommand::Local(LocalCommand::Exit),
@@ -727,6 +775,15 @@ pub struct InteractivePrompt {
 
 /// Typed background event consumed by the sole terminal owner.
 pub enum HostEvent {
+    /// Metadata-only status refresh, fenced to the requested session selection.
+    Sidebar {
+        /// Exact selected session when the read began.
+        session_id: String,
+        /// Selection epoch, including leaving and revisiting the same session.
+        session_epoch: u64,
+        /// Optional snapshot for hosts supporting the status panel.
+        result: Result<Option<SidebarSnapshot>, String>,
+    },
     /// Device-local recording result, isolated by recording generation.
     Dictation {
         /// Identity of the local draft's recording generation.
@@ -740,6 +797,17 @@ pub enum HostEvent {
     DictationSettings(Result<String, String>),
     /// Ordered policy-released agent runtime event.
     Run(RunEventEnvelope),
+    /// Bounded durable child-agent refresh, fenced to its requested session.
+    Subagents {
+        /// Session selected when the refresh began.
+        session_id: String,
+        /// Live-update revision observed before starting the read.
+        revision: u64,
+        /// Selection epoch, including leaving and revisiting the same session.
+        session_epoch: u64,
+        /// Canonical jobs, or a non-fatal refresh failure.
+        result: Result<Vec<SubagentJob>, String>,
+    },
     /// Policy-released informational notice that does not take focus.
     Notice(PresentationDocument),
     /// A trusted bridge needs focused operator input.
@@ -796,6 +864,18 @@ pub enum OperationResult {
 pub trait InteractiveHost: Send + Sync {
     /// Resolve session, transcript, preferences, history, completions, and footer.
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String>;
+
+    /// Read at most 100 durable child jobs for this session, including terminal history.
+    /// Hosts without child-agent discovery may retain the empty default.
+    async fn subagents(&self, _session_id: &str) -> Result<Vec<SubagentJob>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Read bounded task, goal, memory-count and MCP configuration metadata.
+    /// This must not resolve credentials, connect to MCP, or load memory payloads.
+    async fn sidebar_status(&self, _session_id: &str) -> Result<Option<SidebarSnapshot>, String> {
+        Ok(None)
+    }
 
     /// Prompt for and acknowledge one direct-execution boundary for the active TUI session.
     async fn acknowledge_sandbox_boundary(

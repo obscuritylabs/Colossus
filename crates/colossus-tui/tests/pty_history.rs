@@ -25,6 +25,14 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 
+#[path = "pty_history/agents.rs"]
+mod agents;
+#[path = "pty_history/selection.rs"]
+#[cfg(unix)] // This fixture injects SGR mouse input; Windows uses console input records.
+mod selection;
+#[path = "pty_history/status.rs"]
+mod status;
+
 // ConPTY decodes this Win32-input-mode record into a real Ctrl+J key event.
 // A bare LF is translated into Enter before crossterm's Windows backend reads it.
 #[cfg(windows)]
@@ -72,6 +80,66 @@ impl colossus_tui::LocalDictation for FixtureDictation {
 
 #[async_trait]
 impl InteractiveHost for FixtureHost {
+    async fn sidebar_status(
+        &self,
+        _: &str,
+    ) -> Result<Option<colossus_tui::SidebarSnapshot>, String> {
+        use colossus_contracts::{GoalStatus, TaskStatus};
+        if std::env::var_os("COLOSSUS_TUI_STATUS_FIXTURE").is_none() {
+            return Ok(None);
+        }
+        Ok(Some(colossus_tui::SidebarSnapshot {
+            tasks: vec![("Review runtime".into(), TaskStatus::InProgress)],
+            open_task_count: 1,
+            goals: vec![("Ship release".into(), GoalStatus::Active)],
+            goal_count: 1,
+            memory_count: Some((24, false)),
+            plan_count: 2,
+            mcp_servers: vec![("atlas".into(), true), ("offline".into(), false)],
+        }))
+    }
+
+    async fn subagents(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<colossus_contracts::SubagentJob>, String> {
+        use colossus_contracts::{SubagentJob, SubagentStatus};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        if std::env::var_os("COLOSSUS_TUI_AGENTS_FIXTURE").is_none() {
+            return Ok(Vec::new());
+        }
+        static READS: AtomicUsize = AtomicUsize::new(0);
+        let complete = READS.fetch_add(1, Ordering::Relaxed) > 1;
+        Ok([
+            ("review", SubagentStatus::Running),
+            ("checks", SubagentStatus::Queued),
+        ]
+        .into_iter()
+        .map(|(id, status)| SubagentJob {
+            id: id.into(),
+            session_id: session_id.into(),
+            parent_run_id: "parent-run".into(),
+            parent_call_id: format!("call-{id}"),
+            task: id.into(),
+            role: "subagent_default".into(),
+            allowed_tools: None,
+            status: if complete {
+                SubagentStatus::Completed
+            } else {
+                status
+            },
+            child_session_id: format!("child-{id}"),
+            child_run_id: None,
+            final_output: String::new(),
+            error: String::new(),
+            created_at: "2026-10-23T18:00:00Z".into(),
+            updated_at: "2026-10-23T18:00:01Z".into(),
+            started_at: None,
+            completed_at: None,
+        })
+        .collect())
+    }
+
     async fn bootstrap(&self, _request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
         let inline = std::env::var("COLOSSUS_TUI_MODE").as_deref() == Ok("inline");
         let empty = std::env::var_os("COLOSSUS_TUI_EMPTY").is_some();
@@ -179,6 +247,13 @@ impl InteractiveHost for FixtureHost {
         events: mpsc::Sender<HostEvent>,
         _control: RunControl,
     ) -> Result<HostCommandResult, String> {
+        if let RuntimeCommand::Shell { command } = &command {
+            return Ok(HostCommandResult::document(
+                PresentationDocument::from_block(PresentationBlock::Verbatim(format!(
+                    "Shell fixture received: {command}"
+                ))),
+            ));
+        }
         if matches!(
             command,
             RuntimeCommand::Known { ref name, .. } if name == "resume"
@@ -289,10 +364,20 @@ impl InteractiveHost for FixtureHost {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
+        let status_fixture = std::env::var_os("COLOSSUS_TUI_STATUS_FIXTURE").is_some();
         let call = ToolCall {
             call_id: "call-scrollback".into(),
-            name: "filesystem.search".into(),
-            arguments: serde_json::json!({"query": "Runtime"}),
+            name: if status_fixture {
+                "mcp.call"
+            } else {
+                "filesystem.search"
+            }
+            .into(),
+            arguments: if status_fixture {
+                serde_json::json!({"server":"atlas", "tool":"search", "arguments":{}})
+            } else {
+                serde_json::json!({"query": "Runtime"})
+            },
         };
         events
             .send(HostEvent::Run(RunEventEnvelope {
@@ -704,7 +789,22 @@ fn text_selection_freezes_stream_redraw_and_restores_captured_input() {
     writer.flush().expect("flush F6");
     wait_for_screen(&output, 24, 80, "Select text");
     wait_for_mouse_capture_count(&output, false, 1);
+    // ConPTY can project DisableMouseCapture before the frozen frame's footer
+    // and cursor paint. Wait for the complete frame, then allow only complete
+    // cursor commands to settle before the strict no-output interval.
+    #[cfg(windows)]
+    let frozen = wait_for_quiescent_output(&output);
+    #[cfg(not(windows))]
     let frozen = output.lock().expect("output").clone();
+    let mut frozen_screen = vt100::Parser::new(24, 80, 0);
+    frozen_screen.process(&frozen);
+    assert!(
+        !frozen_screen
+            .screen()
+            .contents()
+            .contains("stream-final-row-30"),
+        "selection must freeze the commentary before the final output appears"
+    );
     thread::sleep(Duration::from_millis(1200));
     assert_eq!(
         *output.lock().expect("output"),
@@ -929,16 +1029,16 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
         .expect("pasted Unicode row");
     #[cfg(windows)]
     {
-        writer.write_all(b"\x1b[H!").expect("edit recalled draft");
+        writer.write_all(b"\x1b[Hx").expect("edit recalled draft");
         writer.flush().expect("flush recalled draft edit");
-        wait_for_screen(&output, 24, 80, "│!# Heading ");
+        wait_for_screen(&output, 24, 80, "│x# Heading ");
         writer
             .write_all(&[127])
             .expect("remove recalled draft edit");
         writer.flush().expect("flush recalled draft edit removal");
-        // The border followed by '#' cannot match the pre-delete '!'.
+        // The border followed by '#' cannot match the pre-delete 'x'.
         wait_for_screen(&output, 24, 80, "│# Heading ");
-        assert!(!screen_contents(&output, 24, 80).contains("│!# Heading "));
+        assert!(!screen_contents(&output, 24, 80).contains("│x# Heading "));
     }
     assert_eq!(nested_row, heading_row + 2, "blank line was not preserved");
     assert_eq!(unicode_row, nested_row + 1, "composed lines changed");
@@ -1065,9 +1165,11 @@ fn unicode_history_draft_roundtrip(restore_edit: bool) {
     writer.write_all(b"\x1b[A").expect("recall Unicode draft");
     writer.flush().expect("flush Unicode draft recall");
     wait_for_screen(&output, 24, 80, "界 e\u{301}");
-    writer.write_all(b"\x1b[H!").expect("edit Unicode draft");
+    // Keep the marker ordinary prompt text so the negative roundtrip still
+    // reaches the model-turn host boundary instead of selecting !shell.
+    writer.write_all(b"\x1b[Hx").expect("edit Unicode draft");
     writer.flush().expect("flush Unicode draft edit");
-    wait_for_screen(&output, 24, 80, "│!# Heading ");
+    wait_for_screen(&output, 24, 80, "│x# Heading ");
     if restore_edit {
         writer.write_all(&[127]).expect("restore Unicode draft");
         writer.flush().expect("flush Unicode draft restoration");
@@ -2060,6 +2162,160 @@ fn wait_for_mouse_capture_count(output: &Arc<Mutex<Vec<u8>>>, enabled: bool, exp
 
 fn raw_contains(raw: &[u8], needle: &[u8]) -> bool {
     raw.windows(needle.len()).any(|window| window == needle)
+}
+
+#[cfg(windows)]
+fn wait_for_quiescent_output(output: &Arc<Mutex<Vec<u8>>>) -> Vec<u8> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut unchanged_since = Instant::now();
+    let mut tail_start = None;
+    let mut previous_length = 0;
+    loop {
+        {
+            let raw = output.lock().expect("output");
+            let now = Instant::now();
+            assert!(
+                now < deadline,
+                "ConPTY frozen frame did not settle within 2 seconds: {}",
+                String::from_utf8_lossy(&raw[tail_start.unwrap_or(0)..]).escape_debug()
+            );
+            if tail_start.is_none()
+                && let Some(start) = conpty_frozen_frame_boundary(&raw)
+            {
+                tail_start = Some(start);
+                previous_length = raw.len();
+                unchanged_since = now;
+            }
+            if let Some(start) = tail_start {
+                let tail = &raw[start..];
+                let complete = conpty_cursor_paint_complete(tail).unwrap_or_else(|()| {
+                    panic!(
+                        "ConPTY emitted non-cursor output after the frozen frame: {}",
+                        String::from_utf8_lossy(tail).escape_debug()
+                    )
+                });
+                if raw.len() != previous_length {
+                    previous_length = raw.len();
+                    unchanged_since = now;
+                } else if complete
+                    && now.duration_since(unchanged_since) >= Duration::from_millis(100)
+                {
+                    return raw.clone();
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(windows)]
+fn conpty_frozen_frame_boundary(raw: &[u8]) -> Option<usize> {
+    let disabled = b"\x1b[?1003;1006l";
+    let disabled_end = raw
+        .windows(disabled.len())
+        .position(|bytes| bytes == disabled)?
+        + disabled.len();
+    let mut parser = vt100::Parser::new(24, 80, 0);
+    for (index, byte) in raw.iter().enumerate() {
+        parser.process(std::slice::from_ref(byte));
+        let end = index + 1;
+        if !raw[..end].ends_with(b"\x1b[?25h") && !raw[..end].ends_with(b"\x1b[22;2H") {
+            continue;
+        }
+        let screen = parser.screen();
+        if !screen.hide_cursor()
+            && screen.cursor_position() == (21, 1)
+            && screen
+                .contents()
+                .contains("Select text · F6/Esc return · drag + Copy · view frozen; run continues")
+        {
+            // Consume the expected mode change too when ConPTY paints first.
+            // Both boundaries end in complete commands, even if a later read
+            // has captured only part of the next cursor command.
+            return Some(end.max(disabled_end));
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn conpty_cursor_paint_complete(mut raw: &[u8]) -> Result<bool, ()> {
+    'commands: while !raw.is_empty() {
+        for visibility in [b"\x1b[?25l".as_slice(), b"\x1b[?25h".as_slice()] {
+            if let Some(rest) = raw.strip_prefix(visibility) {
+                raw = rest;
+                continue 'commands;
+            }
+            if visibility.starts_with(raw) {
+                return Ok(false);
+            }
+        }
+        let Some(position) = raw.strip_prefix(b"\x1b[") else {
+            return Err(());
+        };
+        let row_end = position
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        if row_end == 0 {
+            return Err(());
+        }
+        if row_end == position.len() {
+            return Ok(false);
+        }
+        if position[row_end] != b';' {
+            return Err(());
+        }
+        let column = &position[row_end + 1..];
+        let column_end = column
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        if column_end == column.len() {
+            return Ok(false);
+        }
+        if column_end == 0 || column[column_end] != b'H' {
+            return Err(());
+        }
+        raw = &column[column_end + 1..];
+    }
+    Ok(true)
+}
+
+#[cfg(windows)]
+#[test]
+fn conpty_cursor_settling_accepts_only_complete_visibility_and_position_commands() {
+    for raw in [
+        b"".as_slice(),
+        b"\x1b[?25l",
+        b"\x1b[?25h",
+        b"\x1b[22;2H",
+        b"\x1b[?25l\x1b[22;2H\x1b[?25h",
+        b"\x1b[22;2H\x1b[?25h\x1b[?25l\x1b[1;1H",
+    ] {
+        assert_eq!(conpty_cursor_paint_complete(raw), Ok(true));
+    }
+    for raw in [
+        b"\x1b".as_slice(),
+        b"\x1b[",
+        b"\x1b[?25",
+        b"\x1b[22;",
+        b"\x1b[22;2",
+    ] {
+        assert_eq!(conpty_cursor_paint_complete(raw), Ok(false));
+    }
+    for raw in [
+        b"content".as_slice(),
+        b"\x1b[1m",
+        b"\x1b[2J",
+        b"\x1b[1S",
+        b"\x1b[?1003;1006l",
+        b"\x1b[;2H",
+        b"\x1b[22;H",
+        b"\x1b[22;2Helect text",
+    ] {
+        assert_eq!(conpty_cursor_paint_complete(raw), Err(()));
+    }
 }
 
 #[cfg(windows)]

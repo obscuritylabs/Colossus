@@ -1,5 +1,135 @@
 use super::*;
 
+struct PreparedShell {
+    executable: PathBuf,
+    spec: ProcessSpec,
+    invocation: Value,
+    isolated: Option<tempfile::TempDir>,
+    danger_full_access: bool,
+}
+
+impl GatewayToolExecutor {
+    pub(crate) fn prepare_user_shell(
+        &self,
+        command: &str,
+        context: ExecutionContext,
+    ) -> Result<(EffectRequest, Option<tempfile::TempDir>), ToolError> {
+        let call = ToolCall {
+            call_id: Uuid::now_v7().to_string(),
+            name: "shell.run".into(),
+            arguments: json!({
+                "command": command,
+                "justification": "Run the shell command entered by the user.",
+            }),
+        };
+        let prepared = self.prepare_shell(&call, &context)?;
+        let mut request = effect_request(
+            terminal_actor(),
+            "shell.run",
+            prepared.executable.display().to_string(),
+            serde_json::to_value(prepared.spec)
+                .map_err(|error| ToolError::Failed(error.to_string()))?,
+        );
+        request.capabilities = vec!["shell.run".into()];
+        request.command_intent = Some(command_intent(&call)?);
+        request.context = context;
+        Ok((request, prepared.isolated))
+    }
+
+    fn prepare_shell(
+        &self,
+        call: &ToolCall,
+        context: &ExecutionContext,
+    ) -> Result<PreparedShell, ToolError> {
+        command_intent(call)?;
+        let danger_full_access = self.danger_full_access(context);
+        let command = optional_tool_string(call, "command")?;
+        let argv = optional_tool_string_array(call, "argv")?;
+        let command_mode = command.is_some();
+        if command.is_some() == argv.is_some() {
+            return Err(ToolError::InvalidArguments {
+                tool: call.name.clone(),
+                message: "exactly one of command or argv is required".into(),
+            });
+        }
+        let (executable, args, invocation) = if let Some(command) = command {
+            let executable = self.shell_executable(danger_full_access)?;
+            let args = shell_command_arguments(&executable, command)?;
+            (executable, args, json!({"command": command}))
+        } else {
+            let argv = argv.expect("validated argv presence");
+            let requested = argv.first().ok_or_else(|| ToolError::InvalidArguments {
+                tool: call.name.clone(),
+                message: "argv must not be empty".into(),
+            })?;
+            if is_shell_wrapper(requested) {
+                reject_shell_startup_profiles(call, &argv[1..])?;
+            }
+            let executable = self.resolve_executable(requested, danger_full_access, context)?;
+            (
+                executable,
+                argv.iter().skip(1).cloned().collect(),
+                json!({"argv": argv}),
+            )
+        };
+        let requested_cwd = optional_tool_string(call, "cwd")?.unwrap_or(".");
+        let cwd = if danger_full_access {
+            unrestricted_process_cwd(&self.workspace, requested_cwd)?
+        } else if Path::new(requested_cwd).is_absolute() {
+            let cwd = fs::canonicalize(requested_cwd).map_err(|error| {
+                ToolError::Failed(format!("cannot resolve process cwd: {error}"))
+            })?;
+            if self
+                .selected_plugin_roots(context)
+                .iter()
+                .any(|root| cwd.starts_with(root))
+            {
+                cwd
+            } else {
+                return Err(ToolError::Denied(
+                    "shell cwd is not within a selected Agent Plugin".into(),
+                ));
+            }
+        } else {
+            model_workspace_path(&self.workspace, requested_cwd)?
+        };
+        let mut environment = optional_tool_environment(call, "env")?;
+        if danger_full_access && command_mode {
+            prepend_managed_ripgrep_path(&mut environment, managed_ripgrep())?;
+        }
+        let isolated = if danger_full_access {
+            None
+        } else {
+            reject_reserved_shell_environment(call, &environment)?;
+            let isolated = tempfile::Builder::new()
+                .prefix(".colossus-shell-")
+                .tempdir_in(&self.workspace)
+                .map_err(|error| {
+                    ToolError::Failed(format!("cannot create isolated shell directory: {error}"))
+                })?;
+            configure_shell_environment(
+                &mut environment,
+                isolated.path(),
+                &self.sanitized_command_path()?,
+            );
+            Some(isolated)
+        };
+        Ok(PreparedShell {
+            executable,
+            spec: tool_process_spec(
+                cwd,
+                args,
+                environment,
+                optional_tool_u64(call, "timeout_ms")?,
+                optional_tool_u64(call, "max_output_bytes")?,
+            ),
+            invocation,
+            isolated,
+            danger_full_access,
+        })
+    }
+}
+
 impl GatewayToolExecutor {
     pub(super) async fn execute_process(
         &self,
@@ -9,94 +139,19 @@ impl GatewayToolExecutor {
         let exit_code;
         let output = match call.name.as_str() {
             "shell.run" => {
-                command_intent(&call)?;
-                let danger_full_access = self.danger_full_access(&context);
-                let command = optional_tool_string(&call, "command")?;
-                let argv = optional_tool_string_array(&call, "argv")?;
-                let command_mode = command.is_some();
-                if command.is_some() == argv.is_some() {
-                    return Err(ToolError::InvalidArguments {
-                        tool: call.name.clone(),
-                        message: "exactly one of command or argv is required".into(),
-                    });
-                }
-                let (executable, args, invocation) = if let Some(command) = command {
-                    let executable = self.shell_executable(danger_full_access)?;
-                    let args = shell_command_arguments(&executable, command)?;
-                    (executable, args, json!({"command": command}))
-                } else {
-                    let argv = argv.expect("validated argv presence");
-                    let requested = argv.first().ok_or_else(|| ToolError::InvalidArguments {
-                        tool: call.name.clone(),
-                        message: "argv must not be empty".into(),
-                    })?;
-                    if is_shell_wrapper(requested) {
-                        reject_shell_startup_profiles(&call, &argv[1..])?;
-                    }
-                    let executable =
-                        self.resolve_executable(requested, danger_full_access, &context)?;
-                    (
-                        executable,
-                        argv.iter().skip(1).cloned().collect(),
-                        json!({"argv": argv}),
-                    )
-                };
-                let requested_cwd = optional_tool_string(&call, "cwd")?.unwrap_or(".");
-                let cwd = if danger_full_access {
-                    unrestricted_process_cwd(&self.workspace, requested_cwd)?
-                } else if Path::new(requested_cwd).is_absolute() {
-                    let cwd = fs::canonicalize(requested_cwd).map_err(|error| {
-                        ToolError::Failed(format!("cannot resolve process cwd: {error}"))
-                    })?;
-                    if self
-                        .selected_plugin_roots(&context)
-                        .iter()
-                        .any(|root| cwd.starts_with(root))
-                    {
-                        cwd
-                    } else {
-                        return Err(ToolError::Denied(
-                            "shell cwd is not within a selected Agent Plugin".into(),
-                        ));
-                    }
-                } else {
-                    model_workspace_path(&self.workspace, requested_cwd)?
-                };
-                let mut environment = optional_tool_environment(&call, "env")?;
-                if danger_full_access && command_mode {
-                    prepend_managed_ripgrep_path(&mut environment, managed_ripgrep())?;
-                }
-                let _isolated = if danger_full_access {
-                    None
-                } else {
-                    reject_reserved_shell_environment(&call, &environment)?;
-                    let isolated = tempfile::Builder::new()
-                        .prefix(".colossus-shell-")
-                        .tempdir_in(&self.workspace)
-                        .map_err(|error| {
-                            ToolError::Failed(format!(
-                                "cannot create isolated shell directory: {error}"
-                            ))
-                        })?;
-                    configure_shell_environment(
-                        &mut environment,
-                        isolated.path(),
-                        &self.sanitized_command_path()?,
-                    );
-                    Some(isolated)
-                };
+                let PreparedShell {
+                    executable,
+                    spec,
+                    invocation,
+                    isolated,
+                    danger_full_access,
+                } = self.prepare_shell(&call, &context)?;
                 if call.arguments.get("yield_time_ms").is_some()
                     || call.arguments.get("lifetime").is_some()
                 {
                     let lifetime = optional_tool_value(&call, "lifetime")?
                         .unwrap_or(colossus_contracts::ProcessLifetime::Run);
-                    let mut spec = tool_process_spec(
-                        cwd,
-                        args,
-                        environment,
-                        optional_tool_u64(&call, "timeout_ms")?,
-                        optional_tool_u64(&call, "max_output_bytes")?,
-                    );
+                    let mut spec = spec;
                     spec.lifetime = Some(lifetime);
                     let mut request = effect_request(
                         model_actor(&call, &context),
@@ -117,7 +172,7 @@ impl GatewayToolExecutor {
                         .launch(
                             request,
                             lifetime,
-                            _isolated,
+                            isolated,
                             optional_tool_u64(&call, "yield_time_ms")?.unwrap_or(10_000),
                         )
                         .await?;
@@ -137,20 +192,9 @@ impl GatewayToolExecutor {
                     });
                 }
                 let process = self
-                    .execute_process_tool(
-                        &call,
-                        context.clone(),
-                        "shell.run",
-                        executable,
-                        tool_process_spec(
-                            cwd,
-                            args,
-                            environment,
-                            optional_tool_u64(&call, "timeout_ms")?,
-                            optional_tool_u64(&call, "max_output_bytes")?,
-                        ),
-                    )
+                    .execute_process_tool(&call, context.clone(), "shell.run", executable, spec)
                     .await?;
+                drop(isolated);
                 exit_code = process.exit_code;
                 let mut command = vec![process.executable.display().to_string()];
                 command.extend(process.args.clone());
