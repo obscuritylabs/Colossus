@@ -153,7 +153,7 @@ verification stack, affected by
 Colossus passes public JWKS coordinates, message hashes and supplied signatures to
 that stack; client-secret checks use HMAC and access-token hashes use SHA. No
 application path supplies EC private scalars or signing nonces to it. Local TLS
-certificate signing uses P-256 0.14 with patched `crypto-bigint` 0.7.6, and a fixed-seed
+certificate signing uses P-256 0.14 with patched `crypto-bigint` 0.7.10, and a fixed-seed
 certificate fingerprint regression preserves existing identity pins across the upgrade.
 The Desktop dependency graph contains no affected arithmetic.
 

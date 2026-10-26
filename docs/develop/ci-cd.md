@@ -94,13 +94,9 @@ Desktop validation. The Desktop PR gate formats, lints and tests the portable na
 bridge on Linux; it does not capture a desktop or send input.
 
 Dependency manifests and lockfiles add license, source, ban and advisory policy for the
-root sidecar and independent Desktop, browser and native-computer graphs. The current
-`cargo-audit` exception for `RUSTSEC-2026-0253` applies only to Tantivy 0.26.1's
-`LruCache<usize, Block>`: the panic requires a key destructor, which `usize` lacks.
-`cargo-deny` does not report this informational advisory. Remove the exception when
-a Tantivy release includes [Tantivy PR #3034](https://github.com/quickwit-oss/tantivy/pull/3034).
-Ratatui's independent path already uses `lru` 0.18.2. Any new exception must name the
-exact advisory in every reporting scanner, explain unreachability and define removal.
+root sidecar and independent Desktop, browser and native-computer graphs. Tantivy and
+Ratatui use patched `lru` 0.18.2 without an advisory exception. Any new exception must
+name the exact advisory in every reporting scanner, explain unreachability and define removal.
 
 The exact `RUSTSEC-2026-0387` exception covers only OpenID Connect's remaining public
 P-256/P-384 verification stack. Application certificate signing uses patched arithmetic,
