@@ -201,6 +201,7 @@ fn role_name(value: ProjectRole) -> &'static str {
     match value {
         ProjectRole::Viewer => "viewer",
         ProjectRole::Operator => "operator",
+        ProjectRole::TerminalOperator => "terminal_operator",
         ProjectRole::Approver => "approver",
         ProjectRole::ProjectAdmin => "project_admin",
     }
@@ -209,6 +210,7 @@ fn role(value: &str) -> CloudResult<ProjectRole> {
     match value {
         "viewer" => Ok(ProjectRole::Viewer),
         "operator" => Ok(ProjectRole::Operator),
+        "terminal_operator" => Ok(ProjectRole::TerminalOperator),
         "approver" => Ok(ProjectRole::Approver),
         "project_admin" => Ok(ProjectRole::ProjectAdmin),
         _ => Err(CloudError::Storage),
@@ -221,6 +223,7 @@ fn permission_name(value: CloudPermission) -> &'static str {
         CloudPermission::Control => "control",
         CloudPermission::Approve => "approve",
         CloudPermission::Administer => "administer",
+        CloudPermission::Terminal => "terminal",
     }
 }
 fn permission(value: String) -> CloudResult<CloudPermission> {
@@ -230,6 +233,7 @@ fn permission(value: String) -> CloudResult<CloudPermission> {
         "control" => Ok(CloudPermission::Control),
         "approve" => Ok(CloudPermission::Approve),
         "administer" => Ok(CloudPermission::Administer),
+        "terminal" => Ok(CloudPermission::Terminal),
         _ => Err(CloudError::Storage),
     }
 }

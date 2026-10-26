@@ -95,6 +95,7 @@ pub struct SystemServiceAdapter {
     workflows: bool,
     policy_posture: bool,
     agent_communication: bool,
+    human_terminals: bool,
     model_catalog: Option<Arc<dyn ModelCatalogProvider>>,
 }
 
@@ -109,8 +110,15 @@ impl SystemServiceAdapter {
             workflows: false,
             policy_posture: false,
             agent_communication: false,
+            human_terminals: false,
             model_catalog: None,
         }
+    }
+
+    /// Advertise terminals only after explicit native host opt-in.
+    pub fn with_human_terminals(mut self, enabled: bool) -> Self {
+        self.human_terminals = enabled;
+        self
     }
 
     /// Replace application-resource limits with values enforced by the host.
@@ -151,6 +159,10 @@ impl SystemService for SystemServiceAdapter {
     ) -> Result<Response<GetServerInfoResponse>, Status> {
         let caller = caller_context(&request)?;
         let capabilities = [
+            (
+                colossus_api::HUMAN_TERMINAL_CAPABILITY,
+                colossus_api::HUMAN_TERMINAL_SCOPE,
+            ),
             ("agent_runs.create", scopes::RUNS_EXECUTE),
             ("agent_runs.model_selection", scopes::RUNS_EXECUTE),
             ("agent_runs.read", scopes::RUNS_READ),
@@ -175,6 +187,7 @@ impl SystemService for SystemServiceAdapter {
         .map(|(name, scope)| Capability {
             name: name.into(),
             enabled: caller.principal().has_scope(scope)
+                && (name != colossus_api::HUMAN_TERMINAL_CAPABILITY || self.human_terminals)
                 && (name != "runtime.policy_posture.v1" || self.policy_posture)
                 && (!matches!(
                     name,
@@ -489,6 +502,41 @@ mod tests {
                 RequestId::new("request-1").expect("request id"),
             ));
         request
+    }
+
+    #[tokio::test]
+    async fn terminal_capability_requires_host_opt_in_and_exact_scope() {
+        for (enabled, scopes, expected) in [
+            (false, vec![colossus_api::HUMAN_TERMINAL_SCOPE], false),
+            (
+                true,
+                vec![
+                    scopes::RUNS_READ,
+                    scopes::RUNS_EXECUTE,
+                    scopes::RUNS_CONTROL,
+                ],
+                false,
+            ),
+            (true, vec![colossus_api::HUMAN_TERMINAL_SCOPE], true),
+        ] {
+            let response = service()
+                .with_human_terminals(enabled)
+                .get_server_info(request_with(GetServerInfoRequest {}, scopes, vec![]))
+                .await
+                .unwrap()
+                .into_inner()
+                .server_info
+                .unwrap();
+            assert_eq!(
+                response
+                    .capabilities
+                    .iter()
+                    .find(|c| c.name == colossus_api::HUMAN_TERMINAL_CAPABILITY)
+                    .unwrap()
+                    .enabled,
+                expected
+            );
+        }
     }
 
     #[tokio::test]

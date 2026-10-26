@@ -150,6 +150,7 @@ pub struct PublicApiHostOptions {
     default_role: String,
     instructions: String,
     admission: RunAdmissionConfig,
+    human_terminals: bool,
 }
 
 impl PublicApiHostOptions {
@@ -190,7 +191,15 @@ impl PublicApiHostOptions {
             default_role: DEFAULT_ROLE.into(),
             instructions: DEFAULT_INSTRUCTIONS.into(),
             admission: RunAdmissionConfig::default(),
+            human_terminals: false,
         })
+    }
+
+    /// Explicit native opt-in for remotely controlled human shells.
+    /// This grants no application scope and is independent of Desktop local terminals.
+    pub fn with_human_terminals(mut self, enabled: bool) -> Self {
+        self.human_terminals = enabled;
+        self
     }
 
     /// Advertise this host as an isolated application-owned sidecar.
@@ -273,13 +282,19 @@ impl PreparedPublicApi {
         let readiness: Arc<dyn ReadinessProvider> = Arc::new(JournalReadiness::new(Arc::clone(
             &options.credential_journal,
         )));
-        let runs = Arc::new(RuntimeAgentRunApi::with_admission(
+        let mut runs = RuntimeAgentRunApi::with_admission(
             Arc::clone(&runtime),
             interactions,
             options.default_role,
             options.instructions,
             options.admission,
-        ));
+        );
+        if options.human_terminals {
+            runs = runs.with_human_terminals().map_err(|_| {
+                WorkerError::PublicApi("human terminal workspace unavailable".into())
+            })?;
+        }
+        let runs = Arc::new(runs);
         let api: Arc<dyn AgentRunApi> = runs.clone();
         let artifacts: Arc<dyn ArtifactApi> =
             Arc::new(EventSourcedArtifactApi::new(runtime.journal()));
@@ -292,6 +307,7 @@ impl PreparedPublicApi {
             readiness,
         )
         .with_application_limits(advertised_limits)
+        .with_human_terminals(options.human_terminals)
         .with_model_catalog(Arc::new(crate::model_catalog::RuntimeModelCatalog(
             Arc::clone(&runtime),
         )));

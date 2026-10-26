@@ -1,6 +1,6 @@
 //! Keep native health and durable command receipts ahead of queued released output.
 use colossus_cloud_protocol::{
-    MAX_QUEUED_FRAMES,
+    MAX_QUEUED_FRAMES, MAX_TERMINAL_QUEUED_FRAMES,
     v1alpha1::{RuntimeFrame, runtime_frame},
 };
 use std::{
@@ -16,20 +16,30 @@ const PRIORITY_FRAMES: usize = 4;
 pub(crate) struct FrameSender {
     priority: mpsc::Sender<RuntimeFrame>,
     data: mpsc::Sender<RuntimeFrame>,
+    terminal: mpsc::Sender<RuntimeFrame>,
 }
 pub(crate) struct FrameStream {
     priority: mpsc::Receiver<RuntimeFrame>,
     data: mpsc::Receiver<RuntimeFrame>,
+    terminal: mpsc::Receiver<RuntimeFrame>,
+    data_burst: u8,
 }
 
 pub(crate) fn channel() -> (FrameSender, FrameStream) {
     let (priority, priority_receiver) = mpsc::channel(PRIORITY_FRAMES);
     let (data, data_receiver) = mpsc::channel(MAX_QUEUED_FRAMES - PRIORITY_FRAMES);
+    let (terminal, terminal_receiver) = mpsc::channel(MAX_TERMINAL_QUEUED_FRAMES);
     (
-        FrameSender { priority, data },
+        FrameSender {
+            priority,
+            data,
+            terminal,
+        },
         FrameStream {
             priority: priority_receiver,
             data: data_receiver,
+            terminal: terminal_receiver,
+            data_burst: 0,
         },
     )
 }
@@ -49,7 +59,9 @@ impl FrameSender {
                     | runtime_frame::Body::Receipt(_)
             )
         );
-        if priority {
+        if matches!(&frame.body, Some(runtime_frame::Body::TerminalResponse(_))) {
+            self.terminal.send(frame).await
+        } else if priority {
             self.priority.send(frame).await
         } else {
             self.data.send(frame).await
@@ -64,9 +76,23 @@ impl Stream for FrameStream {
         if let Poll::Ready(Some(frame)) = priority {
             return Poll::Ready(Some(frame));
         }
-        match self.data.poll_recv(context) {
-            Poll::Ready(Some(frame)) => Poll::Ready(Some(frame)),
-            Poll::Ready(None) if priority.is_ready() => Poll::Ready(None),
+        if self.data_burst >= 8
+            && let Poll::Ready(Some(frame)) = self.terminal.poll_recv(context)
+        {
+            self.data_burst = 0;
+            return Poll::Ready(Some(frame));
+        }
+        let data = self.data.poll_recv(context);
+        if let Poll::Ready(Some(frame)) = data {
+            self.data_burst = self.data_burst.saturating_add(1);
+            return Poll::Ready(Some(frame));
+        }
+        match self.terminal.poll_recv(context) {
+            Poll::Ready(Some(frame)) => {
+                self.data_burst = 0;
+                Poll::Ready(Some(frame))
+            }
+            Poll::Ready(None) if priority.is_ready() && data.is_ready() => Poll::Ready(None),
             _ => Poll::Pending,
         }
     }
@@ -127,6 +153,42 @@ mod tests {
         assert!(matches!(
             stream.next().await.expect("limit after data").body,
             Some(runtime_frame::Body::OutputLimit(_))
+        ));
+    }
+    #[tokio::test]
+    async fn terminal_output_has_separate_bounded_capacity_behind_health_and_run_events() {
+        let (sender, mut stream) = channel();
+        for _ in 0..MAX_TERMINAL_QUEUED_FRAMES {
+            sender
+                .send(RuntimeFrame {
+                    body: Some(runtime_frame::Body::TerminalResponse(Default::default())),
+                })
+                .await
+                .unwrap();
+        }
+        sender
+            .send(RuntimeFrame {
+                body: Some(runtime_frame::Body::Snapshot(Default::default())),
+            })
+            .await
+            .unwrap();
+        sender
+            .send(RuntimeFrame {
+                body: Some(runtime_frame::Body::Heartbeat(Default::default())),
+            })
+            .await
+            .unwrap();
+        assert!(matches!(
+            stream.next().await.unwrap().body,
+            Some(runtime_frame::Body::Heartbeat(_))
+        ));
+        assert!(matches!(
+            stream.next().await.unwrap().body,
+            Some(runtime_frame::Body::Snapshot(_))
+        ));
+        assert!(matches!(
+            stream.next().await.unwrap().body,
+            Some(runtime_frame::Body::TerminalResponse(_))
         ));
     }
 }

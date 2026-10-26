@@ -73,6 +73,45 @@ Revoke before `forget` or uninstalling; retry a failed revocation with its retai
 enrollment. Certificates renew automatically, or use `control-plane renew`.
 The standalone `colossus-connector` supports the same commands without the prefix.
 
+## Enable a web shell
+
+Remote human shells are available for explicitly enabled CLI daemons. Desktop's local
+Terminal setting does not grant remote access.
+
+Linux workers need kernel pidfd support and a readable `/proc` for ordinary job cleanup.
+Complete the Control Plane rollout on every replica before enabling terminals or
+assigning the new Terminal operator role; older replicas cannot read that role or
+provide the terminal relay.
+
+During the offline application enrollment above, add `--scope terminals:control` to the
+connector application's grant. Start the public worker with `--enable-human-terminals`:
+
+```sh
+colossus --workspace /work/project --config /secure/runtime.yaml worker \
+  --public-api-dir /secure/runtime-api --enable-human-terminals
+```
+
+Assign the human account the project's **Terminal operator** role. Existing Operator,
+Approver, Project administrator, and global administrator rights do not automatically
+include terminal access. The host flag, native application scope, and project permission
+must all permit access before the enrolled workspace advertises **Open Shell**.
+
+In Fleet, select the agent's workspace and choose **Open Shell**. The shell runs as the
+worker's OS account and starts in its selected workspace. It is a human shell with that
+account's filesystem and network authority; individual commands do not pass through
+agent approvals or become model context. The browser cannot choose another executable,
+starting directory, environment, or application credential.
+
+Detach preserves the shell for up to two minutes without an active reader. Reopening
+reattaches to that process. **Close shell** ends it. A terminal has an eight-hour maximum
+lifetime; each worker admits up to eight sessions, with at most four per human/application.
+Browser, connector, and Control Plane reconnection preserve the shell while the worker
+survives. A worker or machine restart ends it, and Colossus does not rerun its commands.
+
+Output history is bounded. A fresh pane replays complete retained output and resize
+events; if earlier history has been evicted, it reports a gap instead of claiming to
+restore the screen. Unconfirmed input is never automatically resent after disconnect.
+
 ## Run unattended
 
 Supervise worker and connector separately as the same selected OS user: systemd

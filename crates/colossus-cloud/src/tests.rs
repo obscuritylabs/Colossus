@@ -24,6 +24,8 @@ mod personal_roles;
 mod plans;
 #[path = "tests/resources.rs"]
 mod resources;
+#[path = "tests/terminal_authority.rs"]
+mod terminal_authority;
 #[path = "tests/thread_metadata.rs"]
 mod thread_metadata;
 #[path = "tests/titles.rs"]

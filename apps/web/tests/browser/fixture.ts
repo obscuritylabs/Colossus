@@ -112,6 +112,7 @@ export async function browserFixture(
   page: Page,
   options: {
     administer?: boolean;
+    terminal?: boolean;
     globalAdmin?: boolean;
     running?: boolean;
     plan?: boolean;
@@ -131,7 +132,11 @@ export async function browserFixture(
     user: { ...me.user, is_admin: Boolean(options.globalAdmin) },
     memberships: me.memberships.map((membership) => ({
       ...membership,
-      permissions: options.permissions ?? membership.permissions,
+      permissions:
+        options.permissions ??
+        (options.terminal
+          ? [...membership.permissions, "terminal" as const]
+          : membership.permissions),
     })),
     projects: me.projects.map((project) => ({
       ...project,
@@ -151,6 +156,12 @@ export async function browserFixture(
     : null;
   const runtimeNode = {
     ...node,
+    presence: {
+      ...node.presence!,
+      capabilities: options.terminal
+        ? [...capabilities, "human_terminal.v1"]
+        : capabilities,
+    },
     node: {
       ...node.node,
       node_id: options.managedChat ? `chat-${"a".repeat(64)}` : "browser-node",

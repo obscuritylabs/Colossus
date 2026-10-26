@@ -2,7 +2,6 @@
 use super::{control_frame, send, status, wire};
 use colossus_cloud::storage::{CloudStore, ConnectionLease, RuntimeResourceRequest};
 use colossus_cloud_protocol::{ResourceOperation, ResourceReply, encode};
-use tokio::sync::mpsc;
 use tonic::Status;
 
 pub(super) async fn dispatch(
@@ -10,7 +9,7 @@ pub(super) async fn dispatch(
     lease: &ConnectionLease,
     request: RuntimeResourceRequest,
     model_catalog_enabled: bool,
-    sender: &mpsc::Sender<Result<wire::ControlFrame, Status>>,
+    sender: &super::FrameSender,
 ) -> Result<(), Status> {
     if matches!(request.operation, ResourceOperation::ModelCatalog {}) && !model_catalog_enabled {
         // HTTP admission can happen on another replica. Only this connection's

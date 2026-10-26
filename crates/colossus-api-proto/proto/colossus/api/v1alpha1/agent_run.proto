@@ -12,6 +12,8 @@ option java_package = "com.obscuritylabs.colossus.api.v1alpha1";
 
 // AgentRunService manages durable asynchronous runs and one-use interactions.
 service AgentRunService {
+  // HumanTerminal operates a separately authorized fixed native shell.
+  rpc HumanTerminal(HumanTerminalRequest) returns (HumanTerminalResponse);
   // ListProcessSessions discovers caller-owned managed shells in this runtime.
   rpc ListProcessSessions(ListProcessSessionsRequest) returns (ListProcessSessionsResponse);
 
@@ -54,6 +56,17 @@ service AgentRunService {
   rpc ListVisibleRuns(ListVisibleRunsRequest) returns (ListVisibleRunsResponse);
   // Caller-scoped configuration metadata; never an enforcement attestation or raw config.
   rpc GetRuntimePolicyPosture(GetRuntimePolicyPostureRequest) returns (GetRuntimePolicyPostureResponse);
+}
+
+// HumanTerminalRequest carries one closed strict JSON terminal envelope, at most128KiB.
+message HumanTerminalRequest {
+  // Canonical HumanTerminalRequest JSON; unknown fields and invalid bounds fail closed.
+  bytes request_json = 1;
+}
+// HumanTerminalResponse carries one bounded typed terminal reply, at most128KiB.
+message HumanTerminalResponse {
+  // Canonical HumanTerminalReply JSON; never a credential or native path.
+  bytes reply_json = 1;
 }
 
 // RunMode selects the runtime's public execution mode.

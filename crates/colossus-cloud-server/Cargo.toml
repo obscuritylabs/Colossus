@@ -9,7 +9,7 @@ license.workspace = true
 
 [dependencies]
 argon2.workspace = true
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 chrono.workspace = true
 async-trait.workspace = true
 colossus-cloud.workspace = true
@@ -33,6 +33,8 @@ colossus-journal-postgres.workspace = true
 colossus-sdk = { workspace = true, features = ["serialization"] }
 futures.workspace = true
 hex.workspace = true
+hmac.workspace = true
+http-body = "1.0.1"
 openidconnect.workspace = true
 rcgen = { workspace = true, features = ["x509-parser"] }
 reqwest.workspace = true
@@ -44,6 +46,7 @@ tokio.workspace = true
 tokio-rustls.workspace = true
 rustls.workspace = true
 tower-http = { version = "0.6.11", features = ["fs", "set-header"] }
+tower.workspace = true
 tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true, features = ["transport", "tls-ring"] }
 getrandom.workspace = true
@@ -53,9 +56,11 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+colossus-api-proto.workspace = true
+colossus-grpc.workspace = true
 colossus-connector.workspace = true
 tempfile.workspace = true
-tower.workspace = true
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect", "handshake"] }
 colossus-control-plane-client = { version = "=0.11.11-preview.2", path = "../colossus-control-plane-client" }
 colossus-testkit.workspace = true
 serde-saphyr.workspace = true
@@ -63,6 +68,7 @@ p256.workspace = true
 colossus-api-runtime.workspace = true
 colossus-policy.workspace = true
 colossus-sdk = { workspace = true, features = ["embedded", "serialization", "sidecar"] }
+vt100.workspace = true
 
 [lints]
 workspace = true

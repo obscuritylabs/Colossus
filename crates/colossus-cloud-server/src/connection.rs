@@ -1,7 +1,7 @@
 use crate::server::{NodePresence, State, db};
 use colossus_cloud::{CloudError, CloudNode};
 use colossus_cloud_protocol::{
-    Command, MAX_PAYLOAD_BYTES, MAX_QUEUED_FRAMES, PROTOCOL_MAJOR, decode, decode_update, encode,
+    Command, MAX_PAYLOAD_BYTES, PROTOCOL_MAJOR, decode, decode_update, encode,
     v1alpha1::{
         self as wire, control_frame,
         runtime_connection_server::{RuntimeConnection, RuntimeConnectionServer},
@@ -14,13 +14,14 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{
     Request, Response, Status, Streaming,
     transport::server::{TcpConnectInfo, TlsConnectInfo},
 };
+pub(crate) mod outbound;
 mod resources;
+pub(crate) use outbound::FrameSender;
+use outbound::FrameStream;
 
 pub(crate) fn service(state: Arc<State>) -> RuntimeConnectionServer<Connection> {
     RuntimeConnectionServer::new(Connection(state))
@@ -30,7 +31,7 @@ pub(crate) fn service(state: Arc<State>) -> RuntimeConnectionServer<Connection> 
 pub(crate) struct Connection(Arc<State>);
 #[tonic::async_trait]
 impl RuntimeConnection for Connection {
-    type ConnectStream = ReceiverStream<Result<wire::ControlFrame, Status>>;
+    type ConnectStream = FrameStream;
     async fn revoke_enrollment(
         &self,
         request: Request<wire::EnrollmentIdentity>,
@@ -142,6 +143,10 @@ impl RuntimeConnection for Connection {
             .capabilities
             .iter()
             .any(|cap| cap == colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY);
+        let terminal_enabled = hello
+            .capabilities
+            .iter()
+            .any(|cap| cap == colossus_cloud_protocol::TERMINAL_CAPABILITY);
         let connection_id = format!("{}-{}", self.0.replica_id, uuid::Uuid::now_v7().simple());
         let key = format!("{}:{}", node.project_id, node.node_id);
         let lease = self
@@ -158,6 +163,14 @@ impl RuntimeConnection for Connection {
             .await
             .map_err(status)?;
         let prepared = async {
+            // Keep remote HTTP replicas' capability discovery bound to this exact
+            // authenticated connection generation, rather than their local map.
+            self.0
+                .repo
+                .storage()
+                .publish_lease_capabilities(&lease, hello.capabilities.clone(), crate::http::now())
+                .await
+                .map_err(status)?;
             let node = if let Some(inventory) = inventory {
                 tokio::time::timeout(
                     Duration::from_secs(5),
@@ -201,7 +214,7 @@ impl RuntimeConnection for Connection {
                     .await
                     .map_err(status)?;
             }
-            let (sender, receiver) = mpsc::channel(MAX_QUEUED_FRAMES);
+            let (sender, receiver) = outbound::channel();
             sender
                 .send(Ok(wire::ControlFrame {
                     body: Some(control_frame::Body::Welcome(wire::ConnectionWelcome {
@@ -229,6 +242,12 @@ impl RuntimeConnection for Connection {
             }
         };
         let state = self.0.clone();
+        if terminal_enabled {
+            state
+                .terminal
+                .connect(lease.clone(), sender.clone())
+                .map_err(|_| Status::resource_exhausted("terminal connection bound"))?;
+        }
         tokio::spawn(async move {
             let result = serve_connection(
                 state.clone(),
@@ -245,6 +264,7 @@ impl RuntimeConnection for Connection {
                 &sender,
             )
             .await;
+            state.terminal.disconnect(&lease);
             let _ = state.repo.storage().release_lease(&lease).await;
             if let Ok(mut presence) = state.presence.lock()
                 && presence
@@ -258,7 +278,7 @@ impl RuntimeConnection for Connection {
                 let _ = sender.send(Err(error)).await;
             }
         });
-        Ok(Response::new(ReceiverStream::new(receiver)))
+        Ok(Response::new(receiver))
     }
 }
 fn peer_fingerprint<T>(request: &Request<T>) -> Result<String, Status> {
@@ -283,7 +303,7 @@ async fn serve_connection(
     state: Arc<State>,
     scope: ConnectionScope,
     mut inbound: Streaming<wire::RuntimeFrame>,
-    sender: &mpsc::Sender<Result<wire::ControlFrame, Status>>,
+    sender: &FrameSender,
 ) -> Result<(), Status> {
     let ConnectionScope {
         node,
@@ -338,6 +358,9 @@ async fn serve_connection(
                     Some(runtime_frame::Body::ResourceResponse(response)) => {
                         let reply = decode(&response.reply_json).map_err(|_| Status::invalid_argument("invalid resource response"))?;
                         state.repo.storage().resource_complete(&lease,&response.request_id,reply,crate::http::now()).await.map_err(status)?;
+                    },
+                    Some(runtime_frame::Body::TerminalResponse(response)) => {
+                        state.terminal.complete(&lease, response)?;
                     },
                     Some(runtime_frame::Body::Receipt(receipt))=>{
                         let reply=decode(&receipt.reply_json).map_err(|_|Status::invalid_argument("invalid receipt"))?;
@@ -518,10 +541,7 @@ async fn serve_connection(
         }
     }
 }
-async fn send(
-    sender: &mpsc::Sender<Result<wire::ControlFrame, Status>>,
-    body: control_frame::Body,
-) -> Result<(), Status> {
+async fn send(sender: &FrameSender, body: control_frame::Body) -> Result<(), Status> {
     tokio::time::timeout(
         Duration::from_secs(10),
         sender.send(Ok(wire::ControlFrame { body: Some(body) })),

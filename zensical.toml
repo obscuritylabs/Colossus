@@ -188,6 +188,7 @@ nav = [
       { "ADR 0008: Owned Chromium browser" = "develop/adr/0008-owned-chromium-browser.md" },
       { "ADR 0009: Hosted execution" = "develop/adr/0009-hosted-execution.md" },
       { "ADR 0010: Control Plane Helm" = "develop/adr/0010-control-plane-helm-database-boundary.md" },
+      { "ADR 0011: Fleet human terminals" = "develop/adr/0011-fleet-human-terminals.md" },
     ] },
     { "Runtime and ports" = "develop/runtime-ports.md" },
     { "OpenTelemetry implementation" = "develop/observability.md" },

@@ -41,7 +41,8 @@ export interface Member {
   revision: number;
   active?: boolean;
 }
-export type ProjectRole = "viewer" | "operator" | "approver" | "project_admin";
+export type ProjectRole =
+  "viewer" | "operator" | "terminal_operator" | "approver" | "project_admin";
 export const projectRoles: {
   value: ProjectRole;
   label: string;
@@ -56,6 +57,12 @@ export const projectRoles: {
     value: "operator",
     label: "Operator",
     description: "Read, execute, and control authorized agent work.",
+  },
+  {
+    value: "terminal_operator",
+    label: "Terminal operator",
+    description:
+      "Operate agent work and open human shells on explicitly enabled fleet hosts.",
   },
   {
     value: "approver",
@@ -93,6 +100,7 @@ export function projectPermissions(
     permissions.delete("execute");
     permissions.delete("control");
     permissions.delete("approve");
+    permissions.delete("terminal");
   }
   return [...permissions];
 }

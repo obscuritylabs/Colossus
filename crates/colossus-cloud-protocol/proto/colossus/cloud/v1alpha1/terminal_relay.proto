@@ -1,0 +1,19 @@
+syntax = "proto3";
+package colossus.cloud.v1alpha1;
+
+// Cluster-internal, independently authenticated forwarding to an exact connector owner.
+service ReplicaTerminalRelay {
+  rpc Dispatch(ReplicaTerminalRequest) returns (ReplicaTerminalResponse);
+}
+message ReplicaTerminalRequest {
+  string project_id = 1;
+  string node_id = 2;
+  string connection_id = 3;
+  uint64 generation = 4;
+  // Strict bounded HumanTerminalRequest JSON. No browser-chosen routing address.
+  bytes request_json = 5;
+}
+message ReplicaTerminalResponse {
+  // Strict bounded ApiResult<HumanTerminalReply> JSON.
+  bytes reply_json = 1;
+}

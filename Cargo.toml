@@ -38,6 +38,7 @@ members = [
     "crates/colossus-sandbox",
     "crates/colossus-windows-process",
     "crates/colossus-windows-native",
+    "crates/colossus-terminal",
     "crates/colossus-access",
     "crates/colossus-network",
     "crates/colossus-policy",
@@ -122,6 +123,7 @@ http = "1.4.2"
 futures = "0.3.31"
 flate2 = "1.1.9"
 fs4 = "0.13.1"
+filedescriptor = "0.8.3"
 globset = "0.4.18"
 ignore = "0.4.28"
 jiff = { version = "0.2.32", default-features = false, features = ["std", "tzdb-bundle-always"] }
@@ -219,6 +221,7 @@ colossus-contracts = { version = "=0.11.11-preview.2", path = "crates/colossus-c
 colossus-credentials = { version = "=0.11.11-preview.2", path = "crates/colossus-credentials" }
 colossus-api-proto = { version = "=0.11.11-preview.2", path = "crates/colossus-api-proto" }
 colossus-api = { version = "=0.11.11-preview.2", path = "crates/colossus-api" }
+colossus-terminal = { version = "=0.11.11-preview.2", path = "crates/colossus-terminal" }
 colossus-api-runtime = { version = "=0.11.11-preview.2", path = "crates/colossus-api-runtime" }
 colossus-grpc = { version = "=0.11.11-preview.2", path = "crates/colossus-grpc" }
 colossus-home = { version = "=0.11.11-preview.2", path = "crates/colossus-home" }

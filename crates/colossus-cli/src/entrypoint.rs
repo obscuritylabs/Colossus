@@ -335,7 +335,9 @@ async fn runtime_command(
                     credential_store(directory, worker.public_api_vault_key_variable.as_deref())?;
                 let environment = PublicApiEnvironment::open(directory, store.as_ref())?;
                 let credentials = environment.credential_manager(&server);
-                let options = environment.host_options(&credentials)?;
+                let options = environment
+                    .host_options(&credentials)?
+                    .with_human_terminals(worker.enable_human_terminals);
                 let server = server.enable_public_api(options).await?;
                 eprintln!(
                     "public API discovery published in {}",

@@ -271,6 +271,37 @@ impl AgentRunService for AgentRunServiceAdapter {
             },
         ))
     }
+    async fn human_terminal(
+        &self,
+        request: Request<colossus_api_proto::v1alpha1::HumanTerminalRequest>,
+    ) -> Result<Response<colossus_api_proto::v1alpha1::HumanTerminalResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let bytes = request.into_inner().request_json;
+        if bytes.is_empty() || bytes.len() > 128 * 1024 {
+            return Err(Status::invalid_argument("invalid terminal envelope"));
+        }
+        let request: colossus_api::HumanTerminalRequest = serde_json::from_slice(&bytes)
+            .map_err(|_| Status::invalid_argument("invalid terminal envelope"))?;
+        if !request.validate() {
+            return Err(Status::invalid_argument("invalid terminal request"));
+        }
+        let response = self
+            .api
+            .human_terminal(&caller, request)
+            .await
+            .map_err(api_status)?;
+        let bytes = serde_json::to_vec(&response)
+            .map_err(|_| Status::internal("terminal response unavailable"))?;
+        if bytes.len() > 128 * 1024 {
+            return Err(Status::resource_exhausted(
+                "terminal response bound exceeded",
+            ));
+        }
+        Ok(Response::new(
+            colossus_api_proto::v1alpha1::HumanTerminalResponse { reply_json: bytes },
+        ))
+    }
+
     async fn list_process_sessions(
         &self,
         request: Request<colossus_api_proto::v1alpha1::ListProcessSessionsRequest>,

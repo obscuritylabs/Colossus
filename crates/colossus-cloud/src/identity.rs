@@ -16,6 +16,8 @@ pub enum CloudPermission {
     Approve,
     /// Enroll and revoke project nodes.
     Administer,
+    /// Open and control explicitly enabled human terminals on Fleet workspaces.
+    Terminal,
 }
 
 /// Project authority constructed only after the host authenticates an identity.

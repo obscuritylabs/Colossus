@@ -62,6 +62,11 @@ mod stream;
 mod types;
 pub use sharing::{ListVisibleRunsResponse, VisibleRun};
 mod workflows;
+pub use colossus_api::{
+    HUMAN_TERMINAL_CAPABILITY, HUMAN_TERMINAL_SCOPE, HumanTerminalFrame, HumanTerminalFrameKind,
+    HumanTerminalOperation, HumanTerminalReply, HumanTerminalRequest, HumanTerminalSession,
+    HumanTerminalSignal, HumanTerminalStatus,
+};
 pub use plugins::*;
 pub use workflows::*;
 

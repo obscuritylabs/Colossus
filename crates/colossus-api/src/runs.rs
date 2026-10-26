@@ -1713,6 +1713,18 @@ pub trait AgentRunApi: Send + Sync {
             next_page_token: page.next_page_token,
         })
     }
+    /// Operate a separately authorized human terminal, never an agent tool.
+    async fn human_terminal(
+        &self,
+        _caller: &CallerContext,
+        _request: crate::HumanTerminalRequest,
+    ) -> ApiResult<crate::HumanTerminalReply> {
+        Err(ApiError::failed_precondition(
+            ApiErrorReason::InvalidRunTransition,
+            "human terminals are unavailable",
+        ))
+    }
+
     /// List caller-owned managed shells.
     async fn list_process_sessions(
         &self,

@@ -45,7 +45,7 @@ pub(crate) fn router(state: Arc<State>) -> Router {
         .route("/api/projects/{project}/tasks/{task}/cancel",post(cancel))
         .route("/api/projects/{project}/tasks/{task}/respond",post(respond))
         .route("/api/projects/{project}/tasks/{task}/inboxes",post(inspect_inboxes))
-        .merge(crate::resources::router()).merge(crate::admin::router()).merge(crate::announcements::router()).merge(crate::observability::router()).merge(crate::settings::router()).merge(crate::chat::router()).merge(crate::hosted::router()).merge(crate::chat_settings::router()).merge(crate::chat_credentials::router()).merge(crate::global_settings::router())
+        .merge(crate::resources::router()).merge(crate::terminal::router()).merge(crate::admin::router()).merge(crate::announcements::router()).merge(crate::observability::router()).merge(crate::settings::router()).merge(crate::chat::router()).merge(crate::hosted::router()).merge(crate::chat_settings::router()).merge(crate::chat_credentials::router()).merge(crate::global_settings::router())
         .fallback_service(spa::service(&state.config.web_root))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::HeaderName::from_static("x-content-type-options"), header::HeaderValue::from_static("nosniff")))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::HeaderName::from_static("referrer-policy"),header::HeaderValue::from_static("no-referrer")))
@@ -269,7 +269,7 @@ async fn nodes(
                 Ok(lease) => Some(crate::server::NodePresence {
                     connection_id: lease.owner_id,
                     ready: node.runtime_ready,
-                    capabilities: Vec::new(),
+                    capabilities: lease.capabilities,
                     heartbeat: None,
                 }),
                 Err(CloudError::NotFound) => None,
@@ -919,7 +919,7 @@ async fn node_detail(
             Ok(lease) => Some(crate::server::NodePresence {
                 connection_id: lease.owner_id,
                 ready: node.runtime_ready,
-                capabilities: Vec::new(),
+                capabilities: lease.capabilities,
                 heartbeat: None,
             }),
             Err(CloudError::NotFound) => None,
