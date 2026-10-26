@@ -136,16 +136,11 @@ run cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
 
 run cargo deny --locked check -A license-not-encountered licenses sources bans
 run cargo deny --locked check -D warnings advisories
-# Tantivy 0.26.1 uses `usize` lru keys, so the panicking key destructor required
-# by RUSTSEC-2026-0253 is unreachable. Tantivy merged lru 0.18.2 for its next
-# registry release in quickwit-oss/tantivy#3034. Remove this exact exception
-# with that upgrade. cargo-deny does not report this informational advisory, so
-# its advisory policy remains unmodified.
 # OpenID Connect verifies public signatures only; no RSA private-key operations.
 # Its legacy EC arithmetic also handles public verification only; secret signing
-# uses p256 0.14 / crypto-bigint 0.7.6. Keep these exact OIDC exceptions aligned
+# uses p256 0.14 / crypto-bigint 0.7.10. Keep these exact OIDC exceptions aligned
 # with deny.toml and ADR 0006, including the legacy arithmetic wrapper bans.
-run cargo audit -D warnings --ignore RUSTSEC-2026-0253 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0387 --file Cargo.lock
+run cargo audit -D warnings --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0387 --file Cargo.lock
 
 run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -A license-not-encountered licenses sources bans
 run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings -A advisory-not-detected advisories

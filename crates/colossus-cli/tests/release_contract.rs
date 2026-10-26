@@ -657,7 +657,7 @@ fn release_readiness_verifier_is_evergreen_and_pinned() {
 }
 
 #[test]
-fn temporary_lru_advisory_exception_is_exact_documented_and_consistent() {
+fn retired_lru_advisory_exception_is_absent_and_dependency_is_patched() {
     const ADVISORY: &str = "RUSTSEC-2026-0253";
     let root = repository_root();
     let deny = fs::read_to_string(root.join("deny.toml")).expect("read deny policy");
@@ -670,27 +670,39 @@ fn temporary_lru_advisory_exception_is_exact_documented_and_consistent() {
     let lock = fs::read_to_string(root.join("Cargo.lock")).expect("read root lockfile");
 
     for (name, source) in [
+        ("cargo-deny", deny.as_str()),
         ("release verifier", verifier.as_str()),
         ("xtask", xtask.as_str()),
         ("CI documentation", ci_docs.as_str()),
     ] {
         assert!(
-            source.contains(ADVISORY),
-            "{name} must carry the exact temporary advisory ID"
+            !source.contains(ADVISORY),
+            "{name} must not retain the retired advisory exception"
         );
     }
+    let lru_versions = lock
+        .split("[[package]]")
+        .filter(|package| package.lines().any(|line| line == "name = \"lru\""))
+        .map(|package| {
+            package
+                .lines()
+                .find_map(|line| line.strip_prefix("version = \"")?.strip_suffix('"'))
+                .expect("lru package version")
+                .split('.')
+                .map(|component| component.parse::<u64>().expect("lru version component"))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
     assert!(
-        !deny.contains(ADVISORY),
-        "cargo-deny must not ignore the informational lru advisory"
+        !lru_versions.is_empty(),
+        "the resolved lru dependency is absent"
     );
-    for required in ["LruCache<usize, Block>", "Tantivy PR #3034", "`lru` 0.18.2"] {
+    for version in lru_versions {
         assert!(
-            ci_docs.contains(required),
-            "CI documentation is missing the exception rationale {required}"
+            version.as_slice() >= [0, 18, 2].as_slice(),
+            "unpatched lru dependency: {version:?}"
         );
     }
-    assert!(lock.contains("name = \"lru\"\nversion = \"0.18.2\""));
-    assert!(!lock.contains("name = \"lru\"\nversion = \"0.18.1\""));
 }
 
 #[test]
@@ -735,12 +747,8 @@ fn oidc_public_verification_exception_is_exact_and_scoped() {
     ignored.sort_unstable();
     assert_eq!(
         ignored,
-        [
-            "RUSTSEC-2023-0071",
-            "RUSTSEC-2026-0253",
-            "RUSTSEC-2026-0387"
-        ],
-        "the release audit must carry only the reviewed OIDC and Tantivy exceptions"
+        ["RUSTSEC-2023-0071", "RUSTSEC-2026-0387"],
+        "the release audit must carry only the reviewed OIDC exceptions"
     );
     let xtask = fs::read_to_string(root.join("xtask/src/checks/surfaces.rs")).unwrap();
     for name in [

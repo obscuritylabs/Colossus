@@ -9,16 +9,9 @@ use crate::repository::Repository;
 const OIDC_RSA_PRIVATE_KEY_ADVISORY: &str = "RUSTSEC-2023-0071";
 
 // OpenID Connect's legacy EC arithmetic only verifies public provider signatures.
-// Application secret signing uses p256 0.14 / crypto-bigint 0.7.6. Keep this exact
+// Application secret signing uses p256 0.14 / crypto-bigint 0.7.10. Keep this exact
 // exception aligned with deny.toml and ADR 0006, including its wrapper bans.
 const OIDC_EC_PRIVATE_KEY_ADVISORY: &str = "RUSTSEC-2026-0387";
-
-// Tantivy 0.26.1 stores `usize` keys in its lru cache, so the panicking key
-// destructor required by this advisory is unreachable. Upstream has merged
-// lru 0.18.2 for its next registry release. Keep this cargo-audit exception
-// exact and documented, and remove it with that upgrade. cargo-deny does not
-// report this informational advisory.
-const TANTIVY_LRU_PANIC_SAFETY_ADVISORY: &str = "RUSTSEC-2026-0253";
 
 pub(super) fn sidecar(repository: &Repository) -> Result<(), String> {
     repository
@@ -370,8 +363,6 @@ pub(super) fn dependencies(repository: &Repository) -> Result<(), String> {
             "audit",
             "-D",
             "warnings",
-            "--ignore",
-            TANTIVY_LRU_PANIC_SAFETY_ADVISORY,
             "--ignore",
             OIDC_RSA_PRIVATE_KEY_ADVISORY,
             "--ignore",

@@ -61,7 +61,7 @@ serde_json = { version = "1.0.149", optional = true }
 hex = { version = "0.4.3", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-colossus-darwin-process = { version = "=0.11.11-preview.2", path = "../../../crates/colossus-darwin-process", optional = true }
+colossus-darwin-process = { version = "=0.11.11-preview.3", path = "../../../crates/colossus-darwin-process", optional = true }
 colossus-native-browser-mac-identity = { version = "=0.1.0", path = "../pki/mac", optional = true }
 
 [lints.rust]
