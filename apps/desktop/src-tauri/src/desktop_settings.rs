@@ -3005,10 +3005,10 @@ mod tests {
                     })),
                     "setup_shape" => {
                         fields.last_mut().expect("retired field")["surprise"] =
-                            serde_json::json!(true)
+                            serde_json::json!(true);
                     }
                     "setup_root" => {
-                        config["memory"] = serde_json::json!({"semantic": {"kind": "disabled"}})
+                        config["memory"] = serde_json::json!({"semantic": {"kind": "disabled"}});
                     }
                     _ => unreachable!(),
                 }
