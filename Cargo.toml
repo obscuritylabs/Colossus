@@ -54,7 +54,6 @@ members = [
     "crates/colossus-work",
     "crates/colossus-communication",
     "crates/colossus-memory",
-    "crates/colossus-memory-chroma",
     "crates/colossus-research",
     "crates/colossus-telemetry",
     "crates/colossus-observability",
@@ -239,7 +238,6 @@ colossus-domain = { version = "=0.11.11-preview.3", path = "crates/colossus-doma
 colossus-journal-redb = { version = "=0.11.11-preview.3", path = "crates/colossus-journal-redb" }
 colossus-journal-postgres = { version = "=0.11.11-preview.3", path = "crates/colossus-journal-postgres" }
 colossus-memory = { version = "=0.11.11-preview.3", path = "crates/colossus-memory" }
-colossus-memory-chroma = { version = "=0.11.11-preview.3", path = "crates/colossus-memory-chroma" }
 colossus-network = { version = "=0.11.11-preview.3", path = "crates/colossus-network" }
 colossus-research = { version = "=0.11.11-preview.3", path = "crates/colossus-research" }
 colossus-telemetry = { version = "=0.11.11-preview.3", path = "crates/colossus-telemetry" }

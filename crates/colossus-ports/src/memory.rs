@@ -16,7 +16,6 @@ pub trait MemoryIndex: Send + Sync {
         memory_id: &str,
         text: &str,
         metadata: &Value,
-        embedding: Option<&[f32]>,
     ) -> Result<(), StoreError>;
 
     /// Idempotently remove an indexed record.
@@ -43,11 +42,4 @@ pub trait MemoryRetriever: Send + Sync {
         context: ExecutionContext,
         limit: usize,
     ) -> Result<Vec<MemoryRecord>, StoreError>;
-}
-
-/// Provider for caller-generated embedding vectors.
-#[async_trait]
-pub trait EmbeddingProvider: Send + Sync {
-    /// Embed bounded input text.
-    async fn embed(&self, text: &str) -> Result<Vec<f32>, StoreError>;
 }

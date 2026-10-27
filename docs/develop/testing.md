@@ -52,7 +52,6 @@ when those boundaries change.
 | `colossus-journal-redb` | Keep shared journal conformance, encryption, tamper, migration, and crash-recovery tests; retained on-disk readers protect current state. |
 | `colossus-linux-native` | Keep bounded file-handle capture and strict NFS volume-scope parser tests; run native capture checks on Linux CI. |
 | `colossus-mcp` | Keep strict configuration, protocol, OAuth, tool ceiling, and subprocess/remote tests. |
-| `colossus-memory-chroma` | Keep projection/retry tests and the opt-in live Chroma target. |
 | `colossus-memory` | Keep canonical lifecycle, scope, Tantivy projection, and fallback tests. |
 | `colossus-network` | Keep DNS pinning, redirects, trust roots, response bounds, and authority tests. |
 | `colossus-observability` | Keep disabled-by-default, redaction, payload-mode, and exporter tests. |

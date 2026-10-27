@@ -12,7 +12,6 @@ pub async fn assert_memory_index_conformance(index: &dyn MemoryIndex) {
             "memory-1",
             "Rust audit journal",
             &serde_json::json!({"scope": "global"}),
-            None,
         )
         .await
         .expect("index upsert");
@@ -22,7 +21,6 @@ pub async fn assert_memory_index_conformance(index: &dyn MemoryIndex) {
             "memory-1",
             "duplicate event must be idempotent",
             &serde_json::json!({"scope": "global"}),
-            None,
         )
         .await
         .expect("idempotent index upsert");

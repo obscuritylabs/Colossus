@@ -64,10 +64,9 @@ impl MemoryIndex for LazyTantivyMemoryIndex {
         memory_id: &str,
         text: &str,
         metadata: &Value,
-        embedding: Option<&[f32]>,
     ) -> Result<(), StoreError> {
         self.opened()?
-            .upsert(event_id, memory_id, text, metadata, embedding)
+            .upsert(event_id, memory_id, text, metadata)
             .await
     }
 
@@ -121,7 +120,6 @@ impl MemoryIndex for UnavailableMemoryIndex {
         _memory_id: &str,
         _text: &str,
         _metadata: &Value,
-        _embedding: Option<&[f32]>,
     ) -> Result<(), StoreError> {
         Err(StoreError::Adapter(self.reason.clone()))
     }
@@ -265,7 +263,6 @@ impl MemoryIndex for TantivyMemoryIndex {
         memory_id: &str,
         text: &str,
         metadata: &Value,
-        _embedding: Option<&[f32]>,
     ) -> Result<(), StoreError> {
         if self.processed(event_id)? {
             return Ok(());

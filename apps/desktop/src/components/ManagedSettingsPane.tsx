@@ -852,14 +852,6 @@ const FIELD_DESCRIPTORS: ManagedFieldDescriptor[] = [
     1,
     100,
   ),
-  advancedField(
-    "memory.semantic",
-    "Memory",
-    "Semantic projection",
-    "Configure the optional semantic-memory projection.",
-    "json",
-    { kind: "disabled" },
-  ),
   toggleField(
     "plugins.enabled",
     "Plugins",

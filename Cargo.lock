@@ -1891,26 +1891,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "colossus-memory-chroma"
-version = "0.11.11-preview.3"
-dependencies = [
- "async-trait",
- "colossus-contracts",
- "colossus-network",
- "colossus-policy",
- "colossus-ports",
- "colossus-testkit",
- "futures",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "url",
-]
-
-[[package]]
 name = "colossus-native-browser-pki"
 version = "0.1.0"
 dependencies = [
@@ -2199,7 +2179,6 @@ dependencies = [
  "colossus-mcp",
  "colossus-media",
  "colossus-memory",
- "colossus-memory-chroma",
  "colossus-network",
  "colossus-observability",
  "colossus-plugins",

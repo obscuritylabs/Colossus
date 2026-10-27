@@ -344,29 +344,26 @@ fn external_work_consumers_advance_independently_and_replay_after_reset() {
     let store_port: Arc<dyn ProjectionStore> = store;
     let queue = JournalExternalWorkQueue::new(journal_port, store_port);
 
-    let lexical = queue.pending("memory.tantivy-v1", 8).expect("lexical work");
-    let semantic = queue.pending("memory.chroma-v1", 8).expect("semantic work");
-    assert_eq!(lexical, semantic);
-    assert_eq!(lexical.len(), 2);
+    let first = queue.pending("fixture.first-v1", 8).expect("first work");
+    let second = queue.pending("fixture.second-v1", 8).expect("second work");
+    assert_eq!(first, second);
+    assert_eq!(first.len(), 2);
 
     assert_eq!(
         queue
-            .acknowledge("memory.tantivy-v1", 0, &lexical[0])
-            .expect("lexical acknowledge"),
+            .acknowledge("fixture.first-v1", 0, &first[0])
+            .expect("first acknowledge"),
         1
     );
-    assert_eq!(queue.position("memory.tantivy-v1").expect("lexical"), 1);
-    assert_eq!(queue.position("memory.chroma-v1").expect("semantic"), 0);
+    assert_eq!(queue.position("fixture.first-v1").expect("first"), 1);
+    assert_eq!(queue.position("fixture.second-v1").expect("second"), 0);
     assert!(matches!(
-        queue.acknowledge("memory.tantivy-v1", 0, &lexical[1]),
+        queue.acknowledge("fixture.first-v1", 0, &first[1]),
         Err(StoreError::Adapter(_))
     ));
 
-    queue.reset("memory.tantivy-v1").expect("reset");
-    assert_eq!(
-        queue.pending("memory.tantivy-v1", 8).expect("replay"),
-        lexical
-    );
+    queue.reset("fixture.first-v1").expect("reset");
+    assert_eq!(queue.pending("fixture.first-v1", 8).expect("replay"), first);
 }
 
 #[test]

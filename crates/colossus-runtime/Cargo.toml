@@ -32,7 +32,6 @@ colossus-home.workspace = true
 colossus-journal-redb.workspace = true
 colossus-journal-postgres.workspace = true
 colossus-memory.workspace = true
-colossus-memory-chroma.workspace = true
 colossus-media.workspace = true
 colossus-mcp.workspace = true
 colossus-network.workspace = true

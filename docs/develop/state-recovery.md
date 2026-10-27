@@ -53,7 +53,7 @@ storage and local ownership contract.
 
 - Session discovery, work lists, and other projections are rebuildable read models.
 - Canonical session messages are reconstructed from their streams.
-- Tantivy and optional Chroma store memory candidate projections, not lifecycle truth.
+- Tantivy stores disposable memory candidate projections, not lifecycle truth.
 - Audit exporters consume a durable outbox and expose ciphertext-free evidence.
 - Each external-work consumer has an independent optimistic position and retry state.
 - `effects-recovery-v1` is a disposable operational view of effects with a durable

@@ -20,7 +20,7 @@ turn infrastructure into domain authority.
 | Sessions | `colossus-session` | Canonical session repository |
 | Context compaction | `colossus-context` | `ContextPreparer` |
 | Tasks, decisions, plans, goals, agents | `colossus-work` and runtime services | Canonical work repositories and effect executors |
-| Memory lifecycle and retrieval | `colossus-memory` | Repository, external-work queue, lexical/semantic index ports |
+| Memory lifecycle and retrieval | `colossus-memory` | Repository, external-work queue, lexical index port |
 | Workflow definitions and runs | `colossus-workflow` | Workflow repository and effect dispatcher |
 | Research | `colossus-research` | Repository, search, MCP, and model ports |
 | Telemetry | `colossus-telemetry` | Persisted run-event query port |

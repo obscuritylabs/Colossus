@@ -255,10 +255,6 @@ fn validate_portable_defaults(
         let value = &field.value;
         let needs_local_credentials = match field.field_id.as_str() {
             "audit.exporter" => present(value, "/credentialReference"),
-            "memory.semantic" => {
-                present(value, "/credentialReference")
-                    || present(value, "/embedding/credentialReference")
-            }
             "plugins.registries" => value.as_object().is_some_and(|registries| {
                 registries.values().any(|registry| {
                     present(registry, "/auth/credentialReference")

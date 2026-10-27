@@ -119,17 +119,11 @@ async fn tantivy_index_is_idempotent_disposable_and_returns_candidate_ids() {
     let directory = tempdir().expect("tempdir");
     let index = TantivyMemoryIndex::open(directory.path()).expect("index");
     index
-        .upsert(
-            "event-1",
-            "memory-1",
-            "Rust workflow runtime",
-            &json!({}),
-            None,
-        )
+        .upsert("event-1", "memory-1", "Rust workflow runtime", &json!({}))
         .await
         .expect("upsert");
     index
-        .upsert("event-1", "memory-1", "ignored duplicate", &json!({}), None)
+        .upsert("event-1", "memory-1", "ignored duplicate", &json!({}))
         .await
         .expect("idempotent upsert");
     assert_eq!(
@@ -145,11 +139,11 @@ async fn tantivy_index_is_idempotent_disposable_and_returns_candidate_ids() {
             .is_empty()
     );
     index
-        .rebuild(&[("memory-2".into(), "Chroma candidate".into(), json!({}))])
+        .rebuild(&[("memory-2".into(), "Rebuilt candidate".into(), json!({}))])
         .await
         .expect("rebuild");
     assert_eq!(
-        index.search("Chroma", 10).await.expect("rebuilt")[0].0,
+        index.search("Rebuilt", 10).await.expect("rebuilt")[0].0,
         "memory-2"
     );
 }
@@ -299,7 +293,7 @@ async fn unavailable_index_leaves_canonical_memory_usable_and_lag_visible() {
 }
 
 #[tokio::test]
-async fn failed_semantic_consumer_does_not_block_lexical_index_progress() {
+async fn failed_consumer_does_not_block_lexical_index_progress() {
     let directory = tempdir().expect("tempdir");
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
     let sessions: Arc<dyn SessionRepository> =
@@ -309,8 +303,8 @@ async fn failed_semantic_consumer_does_not_block_lexical_index_progress() {
     let queue = work_queue(Arc::clone(&journal));
     let lexical: Arc<dyn MemoryIndex> =
         Arc::new(TantivyMemoryIndex::open(directory.path()).expect("index"));
-    let semantic: Arc<dyn MemoryIndex> =
-        Arc::new(UnavailableMemoryIndex::new("semantic adapter offline"));
+    let unavailable: Arc<dyn MemoryIndex> =
+        Arc::new(UnavailableMemoryIndex::new("fixture adapter offline"));
     let service = MemoryService::with_indexes(
         Arc::clone(&journal),
         repository,
@@ -318,8 +312,8 @@ async fn failed_semantic_consumer_does_not_block_lexical_index_progress() {
         vec![
             MemoryIndexRegistration::new("memory.tantivy-v1", lexical)
                 .expect("lexical registration"),
-            MemoryIndexRegistration::new("memory.chroma-v1", semantic)
-                .expect("semantic registration"),
+            MemoryIndexRegistration::new("memory.unavailable-fixture-v1", unavailable)
+                .expect("unavailable registration"),
         ],
         sessions,
     )
@@ -351,14 +345,14 @@ async fn failed_semantic_consumer_does_not_block_lexical_index_progress() {
         .iter()
         .find(|item| item["consumer"] == "memory.tantivy-v1")
         .expect("lexical status");
-    let semantic = consumers
+    let unavailable = consumers
         .iter()
-        .find(|item| item["consumer"] == "memory.chroma-v1")
-        .expect("semantic status");
+        .find(|item| item["consumer"] == "memory.unavailable-fixture-v1")
+        .expect("unavailable status");
     assert_eq!(lexical["ready"], true);
     assert_eq!(lexical["lag"], 0);
-    assert_eq!(semantic["ready"], false);
-    assert!(semantic["lag"].as_u64().is_some_and(|lag| lag > 0));
+    assert_eq!(unavailable["ready"], false);
+    assert!(unavailable["lag"].as_u64().is_some_and(|lag| lag > 0));
 }
 
 struct CountingFailureIndex {
@@ -384,7 +378,6 @@ impl MemoryIndex for CountingFailureIndex {
         _memory_id: &str,
         _text: &str,
         _metadata: &serde_json::Value,
-        _embedding: Option<&[f32]>,
     ) -> Result<(), colossus_ports::StoreError> {
         self.attempts.fetch_add(1, Ordering::AcqRel);
         if self.outcome_unknown {
@@ -403,8 +396,7 @@ impl MemoryIndex for CountingFailureIndex {
         _event_id: &str,
         _memory_id: &str,
     ) -> Result<(), colossus_ports::StoreError> {
-        self.upsert("remove", "remove", "remove", &json!({}), None)
-            .await
+        self.upsert("remove", "remove", "remove", &json!({})).await
     }
 
     async fn search(
@@ -506,7 +498,6 @@ impl MemoryIndex for FailingRebuildIndex {
         _memory_id: &str,
         _text: &str,
         _metadata: &serde_json::Value,
-        _embedding: Option<&[f32]>,
     ) -> Result<(), colossus_ports::StoreError> {
         Ok(())
     }

@@ -408,7 +408,6 @@ impl MemoryService {
                                     id,
                                     &record.text,
                                     &memory_metadata(&record),
-                                    None,
                                 )
                                 .await?;
                         }

@@ -15,7 +15,7 @@ See [Contributing](contributing.md) for the local development and review sequenc
 | Tier | Trigger | Coverage | Required gate |
 | --- | --- | --- | --- |
 | PR validation | Open, edit, reopen, synchronize, or mark ready | Selected Linux formatting, lint, unit, SDK, Desktop, documentation and dependency jobs | `Colossus PR gate` |
-| Pre-merge acceptance | A repository writer applies `ci:full` to the reviewed final head | Representative macOS/Windows, Linux integration, native Desktop/VS Code, fuzzing, supply chain, Chroma, PostgreSQL, OCI, OPA and mTLS | `Colossus pre-merge gate` |
+| Pre-merge acceptance | A repository writer applies `ci:full` to the reviewed final head | Representative macOS/Windows, Linux integration, native Desktop/VS Code, fuzzing, supply chain, PostgreSQL, OCI, OPA and mTLS | `Colossus pre-merge gate` |
 | Release | Annotated stable or approved prerelease tag | Six CLI targets, signed Windows packages, Control Plane/VSIX artifacts, stable SDK or macOS preview | `Colossus release gate` |
 
 Every hosted job needs a timeout. Routine PR jobs use standard public Linux runners.

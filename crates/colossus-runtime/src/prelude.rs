@@ -63,10 +63,6 @@ pub(super) use colossus_memory::{
     EventSourcedMemoryRepository, LazyTantivyMemoryIndex, MemoryIndexRegistration, MemoryService,
     TantivyMemoryIndex, UnavailableMemoryIndex,
 };
-pub(super) use colossus_memory_chroma::{
-    ChromaExecutor, ChromaMemoryIndex, ChromaProfile, GatewayOpenAiEmbeddingProvider,
-    LocalHashEmbeddingProvider, OpenAiEmbeddingExecutor, OpenAiEmbeddingProfile,
-};
 pub(super) use colossus_network::AdditionalRootCertificates;
 pub(super) use colossus_observability::ObservedEventJournal;
 pub(super) use colossus_plugins::{
@@ -85,8 +81,8 @@ pub(super) use colossus_policy::{
 };
 pub(super) use colossus_ports::{
     ApprovalProvider, AuditExporter, CheckpointSigner, ContextError, ContextPreparer,
-    ContextRepository, EmbeddingProvider, EventJournal, ExternalWorkQueue, IntegrationRepository,
-    KeyProvider, MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
+    ContextRepository, EventJournal, ExternalWorkQueue, IntegrationRepository, KeyProvider,
+    MemoryIndex, MemoryRepository, MemoryRetriever, ModelProvider, ModelProviderError,
     PolicyDecisionPoint, PolicyError, PresentationRepository, ProjectionStore,
     ProviderEventObserver, ProviderTurnOptions, ResearchRepository, RiskEvaluationError,
     RiskEvaluator, RunControl, RunEventObserver, RunInputMediaResolver, SearchError,
