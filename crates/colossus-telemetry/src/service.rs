@@ -2,7 +2,7 @@ use super::*;
 
 /// Read-only telemetry queries over the authoritative encrypted journal.
 pub struct TelemetryService {
-    journal: Arc<dyn EventJournal>,
+    pub(super) journal: Arc<dyn EventJournal>,
 }
 
 impl TelemetryService {

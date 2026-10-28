@@ -12,7 +12,7 @@ use colossus_contracts::{
     DecisionPriority, DecisionStatus, EffectRequest, GoalRunOutcome, GoalStatus, IntegrationAuth,
     MemoryScope, MemoryStatus, PlanDraftTarget, PlanExecutionOutcome, PlanExecutionStrategy,
     PlanRecord, PlanStatus, PlanStep, PolicyDecision, ProviderEvent, ResearchDepth,
-    ResearchSourceKind, RiskReviewFallbackNotice, RunEvent, RunEventEnvelope,
+    ResearchSourceKind, RiskReviewFallbackNotice, RunEvent, RunEventEnvelope, RunTokenUsage,
     SecurityPostureReport, SessionSummary, SubagentStatus, TaskStatus, ToolCall, UserPromptRequest,
     UserPromptResponse, WorkflowScheduleMisfirePolicy,
 };
@@ -30,7 +30,7 @@ use colossus_presentation::{
     EventDisplayMode, PresentationBlock, PresentationDocument, PresentationTable, PresentationTone,
     SemanticRenderer, StreamDisplayMode, TerminalDocumentRenderer, TerminalPalette,
     TerminalPreferences, ThemeLibrary, ThemeName, TranscriptDensity, automatic_approval_document,
-    document_from_json, risk_review_fallback_document,
+    document_from_json, risk_review_fallback_document, run_token_usage_document,
 };
 use colossus_runtime::{
     Runtime, RuntimeConfig, RuntimeOpenOptions, StorageLocation, WorkspaceIdentityToken,
@@ -93,6 +93,7 @@ mod plugin_requests;
 mod presentation_commands;
 mod provider_setup;
 mod public_api_admin;
+mod run_usage;
 mod service_args;
 mod terminal_io;
 mod update_commands;
@@ -123,6 +124,7 @@ use output::*;
 use pickers::*;
 use presentation_commands::*;
 use public_api_admin::*;
+use run_usage::*;
 use service_args::*;
 use terminal_io::*;
 use update_commands::*;

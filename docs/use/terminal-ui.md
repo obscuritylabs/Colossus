@@ -74,6 +74,23 @@ and key, see [TUI commands and keys](../reference/tui.md).
 See [Context and snapshots](sessions-context.md) to read the budget and manage
 long-session history.
 
+## Read token usage
+
+The footer shows provider-reported tokens for the current run and keeps the latest
+run's counts when it ends. The **Run usage** summary shows input, output, and total
+tokens, plus cached input and reasoning output when reported. Cached input is
+already included in input; reasoning is already included in output. Colossus keeps
+the provider's total rather than recalculating it. Missing counts stay unknown
+instead of becoming zero.
+
+Counts cover one run, not a session total or a price estimate. Goal counts refer
+to the latest iteration. Reported counts remain available after failure or
+cancellation when the run can be identified; reopening a session restores the
+latest recorded counts when available. The separate `ctx` value estimates the
+prepared context against the input budget. Human CLI run output also includes a
+summary; [JSON output](../reference/cli.md#json-output-contracts) keeps its documented
+format.
+
 ## Write and review a turn
 
 Use `/model` and `/effort` to change the next turn without leaving the current

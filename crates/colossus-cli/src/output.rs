@@ -103,6 +103,7 @@ pub(super) fn render_structured_output(
 pub(super) fn render_run_output(
     value: &Value,
     response: &str,
+    usage: Option<&RunTokenUsage>,
     mode: OutputMode,
     terminal: bool,
     width: usize,
@@ -112,11 +113,19 @@ pub(super) fn render_run_output(
     if !human {
         return serde_json::to_string_pretty(value);
     }
+    let mut document =
+        PresentationDocument::from_block(PresentationBlock::Markdown(response.into()));
+    if value.get("iterations").is_some() {
+        document.push(PresentationBlock::Markdown(
+            "Token usage below is for the last goal iteration.".into(),
+        ));
+    }
+    document
+        .blocks
+        .extend(output_token_usage_document(usage).blocks);
     Ok(TerminalDocumentRenderer::new(preferences, width)
         .with_color(terminal)
-        .render(&PresentationDocument::from_block(
-            PresentationBlock::Markdown(response.into()),
-        )))
+        .render(&document))
 }
 
 pub(super) fn print_json(value: &impl serde::Serialize) -> Result<(), Box<dyn Error>> {
@@ -137,6 +146,7 @@ pub(super) fn print_json(value: &impl serde::Serialize) -> Result<(), Box<dyn Er
 pub(super) fn print_run_response(
     value: &impl serde::Serialize,
     response: &str,
+    usage: Option<&RunTokenUsage>,
 ) -> Result<(), Box<dyn Error>> {
     let value = serde_json::to_value(value)?;
     let terminal = io::stdout().is_terminal();
@@ -145,6 +155,7 @@ pub(super) fn print_run_response(
         render_run_output(
             &value,
             response,
+            usage,
             output_mode(),
             terminal,
             terminal_width(),

@@ -35,6 +35,16 @@ impl EmbeddedInteractiveHost {
     }
 
     async fn footer(&self, session_id: &str, status: &str) -> Result<FooterState, String> {
+        self.footer_with_usage(session_id, status, FooterUsageSelection::Latest)
+            .await
+    }
+
+    async fn footer_with_usage(
+        &self,
+        session_id: &str,
+        status: &str,
+        usage_selection: FooterUsageSelection<'_>,
+    ) -> Result<FooterState, String> {
         let route = self
             .runtime
             .provider_route("primary")
@@ -50,12 +60,16 @@ impl EmbeddedInteractiveHost {
             .get_session(session_id)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| format!("session not found: {session_id}"))?;
+        let usage_run_id = usage_selection.run_id(summary.last_run_id.as_deref());
+        let usage =
+            usage_run_id.and_then(|run_id| self.runtime.run_token_usage(session_id, run_id).ok());
         Ok(FooterState {
             role: route.role.clone(),
             route: route_label(&route),
             context: context
                 .as_ref()
                 .map(|context| (context.token_estimate, route.limits.input_budget_tokens)),
+            usage,
             message_count: summary.message_count,
             status: status.into(),
             approval_mode: self.approvals.mode().as_str().into(),
@@ -247,17 +261,7 @@ impl EmbeddedInteractiveHost {
             }),
             "status" => {
                 let footer = self.footer(session_id, "ready").await?;
-                self.result(
-                    &json!({
-                        "role": footer.role,
-                        "route": footer.route,
-                        "context": footer.context,
-                        "message_count": footer.message_count,
-                        "status": footer.status,
-                        "approval_mode": footer.approval_mode,
-                    }),
-                    Some("Status"),
-                )
+                Ok(HostCommandResult::document(footer_status_document(footer)))
             }
             "agent" => self.result(
                 &selected_route(
@@ -1387,9 +1391,20 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             AgentRunOutcome::Completed { result } => result.plan.clone(),
             AgentRunOutcome::Cancelled { result } => result.plan.clone(),
         };
+        let run_id = match &outcome {
+            AgentRunOutcome::Completed { result } => result.run_id.as_str(),
+            AgentRunOutcome::Cancelled { result } => result.run_id.as_str(),
+        };
+        let footer = self
+            .footer_with_usage(
+                &request.session_id,
+                status,
+                FooterUsageSelection::Exact(run_id),
+            )
+            .await?;
         Ok(HostRunResult {
             outcome,
-            footer: self.footer(&request.session_id, status).await?,
+            footer,
             plan_selection: plan.map_or(PlanSelectionUpdate::Unchanged, |plan| {
                 PlanSelectionUpdate::Set(Box::new(plan))
             }),
@@ -1410,7 +1425,13 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             &request.session_id,
             request.revision,
         )?;
-        let mut fallback_footer = self.footer(&request.session_id, "executing").await?;
+        let mut fallback_footer = self
+            .footer_with_usage(
+                &request.session_id,
+                "executing",
+                FooterUsageSelection::Unavailable,
+            )
+            .await?;
         self.router.install(Some(events.clone()));
         let mut observer = ChannelRunObserver { sender: events };
         let options = self.model_selections.get(&request.session_id)?;
@@ -1440,11 +1461,17 @@ impl InteractiveHost for EmbeddedInteractiveHost {
                     .runtime
                     .get_plan(&selected.id)
                     .map_err(|read_error| read_error.to_string());
-                let (footer, footer_warning) =
-                    match self.footer(&request.session_id, "failed").await {
-                        Ok(footer) => (footer, None),
-                        Err(footer_error) => (fallback_footer, Some(footer_error)),
-                    };
+                let (footer, footer_warning) = match self
+                    .footer_with_usage(
+                        &request.session_id,
+                        "failed",
+                        FooterUsageSelection::Unavailable,
+                    )
+                    .await
+                {
+                    Ok(footer) => (footer, None),
+                    Err(footer_error) => (fallback_footer, Some(footer_error)),
+                };
                 let mut result = host_plan_execution_failure(selected, readback, error, footer);
                 if let Some(footer_error) = footer_warning {
                     append_footer_warning(&mut result, footer_error);
@@ -1479,7 +1506,10 @@ impl InteractiveHost for EmbeddedInteractiveHost {
                 ..
             } => "failed",
         };
-        let (footer, footer_warning) = match self.footer(&request.session_id, status).await {
+        let (footer, footer_warning) = match self
+            .footer_with_usage(&request.session_id, status, plan_usage_selection(&outcome))
+            .await
+        {
             Ok(footer) => (footer, None),
             Err(error) => {
                 fallback_footer.status = status.into();

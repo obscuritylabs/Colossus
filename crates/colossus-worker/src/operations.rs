@@ -518,6 +518,13 @@ pub enum WorkerOperation {
         /// Exact snapshot identifier.
         snapshot_id: String,
     },
+    /// Read exact canonical reported usage without scanning unrelated runs.
+    RunTokenUsage {
+        /// Exact owning session identifier.
+        session_id: String,
+        /// Exact canonical run identifier; prefixes are not accepted.
+        run_id: String,
+    },
     /// List metadata-only run telemetry.
     TelemetryRuns {
         /// Optional session filter.

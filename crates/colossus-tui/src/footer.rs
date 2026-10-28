@@ -38,6 +38,14 @@ pub(super) fn render_footer(
         truncate_width(&sanitize_approval_field(&state.footer.status), 12)
     };
     let approval = sanitize_approval_field(&state.footer.approval_mode);
+    let usage = state
+        .footer
+        .usage
+        .as_ref()
+        .filter(|usage| usage.session_id == state.session_id);
+    let usage_reserve = usage.map_or(0, |usage| {
+        UnicodeWidthStr::width(usage_footer_text(usage, 8).as_str()) + 3
+    });
     let mut approval_text = format!(" · approval {approval}");
     let mut badge = if state.security_posture.is_hardened() {
         String::new()
@@ -48,6 +56,7 @@ pub(super) fn render_footer(
         + UnicodeWidthStr::width(approval_text.as_str())
         + UnicodeWidthStr::width(badge.as_str())
         + 2
+        + usage_reserve
         > width
     {
         if !badge.is_empty() {
@@ -55,12 +64,26 @@ pub(super) fn render_footer(
         }
         approval_text = format!(" · {approval}");
     }
+    if usage.is_some()
+        && UnicodeWidthStr::width(status.as_str())
+            + UnicodeWidthStr::width(approval_text.as_str())
+            + UnicodeWidthStr::width(badge.as_str())
+            + 2
+            + usage_reserve
+            > width
+    {
+        if !badge.is_empty() {
+            badge = format!("⚠{}", state.security_posture.finding_count());
+        }
+        approval_text = format!(" {approval}");
+    }
     let badge_width = UnicodeWidthStr::width(badge.as_str());
     let content_width = width.saturating_sub(badge_width + usize::from(!badge.is_empty()) * 2);
     let mut used =
         UnicodeWidthStr::width(status.as_str()) + UnicodeWidthStr::width(approval_text.as_str());
     let mode = format!(" {} ", state.mode.as_str());
-    let mode = if used + UnicodeWidthStr::width(mode.as_str()) + 2 <= content_width {
+    let mode = if used + UnicodeWidthStr::width(mode.as_str()) + 2 + usage_reserve <= content_width
+    {
         mode
     } else {
         String::new()
@@ -79,11 +102,42 @@ pub(super) fn render_footer(
         Span::styled(status, status_style),
         Span::styled(approval_text, metadata.add_modifier(Modifier::BOLD)),
     ];
-    if !state.queue.is_empty() {
+    let context = state
+        .footer
+        .context
+        .map(|(used, maximum)| format!("ctx {used}/{maximum}"));
+    if let Some(usage) = usage {
+        let available = content_width.saturating_sub(used + 3);
+        let context_width = context
+            .as_ref()
+            .map_or(0, |text| UnicodeWidthStr::width(text.as_str()) + 3);
+        let compact_width = usage_reserve.saturating_sub(3);
+        let budget = if available >= context_width + compact_width {
+            available - context_width
+        } else {
+            available
+        };
         append_footer_segment(
             &mut spans,
             &mut used,
             content_width,
+            usage_footer_text(usage, budget),
+            metadata.add_modifier(Modifier::BOLD),
+        );
+    }
+    let context_reserve = context
+        .as_ref()
+        .map_or(0, |text| UnicodeWidthStr::width(text.as_str()) + 3);
+    let optional_width = if usage.is_some() && used + context_reserve <= content_width {
+        content_width - context_reserve
+    } else {
+        content_width
+    };
+    if !state.queue.is_empty() {
+        append_footer_segment(
+            &mut spans,
+            &mut used,
+            optional_width,
             format!("{} queued", state.queue.len()),
             metadata,
         );
@@ -92,7 +146,7 @@ pub(super) fn render_footer(
         append_footer_segment(
             &mut spans,
             &mut used,
-            content_width,
+            optional_width,
             format!(
                 "plan {} r{} {}",
                 short_plan_id(&plan.id),
@@ -102,10 +156,6 @@ pub(super) fn render_footer(
             metadata,
         );
     }
-    let context = state
-        .footer
-        .context
-        .map(|(used, maximum)| format!("ctx {used}/{maximum}"));
     let reserved = context
         .as_ref()
         .map_or(0, |context| UnicodeWidthStr::width(context.as_str()) + 3);

@@ -33,11 +33,11 @@ pub(super) use colossus_contracts::{
     ProviderRoute, ProviderStreamItem, ProviderTurn, QuarantinedEffectResult, ResearchClaim,
     ResearchDepth, ResearchRun, ResearchSource, ResearchSourceKind, ResourceAuthority,
     RiskAssessment, RunBranchContextMode, RunEvent, RunEventEnvelope, RunTelemetryDetail,
-    RunTelemetrySummary, SandboxBoundaryMode, SearchProfileSummary, SearchRequest, SearchResponse,
-    SearchRoute, SecurityPostureFinding, SecurityPostureReport, SecurityPostureSeverity,
-    SessionMessage, SessionMessageAppend, SessionMessagePage, SessionSummary,
-    StartupVerificationMode, SubagentJob, SubagentQueueStatus, SubagentStatus, TaskRecord,
-    TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec,
+    RunTelemetrySummary, RunTokenUsage, SandboxBoundaryMode, SearchProfileSummary, SearchRequest,
+    SearchResponse, SearchRoute, SecurityPostureFinding, SecurityPostureReport,
+    SecurityPostureSeverity, SessionMessage, SessionMessageAppend, SessionMessagePage,
+    SessionSummary, StartupVerificationMode, SubagentJob, SubagentQueueStatus, SubagentStatus,
+    TaskRecord, TaskStatus, TelemetryMetrics, TerminalPreferences, ToolCall, ToolResult, ToolSpec,
     UserPromptRequest, WorkStateSnapshot, WorkflowWebhookDispatch, validate_model_transcript,
 };
 pub(super) use colossus_home::ConfinedRoot;

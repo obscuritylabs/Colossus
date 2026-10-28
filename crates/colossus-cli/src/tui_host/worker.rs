@@ -345,6 +345,16 @@ impl WorkerInteractiveHost {
     }
 
     async fn footer(&self, session_id: &str, status: &str) -> Result<FooterState, String> {
+        self.footer_with_usage(session_id, status, FooterUsageSelection::Latest)
+            .await
+    }
+
+    async fn footer_with_usage(
+        &self,
+        session_id: &str,
+        status: &str,
+        usage_selection: FooterUsageSelection<'_>,
+    ) -> Result<FooterState, String> {
         let route: ProviderRoute = serde_json::from_value(
             self.value(WorkerOperation::ProviderRoute {
                 role: "primary".into(),
@@ -372,11 +382,25 @@ impl WorkerInteractiveHost {
             .await?,
         )
         .map_err(|error| error.to_string())?;
+        let usage_run_id = usage_selection.run_id(session.last_run_id.as_deref());
+        let usage = if let Some(run_id) = usage_run_id {
+            self.value(WorkerOperation::RunTokenUsage {
+                session_id: session_id.into(),
+                run_id: run_id.into(),
+            })
+            .await
+            .ok()
+            .and_then(|value| serde_json::from_value::<RunTokenUsage>(value).ok())
+            .filter(|usage| usage.session_id == session_id && usage.run_id == run_id)
+        } else {
+            None
+        };
         Ok(FooterState {
             role: route.role.clone(),
             route: route_label(&route),
             context: context
                 .map(|context| (context.token_estimate, route.limits.input_budget_tokens)),
+            usage,
             message_count: session.message_count,
             status: status.into(),
             approval_mode: self
@@ -649,17 +673,7 @@ impl WorkerInteractiveHost {
             }),
             "status" => {
                 let footer = self.footer(session_id, "ready").await?;
-                Ok(HostCommandResult::document(document_from_json(
-                    &json!({
-                        "role": footer.role,
-                        "route": footer.route,
-                        "context": footer.context,
-                        "message_count": footer.message_count,
-                        "status": footer.status,
-                        "approval_mode": footer.approval_mode,
-                    }),
-                    Some("Status"),
-                )))
+                Ok(HostCommandResult::document(footer_status_document(footer)))
             }
             "agent" => {
                 let route = selected_route(
@@ -1781,9 +1795,20 @@ impl InteractiveHost for WorkerInteractiveHost {
             AgentRunOutcome::Completed { result } => result.plan.clone(),
             AgentRunOutcome::Cancelled { result } => result.plan.clone(),
         };
+        let run_id = match &outcome {
+            AgentRunOutcome::Completed { result } => result.run_id.as_str(),
+            AgentRunOutcome::Cancelled { result } => result.run_id.as_str(),
+        };
+        let footer = self
+            .footer_with_usage(
+                &request.session_id,
+                status,
+                FooterUsageSelection::Exact(run_id),
+            )
+            .await?;
         Ok(HostRunResult {
             outcome,
-            footer: self.footer(&request.session_id, status).await?,
+            footer,
             plan_selection: plan.map_or(PlanSelectionUpdate::Unchanged, |plan| {
                 PlanSelectionUpdate::Set(Box::new(plan))
             }),
@@ -1808,7 +1833,13 @@ impl InteractiveHost for WorkerInteractiveHost {
             &request.session_id,
             request.revision,
         )?;
-        let mut fallback_footer = self.footer(&request.session_id, "executing").await?;
+        let mut fallback_footer = self
+            .footer_with_usage(
+                &request.session_id,
+                "executing",
+                FooterUsageSelection::Unavailable,
+            )
+            .await?;
         let mut observer = WorkerChannelObserver {
             sender: events.clone(),
         };
@@ -1850,11 +1881,17 @@ impl InteractiveHost for WorkerInteractiveHost {
                         .map_err(|read_error| read_error.to_string()),
                     Err(read_error) => Err(read_error),
                 };
-                let (footer, footer_warning) =
-                    match self.footer(&request.session_id, "failed").await {
-                        Ok(footer) => (footer, None),
-                        Err(footer_error) => (fallback_footer, Some(footer_error)),
-                    };
+                let (footer, footer_warning) = match self
+                    .footer_with_usage(
+                        &request.session_id,
+                        "failed",
+                        FooterUsageSelection::Unavailable,
+                    )
+                    .await
+                {
+                    Ok(footer) => (footer, None),
+                    Err(footer_error) => (fallback_footer, Some(footer_error)),
+                };
                 let mut result = host_plan_execution_failure(selected, readback, error, footer);
                 if let Some(footer_error) = footer_warning {
                     append_footer_warning(&mut result, footer_error);
@@ -1889,7 +1926,10 @@ impl InteractiveHost for WorkerInteractiveHost {
                 ..
             } => "failed",
         };
-        let (footer, footer_warning) = match self.footer(&request.session_id, status).await {
+        let (footer, footer_warning) = match self
+            .footer_with_usage(&request.session_id, status, plan_usage_selection(&outcome))
+            .await
+        {
             Ok(footer) => (footer, None),
             Err(error) => {
                 fallback_footer.status = status.into();

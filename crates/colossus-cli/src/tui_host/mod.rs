@@ -8,8 +8,9 @@ use colossus_contracts::{
     MemoryStatus, ModelContent, ModelContentPart, ModelImageReference, ModelMessageRole,
     PlanExecutionOutcome, PlanRecord, PlanStatus, PluginInventoryEntry, PolicyDecision,
     ProviderReadinessCheck, ProviderRoute, ReasoningEffort, ResearchDepth, ResearchSourceKind,
-    RiskReviewFallbackNotice, RunEventEnvelope, SandboxBoundaryMode, SessionMessagePage,
-    SessionSummary, TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
+    RiskReviewFallbackNotice, RunEventEnvelope, RunTokenUsage, SandboxBoundaryMode,
+    SessionMessagePage, SessionSummary, TerminalPreferences, UserPromptRequest, UserPromptResponse,
+    WorkStateSnapshot,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -465,7 +466,9 @@ mod embedded;
 mod plugins;
 mod shell;
 mod sidebar;
+mod usage;
 mod worker;
+use usage::*;
 
 pub(crate) use common::{TuiApprovalProvider, TuiPromptRouter, TuiUserPromptProvider};
 pub(crate) use embedded::EmbeddedInteractiveHost;

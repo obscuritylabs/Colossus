@@ -169,10 +169,15 @@ fn named_metadata_binds_workspace_config_and_explicit_access() {
 fn generated_connection_retains_independent_pin_and_rejects_tampering() {
     let temporary = temporary();
     let root = ConfinedRoot::bind(temporary.path().join("private")).unwrap();
-    let workspace = root.prepare_directory(Path::new("workspace")).unwrap();
+    // These public path words are not credential values or secret fields.
+    let workspace = root
+        .prepare_directory(Path::new("workspace-token-invitation-bearer"))
+        .unwrap();
     let identity = detect_workspace_identity(&workspace).unwrap();
     let home = root.prepare_directory(Path::new("home")).unwrap();
-    let partition = root.prepare_directory(Path::new("partition")).unwrap();
+    let partition = root
+        .prepare_directory(Path::new("partition-token-invitation-bearer"))
+        .unwrap();
     let metadata = Metadata::open(&home, &partition, "fixture").unwrap();
     #[cfg(windows)]
     assert!(
@@ -206,7 +211,27 @@ fn generated_connection_retains_independent_pin_and_rejects_tampering() {
     let bytes = std::fs::read(&metadata.connection).unwrap();
     let text = std::str::from_utf8(&bytes).unwrap();
     assert!(text.contains(&"c".repeat(64)));
-    assert!(!text.contains("bearer") && !text.contains("invitation") && !text.contains("token"));
+    let connection: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let fields = connection.as_object().unwrap();
+    let allowed = [
+        "descriptor",
+        "certificate",
+        "instance_id",
+        "certificate_sha256",
+        "keyring_service",
+        "keyring_account",
+    ]
+    .into_iter()
+    .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        fields
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        allowed,
+        "the connection must contain only public paths, pins, and opaque custody references",
+    );
+    assert!(text.contains("partition-token-invitation-bearer"));
     let file = metadata
         .directory
         .open_file(Path::new("connection.json"))
