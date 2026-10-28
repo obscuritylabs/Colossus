@@ -29,6 +29,8 @@ export function App() {
     [settings, setSettings] = useState<PublicSettings | null>(null),
     [error, setError] = useState(""),
     [signOutError, setSignOutError] = useState(""),
+    [sessionRefreshError, setSessionRefreshError] = useState(""),
+    [checkingSession, setCheckingSession] = useState(false),
     [signOutPending, setSignOutPending] = useState(false);
   const epoch = useRef(0);
   const settingsEpoch = useRef(0);
@@ -37,23 +39,40 @@ export function App() {
     setSettings(value);
   }, []);
   const signingOut = useRef(false);
+  const authenticated = useRef(false);
   const loadMe = useCallback(async (signal?: AbortSignal) => {
     if (signingOut.current) return;
     const generation = ++epoch.current;
+    setCheckingSession(authenticated.current);
     try {
       const response = await request<Me>("/api/me", undefined, signal);
       if (signal?.aborted || generation !== epoch.current) return;
+      authenticated.current = true;
       setMe(response);
       setAuth("ready");
+      setSessionRefreshError("");
       setError("");
       restoreSignInReturn();
     } catch (e) {
       if (!signal?.aborted && generation === epoch.current) {
-        setMe(null);
-        setAuth("signed_out");
-        if (!(e instanceof ApiFailure && e.status === 403))
+        if (e instanceof ApiFailure && (e.status === 401 || e.status === 403)) {
+          authenticated.current = false;
+          setMe(null);
+          setAuth("signed_out");
+          setSessionRefreshError("");
+          setError(e.status === 403 ? "" : e.message);
+        } else if (authenticated.current) {
+          setSessionRefreshError(
+            "Could not refresh your session. Check your connection and retry.",
+          );
+        } else {
+          setAuth("signed_out");
           setError(e instanceof Error ? e.message : "Sign-in unavailable.");
+        }
       }
+    } finally {
+      if (!signal?.aborted && generation === epoch.current)
+        setCheckingSession(false);
     }
   }, []);
   useEffect(() => {
@@ -128,10 +147,14 @@ export function App() {
     if (signingOut.current) return;
     signingOut.current = true;
     epoch.current++;
+    setCheckingSession(false);
     setSignOutPending(true);
     setSignOutError("");
     try {
       await request("/auth/logout", {});
+      authenticated.current = false;
+      setSessionRefreshError("");
+      setCheckingSession(false);
       setMe(null);
       setAuth("signed_out");
       setError("");
@@ -183,6 +206,8 @@ export function App() {
           onSignOut={() => void signOut()}
           signOutError={signOutError}
           signingOut={signOutPending}
+          sessionRefreshError={sessionRefreshError}
+          checkingSession={checkingSession}
         />
       </Suspense>
     </NavigationProvider>

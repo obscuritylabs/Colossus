@@ -7,10 +7,11 @@
 {{- $oidc := ternary (dict "label" .Values.auth.oidc.label "issuer" .Values.auth.oidc.issuer "client_id" .Values.auth.oidc.clientId "client_secret_file" (ternary "/etc/colossus/oidc/client-secret" nil (or (ne .Values.auth.oidc.existingSecret "") (ne .Values.auth.oidc.clientSecret "")))) nil .Values.auth.oidc.enabled -}}
 {{- $local := ternary (dict "session_seconds" .Values.auth.local.sessionSeconds) nil .Values.auth.local.enabled -}}
 {{- $bootstrap := dict "display_name" .Values.auth.bootstrap.displayName "email" (default nil .Values.auth.bootstrap.email) "oidc_subject" (default nil .Values.auth.bootstrap.oidcSubject) "username" (ternary .Values.auth.bootstrap.username nil .Values.auth.local.enabled) "password_variable" (ternary "COLOSSUS_CONTROL_PLANE_BOOTSTRAP_PASSWORD" nil .Values.auth.local.enabled) -}}
+{{- $publicSuffix := ternary "" (printf ":%d" (int .Values.routing.publicPort)) (eq (int .Values.routing.publicPort) 443) -}}
 {{- $config := dict
   "http_bind" "0.0.0.0:8080" "grpc_bind" "0.0.0.0:8443"
-  "public_origin" (printf "https://%s" .Values.browserHost)
-  "grpc_endpoint" (printf "https://%s" .Values.connectorHost)
+  "public_origin" (printf "https://%s%s" .Values.browserHost $publicSuffix)
+  "grpc_endpoint" (printf "https://%s%s" .Values.connectorHost $publicSuffix)
   "ca_certificate" "/etc/colossus/tls/ca.pem" "ca_key" "/etc/colossus/tls/ca-key.pem"
   "server_certificate" "/etc/colossus/tls/server.pem" "server_key" "/etc/colossus/tls/server-key.pem"
   "web_root" "/opt/colossus/web" "local_development" false "memberships" (list)

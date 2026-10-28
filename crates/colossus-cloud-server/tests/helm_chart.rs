@@ -79,6 +79,11 @@ fn configuration(documents: &[Value]) -> Config {
 fn renders_secure_defaults_and_real_server_configuration() {
     let documents = render(json!({}));
     let config = configuration(&documents);
+    assert_eq!(config.public_origin, "https://colossus.example.com");
+    assert_eq!(
+        config.grpc_endpoint,
+        "https://runtimes.colossus.example.com"
+    );
     assert!(!config.local_development);
     assert!(config.local_auth.is_some());
     assert!(config.oidc.is_none());
@@ -183,6 +188,38 @@ fn renders_secure_defaults_and_real_server_configuration() {
         ingress["spec"]["rules"][0]["http"]["paths"][0]["backend"]["service"]["port"]["name"],
         "tls-connector"
     );
+}
+
+#[test]
+#[ignore = "static Helm tier; cargo xtask check helm"]
+fn advertises_the_external_tls_port_without_changing_service_ports() {
+    let documents = render(json!({"routing": {"mode": "gateway-api", "publicPort": 8443}}));
+    let config = configuration(&documents);
+    assert_eq!(config.public_origin, "https://colossus.example.com:8443");
+    assert_eq!(
+        config.grpc_endpoint,
+        "https://runtimes.colossus.example.com:8443"
+    );
+    let ports = resource(&documents, "Service", "server")["spec"]["ports"]
+        .as_array()
+        .unwrap();
+    assert!(
+        ports
+            .iter()
+            .any(|port| port["name"] == "http" && port["port"] == 8080)
+    );
+    assert!(
+        ports
+            .iter()
+            .any(|port| port["name"] == "tls-connector" && port["port"] == 8443)
+    );
+    for invalid in [json!(0), json!(65536), json!(443.5), json!("8443")] {
+        let output = helm(
+            &["template", "colossus", "deploy/control-plane/chart"],
+            json!({"routing": {"publicPort": invalid}}),
+        );
+        assert!(!output.status.success(), "invalid public TLS port accepted");
+    }
 }
 
 #[test]

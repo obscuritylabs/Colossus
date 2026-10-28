@@ -79,6 +79,310 @@ afterEach(async () => {
   await act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("loaded conversation actions", () => {
+  const transcript = (): ThreadDetailResponse => ({
+    ...history,
+    thread: {
+      ...thread,
+      sync_status: "incomplete",
+      can_continue: false,
+      source: "runtime",
+    },
+    next_message_cursor: "earlier",
+    messages: [
+      {
+        message_id: "first",
+        role: "user",
+        text: "Deployment alpha",
+        created_at: "2026-10-05T10:00:00Z",
+        task_id: "task-a",
+      },
+      ...history.messages.map((message) => ({
+        ...message,
+        text: "Saved deployment beta",
+      })),
+      {
+        message_id: "system",
+        role: "system",
+        text: "PRIVATE SYSTEM INSTRUCTION",
+        created_at: "2026-10-05T10:02:00Z",
+      },
+      {
+        message_id: "tool",
+        role: "tool",
+        text: "PRIVATE TOOL OUTPUT",
+        created_at: "2026-10-05T10:03:00Z",
+      },
+    ],
+    message_authors: {
+      first: { user_id: "alice", display_name: "Alice Example" },
+    },
+    tasks: [
+      {
+        task_id: "task-a",
+        project_id: "project-a",
+        node_id: "node-a",
+        subject: "alice",
+        request: {
+          input: [
+            { text: "PRIVATE RAW REQUEST" },
+            { artifact: "PRIVATE-ATTACHMENT-HANDLE" },
+          ],
+          mode: "execute",
+          role: "primary",
+        },
+        run_id: "run-a",
+        revision: 1,
+        last_sequence: 0,
+        snapshot: null,
+        source_read_only: true,
+      },
+    ],
+  });
+  async function search(query: string) {
+    const input = container.querySelector<HTMLInputElement>(
+      ".conversation-find input",
+    )!;
+    await act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, query);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    return input;
+  }
+  const selected = () =>
+    container.querySelector<HTMLElement>(".conversation-find-active");
+
+  it("finds only loaded user/assistant text offline, wraps message navigation, and restores focus on Escape", async () => {
+    const detail = transcript();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(detail)),
+    );
+    await render(detail.thread, [{ ...node, presence: null }], ["read"]);
+    await act(() => button("Find in loaded conversation").click());
+    const input = container.querySelector<HTMLInputElement>(
+      ".conversation-find input",
+    )!;
+    expect(document.activeElement).toBe(input);
+    expect(container.textContent).toContain(
+      "Load earlier history to search more",
+    );
+    await search("DEPLOYMENT");
+    expect(
+      container.querySelector(".conversation-find-count")?.textContent,
+    ).toBe("1 of 2 matching messages");
+    expect(selected()?.dataset.asideMessageId).toBe("first");
+    await act(() => button("Next matching message").click());
+    expect(selected()?.dataset.asideMessageId).toBe("message-b");
+    expect(document.activeElement).toBe(selected());
+    await act(() => button("Next matching message").click());
+    expect(selected()?.dataset.asideMessageId).toBe("first");
+    await act(() => button("Previous matching message").click());
+    expect(selected()?.dataset.asideMessageId).toBe("message-b");
+    await search("PRIVATE");
+    expect(
+      container.querySelector(".conversation-find-count")?.textContent,
+    ).toBe("No matching messages");
+    expect(button("Next matching message").disabled).toBe(true);
+    expect(selected()).toBeNull();
+    await act(() => button("Topology").click());
+    expect(container.querySelector(".conversation-find")).toBeNull();
+    await act(() => button("Find in loaded conversation").click());
+    const reopened = container.querySelector<HTMLInputElement>(
+      ".conversation-find input",
+    )!;
+    expect(document.activeElement).toBe(reopened);
+    expect(reopened.value).toBe("PRIVATE");
+    await act(() =>
+      reopened.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    expect(container.querySelector(".conversation-find")).toBeNull();
+    expect(document.activeElement).toBe(button("Find in loaded conversation"));
+    const browserFind = new KeyboardEvent("keydown", {
+      key: "f",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(browserFind);
+    expect(browserFind.defaultPrevented).toBe(false);
+  });
+
+  it("retains the selected message during released updates and adds explicitly loaded earlier history to search", async () => {
+    let detail = transcript();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) =>
+        response(
+          path.includes("message_after=")
+            ? {
+                ...detail,
+                next_message_cursor: null,
+                messages: [
+                  {
+                    message_id: "older",
+                    role: "user",
+                    text: "Earlier deployment context",
+                    created_at: "2026-10-04T10:00:00Z",
+                  },
+                ],
+              }
+            : detail,
+        ),
+      ),
+    );
+    await render(detail.thread, [node], ["read"]);
+    await act(() => button("Find in loaded conversation").click());
+    const input = await search("deployment");
+    await act(() =>
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      ),
+    );
+    expect(selected()?.dataset.asideMessageId).toBe("message-b");
+    detail = {
+      ...detail,
+      messages: detail.messages.map((message) =>
+        message.message_id === "message-b"
+          ? { ...message, text: message.text + " is still streaming" }
+          : message,
+      ),
+    };
+    await act(async () =>
+      TestEventSource.instances[0]!.dispatchEvent(new Event("thread_changed")),
+    );
+    expect(selected()?.dataset.asideMessageId).toBe("message-b");
+    expect(input.value).toBe("deployment");
+    await act(async () => button("Load earlier history").click());
+    expect(
+      container.querySelector(".conversation-find-count")?.textContent,
+    ).toBe("3 of 3 matching messages");
+    expect(selected()?.dataset.asideMessageId).toBe("message-b");
+    await act(() => button("Next matching message").click());
+    expect(selected()?.dataset.asideMessageId).toBe("older");
+  });
+
+  it("clears search and ignores late copy feedback when conversation identity changes", async () => {
+    let detail = transcript();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(detail)),
+    );
+    let copied!: () => void;
+    const writeText = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            copied = resolve;
+          }),
+      );
+    await render(detail.thread, [node], ["read"]);
+    await act(() => button("Find in loaded conversation").click());
+    await search("deployment");
+    await act(async () =>
+      (await conversationMenuItem("Copy loaded conversation")).click(),
+    );
+    expect(writeText).toHaveBeenCalledOnce();
+    detail = {
+      ...detail,
+      thread: {
+        ...detail.thread,
+        thread_id: "thread-next",
+        session_id: "session-next",
+        title: "Another conversation",
+      },
+    };
+    await render(detail.thread, [node], ["read"]);
+    expect(container.querySelector(".conversation-find")).toBeNull();
+    await act(() => copied());
+    expect(container.textContent).not.toContain("Loaded conversation copied");
+    await act(() => button("Find in loaded conversation").click());
+    expect(
+      container.querySelector<HTMLInputElement>(".conversation-find input")
+        ?.value,
+    ).toBe("");
+  });
+
+  it("copies an explicit loaded text snapshot without task, system, tool, or attachment payloads, and reports clipboard failure", async () => {
+    const detail = transcript();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(detail)),
+    );
+    const writeText = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockResolvedValue();
+    await render(detail.thread, [{ ...node, presence: null }], ["read"]);
+    await act(async () =>
+      (await conversationMenuItem("Copy loaded conversation")).click(),
+    );
+    const markdown = writeText.mock.calls[0]![0];
+    expect(markdown).toContain("Alice Example");
+    expect(markdown).toContain("Deployment alpha");
+    expect(markdown).toContain("Saved deployment beta");
+    expect(markdown).toContain(
+      "Earlier history is available but is not included",
+    );
+    expect(markdown).toContain("not the complete agent conversation");
+    expect(markdown).not.toContain("PRIVATE");
+    expect(markdown).not.toContain("task-a");
+    expect(container.textContent).toContain(
+      "Loaded conversation copied as Markdown",
+    );
+    writeText.mockRejectedValueOnce(new Error("clipboard denied"));
+    await act(async () =>
+      (await conversationMenuItem("Copy loaded conversation")).click(),
+    );
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Try downloading it instead",
+    );
+  });
+
+  it("downloads UTF-8 Markdown on click and releases its object URL", async () => {
+    const detail = transcript();
+    detail.thread = { ...detail.thread, title: "Inspect / 東京" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response(detail)),
+    );
+    const urls = vi.fn((_blob: Blob) => "blob:conversation-snapshot"),
+      revoke = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = urls;
+        static revokeObjectURL = revoke;
+      },
+    );
+    const clicks = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+    await render(detail.thread, [node], ["read"]);
+    expect(urls).not.toHaveBeenCalled();
+    await act(async () =>
+      (await conversationMenuItem("Download loaded conversation")).click(),
+    );
+    expect(urls).toHaveBeenCalledOnce();
+    const blob = urls.mock.calls[0]![0] as Blob;
+    expect(blob.type).toBe("text/markdown;charset=utf-8");
+    expect(await blob.text()).toContain("Saved deployment beta");
+    const link = clicks.mock.instances[0] as HTMLAnchorElement;
+    expect(link.download).toBe("Inspect 東京-loaded.md");
+    expect(link.href).toBe("blob:conversation-snapshot");
+    expect(link.isConnected).toBe(false);
+    await vi.waitFor(() =>
+      expect(revoke).toHaveBeenCalledWith("blob:conversation-snapshot"),
+    );
+  });
 });
 const response = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });

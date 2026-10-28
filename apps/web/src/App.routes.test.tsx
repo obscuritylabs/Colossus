@@ -441,3 +441,100 @@ it("shows an unconfirmed logout when a gateway returns a sign-in page", async ()
   expect(container.textContent).toContain("Retained exact-resource reply");
   expect(container.textContent).not.toContain("Unexpected token");
 });
+
+it.each(["server unavailable", "network unavailable"])(
+  "preserves a signed-in draft when identity refresh is %s and retries in place",
+  async (failure) => {
+    history.replaceState(null, "", "/chat?project=p");
+    account = {
+      ...me,
+      memberships: [
+        { ...me.memberships[0]!, permissions: ["read", "execute", "control"] },
+      ],
+    };
+    const fetch = vi.mocked(globalThis.fetch);
+    const original = fetch.getMockImplementation()!;
+    let deferIdentity = false;
+    let resolveIdentity: ((value: Response) => void) | undefined;
+    let rejectIdentity: ((reason: Error) => void) | undefined;
+    fetch.mockImplementation(async (input, options) => {
+      if (input === "/api/me" && deferIdentity) {
+        deferIdentity = false;
+        return new Promise<Response>((resolve, reject) => {
+          resolveIdentity = resolve;
+          rejectIdentity = reject;
+        });
+      }
+      if (input === "/api/projects/p/chat")
+        return response({ enabled: true, node });
+      if (String(input).includes("/chat/threads?"))
+        return response({ threads: [], next_cursor: null });
+      if (input === "/api/projects/p/nodes/n/resources")
+        return response({
+          kind: "result",
+          connection_id: null,
+          value: { capabilities: [] },
+        });
+      return original(input, options);
+    });
+    await act(() => root.render(<App />));
+    await contains("Message Colossus");
+    const draft = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    await act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(draft, "Keep my unsent question");
+      draft.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    deferIdentity = true;
+    await act(() =>
+      window.dispatchEvent(new Event("colossus:web:reconcile-identity")),
+    );
+    expect(resolveIdentity).toBeDefined();
+    await act(() => {
+      if (failure === "server unavailable")
+        resolveIdentity!(response({ error: "storage" }, 503));
+      else rejectIdentity!(new TypeError("Failed to fetch"));
+    });
+    await contains("Could not refresh your session");
+    expect(container.querySelector("textarea")).toBe(draft);
+    expect(draft.value).toBe("Keep my unsent question");
+    expect(container.textContent).not.toContain(
+      "Sign in to your Control Plane",
+    );
+    const retry = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Retry session check",
+    );
+    expect(retry).toBeDefined();
+    await act(() => retry!.click());
+    await ready();
+    expect(container.textContent).not.toContain(
+      "Could not refresh your session",
+    );
+    expect(container.querySelector("textarea")).toBe(draft);
+    expect(draft.value).toBe("Keep my unsent question");
+  },
+);
+
+it.each([401, 403])(
+  "clears the workspace after an explicit identity denial (%s)",
+  async (status) => {
+    await act(() => root.render(<App />));
+    await contains("Retained exact-resource reply");
+    const fetch = vi.mocked(globalThis.fetch);
+    const original = fetch.getMockImplementation()!;
+    fetch.mockImplementation(async (input, options) =>
+      input === "/api/me"
+        ? response({ error: "permission_denied" }, status)
+        : original(input, options),
+    );
+    await act(() =>
+      window.dispatchEvent(new Event("colossus:web:reconcile-identity")),
+    );
+    await contains("Sign in to your Control Plane");
+    expect(container.textContent).not.toContain(
+      "Retained exact-resource reply",
+    );
+  },
+);

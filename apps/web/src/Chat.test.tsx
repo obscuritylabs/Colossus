@@ -3,8 +3,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Chat, personalChatPermissions } from "./Chat";
-import { NavigationProvider } from "./navigation";
-import type { FleetNode, Permission } from "./api";
+import { NavigationProvider, navigate } from "./navigation";
+import type { FleetNode, Permission, Task, Thread } from "./api";
+import type { ForkDraftSource } from "./ThreadBranchDraft";
+
+vi.mock("./ThreadDetail", () => ({ ThreadDetail: () => null }));
 
 const node: FleetNode = {
   node: {
@@ -27,7 +30,8 @@ let connected: boolean,
   enabled: boolean,
   authUrl: string;
 let requests: { path: string; body: unknown }[];
-beforeEach(() => {
+const changed = vi.fn();
+beforeEach(async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   history.replaceState(null, "", "/chat?project=p");
   connected = false;
@@ -35,6 +39,7 @@ beforeEach(() => {
   enabled = true;
   authUrl = "https://identity.example/authorize?state=synthetic";
   requests = [];
+  changed.mockClear();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -100,6 +105,7 @@ beforeEach(() => {
       throw new Error(`Unexpected read ${path}`);
     }),
   );
+  await import("./ThreadDetail");
 });
 afterEach(async () => {
   await act(() => root.unmount());
@@ -109,6 +115,7 @@ afterEach(async () => {
 async function render(
   permissions: Permission[] = ["read", "execute", "control"],
   view: "conversation" | "connections" = "conversation",
+  forkDraft?: ForkDraftSource,
 ) {
   await act(async () =>
     root.render(
@@ -120,7 +127,8 @@ async function render(
           view={view}
           selected={null}
           detailLoading={false}
-          onChanged={() => {}}
+          onChanged={changed}
+          forkDraft={forkDraft ?? null}
         />
       </NavigationProvider>,
     ),
@@ -253,3 +261,135 @@ it("shows personal approval authority only for the exact owned personal node wit
     "approve",
   );
 });
+
+it.each([
+  "/settings/appearance?project=p",
+  "/projects/p/chat/other",
+  "/chat?project=p",
+])(
+  "does not let a late chat creation replace a newer navigation to %s",
+  async (destination) => {
+    connected = true;
+    const fetch = vi.mocked(globalThis.fetch);
+    const original = fetch.getMockImplementation()!;
+    let complete: ((response: Response) => void) | undefined;
+    fetch.mockImplementation(async (input, options) => {
+      if (
+        input === "/api/projects/p/chat/threads" &&
+        options?.method === "POST"
+      )
+        return new Promise<Response>((resolve) => {
+          complete = resolve;
+        });
+      return original(input, options);
+    });
+    await render();
+    await write("Slow initial question");
+    await act(() =>
+      container
+        .querySelector("form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(complete).toBeDefined();
+    await act(() => navigate("/settings/appearance?project=p"));
+    await act(() => navigate(destination));
+    await act(() =>
+      complete!(
+        json({ thread: { project_id: "p", thread_id: "late-thread" } }),
+      ),
+    );
+    expect(location.pathname + location.search).toBe(destination);
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain("Could not");
+  },
+);
+
+const forkParent: Thread = {
+  thread_id: "parent",
+  project_id: "p",
+  node_id: "personal-node",
+  session_id: "parent-session",
+  owner_user_id: "user-a",
+  title: "Parent chat",
+  revision: 2,
+  archived: false,
+  can_continue: true,
+  source: "cloud",
+  sync_status: "current",
+  created_at: "now",
+  updated_at: "now",
+};
+const forkSource: Task = {
+  task_id: "source",
+  project_id: "p",
+  node_id: "personal-node",
+  thread_id: "parent",
+  subject: "user-a",
+  run_id: "source-run",
+  source_read_only: false,
+  request: { role: "primary", mode: "execute", input: [] },
+  last_sequence: 1,
+  revision: 1,
+  snapshot: {
+    run: {
+      run_id: "source-run",
+      session_id: "parent-session",
+      title: "Source",
+      terminal: null,
+      mode: "execute",
+      role: "primary",
+      status: "completed",
+      created_at: "now",
+      updated_at: "now",
+      last_sequence: 1,
+    },
+    pending_interactions: [],
+  },
+};
+it.each([false, true])(
+  "navigates a completed fork only while its origin is current (moved: %s)",
+  async (move) => {
+    connected = true;
+    const fetch = vi.mocked(globalThis.fetch);
+    const original = fetch.getMockImplementation()!;
+    let complete: ((response: Response) => void) | undefined;
+    fetch.mockImplementation(async (input, options) => {
+      if (
+        input === "/api/projects/p/threads/parent" &&
+        options?.method === "GET"
+      )
+        return json({ thread: forkParent, tasks: [], messages: [] });
+      if (input === "/api/projects/p/tasks/source")
+        return json({ task: forkSource });
+      if (input === "/api/projects/p/threads/parent/branches")
+        return new Promise<Response>((resolve) => {
+          complete = resolve;
+        });
+      return original(input, options);
+    });
+    await render(undefined, "conversation", {
+      parent: forkParent,
+      source: forkSource,
+      key: "fork-draft",
+    });
+    await write("Fork this conversation");
+    await act(() =>
+      container
+        .querySelector(".thread-branch-draft form")!
+        .dispatchEvent(
+          new Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    expect(complete).toBeDefined();
+    if (move) await act(() => navigate("/settings/appearance?project=p"));
+    await act(() =>
+      complete!(json({ thread: { project_id: "p", thread_id: "fork-child" } })),
+    );
+    expect(location.pathname + location.search).toBe(
+      move ? "/settings/appearance?project=p" : "/projects/p/chat/fork-child",
+    );
+    expect(changed).toHaveBeenCalledTimes(1);
+  },
+);

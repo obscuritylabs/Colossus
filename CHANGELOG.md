@@ -8,6 +8,21 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Added
+
+- Find text in loaded web conversations, or copy and download their released user and assistant messages as Markdown.
+- Run a disposable Windows Helm deployment with the tracked Docker/kind harness, verified browser and connector TLS probes, and ownership-checked cleanup under one test directory.
+
+### Fixed
+
+- Preserve unsent web drafts when session refresh fails temporarily or an earlier submission finishes after editing has resumed.
+- Keep the current page when a delayed chat creation or fork finishes after navigation.
+- Support a non-default public TLS port in Helm without changing internal service ports or connector passthrough.
+
+### Changed
+
+- Rewrite provider setup and connected-agent guides around concrete tasks, correct configuration schema and timeout guidance, and document web-shell permissions and controls.
+
 ### Removed
 
 - Remove ChromaDB semantic memory, its embedding adapters, configuration and Desktop controls, and live compatibility CI. Canonical memory records and local Tantivy search remain supported. Remove the obsolete `memory.semantic` block from runtime YAML before upgrading; Desktop automatically retires saved overrides for that field.

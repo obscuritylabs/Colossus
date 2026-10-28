@@ -99,6 +99,28 @@ export function Chat({
   onFork?: (thread: Thread, source: Task) => void;
 }) {
   const navigation = useNavigation();
+  const navigationScope = useRef({ href: navigation.href });
+  if (navigationScope.current.href !== navigation.href)
+    navigationScope.current = { href: navigation.href };
+  // Chat stays mounted behind settings. Observe every route transition so even
+  // leaving and returning to the same URL invalidates an operation's navigation.
+  useEffect(() => {
+    const moved = () => {
+      const href = window.location.pathname + window.location.search;
+      if (navigationScope.current.href !== href)
+        navigationScope.current = { href };
+    };
+    window.addEventListener("colossus:web:navigation", moved);
+    window.addEventListener("popstate", moved);
+    return () => {
+      window.removeEventListener("colossus:web:navigation", moved);
+      window.removeEventListener("popstate", moved);
+    };
+  }, []);
+  const navigationOrigin = navigationScope.current;
+  const stillAtOrigin = (origin: typeof navigationOrigin) =>
+    origin === navigationScope.current &&
+    origin.href === window.location.pathname + window.location.search;
   const path = `${projectPath(project)}/chat`;
   const runtime = useResource<ChatRuntime>(path, 3000, identity);
   const connections = useResource<{ connections: ChatConnection[] }>(
@@ -169,6 +191,7 @@ export function Chat({
     }
   }
   async function create(runRequest: RunRequest) {
+    const origin = navigationOrigin;
     setBusy(true);
     setError("");
     try {
@@ -176,10 +199,12 @@ export function Chat({
         request: runRequest,
       });
       if (!alive.current) return false;
-      setInitialRequest(runRequest);
       setCreatedThread(result.thread);
       onChanged();
-      navigation.go(chatThreadHref(project, result.thread.thread_id));
+      if (stillAtOrigin(origin)) {
+        setInitialRequest(runRequest);
+        navigation.go(chatThreadHref(project, result.thread.thread_id));
+      }
       return true;
     } catch (e) {
       if (alive.current) setError(errorMessage(e));
@@ -470,10 +495,12 @@ export function Chat({
               onCancel={() => onCloseFork?.()}
               onChanged={onChanged}
               onCreated={(child, submitted) => {
-                setInitialRequest(submitted);
                 setCreatedThread(child);
                 onCloseFork?.();
-                navigation.go(chatThreadHref(project, child.thread_id));
+                if (stillAtOrigin(navigationOrigin)) {
+                  setInitialRequest(submitted);
+                  navigation.go(chatThreadHref(project, child.thread_id));
+                }
               }}
             />
           ) : null}

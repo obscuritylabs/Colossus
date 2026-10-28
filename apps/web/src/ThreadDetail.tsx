@@ -11,6 +11,7 @@ import type { AsideDraftSource } from "./ThreadBranchDraft";
 import { latestChatForkSource } from "./ChatHistorySidebar.actions";
 import "@colossus/ui/styles/inspector.css";
 import "./thread-inspector.css";
+import "./conversation-text.css";
 import { ThreadAgentInboxes } from "./ThreadAgentInboxes";
 import { WebLink } from "./WebLink";
 import { releasedRunUsage } from "./message-usage";
@@ -30,7 +31,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@colossus/ui/components/ui/dropdown-menu";
-import { IconDots, IconGitFork, IconMessagePlus } from "@tabler/icons-react";
+import {
+  IconChevronDown,
+  IconChevronUp,
+  IconCopy,
+  IconDots,
+  IconDownload,
+  IconGitFork,
+  IconMessagePlus,
+  IconSearch,
+} from "@tabler/icons-react";
 import { Badge } from "@colossus/ui/components/ui/badge";
 import { Button as LinkButton } from "@colossus/ui/components/ui/button";
 import {
@@ -40,6 +50,7 @@ import {
   useRef,
   useState,
   useId,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { Button, TextInput } from "@colossus/ui";
 import {
@@ -76,6 +87,12 @@ import { Interactions } from "./Interactions";
 import { RunComposer, type RunRequest } from "./RunComposer";
 import { HostedFileLinks } from "./HostedAttachments";
 import { conversationProjection } from "./conversation";
+import {
+  conversationMarkdown,
+  downloadConversationMarkdown,
+  findConversationMessages,
+  type ConversationTextMessage,
+} from "./conversation-text";
 import { ThreadSessionViews, sessionRunViews } from "./ThreadSessionViews";
 import { ThreadRunActivity } from "./ThreadRunActivity";
 import {
@@ -334,6 +351,112 @@ export function ThreadDetail({
     () => conversationProjection(detail, events),
     [detail, events],
   );
+  const textScope = JSON.stringify([
+    project,
+    initial.thread_id,
+    initial.node_id,
+    initial.session_id,
+    initial.owner_user_id,
+    personalChat?.owner,
+  ]);
+  const textScopeRef = useRef(textScope);
+  textScopeRef.current = textScope;
+  const textMessages = useMemo<ConversationTextMessage[]>(
+    () =>
+      detail.thread.thread_id !== initial.thread_id ||
+      detail.thread.project_id !== project
+        ? []
+        : projection.turns.flatMap((turn) =>
+            turn.messages.flatMap((message) =>
+              message.role === "user" || message.role === "assistant"
+                ? [
+                    {
+                      id: message.message_id,
+                      role: message.role,
+                      author:
+                        message.role === "user"
+                          ? detail.message_authors?.[message.message_id]
+                              ?.display_name || "User"
+                          : "Colossus",
+                      createdAt: message.created_at,
+                      text: message.text,
+                    },
+                  ]
+                : [],
+            ),
+          ),
+    [projection, detail, initial.thread_id, project],
+  );
+  const emptyFind = () => ({
+    scope: textScope,
+    open: false,
+    query: "",
+    selectedId: null as string | null,
+  });
+  const [findState, setFind] = useState(emptyFind);
+  const find = findState.scope === textScope ? findState : emptyFind();
+  const matches = useMemo(
+    () => findConversationMessages(textMessages, find.query),
+    [textMessages, find.query],
+  );
+  const selectedMatch = matches.includes(find.selectedId ?? "")
+    ? find.selectedId
+    : (matches[0] ?? null);
+  const matchIndex = selectedMatch ? matches.indexOf(selectedMatch) : -1;
+  const findTrigger = useRef<HTMLButtonElement>(null);
+  const findInput = useRef<HTMLInputElement>(null);
+  const textRows = useRef(new Map<string, HTMLDivElement>());
+  const findInputId = useId();
+  const findScopeId = useId();
+  const [textFeedback, setTextFeedback] = useState<{
+    scope: string;
+    message: string;
+    failed?: boolean;
+  } | null>(null);
+  const [copyingScope, setCopyingScope] = useState<string | null>(null);
+  useEffect(() => {
+    setFind({ scope: textScope, open: false, query: "", selectedId: null });
+    setTextFeedback(null);
+  }, [textScope]);
+  useEffect(() => {
+    if (find.open) findInput.current?.focus();
+  }, [find.open, textScope, view]);
+  useEffect(() => {
+    if (!find.open) return;
+    if (find.selectedId !== selectedMatch)
+      setFind((current) =>
+        current.scope === textScope && current.query === find.query
+          ? { ...current, selectedId: selectedMatch }
+          : current,
+      );
+    if (selectedMatch) {
+      follow.current = false;
+      textRows.current
+        .get(selectedMatch)
+        ?.scrollIntoView?.({ block: "center" });
+    }
+  }, [find.open, find.query, find.selectedId, selectedMatch, textScope, view]);
+  function closeFind() {
+    setFind({ ...find, open: false });
+    findTrigger.current?.focus();
+  }
+  function findKey(event: ReactKeyboardEvent) {
+    if (find.open && event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeFind();
+    }
+  }
+  function moveMatch(direction: number, focusRow = true) {
+    if (!matches.length) return;
+    const id =
+      matches[(matchIndex + direction + matches.length) % matches.length]!;
+    setFind({ ...find, selectedId: id });
+    follow.current = false;
+    const row = textRows.current.get(id);
+    row?.scrollIntoView?.({ block: "center" });
+    if (focusRow) row?.focus({ preventScroll: true });
+  }
   const target =
     nodes.find((item) => item.node.node_id === thread.node_id) ??
     resolvedTarget;
@@ -359,6 +482,58 @@ export function ThreadDetail({
     (task) =>
       !task.source_read_only && task.run_id && taskStatus(task) !== "queued",
   );
+  const earlierHistoryAvailable = Boolean(
+    detail.next_message_cursor || detail.next_task_cursor,
+  );
+  function textSnapshot() {
+    return conversationMarkdown({
+      title: thread.title,
+      messages: textMessages,
+      earlierHistoryAvailable,
+      incompleteHistory:
+        thread.sync_status !== "current" ||
+        tasks.some((task) => task.history_bounded || task.output_limited),
+      streaming: active.length > 0,
+    });
+  }
+  async function copyConversation() {
+    const scope = textScope;
+    const snapshot = textSnapshot();
+    setCopyingScope(scope);
+    try {
+      await navigator.clipboard.writeText(snapshot);
+      if (textScopeRef.current === scope)
+        setTextFeedback({
+          scope,
+          message: "Loaded conversation copied as Markdown.",
+        });
+    } catch {
+      if (textScopeRef.current === scope)
+        setTextFeedback({
+          scope,
+          message:
+            "Could not copy the conversation. Try downloading it instead.",
+          failed: true,
+        });
+    } finally {
+      setCopyingScope((current) => (current === scope ? null : current));
+    }
+  }
+  function downloadConversation() {
+    try {
+      downloadConversationMarkdown(thread.title, textSnapshot());
+      setTextFeedback({
+        scope: textScope,
+        message: "Loaded conversation downloaded as Markdown.",
+      });
+    } catch {
+      setTextFeedback({
+        scope: textScope,
+        message: "Could not download the conversation. Try copying it instead.",
+        failed: true,
+      });
+    }
+  }
   async function olderHistory() {
     if (historyBusy) return;
     const params = new URLSearchParams();
@@ -876,7 +1051,24 @@ export function ThreadDetail({
                 <span className="sr-only">Side chats</span>
               </Button>
             ) : null}
-            {onConnections ||
+            <Button
+              ref={findTrigger}
+              variant="tertiary"
+              aria-label="Find in loaded conversation"
+              title="Find in loaded conversation"
+              aria-expanded={find.open && activeView === "conversation"}
+              onClick={() => {
+                setView("conversation");
+                setFind({
+                  ...find,
+                  open: !find.open || activeView !== "conversation",
+                });
+              }}
+            >
+              <IconSearch size={16} aria-hidden="true" />
+            </Button>
+            {permissions.includes("read") ||
+            onConnections ||
             permissions.includes("control") ||
             (onFork && !embedded && canBranch) ? (
               <DropdownMenu
@@ -906,6 +1098,22 @@ export function ThreadDetail({
                     }
                   }}
                 >
+                  <DropdownMenuItem
+                    disabled={
+                      !textMessages.length || copyingScope === textScope
+                    }
+                    onSelect={() => void copyConversation()}
+                  >
+                    <IconCopy size={16} aria-hidden="true" />
+                    Copy loaded conversation
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={!textMessages.length}
+                    onSelect={downloadConversation}
+                  >
+                    <IconDownload size={16} aria-hidden="true" />
+                    Download loaded conversation
+                  </DropdownMenuItem>
                   {onConnections ? (
                     <DropdownMenuItem onSelect={onConnections}>
                       <IconPlugConnected size={16} aria-hidden="true" />
@@ -990,6 +1198,14 @@ export function ThreadDetail({
           {notice}
         </p>
       ) : null}
+      {textFeedback?.scope === textScope ? (
+        <p
+          className="sync-notice"
+          role={textFeedback.failed ? "alert" : "status"}
+        >
+          {textFeedback.message}
+        </p>
+      ) : null}
       {thread.sync_status !== "current" ? (
         <p className="sync-notice" role="status">
           Released history is incomplete or bounded. Saved messages are
@@ -1014,12 +1230,79 @@ export function ThreadDetail({
           </span>
         </div>
       ) : null}
+      {activeView === "conversation" && find.open ? (
+        <div
+          className="conversation-find"
+          role="search"
+          aria-label="Find in loaded conversation"
+          onKeyDown={findKey}
+        >
+          <label htmlFor={findInputId}>Find loaded messages</label>
+          <div className="conversation-find-controls">
+            <TextInput
+              id={findInputId}
+              ref={findInput}
+              type="search"
+              value={find.query}
+              aria-describedby={findScopeId}
+              onChange={(event) =>
+                setFind({
+                  ...find,
+                  query: event.target.value,
+                  selectedId: null,
+                })
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  moveMatch(event.shiftKey ? -1 : 1, false);
+                }
+              }}
+            />
+            <span
+              className="conversation-find-count"
+              role="status"
+              aria-live="polite"
+            >
+              {find.query.trim()
+                ? matches.length
+                  ? `${matchIndex + 1} of ${matches.length} matching messages`
+                  : "No matching messages"
+                : "Enter text to find"}
+            </span>
+            <Button
+              aria-label="Previous matching message"
+              disabled={!matches.length}
+              onClick={() => moveMatch(-1)}
+            >
+              <IconChevronUp size={16} aria-hidden="true" />
+            </Button>
+            <Button
+              aria-label="Next matching message"
+              disabled={!matches.length}
+              onClick={() => moveMatch(1)}
+            >
+              <IconChevronDown size={16} aria-hidden="true" />
+            </Button>
+            <Button aria-label="Close conversation search" onClick={closeFind}>
+              <IconX size={16} aria-hidden="true" />
+            </Button>
+          </div>
+          <p id={findScopeId}>
+            Loaded user and assistant messages only.
+            {earlierHistoryAvailable
+              ? " Load earlier history to search more."
+              : ""}
+          </p>
+        </div>
+      ) : null}
       {activeView === "conversation" ? (
         <div
           className="thread-conversation"
           ref={conversation}
           tabIndex={0}
           aria-label="Conversation history"
+          onKeyDown={findKey}
           onScroll={() => {
             const panel = conversation.current;
             if (panel) {
@@ -1055,6 +1338,21 @@ export function ThreadDetail({
                 <div
                   key={message.message_id}
                   tabIndex={-1}
+                  ref={(element) => {
+                    if (element)
+                      textRows.current.set(message.message_id, element);
+                    else textRows.current.delete(message.message_id);
+                  }}
+                  className={
+                    find.open && selectedMatch === message.message_id
+                      ? "conversation-find-active"
+                      : undefined
+                  }
+                  aria-current={
+                    find.open && selectedMatch === message.message_id
+                      ? "true"
+                      : undefined
+                  }
                   data-aside-source-task-id={
                     isAsideSource(task) &&
                     ["user", "assistant"].includes(message.role)
