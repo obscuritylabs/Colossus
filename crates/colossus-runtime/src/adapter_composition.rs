@@ -87,76 +87,6 @@ pub(super) fn validate_search_config(config: &RuntimeConfig) -> Result<(), Runti
     Ok(())
 }
 
-pub(super) fn validate_memory_config(
-    memory: &MemoryConfig,
-    sandbox: &SandboxConfig,
-) -> Result<(), RuntimeError> {
-    let SemanticMemoryConfig::Chroma {
-        base_url,
-        tenant,
-        database,
-        collection,
-        credential_reference,
-        timeout_ms,
-        position_path: _,
-        embedding,
-    } = &memory.semantic
-    else {
-        return Ok(());
-    };
-    if !memory.index_enabled {
-        return Err(RuntimeError::Config(
-            "memory semantic Chroma requires indexEnabled: true".into(),
-        ));
-    }
-    let resource_authority = configured_resource_authority(sandbox);
-    let chroma = ChromaProfile::new_with_resource_authority(
-        base_url,
-        tenant,
-        database,
-        collection,
-        credential_reference.clone(),
-        *timeout_ms,
-        resource_authority,
-    )?;
-    let chroma_origin = chroma.network_origin()?;
-    if !sandbox_allows_network(sandbox, &chroma_origin)? {
-        return Err(RuntimeError::Config(format!(
-            "Chroma origin {chroma_origin} is absent from sandbox.networkDestinations"
-        )));
-    }
-    match embedding.as_ref() {
-        MemoryEmbeddingConfig::Local { dimensions } => {
-            let _ = LocalHashEmbeddingProvider::new(*dimensions)?;
-        }
-        MemoryEmbeddingConfig::OpenAiCompatible {
-            profile,
-            model,
-            base_url,
-            credential_reference,
-            timeout_ms,
-            dimensions,
-        } => {
-            let profile = OpenAiEmbeddingProfile::new_with_resource_authority(
-                profile,
-                model,
-                base_url,
-                credential_reference.clone(),
-                *timeout_ms,
-                *dimensions,
-                resource_authority,
-            )?;
-            let embedding_origin = profile.network_origin()?;
-            if !sandbox_allows_network(sandbox, &embedding_origin)? {
-                return Err(RuntimeError::Config(format!(
-                    "embedding origin {embedding_origin} is absent from sandbox.networkDestinations"
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 pub(super) fn provider_profile(
     name: &str,
@@ -238,10 +168,7 @@ pub(super) fn provider_registry(
 
 pub(super) fn compose_memory_indexes(
     config: &RuntimeConfig,
-    gateway: Arc<EffectGateway>,
-    tls_roots: &AdditionalRootCertificates,
 ) -> Result<Vec<MemoryIndexRegistration>, RuntimeError> {
-    let resource_authority = configured_resource_authority(&config.sandbox);
     if !config.memory.index_enabled {
         let index: Arc<dyn MemoryIndex> = Arc::new(UnavailableMemoryIndex::new(
             "memory index disabled by configuration",
@@ -264,75 +191,10 @@ pub(super) fn compose_memory_indexes(
         config.revalidate_resolved_home_directory(&path)?;
         Arc::new(LazyTantivyMemoryIndex::new(path))
     };
-    let mut indexes = vec![MemoryIndexRegistration::new("memory.tantivy-v1", lexical)?];
-    let SemanticMemoryConfig::Chroma {
-        base_url,
-        tenant,
-        database,
-        collection,
-        credential_reference,
-        timeout_ms,
-        position_path,
-        embedding,
-    } = &config.memory.semantic
-    else {
-        return Ok(indexes);
-    };
-    let embedding: Arc<dyn EmbeddingProvider> = match embedding.as_ref() {
-        MemoryEmbeddingConfig::Local { dimensions } => {
-            Arc::new(LocalHashEmbeddingProvider::new(*dimensions)?)
-        }
-        MemoryEmbeddingConfig::OpenAiCompatible {
-            profile,
-            model,
-            base_url,
-            credential_reference,
-            timeout_ms,
-            dimensions,
-        } => {
-            let profile = OpenAiEmbeddingProfile::new_with_resource_authority(
-                profile,
-                model,
-                base_url,
-                credential_reference.clone(),
-                *timeout_ms,
-                *dimensions,
-                resource_authority,
-            )?;
-            let executor = Arc::new(
-                OpenAiEmbeddingExecutor::new(profile.clone()).with_tls_roots(tls_roots.clone()),
-            );
-            Arc::new(GatewayOpenAiEmbeddingProvider::new(
-                Arc::clone(&gateway),
-                executor,
-                profile,
-            ))
-        }
-    };
-    let profile = ChromaProfile::new_with_resource_authority(
-        base_url,
-        tenant,
-        database,
-        collection,
-        credential_reference.clone(),
-        *timeout_ms,
-        resource_authority,
-    )?;
-    let executor = Arc::new(ChromaExecutor::new(profile.clone()).with_tls_roots(tls_roots.clone()));
-    let position_path = position_path
-        .clone()
-        .unwrap_or_else(|| config.storage.path.with_extension("chroma-position.json"));
-    config.revalidate_resolved_home_file(&position_path)?;
-    let semantic: Arc<dyn MemoryIndex> =
-        match ChromaMemoryIndex::open(gateway, executor, embedding, profile, &position_path) {
-            Ok(index) => Arc::new(index),
-            Err(error) => Arc::new(UnavailableMemoryIndex::new(format!(
-                "Chroma projection metadata {} could not open: {error}",
-                position_path.display()
-            ))),
-        };
-    indexes.push(MemoryIndexRegistration::new("memory.chroma-v1", semantic)?);
-    Ok(indexes)
+    Ok(vec![MemoryIndexRegistration::new(
+        "memory.tantivy-v1",
+        lexical,
+    )?])
 }
 
 pub(super) fn validate_provider_config(config: &RuntimeConfig) -> Result<(), RuntimeError> {

@@ -704,7 +704,6 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "windows-desktop",
         "fuzz",
         "supply-chain",
-        "chroma",
         "storage",
         "live-security",
     ] {
@@ -748,8 +747,6 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "--test native_lifecycle -- --ignored --nocapture",
         "cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings",
         "cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib",
-        "for attempt in 1 2 3",
-        "docker pull \"${{ matrix.image }}\"",
         "cargo xtask check dependencies",
         "type -a podman || true",
         "sudo apt-get install --yes musl-tools podman slirp4netns",

@@ -838,16 +838,16 @@ describe("ManagedSettingsPane", () => {
 
   it("routes field search results to the owning tab and disclosure", () => {
     const descriptors = buildManagedSettingsFixture(desktop()).fieldDescriptors;
-    const semantic = descriptors.find(
-      (descriptor) => descriptor.id === "memory.semantic",
+    const exporter = descriptors.find(
+      (descriptor) => descriptor.id === "audit.exporter",
     )!;
     const sandbox = descriptors.find(
       (descriptor) => descriptor.id === "sandbox.maxMemoryBytes",
     )!;
 
-    expect(managedFieldDestination(semantic)).toEqual({
+    expect(managedFieldDestination(exporter)).toEqual({
       tab: "advanced",
-      section: "Memory",
+      section: "Audit",
     });
     expect(managedFieldDestination(sandbox)).toEqual({
       tab: "sandbox",
@@ -874,8 +874,8 @@ describe("ManagedSettingsPane", () => {
     }
     expect(
       advancedSectionContainsField(
-        descriptors.filter(({ section }) => section === "Memory"),
-        semantic.id,
+        descriptors.filter(({ section }) => section === "Audit"),
+        exporter.id,
       ),
     ).toBe(true);
   });

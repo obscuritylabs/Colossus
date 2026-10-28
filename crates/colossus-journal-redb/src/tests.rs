@@ -774,20 +774,20 @@ fn external_work_checkpoint_survives_restart_without_blocking_other_consumers() 
         let journal_port: Arc<dyn EventJournal> = journal.clone();
         let store_port: Arc<dyn ProjectionStore> = journal;
         let queue = JournalExternalWorkQueue::new(journal_port, store_port);
-        let pending = queue.pending("memory.tantivy-v1", 8).expect("pending");
+        let pending = queue.pending("fixture.first-v1", 8).expect("pending");
         first_event_id = pending[0].event_id.clone();
         queue
-            .acknowledge("memory.tantivy-v1", 0, &pending[0])
+            .acknowledge("fixture.first-v1", 0, &pending[0])
             .expect("acknowledge");
-        assert_eq!(queue.position("memory.chroma-v1").expect("chroma"), 0);
+        assert_eq!(queue.position("fixture.second-v1").expect("second"), 0);
         queue
             .record_failure(
-                "memory.chroma-v1",
+                "fixture.second-v1",
                 Some(&pending[0]),
                 "2026-07-11T00:00:00Z",
                 true,
                 "external_work.test",
-                "temporary Chroma failure",
+                "temporary fixture failure",
             )
             .expect("retry state");
     }
@@ -796,17 +796,17 @@ fn external_work_checkpoint_survives_restart_without_blocking_other_consumers() 
     let journal_port: Arc<dyn EventJournal> = journal.clone();
     let store_port: Arc<dyn ProjectionStore> = journal;
     let queue = JournalExternalWorkQueue::new(journal_port, store_port);
-    assert_eq!(queue.position("memory.tantivy-v1").expect("position"), 1);
+    assert_eq!(queue.position("fixture.first-v1").expect("position"), 1);
     assert_eq!(
-        queue.pending("memory.tantivy-v1", 8).expect("remaining")[0].global_sequence,
+        queue.pending("fixture.first-v1", 8).expect("remaining")[0].global_sequence,
         2
     );
     assert_eq!(
-        queue.pending("memory.chroma-v1", 8).expect("chroma")[0].event_id,
+        queue.pending("fixture.second-v1", 8).expect("second")[0].event_id,
         first_event_id
     );
     let retry = queue
-        .retry_state("memory.chroma-v1")
+        .retry_state("fixture.second-v1")
         .expect("retry state")
         .expect("persisted retry state");
     assert_eq!(retry.attempts, 1);

@@ -813,54 +813,6 @@ jobs:
       - name: Enforce dependency policy
         run: cargo xtask check dependencies
 
-  chroma:
-    name: Chroma ${{ matrix.chroma }} compatibility
-    if: needs.eligibility.result == 'success'
-    needs: eligibility
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - chroma: "1.5.8"
-            image: chromadb/chroma:1.5.8@sha256:607103123fbd79794e3cd8029e16137031a464551e3a61df77191627a9d23c72
-          - chroma: "1.5.9"
-            image: chromadb/chroma:1.5.9@sha256:1e0b73a187a28757c572acba508c46f48c9e8b0acaf5c20e6d95cdedce1acdf6
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install Rust 1.96
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
-        with:
-          toolchain: 1.96.0
-      - name: Pull pinned Chroma release
-        run: |
-          for attempt in 1 2 3; do
-            docker pull "${{ matrix.image }}" && exit 0
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 5))
-          done
-      - name: Start pinned Chroma release
-        run: |
-          docker run --detach --rm --name colossus-chroma \
-            --publish 127.0.0.1:8000:8000 "${{ matrix.image }}"
-          for _ in $(seq 1 60); do
-            curl --fail --silent http://127.0.0.1:8000/api/v2/heartbeat >/dev/null && exit 0
-            sleep 1
-          done
-          docker logs colossus-chroma
-          exit 1
-      - name: Run live Chroma compatibility suite
-        env:
-          COLOSSUS_CHROMA_URL: http://127.0.0.1:8000
-        run: cargo test --locked -p colossus-memory-chroma --test chroma_live -- --ignored
-      - name: Stop Chroma
-        if: always()
-        run: docker stop colossus-chroma || true
-
   storage:
     name: PostgreSQL acceptance
     if: needs.eligibility.result == 'success'
@@ -1139,7 +1091,7 @@ jobs:
   gate:
     name: Colossus pre-merge gate
     if: always()
-    needs: [eligibility, linux-rust-integration, linux-desktop, macos-native, macos-desktop-acceptance, macos-desktop-bundle, windows-runtime, windows-desktop, credential-vault, fuzz, supply-chain, chroma, storage, live-security, vscode-sdk, vscode-native]
+    needs: [eligibility, linux-rust-integration, linux-desktop, macos-native, macos-desktop-acceptance, macos-desktop-bundle, windows-runtime, windows-desktop, credential-vault, fuzz, supply-chain, storage, live-security, vscode-sdk, vscode-native]
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -1164,7 +1116,6 @@ jobs:
             credential-vault=${{ needs['credential-vault'].result }}
             fuzz=${{ needs.fuzz.result }}
             supply-chain=${{ needs['supply-chain'].result }}
-            chroma=${{ needs.chroma.result }}
             storage=${{ needs.storage.result }}
             live-security=${{ needs['live-security'].result }}
         run: |

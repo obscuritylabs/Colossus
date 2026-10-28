@@ -319,8 +319,6 @@ memory:
   indexEnabled: true
   indexPath: null
   retrievalLimit: 6
-  semantic:
-    kind: disabled
 research:
   maxSources: 20
   maxWorkers: 4
@@ -389,7 +387,7 @@ Common timeout fields apply at different boundaries:
 | `providers.profiles.*.generationTimeoutMs` | Hard wall time for one streaming generation | At least `timeoutMs`; defaults to the larger of `timeoutMs` and `1200000` remotely or `3600000` on loopback |
 | `sandbox.timeoutMs` | One permit-bearing effect and cleanup | `900000`; backend minimums apply |
 | `mcp.servers.*.timeoutMs` | One MCP operation | When present, positive and no greater than sandbox timeout |
-| Search or semantic-memory `timeoutMs` | One adapter request | Positive; see the owning page |
+| Search `timeoutMs` | One adapter request | Positive; see the owning page |
 | `storage.postgres.statementTimeoutMs` | One PostgreSQL statement and lock acquisition | `30000`; `100..=300000` |
 
 `agent.maxTurns` counts model rounds and is not a timeout. A run can contain provider

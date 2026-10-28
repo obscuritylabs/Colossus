@@ -1285,7 +1285,7 @@ fn risky_field_authority_changed(
     before: &ResolvedSpaceConfiguration,
     after: &ResolvedSpaceConfiguration,
 ) -> bool {
-    const RISKY_FIELDS: [&str; 25] = [
+    const RISKY_FIELDS: [&str; 24] = [
         "access.tools.include",
         "access.tools.exclude",
         "access.actions.allow",
@@ -1293,7 +1293,6 @@ fn risky_field_authority_changed(
         "access.actions.deny",
         "audit.exporter",
         "policy",
-        "memory.semantic",
         "plugins.enabled",
         "plugins.workspaceDiscovery",
         "plugins.include",
@@ -2090,15 +2089,6 @@ fn field_descriptors() -> Vec<FieldDescriptorDto> {
             Some(1),
             Some(100),
             vec![],
-        ),
-        advanced_descriptor(
-            "memory.semantic",
-            "Memory",
-            "Semantic projection",
-            "Disabled, local, or Chroma semantic memory projection configuration.",
-            "high",
-            "json",
-            json!({ "kind": "disabled" }),
         ),
         descriptor(
             "plugins.enabled",

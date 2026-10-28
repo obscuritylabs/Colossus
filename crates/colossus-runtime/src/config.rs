@@ -198,9 +198,6 @@ pub struct MemoryConfig {
     pub index_path: Option<PathBuf>,
     /// Maximum memories composed into one model turn.
     pub retrieval_limit: usize,
-    /// Optional semantic projection. Disabled preserves the offline Tantivy default.
-    #[serde(default)]
-    pub semantic: SemanticMemoryConfig,
 }
 
 impl Default for MemoryConfig {
@@ -209,77 +206,8 @@ impl Default for MemoryConfig {
             index_enabled: true,
             index_path: None,
             retrieval_limit: 6,
-            semantic: SemanticMemoryConfig::default(),
         }
     }
-}
-
-/// Optional semantic memory projection configuration.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum SemanticMemoryConfig {
-    /// Use only the offline Tantivy lexical projection.
-    #[default]
-    Disabled,
-    /// Replace the disposable search projection with Chroma v2.
-    Chroma {
-        /// Chroma server origin. HTTPS is required except for loopback development.
-        base_url: String,
-        /// Existing Chroma tenant identifier.
-        tenant: String,
-        /// Existing Chroma database name.
-        database: String,
-        /// Disposable collection name managed by Colossus.
-        collection: String,
-        /// Optional `env:VARIABLE` token reference.
-        #[serde(default)]
-        credential_reference: Option<String>,
-        /// Per-operation transport timeout.
-        timeout_ms: u64,
-        /// Optional local file tracking the last applied journal sequence.
-        #[serde(default)]
-        position_path: Option<PathBuf>,
-        /// Caller-owned embedding profile; Chroma never generates canonical embeddings.
-        embedding: Box<MemoryEmbeddingConfig>,
-    },
-}
-
-/// Embedding provider selected for a Chroma projection.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum MemoryEmbeddingConfig {
-    /// Deterministic offline token and bigram feature hashing.
-    Local {
-        /// Output vector dimensions in 64..=4096.
-        dimensions: usize,
-    },
-    /// OpenAI-compatible `/embeddings` endpoint.
-    OpenAiCompatible {
-        /// Stable profile name used in audit requests.
-        profile: String,
-        /// Embedding model identifier.
-        model: String,
-        /// API base URL, normally ending in `/v1`.
-        base_url: String,
-        /// Optional `env:VARIABLE` credential reference.
-        #[serde(default)]
-        credential_reference: Option<String>,
-        /// Per-request transport timeout.
-        timeout_ms: u64,
-        /// Optional strict response dimension.
-        #[serde(default)]
-        dimensions: Option<usize>,
-    },
 }
 
 /// Bounded durable research orchestration configuration.
@@ -1314,7 +1242,6 @@ impl RuntimeConfig {
                 "memory.retrievalLimit must be in 1..=100".into(),
             ));
         }
-        validate_memory_config(&config.memory, &config.sandbox)?;
         if !(1..=100).contains(&config.research.max_sources)
             || !(1..=16).contains(&config.research.max_workers)
         {
@@ -1526,28 +1453,6 @@ impl RuntimeConfig {
                             "home-workspace memory index path is unsafe: {error}"
                         ))
                     })?);
-            }
-            if let SemanticMemoryConfig::Chroma { position_path, .. } =
-                &mut resolved.memory.semantic
-            {
-                let relative = position_path.as_ref().map_or_else(
-                    || Ok(self.storage.path.with_extension("chroma-position.json")),
-                    |path| {
-                        if confined_relative_storage_path(path) {
-                            Ok(path.clone())
-                        } else {
-                            Err(RuntimeError::Config(
-                                "memory.semantic.positionPath must be confined when storage.location is home_workspace"
-                                    .into(),
-                            ))
-                        }
-                    },
-                )?;
-                *position_path = Some(root.prepare_file(&relative).map_err(|error| {
-                    RuntimeError::Config(format!(
-                        "home-workspace Chroma position path is unsafe: {error}"
-                    ))
-                })?);
             }
             resolved.storage.resolved_home_workspace = Some(root);
         } else {

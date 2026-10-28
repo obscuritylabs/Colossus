@@ -1175,7 +1175,6 @@ pub const MANAGED_EDITABLE_FIELD_IDS: &[&str] = &[
     "context.modelAssisted",
     "memory.indexEnabled",
     "memory.retrievalLimit",
-    "memory.semantic",
     "research.maxSources",
     "research.maxWorkers",
     "plugins.enabled",

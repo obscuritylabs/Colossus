@@ -282,12 +282,6 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
         &[
             "network.http",
             "web.search",
-            "embedding.openai.create",
-            "memory.index.chroma.search",
-            "memory.index.chroma.status",
-            "memory.index.chroma.upsert",
-            "memory.index.chroma.remove",
-            "memory.index.chroma.reset",
             "research.run",
             "integration.openapi.import",
             "integration.connect",

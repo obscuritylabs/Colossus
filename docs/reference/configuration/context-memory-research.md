@@ -1,6 +1,6 @@
 ---
 title: Context, memory, and research configuration
-description: Configure long-session compaction, durable memory retrieval, disposable indexes, semantic backends, and bounded research.
+description: Configure long-session compaction, durable memory retrieval, a disposable local index, and bounded research.
 audience: operator
 type: reference
 ---
@@ -28,9 +28,8 @@ For user workflows, see [Sessions](../../use/sessions.md) and
 | Scenario | Configuration guidance |
 | --- | --- |
 | Normal local or hosted-model use | Keep the defaults: automatic context compaction, local Tantivy memory, and bounded research |
-| Deterministic or air-gapped operation | Set `context.modelAssisted: false`, keep semantic memory disabled, and use repository-only research |
+| Deterministic or air-gapped operation | Set `context.modelAssisted: false` and use repository-only research |
 | Long sessions with a dedicated summarizer | Route `context_summarizer` to a reviewed model and keep recent-message preservation explicit |
-| Meaning-based memory retrieval | Add Chroma with local embeddings before introducing a second remote embedding service |
 | Web-backed research | Configure the top-level `search.roles.research` route |
 | MCP-backed research | Enable the server's ordinary `allowedTools`; optionally override its research calls with `researchTools` |
 
@@ -47,16 +46,13 @@ memory:
   indexEnabled: true
   indexPath: null
   retrievalLimit: 6
-  semantic:
-    kind: disabled
 research:
   maxSources: 20
   maxWorkers: 4
 ```
 
 When a block is present, you may specify only the fields you want to override. Omitted
-ordinary fields keep the defaults above, while unknown fields are rejected. Tagged
-choices such as `semantic` still require an explicit `kind` when their block is present.
+fields keep the defaults above, while unknown fields are rejected.
 
 ## Context configuration
 
@@ -176,14 +172,18 @@ apply across sessions in the same workspace as binding context and take preceden
 memories; memories are explicitly presented to the model as background rather than
 instructions.
 
+When upgrading an existing configuration, remove the entire obsolete `memory.semantic`
+block, including `kind: disabled`. The strict parser rejects that removed field.
+Canonical memory records and local Tantivy retrieval remain supported.
+Desktop automatically removes the retired override from saved settings and setup snapshots.
+
 ### Memory fields
 
 | Field | Meaning | Constraint | Default |
 | --- | --- | --- | ---: |
-| `indexEnabled` | Enable disposable Tantivy indexing and any configured semantic index | Boolean | `true` |
+| `indexEnabled` | Enable disposable local Tantivy indexing | Boolean | `true` |
 | `indexPath` | Local Tantivy directory; workspace-relative, absolute, or `null` | Path or `null` | Derived beside `storage.path` |
 | `retrievalLimit` | Maximum relevant canonical records composed into one model turn | `1..=100` | `6` |
-| `semantic` | `kind: disabled` or a Chroma projection | Strict tagged block | Disabled |
 
 `retrievalLimit` does not change the CLI `memories search --limit` argument. It bounds
 automatic memory composition during model-context preparation.
@@ -204,26 +204,20 @@ memory:
   indexEnabled: true
   indexPath: .colossus/indexes/memory-tantivy
   retrievalLimit: 8
-  semantic:
-    kind: disabled
 ```
 
 Index updates are queued from canonical journal events and applied in order. Index-open,
 sync, or search failure does not destroy memories; Colossus can fall back to a bounded
 canonical term match and exposes index lag and errors through status.
 
-Disable all indexes while preserving canonical memory operations with:
+Disable the index while preserving canonical memory operations with:
 
 ```yaml
 memory:
   indexEnabled: false
   indexPath: null
   retrievalLimit: 6
-  semantic:
-    kind: disabled
 ```
-
-Chroma cannot be configured when `indexEnabled` is false.
 
 ### Index operations
 
@@ -237,130 +231,6 @@ colossus --config .colossus/config.yaml memories index rebuild
 adapter status. `sync` retries queued journal-to-index work. `rebuild` resets disposable
 index data and recreates it from canonical active records; it does not recreate or edit
 memory records.
-
-An external mutation with an unknown outcome blocks automatic Chroma retries. Inspect
-status and use an operator-authorized rebuild to re-establish known projection state.
-
-## Chroma semantic memory
-
-Chroma adds a second candidate index alongside Tantivy. It does not become the memory
-source of truth. The Chroma collection and its local position file are disposable
-projection state that can be rebuilt from the journal.
-
-This example uses deterministic local embeddings and sends the resulting vectors,
-memory text, and bounded metadata to Chroma:
-
-```yaml
-memory:
-  indexEnabled: true
-  indexPath: .colossus/indexes/memory-tantivy
-  retrievalLimit: 8
-  semantic:
-    kind: chroma
-    baseUrl: https://chroma.internal.example
-    tenant: colossus
-    database: production
-    collection: memories
-    credentialReference: env:CHROMA_TOKEN
-    timeoutMs: 30000
-    positionPath: .colossus/indexes/chroma-position.json
-    embedding:
-      kind: local
-      dimensions: 384
-sandbox:
-  networkDestinations:
-    - https://chroma.internal.example
-```
-
-Under an isolating boundary, merge the sandbox destination into the deployment's
-sandbox block. Acknowledged full access needs no duplicate destination and adding one
-does not narrow ambient authority. Chroma and embedding credentials are resolved by
-Colossus in-process after authorization; they do not need `sandbox.environment` grants.
-
-### Chroma fields
-
-| Field | Rule |
-| --- | --- |
-| `baseUrl` | Credential-free HTTPS origin; isolation also allows exact loopback HTTP, while acknowledged full access permits canonical HTTP(S) |
-| `tenant` | Existing Chroma tenant; 1–128 ASCII letters, digits, dots, underscores, or hyphens |
-| `database` | Existing Chroma database with the same name constraint |
-| `collection` | Colossus-managed disposable collection name with the same constraint |
-| `credentialReference` | Optional `env:VARIABLE`; sent as `x-chroma-token` |
-| `timeoutMs` | Positive per-operation timeout, capped by permit policy |
-| `positionPath` | Optional local projection position/outcome file; defaults beside `storage.path` |
-| `embedding` | Required local or OpenAI-compatible embedding profile |
-
-The Chroma `baseUrl` must not contain a path other than `/`, user information, query, or
-fragment. Colossus constructs the Chroma v2 API paths and gets or creates the configured
-collection.
-
-Under acknowledged full access, canonical non-loopback plaintext HTTP is accepted. It
-has no TLS confidentiality or server authentication and can expose memory text,
-metadata, vectors, and credentials in transit.
-
-Under an isolating boundary, the Chroma origin must appear in
-`sandbox.networkDestinations`. Its client uses DNS
-pinning, no ambient proxy, no redirects, bounded requests and responses, the permit
-timeout, and the shared [network CA bundle](network.md).
-
-Enabling Chroma is an external disclosure decision: memory text, metadata, IDs, and
-vectors are sent to that service. The configured collection should be dedicated to the
-deployment and protected accordingly.
-
-### Local embeddings
-
-```yaml
-embedding:
-  kind: local
-  dimensions: 384
-```
-
-Local embeddings use deterministic token and bigram feature hashing without a model or
-network request. `dimensions` must be in `64..=4096`. This provides lightweight lexical
-similarity in vector form; it should not be described as model-derived semantic
-understanding.
-
-### OpenAI-compatible embeddings
-
-Use a remote embedding endpoint when model-derived vectors are required:
-
-```yaml
-embedding:
-  kind: open_ai_compatible
-  profile: memory-embeddings
-  model: text-embedding-model
-  baseUrl: https://embeddings.example.com/v1
-  credentialReference: env:EMBEDDING_API_KEY
-  timeoutMs: 30000
-  dimensions: 1536
-```
-
-| Field | Rule |
-| --- | --- |
-| `profile` | Stable 1–128 character name using ASCII letters, digits, dots, underscores, or hyphens |
-| `model` | Nonempty provider model ID of at most 256 bytes |
-| `baseUrl` | Credential-free API base; isolation requires HTTPS outside loopback, while acknowledged full access accepts canonical HTTP(S); a path such as `/v1` is allowed |
-| `credentialReference` | Optional `env:VARIABLE`; sent as a bearer credential |
-| `timeoutMs` | Positive per-request timeout, capped by permit policy |
-| `dimensions` | Optional strict response length in `1..=4096`; `null` accepts any valid bounded length |
-
-Colossus appends `/embeddings` to `baseUrl`. Under an isolating boundary, the embedding
-origin and Chroma origin must both be present in `sandbox.networkDestinations`; list
-both when they differ. This is the corresponding isolating-boundary grant:
-
-```yaml
-sandbox:
-  networkDestinations:
-    - https://chroma.internal.example
-    - https://embeddings.example.com
-```
-
-Acknowledged full access authorizes the exact configured HTTP(S) endpoints without
-that duplicate grant; adding the list does not narrow ambient authority.
-
-The embedding service receives memory text during indexing and query text during search.
-Changing the embedding model or vector dimensions changes projection compatibility;
-rebuild the disposable memory indexes deliberately after the new profile is in place.
 
 ## Research configuration
 
@@ -473,18 +343,16 @@ requirements.
 | Feature | Potential external disclosure |
 | --- | --- |
 | Model-assisted context | Bounded older session messages sent to the resolved context summarizer |
-| Chroma with local embeddings | Memory text, metadata, identifiers, and locally generated vectors sent to Chroma |
-| Remote embeddings | Memory text and search queries sent to the embedding service, plus projection data sent to Chroma |
 | Web research | Planned queries sent to the configured search service; released results persisted in the journal |
 | MCP research | Templated queries sent to configured MCP tools; released results persisted as research sources |
 
 Credentials remain references in YAML and are resolved only inside permit-bearing
-adapters. Colossus-owned semantic and search clients use the shared CA bundle for
-HTTPS, declared or ambient request-bound network authorization, DNS pinning, redirect
+adapters. Colossus-owned search clients use the shared CA bundle for HTTPS, declared or
+ambient request-bound network authorization, DNS pinning, redirect
 rejection, response bounds, and quarantine.
 
-Neither an index nor an external service may directly make a memory visible. Colossus
-always rechecks canonical lifecycle and scope before composing memory context.
+The index cannot directly make a memory visible. Colossus always rechecks canonical
+lifecycle and scope before composing memory context.
 
 ## Common configuration mistakes
 
@@ -496,10 +364,6 @@ always rechecks canonical lifecycle and scope before composing memory context.
 | Turning off model assistance disables compaction | It does not; deterministic snapshots remain available |
 | A restored snapshot appears to lose later messages | Restore changes the derived active view only; inspect canonical messages with `sessions messages` |
 | Memory search returns no indexed result | Check scope, lifecycle status, and expiry with `memories index status`; canonical fallback may still return bounded matches |
-| Chroma is rejected at startup | Set `indexEnabled: true`, use an origin-only base URL, and under isolation authorize its exact network origin |
-| Chroma works but embedding calls are denied | Under isolation authorize the separate embedding origin; in every mode verify its credential reference |
-| A Chroma retry is blocked after failure | The previous mutation outcome is unknown; inspect status and perform a deliberate rebuild |
-| Vector writes fail after changing models | Keep dimensions compatible or rebuild the disposable collection and position state |
 | Web research is disabled | Configure the exact top-level `search.roles.research` route |
 | Research lanes are unexpectedly skipped | `maxWorkers` counts query/lane jobs; compare depth × selected lanes with the configured bound |
 | Research reaches the source limit early | `maxSources` applies across every query and lane in the run |

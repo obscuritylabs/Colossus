@@ -462,8 +462,6 @@ async fn every_effect_category_denies_before_adapter_without_a_permit() {
         ("network", "network.http"),
         ("provider", "provider.openai.responses"),
         ("mcp", "mcp.call"),
-        ("embedding", "embedding.openai.create"),
-        ("memory_index", "memory.chroma.upsert"),
         ("integration", "integration.call"),
         ("memory", "memory.create"),
         ("domain_state", "task.create"),

@@ -8,8 +8,8 @@ type: reference
 # Storage configuration
 
 `storage` is required. It tells Colossus where the canonical event journal lives and
-how to protect it. Storage configuration is separate from projections, semantic
-indexes, and exports: those are derived data that Colossus can rebuild from the
+how to protect it. Storage configuration is separate from projections, the local
+Tantivy index, and exports: those are derived data that Colossus can rebuild from the
 journal.
 
 Use this mental model when configuring storage:
@@ -83,10 +83,9 @@ redb or PostgreSQL whenever retry, resume, audit retention, or unknown-outcome r
 matters. `state doctor` reports `persistence: process` and emits an explicit security
 posture warning in this mode.
 
-Explicit external audit exporters, `mcp.oauthCredentialStore: platform`, Chroma
-projection metadata, and other separately configured adapters keep their documented
-persistence behavior; `ephemeral` governs the canonical journal/projection store and
-the automatic local defaults.
+Explicit external audit exporters, `mcp.oauthCredentialStore: platform`, and other
+separately configured adapters keep their documented persistence behavior; `ephemeral`
+governs the canonical journal/projection store and the automatic local defaults.
 
 ## Keyless plaintext default
 

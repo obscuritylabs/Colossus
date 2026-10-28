@@ -198,8 +198,8 @@ explicit choice in the review. It replaces the default snapshot for new workspac
 existing workspaces remain pinned until their normal update and authority review.
 Leaving it unchecked imports the catalogs while retaining your defaults.
 
-Advanced defaults for audit export, semantic memory, plugin registries, and plugin
-MCP overlays can be shared only without authentication settings. Import and export
+Advanced defaults for audit export, plugin registries, and plugin MCP overlays can be
+shared only without authentication settings. Import and export
 reject credential references in those overrides, including Docker registry
 authentication, because they cannot be bound to Desktop's portable credential slots.
 Configure that authentication locally, or use the MCP and search catalogs for

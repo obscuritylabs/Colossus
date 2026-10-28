@@ -153,8 +153,6 @@ memory:
   indexEnabled: true
   indexPath: null
   retrievalLimit: 6
-  semantic:
-    kind: disabled
 research:
   maxSources: 20
   maxWorkers: 4
@@ -244,7 +242,7 @@ process launch. YAML contains names and identities, never the values.
 | `subagents` | No | Child concurrency bound; defaults to `10` | [Runtime limits](configuration/limits.md) |
 | `sandbox` | No | Execution boundary and resource obligations; omission selects acknowledged full access | [Sandbox](configuration/sandbox.md) |
 | `context` | No | Long-session compaction controls | [Context, memory, and research](configuration/context-memory-research.md) |
-| `memory` | No | Lexical and optional semantic indexes | [Context, memory, and research](configuration/context-memory-research.md) |
+| `memory` | No | Local Tantivy index and retrieval bound | [Context, memory, and research](configuration/context-memory-research.md) |
 | `research` | No | Research bounds and compatibility search settings | [Context, memory, and research](configuration/context-memory-research.md) |
 | `browser` | No | Native browser access, sessions, tabs, and snapshot limits | [Browser access and limits](configuration/limits.md#browser-access-and-limits) |
 | `search` | No | Named provider-neutral search profiles and routes | [Search](configuration/search.md) |

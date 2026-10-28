@@ -91,7 +91,6 @@ chat:
             - decision.list
             - decision.supersede
             - decision.update
-            - embedding.openai.create
             - goal.create
             - goal.iteration.record
             - goal.show
@@ -100,11 +99,6 @@ chat:
             - mcp.tools
             - memory.archive
             - memory.create
-            - memory.index.chroma.remove
-            - memory.index.chroma.reset
-            - memory.index.chroma.search
-            - memory.index.chroma.status
-            - memory.index.chroma.upsert
             - memory.index.rebuild
             - memory.index.status
             - memory.index.sync
@@ -243,9 +237,6 @@ chat:
         plugins:
           enabled: false
           workspaceDiscovery: false
-        memory:
-          semantic:
-            kind: disabled
         agent:
           maxTurns: 8
         subagents:

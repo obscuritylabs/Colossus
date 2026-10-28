@@ -22,6 +22,8 @@ use crate::managed_configuration::{
     validate_configuration,
 };
 
+mod retired_fields;
+
 use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
@@ -878,6 +880,7 @@ impl SettingsStore {
             return Err(storage_error());
         }
         let (mut settings, mut migrated_settings) = decode_settings(&bytes)?;
+        migrated_settings |= retired_fields::retire_removed_memory_field(&mut settings)?;
         migrated_settings |= settings.migrate_workspace_to_space();
         let previous_global = settings.global_configuration.clone();
         let previous_space_configuration = settings
@@ -2856,6 +2859,169 @@ mod tests {
         assert_eq!(store.load().expect("load"), settings);
         let bytes = fs::read(canonical_root.join(SETTINGS_FILE)).expect("settings");
         assert!(!String::from_utf8_lossy(&bytes).contains("provider-secret"));
+    }
+
+    fn defaults_only_setup_package() -> crate::setup_package::SavedSetupPackage {
+        let config = serde_json::json!({
+            "schemaVersion": 3,
+            "providers": {"profiles": {}},
+            "desktop": {"defaults": {"fieldOverrides": [
+                {"fieldId": "agent.maxTurns", "value": 25}
+            ]}}
+        });
+        serde_json::from_value(serde_json::json!({
+            "manifest": {"schemaVersion": 2, "id": "defaults", "name": "Defaults",
+                "version": "1", "providers": {}},
+            "sha256": "a".repeat(64),
+            "configYaml": serde_saphyr::to_string(&config).expect("setup YAML"),
+            "providers": [], "models": [], "roles": {}, "icons": {}, "caPem": null,
+            "catalogResources": {}, "credentialBindings": {}
+        }))
+        .expect("saved setup")
+    }
+
+    #[test]
+    fn retired_field_migration_preserves_settings_and_persists_idempotently() {
+        use crate::managed_configuration::{CatalogRevisionSetting, FieldOverrideSetting};
+
+        let (_root_guard, root, store) = test_store();
+        let (_first_guard, first) = test_directory("retired-first");
+        let (_second_guard, second) = test_directory("retired-second");
+        let mut settings = configured_settings(
+            ProviderKindSetting::Compatible,
+            OPENROUTER_BASE_URL,
+            Some(Uuid::now_v7().to_string()),
+        );
+        settings
+            .add_space(validate_workspace(&first).expect("first workspace"))
+            .expect("first Space");
+        settings
+            .add_space(validate_workspace(&second).expect("second workspace"))
+            .expect("second Space");
+        settings.spaces[0].archived = true;
+        settings.spaces[0].display_name = "memory.semantic notes".into();
+        settings.global_configuration.defaults.revisions[0]
+            .value
+            .field_overrides
+            .push(FieldOverrideSetting {
+                field_id: "memory.retrievalLimit".into(),
+                value: serde_json::json!(4),
+            });
+        let older_defaults = settings.global_configuration.defaults.revisions[0]
+            .value
+            .clone();
+        settings
+            .global_configuration
+            .defaults
+            .revisions
+            .push(CatalogRevisionSetting {
+                revision: 2,
+                value: older_defaults,
+            });
+        settings.global_configuration.defaults.current_revision = 2;
+        settings.global_configuration.revision = 2;
+        for space in &mut settings.spaces {
+            space
+                .configuration
+                .field_overrides
+                .push(FieldOverrideSetting {
+                    field_id: "browser.maxTabs".into(),
+                    value: serde_json::json!(12),
+                });
+        }
+        settings.setup_packages.push(defaults_only_setup_package());
+        store.save(&settings).expect("valid current settings");
+        let expected = store.load().expect("canonical settings");
+        let mut legacy = expected.clone();
+        let retired = FieldOverrideSetting {
+            field_id: "memory.semantic".into(),
+            value: serde_json::json!({"kind": "disabled"}),
+        };
+        for revision in &mut legacy.global_configuration.defaults.revisions {
+            revision.value.field_overrides.push(retired.clone());
+        }
+        for space in &mut legacy.spaces {
+            space.configuration.field_overrides.push(retired.clone());
+        }
+        let package = &mut legacy.setup_packages[0];
+        let mut config: serde_json::Value =
+            serde_saphyr::from_str(&package.config_yaml).expect("saved YAML");
+        config["desktop"]["defaults"]["fieldOverrides"]
+            .as_array_mut()
+            .expect("override list")
+            .push(serde_json::to_value(retired).expect("retired override"));
+        package.config_yaml = serde_saphyr::to_string(&config).expect("old setup YAML");
+        assert!(crate::setup_package::validate_saved(&legacy.setup_packages).is_err());
+        let path = root.join(SETTINGS_FILE);
+        // Bypass the current writer to represent an existing older installation.
+        fs::remove_file(&path).expect("replace current fixture");
+        write_private_file(&path, &serde_json::to_vec(&legacy).expect("old settings"))
+            .expect("persist old settings");
+
+        let mut loaded = store.load().expect("migrate retired setting");
+        assert_eq!(loaded, expected);
+        assert!(!retired_fields::retire_removed_memory_field(&mut loaded).expect("idempotent"));
+        let persisted = fs::read(&path).expect("migrated settings bytes");
+        assert_eq!(store.load().expect("reload migration"), expected);
+        assert_eq!(fs::read(&path).expect("reload bytes"), persisted);
+    }
+
+    #[test]
+    fn retired_field_migration_does_not_accept_other_invalid_settings_or_setups() {
+        use crate::managed_configuration::FieldOverrideSetting;
+
+        for invalid in ["global_field", "setup_field", "setup_shape", "setup_root"] {
+            let (_root_guard, root, store) = test_store();
+            let mut legacy = DesktopSettings::default();
+            legacy.global_configuration.defaults.revisions[0]
+                .value
+                .field_overrides
+                .push(FieldOverrideSetting {
+                    field_id: "memory.semantic".into(),
+                    value: serde_json::json!({"kind": "disabled"}),
+                });
+            if invalid == "global_field" {
+                legacy.global_configuration.defaults.revisions[0]
+                    .value
+                    .field_overrides
+                    .push(FieldOverrideSetting {
+                        field_id: "memory.future".into(),
+                        value: serde_json::json!(true),
+                    });
+            } else {
+                let mut package = defaults_only_setup_package();
+                let mut config: serde_json::Value =
+                    serde_saphyr::from_str(&package.config_yaml).expect("setup YAML");
+                let retired = serde_json::json!({
+                    "fieldId": "memory.semantic", "value": {"kind": "disabled"}
+                });
+                let fields = config["desktop"]["defaults"]["fieldOverrides"]
+                    .as_array_mut()
+                    .expect("override list");
+                fields.push(retired);
+                match invalid {
+                    "setup_field" => fields.push(serde_json::json!({
+                        "fieldId": "memory.future", "value": true
+                    })),
+                    "setup_shape" => {
+                        fields.last_mut().expect("retired field")["surprise"] =
+                            serde_json::json!(true);
+                    }
+                    "setup_root" => {
+                        config["memory"] = serde_json::json!({"semantic": {"kind": "disabled"}});
+                    }
+                    _ => unreachable!(),
+                }
+                package.config_yaml = serde_saphyr::to_string(&config).expect("old setup YAML");
+                legacy.setup_packages.push(package);
+            }
+            let bytes = serde_json::to_vec(&legacy).expect("invalid old settings");
+            let path = root.join(SETTINGS_FILE);
+            write_private_file(&path, &bytes).expect("persist old settings");
+
+            assert!(store.load().is_err(), "accepted {invalid}");
+            assert_eq!(fs::read(&path).expect("original bytes"), bytes);
+        }
     }
 
     #[test]

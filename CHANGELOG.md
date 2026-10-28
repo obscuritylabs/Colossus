@@ -8,6 +8,10 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Removed
+
+- Remove ChromaDB semantic memory, its embedding adapters, configuration and Desktop controls, and live compatibility CI. Canonical memory records and local Tantivy search remain supported. Remove the obsolete `memory.semantic` block from runtime YAML before upgrading; Desktop automatically retires saved overrides for that field.
+
 ## [0.11.11-preview.3] - 2026-10-26
 
 ### Highlights

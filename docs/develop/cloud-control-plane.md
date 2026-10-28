@@ -155,8 +155,7 @@ local paths must name a canonical owner-private directory on the development hos
 `RuntimeConfig::controlled_chat_template` owns the allowed-tool/action baseline and
 `RuntimeOpenOptions::for_controlled_chat` independently constrains catalog and effect
 policy. Host composition always rewrites journal, anchor, lexical index and workflow
-paths into the selected user's private state. Semantic Chroma projection is currently
-rejected until its tenant and credential ownership are defined.
+paths into the selected user's private state.
 
 To seed the same controlled service from an existing reviewed runtime configuration,
 use the source-only generator:

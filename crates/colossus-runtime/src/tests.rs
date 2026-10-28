@@ -5,17 +5,16 @@ use super::{
     GatewayMemoryRetriever, GatewayRiskEvaluator, GatewayToolExecutor, GatewayWorkflowEffects,
     InstructionSnapshotStore, InteractiveToolExecutor, JournalExternalWorkQueue,
     LOOPBACK_PROVIDER_GENERATION_TIMEOUT_MS, LOOPBACK_PROVIDER_TIMEOUT_MS,
-    MAX_FILE_SUMMARY_OUTPUT_BYTES, MemoryEffectExecutor, MemoryEmbeddingConfig, MemoryOperation,
-    ModelCapabilities, ModelProfileConfig, PresentationEffectExecutor, PresentationOperation,
-    ProviderProfileConfig, REMOTE_PROVIDER_GENERATION_TIMEOUT_MS, REMOTE_PROVIDER_TIMEOUT_MS,
-    ReasoningEffort, RepositoryEffectExecutor, Runtime, RuntimeConfig, RuntimeError,
-    RuntimeOpenOptions, SearchConfig, SearchProfileConfig, SemanticMemoryConfig, StorageAdapter,
-    TraceToolExecutor, WorkEffectExecutor, WorkOperation, configure_shell_environment,
-    derive_development_sandbox, goal_objective_from_plan, model_resource_path,
-    model_workspace_path, plan_mode_instructions, provider_profile,
-    push_bounded_mcp_discovery_tool, recover_interrupted_subagents, recover_unknown_effects,
-    redacted_risk_metadata, reject_reserved_shell_environment, reject_shell_startup_profiles,
-    shell_command_arguments, terminal_actor,
+    MAX_FILE_SUMMARY_OUTPUT_BYTES, MemoryEffectExecutor, MemoryOperation, ModelCapabilities,
+    ModelProfileConfig, PresentationEffectExecutor, PresentationOperation, ProviderProfileConfig,
+    REMOTE_PROVIDER_GENERATION_TIMEOUT_MS, REMOTE_PROVIDER_TIMEOUT_MS, ReasoningEffort,
+    RepositoryEffectExecutor, Runtime, RuntimeConfig, RuntimeError, RuntimeOpenOptions,
+    SearchConfig, SearchProfileConfig, StorageAdapter, TraceToolExecutor, WorkEffectExecutor,
+    WorkOperation, configure_shell_environment, derive_development_sandbox,
+    goal_objective_from_plan, model_resource_path, model_workspace_path, plan_mode_instructions,
+    provider_profile, push_bounded_mcp_discovery_tool, recover_interrupted_subagents,
+    recover_unknown_effects, redacted_risk_metadata, reject_reserved_shell_environment,
+    reject_shell_startup_profiles, shell_command_arguments, terminal_actor,
 };
 use crate::test_support::private_tempdir;
 use colossus_contracts::{
@@ -1012,6 +1011,12 @@ workflows:
 surprise: true
 "#;
     assert!(RuntimeConfig::from_yaml(yaml).is_err());
+    let error = RuntimeConfig::from_yaml(
+        "schemaVersion: 3\nstorage:\n  path: state.redb\nmemory:\n  semantic:\n    kind: disabled\n",
+    )
+    .expect_err("removed memory setting must not be ignored");
+    assert!(error.to_string().contains("unknown field"));
+    assert!(error.to_string().contains("semantic"));
 }
 
 #[test]
@@ -1232,8 +1237,6 @@ memory:
   indexEnabled: true
   indexPath: null
   retrievalLimit: 6
-  semantic:
-    kind: disabled
 research:
   maxSources: 20
   maxWorkers: 4
@@ -2948,16 +2951,6 @@ fn selected_danger_backend_accepts_private_plaintext_profiles_before_acknowledge
         )]),
         roles: BTreeMap::from([("agent".into(), "metadata".into())]),
     };
-    config.memory.semantic = SemanticMemoryConfig::Chroma {
-        base_url: "http://10.0.0.9:8000".into(),
-        tenant: "tenant".into(),
-        database: "database".into(),
-        collection: "collection".into(),
-        credential_reference: None,
-        timeout_ms: 5_000,
-        position_path: None,
-        embedding: Box::new(MemoryEmbeddingConfig::Local { dimensions: 128 }),
-    };
     assert!(
         RuntimeConfig::from_yaml(&config.to_yaml().expect("ambient YAML")).is_ok(),
         "selected danger authority should validate profiles before session acknowledgement"
@@ -2968,7 +2961,6 @@ fn selected_danger_backend_accepts_private_plaintext_profiles_before_acknowledge
     config.sandbox.network_destinations = vec![
         "http://10.0.0.8:8080".into(),
         "http://169.254.169.254".into(),
-        "http://10.0.0.9:8000".into(),
     ];
     assert!(
         RuntimeConfig::from_yaml(&config.to_yaml().expect("declared YAML")).is_err(),
@@ -3198,57 +3190,6 @@ fn provider_neutral_search_requires_explicit_valid_routes() {
     assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
 
     config.search.roles.remove("agent");
-    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
-}
-
-#[test]
-fn semantic_memory_requires_enabled_index_secure_origins_and_valid_profiles() {
-    let mut config = RuntimeConfig::offline_template("state.redb");
-    config.memory.semantic = SemanticMemoryConfig::Chroma {
-        base_url: "http://127.0.0.1:8000".into(),
-        tenant: "default_tenant".into(),
-        database: "default_database".into(),
-        collection: "colossus-memory".into(),
-        credential_reference: None,
-        timeout_ms: 5_000,
-        position_path: None,
-        embedding: Box::new(MemoryEmbeddingConfig::Local { dimensions: 256 }),
-    };
-    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
-    config
-        .sandbox
-        .network_destinations
-        .push("http://127.0.0.1:8000".into());
-    let yaml = config.to_yaml().expect("YAML");
-    assert!(yaml.contains("baseUrl:"));
-    assert!(yaml.contains("timeoutMs:"));
-    assert!(RuntimeConfig::from_yaml(&yaml).is_ok());
-
-    config.memory.index_enabled = false;
-    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
-    config.memory.index_enabled = true;
-    config.memory.semantic = SemanticMemoryConfig::Chroma {
-        base_url: "http://127.0.0.1:8000".into(),
-        tenant: "default_tenant".into(),
-        database: "default_database".into(),
-        collection: "colossus-memory".into(),
-        credential_reference: None,
-        timeout_ms: 5_000,
-        position_path: None,
-        embedding: Box::new(MemoryEmbeddingConfig::OpenAiCompatible {
-            profile: "local-embedding".into(),
-            model: "embedding-model".into(),
-            base_url: "http://127.0.0.1:11434/v1".into(),
-            credential_reference: None,
-            timeout_ms: 5_000,
-            dimensions: Some(768),
-        }),
-    };
-    assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_err());
-    config
-        .sandbox
-        .network_destinations
-        .push("http://127.0.0.1:11434".into());
     assert!(RuntimeConfig::from_yaml(&config.to_yaml().expect("YAML")).is_ok());
 }
 

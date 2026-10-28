@@ -7,8 +7,8 @@ use colossus_credentials::{EnvironmentKeyStore, PlatformCredentialVault};
 use colossus_home::ConfinedRoot;
 use colossus_policy::DenyApproval;
 use colossus_runtime::{
-    CodexAuthStore, KeyConfig, Runtime, RuntimeConfig, RuntimeOpenOptions, SemanticMemoryConfig,
-    StorageAdapter, StorageLocation,
+    CodexAuthStore, KeyConfig, Runtime, RuntimeConfig, RuntimeOpenOptions, StorageAdapter,
+    StorageLocation,
 };
 use colossus_sdk::{AgentRunClient, ContextBoundAgentRunClient};
 use sha2::{Digest as _, Sha256};
@@ -81,14 +81,6 @@ impl ChatRuntime {
             .as_ref()
             .is_some_and(|shared| shared.durability.identity() != identity)
         {
-            return Err(ChatError::InvalidConfiguration);
-        }
-        // Remote semantic indexes have their own credential adapters and collection
-        // ownership. Do not reuse an operator's shared projection for personal history.
-        if !matches!(
-            options.config.memory.semantic,
-            SemanticMemoryConfig::Disabled
-        ) {
             return Err(ChatError::InvalidConfiguration);
         }
         let home_path = options

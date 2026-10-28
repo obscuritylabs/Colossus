@@ -280,10 +280,9 @@ HTTP effects match either an exact canonical origin or the public HTTP(S)-only `
 grant. The wildcard excludes loopback, private, link-local, and metadata destinations;
 exact private HTTPS origins and exact loopback HTTP origins remain possible. Under
 declared authority, even an exact origin cannot authorize non-loopback plaintext HTTP.
-Provider, search, integration, brokered HTTP,
-semantic memory, native/Windows process proxy, and OCI proxy paths share this matcher,
-pin DNS results, validate TLS authority, reject ambient proxies, bound
-connections, and quarantine responses. Process proxy results record a bounded list of
+Provider, search, integration, brokered HTTP, native/Windows process proxy, and OCI
+proxy paths share this matcher, pin DNS results, validate TLS authority, reject ambient
+proxies, bound connections, and quarantine responses. Process proxy results record a bounded list of
 allowed observed origins.
 
 Bodyless brokered HTTP GET/HEAD effects may follow 301, 302, 303, 307, and 308 redirects

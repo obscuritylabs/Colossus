@@ -265,14 +265,6 @@ fn advanced_defaults_reject_unbound_credentials_on_import_and_export() {
                 json!({"kind":"worm_http", "credentialReference":reference}),
             ),
             (
-                "memory.semantic",
-                json!({"kind":"chroma", "credentialReference":reference}),
-            ),
-            (
-                "memory.semantic",
-                json!({"kind":"chroma", "embedding":{"credentialReference":reference}}),
-            ),
-            (
                 "plugins.registries",
                 json!({"company":{"auth":{"kind":"bearer", "credentialReference":reference}}}),
             ),
@@ -321,7 +313,6 @@ fn credential_free_advanced_defaults_remain_portable_without_rewriting_user_stri
     let mut globals: globals::SetupGlobals = serde_json::from_value(payload()).unwrap();
     globals.defaults.as_mut().unwrap().field_overrides = serde_json::from_value(json!([
         {"fieldId":"audit.exporter","value":{"kind":"disabled"}},
-        {"fieldId":"memory.semantic","value":{"kind":"disabled"}},
         {"fieldId":"plugins.registries","value":{"company":{"auth":{"kind":"anonymous"}}}},
         {"fieldId":"plugins.mcpServers","value":{"company/docs":{
             "enabled":true,"environment":{},"credentialHeaders":{},

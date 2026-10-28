@@ -852,7 +852,7 @@ impl Runtime {
             gateway: Arc::clone(&gateway),
             searches,
         });
-        let memory_indexes = compose_memory_indexes(config, Arc::clone(&gateway), &tls_roots)?;
+        let memory_indexes = compose_memory_indexes(config)?;
         let external_work: Arc<dyn ExternalWorkQueue> = Arc::new(JournalExternalWorkQueue::new(
             Arc::clone(&journal),
             Arc::clone(&projection_store),
