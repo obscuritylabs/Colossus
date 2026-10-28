@@ -8,6 +8,8 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.11.11-preview.4] - 2026-10-28
+
 ### Added
 
 - Find text in loaded web conversations, or copy and download their released user and assistant messages as Markdown.
@@ -26,6 +28,72 @@ include breaking changes while the public API is still settling.
 ### Removed
 
 - Remove ChromaDB semantic memory, its embedding adapters, configuration and Desktop controls, and live compatibility CI. Canonical memory records and local Tantivy search remain supported. Remove the obsolete `memory.semantic` block from runtime YAML before upgrading; Desktop automatically retires saved overrides for that field.
+
+<!-- colossus:release-notes base=v0.11.10 -->
+
+### Merged changes
+
+#### Added
+
+- **control-plane:** replace Kustomize with a Helm chart ([2cf71f0](https://github.com/obscuritylabs/Colossus/commit/2cf71f0823f66742004f9b0a30fd121caae72bc8))
+- **cloud:** add instance announcements and classification colors ([e78b2e4](https://github.com/obscuritylabs/Colossus/commit/e78b2e4678685b69d481abdfa2cfe5be89c79932))
+- **web:** add pinned hosted chats ([013a535](https://github.com/obscuritylabs/Colossus/commit/013a535f5a6d3968fa508573d5717b1d11384599))
+- **web:** make pinned chats collapsible ([021b742](https://github.com/obscuritylabs/Colossus/commit/021b7421aea37c970a7fa257ad88faba52fb678b))
+- **cloud:** add scoped settings and user administration ([e1754b3](https://github.com/obscuritylabs/Colossus/commit/e1754b307efb2b6d91e459564a5cf7ffcc9199c6))
+- **web:** add scoped administration and shareable settings forms ([2ed8b2e](https://github.com/obscuritylabs/Colossus/commit/2ed8b2e0df96dc29c8517e154cf48941d6a6caed))
+- **tui:** add status sidebar, shell commands, and text selection ([#321](https://github.com/obscuritylabs/Colossus/pull/321))
+- **fleet:** add persistent browser shells ([6776356](https://github.com/obscuritylabs/Colossus/commit/67763563d4ff3679c07f510bfa0bb23c571ae3fd))
+- **web:** harden drafts and add conversation search and export ([01dd5a6](https://github.com/obscuritylabs/Colossus/commit/01dd5a67872615ff3628a6edcd3551d320cf0297))
+
+#### Fixed
+
+- **browser:** bound owner lease watcher shutdown ([dfd2e2c](https://github.com/obscuritylabs/Colossus/commit/dfd2e2c036185dc00279462edecb52e7623fc0c6))
+- **browser:** poll owner leases for bounded retirement ([61d1f59](https://github.com/obscuritylabs/Colossus/commit/61d1f597535dda7525d3d46b8fd5d61afbef186b))
+- **release:** retain usable Control Plane bundle guidance ([8d20776](https://github.com/obscuritylabs/Colossus/commit/8d20776265f2cbec7c6065870ee9eafab2330ff1))
+- **cloud:** make inherited connections usable across scopes ([129114c](https://github.com/obscuritylabs/Colossus/commit/129114c39c838d9f7f418f05495fc791f65726f5))
+- **ui:** validate scoped settings and improve save feedback ([5c4bec3](https://github.com/obscuritylabs/Colossus/commit/5c4bec31ffdb49d71b1c8d5a96cbcbd9160355ec))
+- **deps:** update ctutils for RUSTSEC-2026-0385 ([8919f09](https://github.com/obscuritylabs/Colossus/commit/8919f098e2e06b971370be4569ed873d530bc711))
+- **cloud:** safely reload stopped hosted workers ([c07249f](https://github.com/obscuritylabs/Colossus/commit/c07249f701d73c75c45ff014aaa57fe8941b929d))
+- **helm:** publish control plane chart to GHCR ([d4132a7](https://github.com/obscuritylabs/Colossus/commit/d4132a7feab2cc1050cf7170e799b48ff95aea49))
+- **provider:** preserve tool replay after failed turns ([#322](https://github.com/obscuritylabs/Colossus/pull/322))
+- **terminal:** finish readers when native shells exit ([f3389e1](https://github.com/obscuritylabs/Colossus/commit/f3389e1d9904bdcca865b4c2debb22107d9a65f9))
+- **web:** disclose Fleet shell time limits ([536c3f7](https://github.com/obscuritylabs/Colossus/commit/536c3f7d018c0747c2d33d44b245773522d6a23e))
+
+#### Security
+
+- **deps:** update ctutils to patched 0.4.4 ([a7cb848](https://github.com/obscuritylabs/Colossus/commit/a7cb848067e68fc8f065b7de0afab10fe44b4036))
+- **ui:** update Vitest and isolate grammar contract cases ([32df279](https://github.com/obscuritylabs/Colossus/commit/32df279a2a8e065c1542258581900e8d3dea76d7))
+- **deps:** update Tokio to patched 1.53.3 ([9749a76](https://github.com/obscuritylabs/Colossus/commit/9749a76b76d30923e4354a7509c11922660e01de))
+
+#### Changed
+
+- **dev:** tighten Rust feedback and validation loops ([a3ca505](https://github.com/obscuritylabs/Colossus/commit/a3ca5054a06ca5a8765b8dca50eb296758dfc104))
+- **memory:** remove ChromaDB integration ([#327](https://github.com/obscuritylabs/Colossus/pull/327))
+
+#### Documentation
+
+- retain the dependency exception reference ([b415d61](https://github.com/obscuritylabs/Colossus/commit/b415d6176ad27924e9781f3bb113bb331a15a20d))
+
+#### Maintenance
+
+- **packaging:** pin Homebrew and Nix to 0.11.10 ([#314](https://github.com/obscuritylabs/Colossus/pull/314))
+- **release:** prepare 0.11.11-preview.1 ([e5d2ed2](https://github.com/obscuritylabs/Colossus/commit/e5d2ed2df4712bd4edfbab9f7810a13681340fa2))
+- **release:** prepare 0.11.11-preview.2 ([625338d](https://github.com/obscuritylabs/Colossus/commit/625338de8a8cfc4c98470db2251dcb0e2eb90d95))
+- **release:** include preview security fix in notes ([5a42de4](https://github.com/obscuritylabs/Colossus/commit/5a42de4c1623a4f7ba0a06fe2c648657c71ef35d))
+- **release:** include settings audit fixes in preview notes ([4aa0141](https://github.com/obscuritylabs/Colossus/commit/4aa01411353f685b834933d062be872079d47a19))
+- **web:** align settings fixtures with canonical inputs ([005eb6e](https://github.com/obscuritylabs/Colossus/commit/005eb6e1c4c066e14ec8b7f4d8077744bf9a6002))
+- **cloud:** exercise administrator settings over HTTP ([194d82c](https://github.com/obscuritylabs/Colossus/commit/194d82cc43b57fca44c0a886f02829c0f9fbd84e))
+- **release:** document hosted runtime lifecycle repair ([1c1555e](https://github.com/obscuritylabs/Colossus/commit/1c1555e300d238067c4e568f14e3398c74071d90))
+- **release:** include Tokio advisory fix in preview notes ([92e9a4e](https://github.com/obscuritylabs/Colossus/commit/92e9a4ef6c22e784182fdc33161d5c33a0f995e4))
+- **terminal:** synchronize native shell acceptance ([a0cab31](https://github.com/obscuritylabs/Colossus/commit/a0cab316a90a1161d7cf5de2f270629ab9b1bc22))
+- **terminal:** correct cross-platform shell acceptance ([d610e7f](https://github.com/obscuritylabs/Colossus/commit/d610e7f37a24057cb40f34619837e4eeeef39bab))
+- **release:** prepare 0.11.11-preview.3 ([0ae21c0](https://github.com/obscuritylabs/Colossus/commit/0ae21c0ebb8e3b9c9a854da6f504360beb8273e0))
+
+**Source:** [01dd5a6](https://github.com/obscuritylabs/Colossus/commit/01dd5a67872615ff3628a6edcd3551d320cf0297)
+
+**Full changelog:** [v0.11.10...v0.11.11-preview.4](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.4)
+
+<!-- /colossus:release-notes -->
 
 ## [0.11.11-preview.3] - 2026-10-26
 
