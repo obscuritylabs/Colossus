@@ -89,6 +89,26 @@ pub(super) fn render_footer(
     let content_width = width.saturating_sub(badge_width + usize::from(!badge.is_empty()) * 2);
     let mut used =
         UnicodeWidthStr::width(status.as_str()) + UnicodeWidthStr::width(approval_text.as_str());
+    let queue = (!state.queue.is_empty()).then(|| format!("{} queued", state.queue.len()));
+    let plan = state.selected_plan.as_ref().map(|plan| {
+        format!(
+            "plan {} r{} {}",
+            short_plan_id(&plan.id),
+            plan.revision,
+            plan_status_label(plan.status)
+        )
+    });
+    let mut lifecycle_reserve = 0;
+    if usage.is_some() {
+        // Existing queue and selected-plan cues outrank optional mode, route,
+        // context, and token details. Reserve only cues that can actually fit.
+        for text in queue.iter().chain(plan.iter()) {
+            let required = UnicodeWidthStr::width(text.as_str()) + 3;
+            if used + usage_reserve + lifecycle_reserve + required <= content_width {
+                lifecycle_reserve += required;
+            }
+        }
+    }
     let full_route_reserve = if route.is_empty() {
         0
     } else {
@@ -96,17 +116,20 @@ pub(super) fn render_footer(
     };
     // Selected model and effort must not be clipped merely to keep optional
     // mode or token detail chrome that could be omitted instead.
-    let route_reserve =
-        if used + usage_reserve + context_reserve + full_route_reserve <= content_width {
-            full_route_reserve
-        } else {
-            0
-        };
-    let selected_metadata_reserve = if route_reserve > 0 {
-        route_reserve + context_reserve
+    let route_reserve = if usage.is_some()
+        && used + usage_reserve + lifecycle_reserve + context_reserve + full_route_reserve
+            <= content_width
+    {
+        full_route_reserve
     } else {
         0
     };
+    let selected_metadata_reserve = lifecycle_reserve
+        + if route_reserve > 0 {
+            route_reserve + context_reserve
+        } else {
+            0
+        };
     let mode = format!(" {} ", state.mode.as_str());
     let mode = if used
         + UnicodeWidthStr::width(mode.as_str())
@@ -135,13 +158,14 @@ pub(super) fn render_footer(
     ];
     if let Some(usage) = usage {
         let available = content_width.saturating_sub(used + 3);
-        let metadata_reserve = context_reserve + route_reserve;
+        let protected = lifecycle_reserve + route_reserve;
         let compact_width = usage_reserve.saturating_sub(3);
-        let budget = if available >= metadata_reserve + compact_width {
-            available - metadata_reserve
+        let context_width = if available >= protected + context_reserve + compact_width {
+            context_reserve
         } else {
-            available
+            0
         };
+        let budget = available.saturating_sub(protected + context_width);
         append_footer_segment(
             &mut spans,
             &mut used,
@@ -150,35 +174,22 @@ pub(super) fn render_footer(
             metadata.add_modifier(Modifier::BOLD),
         );
     }
-    let optional_reserve = context_reserve + route_reserve;
-    let optional_width =
-        if (usage.is_some() || route_reserve > 0) && used + optional_reserve <= content_width {
-            content_width - optional_reserve
+    let optional_reserve = route_reserve
+        + if used + lifecycle_reserve + route_reserve + context_reserve <= content_width {
+            context_reserve
         } else {
-            content_width
+            0
         };
-    if !state.queue.is_empty() {
-        append_footer_segment(
-            &mut spans,
-            &mut used,
-            optional_width,
-            format!("{} queued", state.queue.len()),
-            metadata,
-        );
+    let optional_width = if usage.is_some() {
+        content_width.saturating_sub(optional_reserve)
+    } else {
+        content_width
+    };
+    if let Some(queue) = queue {
+        append_footer_segment(&mut spans, &mut used, optional_width, queue, metadata);
     }
-    if let Some(plan) = &state.selected_plan {
-        append_footer_segment(
-            &mut spans,
-            &mut used,
-            optional_width,
-            format!(
-                "plan {} r{} {}",
-                short_plan_id(&plan.id),
-                plan.revision,
-                plan_status_label(plan.status)
-            ),
-            metadata,
-        );
+    if let Some(plan) = plan {
+        append_footer_segment(&mut spans, &mut used, optional_width, plan, metadata);
     }
     let reserved = context
         .as_ref()

@@ -499,3 +499,74 @@ fn compact_usage_preserves_selected_model_and_reasoning_in_sidebar_sized_footer(
         }
     }
 }
+
+#[test]
+fn selected_plan_and_queue_cues_keep_priority_with_or_without_usage() {
+    for usage in [
+        None,
+        Some(report("direct", None)),
+        Some(report("direct", Some(counters()))),
+    ] {
+        for queued in [false, true] {
+            for warning in [false, true] {
+                let mut source = snapshot();
+                source.footer.route = "interactive-plan-fixture@interactive via interactive".into();
+                source.footer.context = Some((17, 25_395));
+                source.footer.approval_mode = "full-access".into();
+                source.footer.usage = usage.clone();
+                if warning {
+                    source
+                        .security_posture
+                        .findings
+                        .push(SecurityPostureFinding {
+                            code: "storage.plaintext".into(),
+                            severity: SecurityPostureSeverity::Warning,
+                            summary: "Plaintext journal".into(),
+                            remediation: "Use storage keys".into(),
+                        });
+                }
+                let mut state = TuiState::from_snapshot(source);
+                let mut plan = plan_record(PlanStatus::Approved, 2);
+                plan.id = "plan-01a184c9-1d4b-76a3-a786-12044036ca80".into();
+                state.mode = InteractiveMode::Plan;
+                state.selected_plan = Some(plan.clone());
+                state.overlay = Some(Overlay::PlanExecutionChoice {
+                    plan,
+                    selected: None,
+                });
+                if queued {
+                    state.queue.push_back("next turn".into());
+                }
+                let mut terminal =
+                    Terminal::new(TestBackend::new(111, FOOTER_HEIGHT)).expect("terminal");
+                terminal
+                    .draw(|frame| render_footer(frame, &state, frame.area(), false))
+                    .expect("footer");
+                let rendered = terminal
+                    .backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                for expected in ["waiting", "full-access", "plan plan-01a r2 approved"] {
+                    assert!(rendered.contains(expected), "{rendered}");
+                }
+                if queued {
+                    assert!(rendered.contains("1 queued"), "{rendered}");
+                }
+                if warning {
+                    assert!(rendered.contains('⚠'), "{rendered}");
+                }
+                if let Some(usage) = &usage {
+                    let count = if usage.usage.is_some() {
+                        "1.2k"
+                    } else {
+                        "tok—"
+                    };
+                    assert!(rendered.contains(count), "{rendered}");
+                }
+            }
+        }
+    }
+}
