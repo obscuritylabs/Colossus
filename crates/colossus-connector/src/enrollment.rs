@@ -7,6 +7,10 @@ use std::{sync::Arc, time::Duration};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 mod renewal;
 mod revocation;
+mod trust;
+pub use trust::EnrollmentTrust;
+#[cfg(test)]
+mod tests;
 pub(crate) use renewal::certificate_due;
 
 /// Native enrollment store, shared by CLI and Desktop; secrets stay in the encrypted vault.
@@ -31,6 +35,9 @@ struct Pending {
     token: String,
     enrollment_url: String,
     instance_id: String,
+    #[serde(default)]
+    #[zeroize(skip)]
+    trust: EnrollmentTrust,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,6 +78,28 @@ impl EnrollmentStore {
         capabilities: Vec<String>,
         allow_loopback_http: bool,
     ) -> Result<ConnectionConfig, &'static str> {
+        self.enroll_with_trust(
+            url,
+            token,
+            instance_id,
+            capabilities,
+            allow_loopback_http,
+            EnrollmentTrust::public_roots(),
+        )
+        .await
+    }
+    /// Enroll with an explicitly selected HTTPS trust anchor. A pending exchange
+    /// retains its trust alongside the CSR; retries cannot replace that authority.
+    pub async fn enroll_with_trust(
+        &self,
+        url: String,
+        token: Zeroizing<String>,
+        instance_id: String,
+        capabilities: Vec<String>,
+        allow_loopback_http: bool,
+        trust: EnrollmentTrust,
+    ) -> Result<ConnectionConfig, &'static str> {
+        trust.validate()?;
         let endpoint = url::Url::parse(&url).map_err(|_| "invalid enrollment URL")?;
         let local = matches!(
             endpoint.host_str(),
@@ -111,21 +140,29 @@ impl EnrollmentStore {
                     token: token.to_string(),
                     enrollment_url: url.clone(),
                     instance_id: instance_id.clone(),
+                    trust: trust.clone(),
                 },
             }
         };
+        record.pending.trust.validate()?;
         if record.pending.enrollment_url != url || record.pending.instance_id != instance_id {
             return Err("pending enrollment belongs to another runtime or cloud");
+        }
+        if record.pending.trust != trust {
+            return Err("pending enrollment belongs to another trust anchor");
         }
         if let Some(config) = &record.config {
             return Ok(config.clone());
         }
         self.save_async(&record).await?;
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(15))
-            .build()
-            .map_err(|_| "enrollment HTTP unavailable")?;
+        let client = crate::localhost::http(
+            record.pending.trust.apply(reqwest::Client::builder())?,
+            &endpoint,
+        )
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|_| "enrollment HTTP unavailable")?;
         let response=client.post(&url).json(&serde_json::json!({"token":record.pending.token,"instance_id":record.pending.instance_id,"csr_pem":record.pending.csr_pem})).send().await.map_err(|_|"enrollment transport unavailable; retry the same exchange")?;
         if !response.status().is_success() {
             return Err("cloud enrollment rejected");
@@ -168,6 +205,21 @@ impl EnrollmentStore {
         record.pending.token.zeroize();
         self.save_async(&record).await?;
         Ok(config)
+    }
+    /// Check for a validated saved pending or completed exchange without exposing
+    /// its invitation or credentials. A caller can resume without another prompt.
+    pub fn has_saved_exchange(&self) -> Result<bool, &'static str> {
+        let Some(record) = self
+            .vault
+            .read(&self.key)
+            .map_err(|_| "enrollment vault unavailable")?
+        else {
+            return Ok(false);
+        };
+        let record: Record =
+            serde_json::from_slice(record.expose()).map_err(|_| "enrollment record invalid")?;
+        record.pending.trust.validate()?;
+        Ok(true)
     }
     /// Load native enrollment and private TLS key without serializing secrets to UI.
     pub fn load(&self) -> Result<Option<(ConnectionConfig, Zeroizing<String>)>, &'static str> {

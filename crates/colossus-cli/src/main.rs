@@ -84,6 +84,7 @@ mod extension_args;
 mod herdr;
 mod line_plan;
 mod line_runner;
+mod managed_cloud;
 mod mcp_auth;
 mod memory_research_args;
 mod output;

@@ -319,6 +319,22 @@ pub(super) struct PublicApiEnvironment {
 
 impl PublicApiEnvironment {
     pub(super) fn open(path: &Path, store: &dyn SecretStore) -> Result<Self, PublicApiAdminError> {
+        Self::open_with_key_policy(path, store, false)
+    }
+
+    /// Reopen retained authority without creating any replacement native keys.
+    pub(super) fn open_existing(
+        path: &Path,
+        store: &dyn SecretStore,
+    ) -> Result<Self, PublicApiAdminError> {
+        Self::open_with_key_policy(path, store, true)
+    }
+
+    fn open_with_key_policy(
+        path: &Path,
+        store: &dyn SecretStore,
+        existing_keys_only: bool,
+    ) -> Result<Self, PublicApiAdminError> {
         #[cfg(not(any(unix, windows)))]
         {
             let _ = (path, store);
@@ -348,11 +364,24 @@ impl PublicApiEnvironment {
                 .try_clone()
                 .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
             let namespace_service = namespace_service(&directory);
-            let authentication_root =
-                load_or_create_exact_key(store, &namespace_service, AUTHENTICATION_ROOT_ACCOUNT)?;
-            let tls_seed = load_or_create_exact_key(store, &namespace_service, TLS_SEED_ACCOUNT)?;
-            let instance_seed =
-                load_or_create_exact_key(store, &namespace_service, INSTANCE_SEED_ACCOUNT)?;
+            let authentication_root = load_exact_key(
+                store,
+                &namespace_service,
+                AUTHENTICATION_ROOT_ACCOUNT,
+                existing_keys_only,
+            )?;
+            let tls_seed = load_exact_key(
+                store,
+                &namespace_service,
+                TLS_SEED_ACCOUNT,
+                existing_keys_only,
+            )?;
+            let instance_seed = load_exact_key(
+                store,
+                &namespace_service,
+                INSTANCE_SEED_ACCOUNT,
+                existing_keys_only,
+            )?;
             confined_root
                 .revalidate()
                 .map_err(|_| PublicApiAdminError::InvalidDirectory)?;
@@ -375,11 +404,24 @@ impl PublicApiEnvironment {
             let directory_device = directory_metadata.dev();
             let directory_inode = directory_metadata.ino();
             let namespace_service = namespace_service(&directory);
-            let authentication_root =
-                load_or_create_exact_key(store, &namespace_service, AUTHENTICATION_ROOT_ACCOUNT)?;
-            let tls_seed = load_or_create_exact_key(store, &namespace_service, TLS_SEED_ACCOUNT)?;
-            let instance_seed =
-                load_or_create_exact_key(store, &namespace_service, INSTANCE_SEED_ACCOUNT)?;
+            let authentication_root = load_exact_key(
+                store,
+                &namespace_service,
+                AUTHENTICATION_ROOT_ACCOUNT,
+                existing_keys_only,
+            )?;
+            let tls_seed = load_exact_key(
+                store,
+                &namespace_service,
+                TLS_SEED_ACCOUNT,
+                existing_keys_only,
+            )?;
+            let instance_seed = load_exact_key(
+                store,
+                &namespace_service,
+                INSTANCE_SEED_ACCOUNT,
+                existing_keys_only,
+            )?;
             revalidate_exact_directory(&directory, directory_device, directory_inode)?;
             Ok(Self {
                 directory,
@@ -446,7 +488,7 @@ impl PublicApiEnvironment {
         }
     }
 
-    fn public_identity(&self) -> Result<(Uuid, String), PublicApiAdminError> {
+    pub(super) fn public_identity(&self) -> Result<(Uuid, String), PublicApiAdminError> {
         #[cfg(not(any(unix, windows)))]
         {
             Err(PublicApiAdminError::UnsupportedPlatform)
@@ -987,13 +1029,17 @@ fn normalize_scopes(scopes: &[String]) -> Result<Vec<ApiScope>, PublicApiAdminEr
     Ok(scopes)
 }
 
-fn load_or_create_exact_key(
+fn load_exact_key(
     store: &dyn SecretStore,
     service: &str,
     account: &str,
+    existing_keys_only: bool,
 ) -> Result<Zeroizing<[u8; 32]>, PublicApiAdminError> {
     if let Some(existing) = store.read(service, account)? {
         return exact_key(existing);
+    }
+    if existing_keys_only {
+        return Err(PublicApiAdminError::SecretStoreValueInvalid);
     }
 
     let mut generated = Zeroizing::new([0_u8; 32]);
@@ -1307,6 +1353,36 @@ mod tests {
                 .map(|previous| previous.credential_id.as_str()),
             Some("old-id")
         );
+    }
+
+    #[test]
+    fn retained_native_keys_are_never_replaced_when_missing_or_malformed() {
+        let store = MemoryStore::default();
+        for account in [
+            AUTHENTICATION_ROOT_ACCOUNT,
+            TLS_SEED_ACCOUNT,
+            INSTANCE_SEED_ACCOUNT,
+        ] {
+            assert!(matches!(
+                load_exact_key(&store, "managed-test", account, true),
+                Err(PublicApiAdminError::SecretStoreValueInvalid)
+            ));
+            assert!(store.read("managed-test", account).unwrap().is_none());
+            store.write("managed-test", account, &[7; 31]).unwrap();
+            assert!(matches!(
+                load_exact_key(&store, "managed-test", account, true),
+                Err(PublicApiAdminError::SecretStoreValueInvalid)
+            ));
+            assert_eq!(
+                store.read("managed-test", account).unwrap().unwrap().len(),
+                31
+            );
+            store.write("managed-test", account, &[9; 32]).unwrap();
+            assert_eq!(
+                *load_exact_key(&store, "managed-test", account, true).unwrap(),
+                [9; 32]
+            );
+        }
     }
 
     #[test]
