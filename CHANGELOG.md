@@ -20,7 +20,12 @@ include breaking changes while the public API is still settling.
 - Preserve unsent web drafts when session refresh fails temporarily or an earlier submission finishes after editing has resumed.
 - Keep the current page when a delayed chat creation or fork finishes after navigation.
 - Support a non-default public TLS port in Helm without changing internal service ports or connector passthrough.
+- Allow explicitly scoped terminal enrollment through the CLI so opted-in Fleet workers can serve web shells.
 - Keep native Windows transport acceptance under an explicitly selected private test root instead of creating new fixture directories directly under the user profile.
+
+### Security
+
+- Update the VS Code packaging dependency qs and the Python SDK build tool setuptools to patched versions.
 
 ### Changed
 

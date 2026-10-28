@@ -55,6 +55,11 @@ runtime. If Windows cannot resolve `.localhost` names, an administrator can conf
 ```
 
 The advertised connector endpoint is `https://runtimes.colossus.localhost:8443`.
+Normal native CLI HTTPS enrollment requires a browser certificate that chains to the
+client's bundled public CA roots. Browser certificate exceptions and Windows trust-store
+imports do not configure that client. The generated self-signed certificate is sufficient
+for the harness's explicit-CA probes; arrange a publicly trusted endpoint before normal
+native enrollment.
 Follow [Connect runtimes](../cloud/connect-runtimes.md), then use the
 [web shell procedure](../cloud/work.md#open-a-shell-on-a-connected-host).
 Terminal access still requires the worker opt-in, connector grant, and project role.
