@@ -72,10 +72,6 @@ chat:
             - workflow.definition.get
             - workflow.schedule.list
             - workflow.schedule.get
-            - workflow.schedule.create
-            - workflow.schedule.set_enabled
-            - workflow.schedule.delete
-            - workflow.task.schedule
             exclude: []
           actions:
             allow:
@@ -147,9 +143,6 @@ chat:
             requireApproval:
             - mcp.call
             - plan.approve_request
-            - workflow.schedule.create
-            - workflow.schedule.set_enabled
-            - workflow.schedule.delete
             deny: []
         storage:
           location: workspace

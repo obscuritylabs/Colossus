@@ -253,10 +253,11 @@ impl RuntimeConnector {
             .map_err(|_| Status::invalid_argument("invalid TLS identity"))?
             .connect_timeout(Duration::from_secs(10));
         // Endpoint's connect_timeout covers TCP. Bound TLS and HTTP/2 startup too.
-        let channel = tokio::time::timeout(Duration::from_secs(10), endpoint.connect())
-            .await
-            .map_err(|_| Status::deadline_exceeded("cloud channel startup timeout"))?
-            .map_err(|_| Status::unavailable("cloud transport unavailable"))?;
+        let channel =
+            tokio::time::timeout(Duration::from_secs(10), crate::localhost::connect(endpoint))
+                .await
+                .map_err(|_| Status::deadline_exceeded("cloud channel startup timeout"))?
+                .map_err(|_| Status::unavailable("cloud transport unavailable"))?;
         let mut client = RuntimeConnectionClient::new(channel)
             .max_decoding_message_size(MAX_PAYLOAD_BYTES + 16384)
             .max_encoding_message_size(MAX_PAYLOAD_BYTES + 16384);

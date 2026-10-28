@@ -1,4 +1,4 @@
-#requires -Version 7.0
+#requires -Version 7.2
 <#
 .SYNOPSIS
 Creates, checks, or removes an isolated Docker-backed kind deployment.
@@ -57,6 +57,10 @@ if ($null -ne $manifest) {
 # A preview reads only local ownership and Git metadata. No client environment,
 # directories, Docker commands, cluster operations, credentials, or files are changed.
 if ($WhatIfPreference) {
+    if ($null -ne $manifest -and $manifest.schemaVersion -eq 2 -and $Action -in @('up', 'test')) {
+        Write-Output 'Legacy deployment retained: this operation requires a fresh complete profile or reviewed migration. No changes would be made.'
+        return
+    }
     if ($Action -eq 'down') {
         [void]$PSCmdlet.ShouldProcess($cluster, 'Delete the exact owned kind cluster and its PostgreSQL data')
         if ($RemoveImages) {
@@ -65,9 +69,11 @@ if ($WhatIfPreference) {
             }
         }
         if ($RemoveFiles) { [void]$PSCmdlet.ShouldProcess($runRoot, 'Remove the verified owned directory after resource cleanup') }
+        if ($RemoveFiles -and $manifest.schemaVersion -eq 3) { [void]$PSCmdlet.ShouldProcess($manifest.hosted.privateAllocation.path, 'Remove only this deployment private allocation after exact ownership checks') }
     } else { [void]$PSCmdlet.ShouldProcess($runRoot, "$Action local Helm deployment on port $Port") }
     return
 }
+if ($null -ne $manifest -and $Action -in @('up', 'test')) { Assert-HelmLocalFullProfile $manifest }
 
 if (-not $PSCmdlet.ShouldProcess($runRoot, "$Action local Helm deployment")) { return }
 $tools = @{
@@ -78,22 +84,34 @@ if ($Action -ne 'down') {
     $tools.Helm = Resolve-HelmLocalTool 'helm' $Helm
     $tools.Kubectl = Resolve-HelmLocalTool 'kubectl' $Kubectl
     $tools.Curl = Resolve-HelmLocalTool 'curl.exe' ''
-    $tools.Node = Resolve-HelmLocalTool 'node' $Node -Optional
+    $tools.Node = Resolve-HelmLocalTool 'node' $Node
 }
 $savedEnvironment = Save-HelmLocalEnvironment
+$operationLock = $null
 try {
+    $operationLock = Enter-HelmLocalRunLock -Primary $primaryRoot -Cluster $cluster
+    # Another operation may have finished after the initial read, before this lock.
+    $manifest = Read-HelmLocalManifest $manifestPath $runRoot $cluster $primaryRoot
+    if ($null -ne $manifest -and $Action -in @('up', 'test')) { Assert-HelmLocalFullProfile $manifest }
+    if ($null -eq $manifest -and $Action -eq 'down') { Write-Output 'The owned deployment was already removed.'; return }
+    if ($null -eq $manifest -and $Action -eq 'test') { throw 'The owned deployment was removed before verification started.' }
+    if ($null -ne $manifest) {
+        Assert-HelmLocalPrivateAcl $runRoot
+        Assert-HelmLocalNoChildReparse $runRoot
+        if ($Action -eq 'up' -and [int]$manifest.port -ne $Port) { throw 'Changing the port requires a fresh deployment name.' }
+        if ($Action -ne 'up') { $Port = [int]$manifest.port }
+    }
     if (-not (Test-Path -LiteralPath $runRoot)) {
         [void][IO.Directory]::CreateDirectory($runRoot)
         Set-HelmLocalPrivateAcl $runRoot
         # Establish ownership before prerequisite checks can fail, so a failed
         # first attempt remains inspectable and can be retried safely.
-        $manifest = @{
-            schemaVersion = 2; purpose = 'ColossusLocalHelmHarness'; rootPath = $runRoot; primaryRoot = $primaryRoot
-            sourcePath = $sourceRoot; sourceCommit = (Invoke-HelmLocalNative $git @('-C', $sourceRoot, 'rev-parse', 'HEAD')).Trim()
-            clusterName = $cluster; namespace = $cluster; port = $Port; images = @(); nodes = @()
-        }
+        $sourceCommit = (Invoke-HelmLocalNative $git @('-C', $sourceRoot, 'rev-parse', 'HEAD')).Trim()
+        $manifest = New-HelmLocalManifest -Root $runRoot -Primary $primaryRoot -Source $sourceRoot -Cluster $cluster -Port $Port -SourceCommit $sourceCommit
         Write-HelmLocalJson $manifestPath $manifest
     }
+    if ($Action -eq 'up') { $null = Initialize-HelmLocalPrivateAllocation -Root $runRoot -Manifest $manifest }
+    if ($Action -eq 'test') { $null = Assert-HelmLocalPrivateAllocation -Root $runRoot -Manifest $manifest }
     Set-HelmLocalEnvironment $runRoot
     $engine = (Invoke-HelmLocalNative $tools.Docker @('info', '--format', '{{.OSType}}')).Trim()
     if ($engine -cne 'linux') { throw 'Docker Desktop must be running its Linux engine.' }
@@ -104,7 +122,8 @@ try {
     if ($Action -eq 'up') {
         $manifest = Start-HelmLocalDeployment $tools $sourceRoot $primaryRoot $runRoot $cluster $Name $Port $manifest $ControlPlaneImage $DocumentationImage -LoadImages:$LoadImages
     }
-    Test-HelmLocalDeployment $tools $manifest $runRoot
+    Test-HelmLocalDeployment $tools $manifest $runRoot -InitializeHosted:($Action -eq 'up')
 } finally {
     Restore-HelmLocalEnvironment $savedEnvironment
+    if ($null -ne $operationLock) { $operationLock.Dispose() }
 }

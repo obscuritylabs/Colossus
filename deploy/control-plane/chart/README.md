@@ -5,6 +5,12 @@ on GKE, EKS and OpenShift, including disconnected registries. Templates and prod
 configuration are checked without installing a cluster. These checks do not establish
 live controller, storage, mesh, or platform acceptance.
 
+For a complete Windows Docker Desktop installation, use the
+[local Helm harness](../../../docs/develop/local-helm.md). Its local profile provisions
+Hosted execution, verified-TLS PostgreSQL, and a separate HTTPS checkpoint authority
+alongside Fleet and documentation. The production chart retains the explicit Hosted
+configuration described below.
+
 ## Install
 
 Provision a namespace, three schedulable availability zones, a StorageClass, metrics-server
