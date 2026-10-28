@@ -2,7 +2,10 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use colossus_cloud_server::config::Config;
 use serde_json::{Value, json};
-use std::{path::PathBuf, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -70,8 +73,68 @@ fn configuration(documents: &[Value]) -> Config {
         .unwrap();
     let config: Config =
         serde_json::from_str(config["data"]["control-plane.json"].as_str().unwrap()).unwrap();
-    config.validate().unwrap();
+    validate_configuration(&config).unwrap();
     config
+}
+
+fn validate_configuration(config: &Config) -> Result<(), &'static str> {
+    if let Some(chat) = &config.chat {
+        assert_eq!(
+            chat.home.to_str(),
+            Some("/var/lib/colossus-chat/private"),
+            "Helm must render the Linux container home unchanged"
+        );
+    }
+    // The chart targets Linux containers. On Windows, validate the remaining
+    // server contract with a native absolute home without opening any state.
+    #[cfg(windows)]
+    {
+        let mut native = config.clone();
+        if let Some(chat) = &mut native.chat {
+            chat.home = std::env::temp_dir().join("colossus-helm-validation");
+        }
+        native.validate()
+    }
+    #[cfg(not(windows))]
+    config.validate()
+}
+
+fn assert_private_cache_mount_graph(pod: &Value, home: &Path) {
+    let server = &pod["containers"][0];
+    let mounts = server["volumeMounts"].as_array().unwrap();
+    let cache_mounts = mounts
+        .iter()
+        .filter(|mount| mount["name"] == "chat-cache")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cache_mounts.len(),
+        1,
+        "server must expose only the private cache leaf"
+    );
+    let cache = cache_mounts[0];
+    assert_eq!(Path::new(cache["mountPath"].as_str().unwrap()), home);
+    assert!(
+        mounts.iter().all(|mount| {
+            let path = Path::new(mount["mountPath"].as_str().unwrap());
+            path == home || !home.starts_with(path)
+        }),
+        "a mounted writable ancestor would invalidate the private home"
+    );
+
+    let init = &pod["initContainers"][0];
+    let parent = init["volumeMounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|mount| mount["name"] == cache["name"])
+        .unwrap();
+    assert!(parent["subPath"].is_null());
+    let initialized =
+        Path::new(parent["mountPath"].as_str().unwrap()).join(cache["subPath"].as_str().unwrap());
+    assert_eq!(initialized, home);
+    let initialization = init["args"][0].as_str().unwrap();
+    assert!(initialization.contains(&format!("mkdir -p {}", home.display())));
+    assert!(initialization.contains(&format!("chmod 0700 {}", home.display())));
 }
 
 #[test]
@@ -248,7 +311,10 @@ fn renders_shared_hosted_chat_with_private_disposable_caches() {
             service: "postgres".into(),
             namespace: "colossus".into(),
         };
-        assert!(invalid.validate().is_err());
+        assert_eq!(
+            validate_configuration(&invalid),
+            Err("shared hosted chat requires verified database TLS")
+        );
         let chat = config.chat.unwrap();
         assert_eq!(
             chat.home.to_str().unwrap(),
@@ -263,11 +329,20 @@ fn renders_shared_hosted_chat_with_private_disposable_caches() {
             "/etc/colossus/chat-anchor/ca.pem"
         );
         let pod = &resource(&documents, "Deployment", "server")["spec"]["template"]["spec"];
+        assert_private_cache_mount_graph(pod, &chat.home);
         assert_eq!(pod["terminationGracePeriodSeconds"], 120);
         let init = &pod["initContainers"][0];
         assert_eq!(init["image"], pod["containers"][0]["image"]);
         assert_eq!(init["securityContext"]["allowPrivilegeEscalation"], false);
         assert!(init["args"][0].as_str().unwrap().contains("chmod 0700"));
+        if platform == "openshift" {
+            assert!(pod["securityContext"]["runAsUser"].is_null());
+            assert!(pod["securityContext"]["fsGroup"].is_null());
+            assert!(init["securityContext"]["runAsUser"].is_null());
+        } else {
+            assert_eq!(pod["securityContext"]["runAsUser"], 10001);
+            assert_eq!(pod["securityContext"]["fsGroup"], 10001);
+        }
         let volumes = pod["volumes"].as_array().unwrap();
         assert_eq!(
             volumes.iter().find(|v| v["name"] == "chat-cache").unwrap()["emptyDir"]["sizeLimit"],
@@ -523,6 +598,33 @@ fn published_values_examples_render_valid_server_configuration() {
         let documents =
             serde_saphyr::from_multiple::<Value>(&String::from_utf8(output.stdout).unwrap())
                 .unwrap();
-        configuration(&documents);
+        let config = configuration(&documents);
+        if let Some(chat) = config.chat {
+            let baseline = colossus_runtime::RuntimeConfig::controlled_chat_template("unused.redb");
+            for project in chat.projects.values() {
+                assert!(
+                    project
+                        .runtime
+                        .access
+                        .tools
+                        .include
+                        .iter()
+                        .all(|selector| { baseline.access.tools.include.contains(selector) }),
+                    "Hosted example selects a tool outside the controlled runtime catalog"
+                );
+                assert!(
+                    project
+                        .runtime
+                        .access
+                        .actions
+                        .require_approval
+                        .iter()
+                        .all(|action| {
+                            baseline.access.actions.require_approval.contains(action)
+                        }),
+                    "Hosted example requires approval for an unavailable controlled action"
+                );
+            }
+        }
     }
 }
