@@ -27,7 +27,7 @@ separately enrolled CLI connector. To remove Cloud authority, choose **Revoke
 enrollment** in Desktop or **Revoke agent** in Fleet. Forgetting local data alone
 does not revoke the enrollment.
 
-## Enroll the CLI
+## Enroll the CLI { #enroll-a-cli-daemon }
 
 From a configured workspace, run the enrollment URL shown in Fleet:
 
