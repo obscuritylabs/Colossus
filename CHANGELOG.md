@@ -64,6 +64,7 @@ include breaking changes while the public API is still settling.
 - **provider:** preserve tool replay after failed turns ([#322](https://github.com/obscuritylabs/Colossus/pull/322))
 - **terminal:** finish readers when native shells exit ([f3389e1](https://github.com/obscuritylabs/Colossus/commit/f3389e1d9904bdcca865b4c2debb22107d9a65f9))
 - **web:** disclose Fleet shell time limits ([536c3f7](https://github.com/obscuritylabs/Colossus/commit/536c3f7d018c0747c2d33d44b245773522d6a23e))
+- restore explicit terminal enrollment and patch build tools ([077bfad](https://github.com/obscuritylabs/Colossus/commit/077bfad5ad8a6473a1f520c04cea712e53ad7698))
 
 #### Security
 
@@ -98,8 +99,9 @@ include breaking changes while the public API is still settling.
 - **cloud:** support private native acceptance roots ([1c79663](https://github.com/obscuritylabs/Colossus/commit/1c79663f49396ddffec4479648a56159b165ed25))
 - **release:** refresh preview.4 history ([1e4d9d8](https://github.com/obscuritylabs/Colossus/commit/1e4d9d84027dd5ff8e3cb7590beb29dc46a0143d))
 - **windows:** group native fixtures under one private root ([32dcf2e](https://github.com/obscuritylabs/Colossus/commit/32dcf2ed8ff69bfb1a60df510af25971f667c46e))
+- **release:** finalize preview.4 validation history ([58ba1d0](https://github.com/obscuritylabs/Colossus/commit/58ba1d0247e412ab6d9d425e020a678480fce246))
 
-**Source:** [32dcf2e](https://github.com/obscuritylabs/Colossus/commit/32dcf2ed8ff69bfb1a60df510af25971f667c46e)
+**Source:** [077bfad](https://github.com/obscuritylabs/Colossus/commit/077bfad5ad8a6473a1f520c04cea712e53ad7698)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.4](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.4)
 
