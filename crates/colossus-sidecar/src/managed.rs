@@ -2260,7 +2260,8 @@ mod tests {
     #[test]
     fn full_access_desktop_runtime_opens_loopback_wildcard_mcp_servers() {
         #[cfg(windows)]
-        let temporary_root = std::env::var_os("USERPROFILE")
+        let temporary_root = std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
+            .or_else(|| std::env::var_os("USERPROFILE"))
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
             .expect("absolute Windows user profile")

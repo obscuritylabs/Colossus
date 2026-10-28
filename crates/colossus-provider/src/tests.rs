@@ -412,6 +412,12 @@ fn codex_auth_tempdir() -> tempfile::TempDir {
 
 #[cfg(windows)]
 fn current_user_profile() -> PathBuf {
+    if let Some(parent) = std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT") {
+        let parent = std::path::PathBuf::from(parent);
+        assert!(parent.is_absolute(), "native test root must be absolute");
+        assert!(parent.is_dir(), "native test root must already exist");
+        return parent;
+    }
     let account = current_windows_user().0;
     let user_name = account
         .rsplit('\\')

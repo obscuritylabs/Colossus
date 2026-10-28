@@ -31,26 +31,28 @@ struct KeyringCleanup {
 
 struct PrivateDirectory {
     path: std::path::PathBuf,
+    parent: std::path::PathBuf,
 }
 
 impl PrivateDirectory {
     fn in_user_profile() -> Self {
-        let user_profile = std::env::var_os("USERPROFILE")
+        let user_profile = std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
+            .or_else(|| std::env::var_os("USERPROFILE"))
             .map(std::path::PathBuf::from)
             .filter(|path| path.is_absolute())
-            .expect("absolute Windows user profile");
+            .expect("absolute native test parent");
         let path = user_profile.join(format!(".colossus-windows-test-{}", Uuid::now_v7()));
         create_private_directory(&path).expect("private instance directory");
-        Self { path }
+        Self {
+            path,
+            parent: user_profile,
+        }
     }
 }
 
 impl Drop for PrivateDirectory {
     fn drop(&mut self) {
-        let user_profile = std::env::var_os("USERPROFILE")
-            .map(std::path::PathBuf::from)
-            .expect("Windows user profile");
-        assert_eq!(self.path.parent(), Some(user_profile.as_path()));
+        assert_eq!(self.path.parent(), Some(self.parent.as_path()));
         let _ = std::fs::remove_dir_all(&self.path);
     }
 }

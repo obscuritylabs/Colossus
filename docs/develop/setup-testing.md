@@ -62,10 +62,15 @@ that task's temporary directory with process-scoped `TEMP` and `TMP` before star
 tests; do not change the user's permanent environment or create test folders directly
 under their profile. Keep private state outside the test tool workspace and protect
 credentials with an owner-private ACL. Preserve failed-run evidence until inspected.
-Native Windows cloud-transport acceptance also accepts `COLOSSUS_NATIVE_TEST_ROOT`:
-set it to an existing absolute directory with an owner-private ACL inside the task's
-artifact root. The native home checks still apply. Without this override, those
-fixtures use the protected user-profile ancestor rather than shared Windows TEMP.
+Native Windows fixtures also accept `COLOSSUS_NATIVE_TEST_ROOT`. Select an existing
+absolute private directory whose entire ancestor namespace prevents replacement by
+other users. A private leaf ACL inside a shared drive or checkout may still fail
+native custody checks. In that case, use one protected test parent such as
+`%USERPROFILE%/.colossus-tests/<task>/`, and keep its exact ownership receipt and
+cleanup entry point in the checkout's task directory. The native checks still apply;
+without an override, fixtures retain their protected user-profile default. Tests of
+the production profile allocator itself still exercise that allocator and clean up
+their exact allocation.
 
 Cleanup must use the recorded ownership and resolved path boundary. Never delete
 profile directories by a broad name prefix: a browser profile or restoration backup

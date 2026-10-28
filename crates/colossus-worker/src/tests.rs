@@ -980,7 +980,8 @@ async fn hosted_worker_fixture_with_home(
 ) -> HostedWorkerFixture {
     #[cfg(windows)]
     let directory = if home_backed {
-        let user_profile = std::env::var_os("USERPROFILE")
+        let user_profile = std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
+            .or_else(|| std::env::var_os("USERPROFILE"))
             .map(std::path::PathBuf::from)
             .filter(|path| path.is_absolute())
             .expect("absolute Windows user profile");
