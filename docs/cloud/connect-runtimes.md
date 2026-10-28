@@ -8,7 +8,7 @@ icon: lucide/plug
 
 # Connect runtimes
 
-Connect an existing Desktop workspace or CLI daemon to a Cloud project. The runtime
+Connect an existing Desktop workspace or CLI runtime to a Cloud project. The runtime
 opens an outbound connection, so its machine needs no inbound public port. It keeps
 its own tools, credentials, policy, and sandbox.
 
@@ -27,7 +27,7 @@ separately enrolled CLI connector. To remove Cloud authority, choose **Revoke
 enrollment** in Desktop or **Revoke agent** in Fleet. Forgetting local data alone
 does not revoke the enrollment.
 
-## Enroll a CLI daemon
+## Enroll the CLI
 
 From a configured workspace, run the enrollment URL shown in Fleet:
 

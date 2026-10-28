@@ -105,7 +105,7 @@ fn named_metadata_binds_workspace_config_and_explicit_access() {
     // the Windows path passed to descriptor-relative creation and replacement.
     assert_eq!(
         metadata.directory.path(),
-        partition.join("cloud").join(metadata::digest(b"fixture"))
+        std::fs::canonicalize(partition.join("cloud").join(metadata::digest(b"fixture"))).unwrap()
     );
     #[cfg(windows)]
     assert!(
@@ -216,4 +216,65 @@ fn generated_connection_retains_independent_pin_and_rejects_tampering() {
     stream.write_all(b"{}").unwrap();
     stream.sync_all().unwrap();
     assert!(metadata.connection(&mut binding).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn ordinary_windows_profile_path_supports_long_atomic_connection_leaves() {
+    use std::{os::windows::ffi::OsStrExt as _, path::Component};
+    let temporary = temporary();
+    let canonical = std::fs::canonicalize(temporary.path()).unwrap();
+    let mut components = canonical.components();
+    let drive = match components.next().unwrap() {
+        Component::Prefix(prefix) => match prefix.kind() {
+            std::path::Prefix::VerbatimDisk(drive) => drive,
+            _ => panic!("native fixture must reside on an owned local disk"),
+        },
+        _ => panic!("native fixture must have an absolute prefix"),
+    };
+    assert_eq!(components.next(), Some(Component::RootDir));
+    let mut ordinary = PathBuf::from(format!("{}:\\", char::from(drive)));
+    for component in components {
+        assert!(matches!(component, Component::Normal(_)));
+        ordinary.push(component);
+    }
+    assert!(!ordinary.as_os_str().to_string_lossy().starts_with(r"\\?\"));
+    let root = ConfinedRoot::bind(ordinary.join("private")).unwrap();
+    let home = root.prepare_directory(Path::new("home")).unwrap();
+    let workspace = root.prepare_directory(Path::new("workspace")).unwrap();
+    let partition = root
+        .prepare_directory(&Path::new("workspaces").join("a".repeat(64)).join("cli"))
+        .unwrap();
+    let identity = detect_workspace_identity(&workspace).unwrap();
+    let metadata = Metadata::open(&home, &partition, "long-profile").unwrap();
+    assert!(
+        metadata
+            .directory
+            .path()
+            .join("stage-01a18333d15470a1bb492dec464909dc.json")
+            .as_os_str()
+            .encode_wide()
+            .count()
+            > 260
+    );
+    let mut binding = Binding::planned(
+        &local(),
+        &identity,
+        &workspace.join("runtime.yaml"),
+        "a".repeat(64),
+        metadata.api_directory().unwrap(),
+    );
+    binding.instance_id = Some(uuid::Uuid::now_v7().to_string());
+    binding.certificate_sha256 = Some("c".repeat(64));
+    binding.credential_id = Some(uuid::Uuid::now_v7().to_string());
+    binding.stage = Stage::Ready;
+    metadata.save(&binding).unwrap();
+    metadata.connection(&mut binding).unwrap();
+    let connection = std::fs::read(&metadata.connection).unwrap();
+    metadata.save(&binding).unwrap();
+    drop(metadata);
+    let retained = Metadata::open(&home, &partition, "long-profile").unwrap();
+    let mut restored = retained.load().unwrap().unwrap();
+    retained.connection(&mut restored).unwrap();
+    assert_eq!(std::fs::read(&retained.connection).unwrap(), connection);
 }

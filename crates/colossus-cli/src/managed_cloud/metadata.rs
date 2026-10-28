@@ -61,10 +61,36 @@ pub(super) fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+fn bind_managed_directory(path: &Path) -> Result<ConfinedRoot, Box<dyn Error>> {
+    let original = ConfinedRoot::bind(path)?;
+    #[cfg(windows)]
+    {
+        // Private file creation uses Win32 paths. Retain a verified verbatim path
+        // before adding hashed partitions and atomic staging leaves, which can
+        // exceed MAX_PATH under an ordinary user profile directory.
+        let retained = colossus_windows_native::BoundPath::open_directory(original.path())?;
+        retained.validate_ancestor_namespace_authority()?;
+        retained.validate_private_owner_dacl()?;
+        retained.revalidate()?;
+        let canonical = ConfinedRoot::bind(retained.canonical_path())?;
+        let reopened = colossus_windows_native::BoundPath::open_directory(canonical.path())?;
+        if retained.identity() != reopened.identity() {
+            return Err("managed Cloud directory changed during canonical binding".into());
+        }
+        original.revalidate()?;
+        retained.revalidate()?;
+        reopened.revalidate()?;
+        canonical.revalidate()?;
+        Ok(canonical)
+    }
+    #[cfg(not(windows))]
+    Ok(original)
+}
+
 impl Metadata {
     pub fn open(home: &Path, workspace_home: &Path, name: &str) -> Result<Self, Box<dyn Error>> {
         colossus_ports::CredentialKey::new("cloud-connector", name)?;
-        let home = ConfinedRoot::bind(home)?;
+        let home = bind_managed_directory(home)?;
         let root = ConfinedRoot::bind(
             home.prepare_directory(&Path::new("cloud-connector").join("managed-clients"))?,
         )?;
@@ -77,7 +103,7 @@ impl Metadata {
             );
         }
         lock.revalidate(&root)?;
-        let workspace = ConfinedRoot::bind(workspace_home)?;
+        let workspace = bind_managed_directory(workspace_home)?;
         let directory =
             ConfinedRoot::bind(workspace.prepare_directory(&Path::new("cloud").join(&selector))?)?;
         let connection = directory.path().join("connection.json");
