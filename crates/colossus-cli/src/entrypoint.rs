@@ -118,10 +118,10 @@ async fn runtime_command(
         return dev_credentials::run(command, &cli.workspace)
             .map_err(|error| Box::new(error) as Box<dyn Error>);
     }
-    if !matches!(&cli.command, Command::Cloud(command) if command.requires_managed_runtime()) {
-        if let Command::Cloud(command) = cli.command {
-            return colossus_connector::run_cli(command).await;
-        }
+    if !matches!(&cli.command, Command::Cloud(command) if command.requires_managed_runtime())
+        && let Command::Cloud(command) = cli.command
+    {
+        return colossus_connector::run_cli(command).await;
     }
     // Metadata validation precedes home/runtime/worker acquisition. The selected
     // account remains native-only and no credential is loaded until a provider permit.
