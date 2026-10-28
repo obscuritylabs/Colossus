@@ -89,8 +89,10 @@ include breaking changes while the public API is still settling.
 - **terminal:** synchronize native shell acceptance ([a0cab31](https://github.com/obscuritylabs/Colossus/commit/a0cab316a90a1161d7cf5de2f270629ab9b1bc22))
 - **terminal:** correct cross-platform shell acceptance ([d610e7f](https://github.com/obscuritylabs/Colossus/commit/d610e7f37a24057cb40f34619837e4eeeef39bab))
 - **release:** prepare 0.11.11-preview.3 ([0ae21c0](https://github.com/obscuritylabs/Colossus/commit/0ae21c0ebb8e3b9c9a854da6f504360beb8273e0))
+- **release:** prepare v0.11.11-preview.4 notes ([8e8df64](https://github.com/obscuritylabs/Colossus/commit/8e8df64aa6f1b3492795e91666a8e3cfa2314718))
+- **cloud:** support private native acceptance roots ([1c79663](https://github.com/obscuritylabs/Colossus/commit/1c79663f49396ddffec4479648a56159b165ed25))
 
-**Source:** [01dd5a6](https://github.com/obscuritylabs/Colossus/commit/01dd5a67872615ff3628a6edcd3551d320cf0297)
+**Source:** [1c79663](https://github.com/obscuritylabs/Colossus/commit/1c79663f49396ddffec4479648a56159b165ed25)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.4](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.4)
 
