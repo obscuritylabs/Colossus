@@ -38,6 +38,14 @@ pub(super) fn render_footer(
         truncate_width(&sanitize_approval_field(&state.footer.status), 12)
     };
     let approval = sanitize_approval_field(&state.footer.approval_mode);
+    let route = sanitize_approval_field(&state.footer.route);
+    let context = state
+        .footer
+        .context
+        .map(|(used, maximum)| format!("ctx {used}/{maximum}"));
+    let context_reserve = context
+        .as_ref()
+        .map_or(0, |text| UnicodeWidthStr::width(text.as_str()) + 3);
     let usage = state
         .footer
         .usage
@@ -81,8 +89,31 @@ pub(super) fn render_footer(
     let content_width = width.saturating_sub(badge_width + usize::from(!badge.is_empty()) * 2);
     let mut used =
         UnicodeWidthStr::width(status.as_str()) + UnicodeWidthStr::width(approval_text.as_str());
+    let full_route_reserve = if route.is_empty() {
+        0
+    } else {
+        UnicodeWidthStr::width(route.as_str()) + 3
+    };
+    // Selected model and effort must not be clipped merely to keep optional
+    // mode or token detail chrome that could be omitted instead.
+    let route_reserve =
+        if used + usage_reserve + context_reserve + full_route_reserve <= content_width {
+            full_route_reserve
+        } else {
+            0
+        };
+    let selected_metadata_reserve = if route_reserve > 0 {
+        route_reserve + context_reserve
+    } else {
+        0
+    };
     let mode = format!(" {} ", state.mode.as_str());
-    let mode = if used + UnicodeWidthStr::width(mode.as_str()) + 2 + usage_reserve <= content_width
+    let mode = if used
+        + UnicodeWidthStr::width(mode.as_str())
+        + 2
+        + usage_reserve
+        + selected_metadata_reserve
+        <= content_width
     {
         mode
     } else {
@@ -102,18 +133,12 @@ pub(super) fn render_footer(
         Span::styled(status, status_style),
         Span::styled(approval_text, metadata.add_modifier(Modifier::BOLD)),
     ];
-    let context = state
-        .footer
-        .context
-        .map(|(used, maximum)| format!("ctx {used}/{maximum}"));
     if let Some(usage) = usage {
         let available = content_width.saturating_sub(used + 3);
-        let context_width = context
-            .as_ref()
-            .map_or(0, |text| UnicodeWidthStr::width(text.as_str()) + 3);
+        let metadata_reserve = context_reserve + route_reserve;
         let compact_width = usage_reserve.saturating_sub(3);
-        let budget = if available >= context_width + compact_width {
-            available - context_width
+        let budget = if available >= metadata_reserve + compact_width {
+            available - metadata_reserve
         } else {
             available
         };
@@ -125,14 +150,13 @@ pub(super) fn render_footer(
             metadata.add_modifier(Modifier::BOLD),
         );
     }
-    let context_reserve = context
-        .as_ref()
-        .map_or(0, |text| UnicodeWidthStr::width(text.as_str()) + 3);
-    let optional_width = if usage.is_some() && used + context_reserve <= content_width {
-        content_width - context_reserve
-    } else {
-        content_width
-    };
+    let optional_reserve = context_reserve + route_reserve;
+    let optional_width =
+        if (usage.is_some() || route_reserve > 0) && used + optional_reserve <= content_width {
+            content_width - optional_reserve
+        } else {
+            content_width
+        };
     if !state.queue.is_empty() {
         append_footer_segment(
             &mut spans,
@@ -160,15 +184,12 @@ pub(super) fn render_footer(
         .as_ref()
         .map_or(0, |context| UnicodeWidthStr::width(context.as_str()) + 3);
     let route_width = content_width.saturating_sub(used + reserved + 3);
-    if route_width >= 16 {
+    if route_reserve > 0 || route_width >= 16 {
         append_footer_segment(
             &mut spans,
             &mut used,
             content_width,
-            truncate_width_with_ellipsis(
-                &sanitize_approval_field(&state.footer.route),
-                route_width,
-            ),
+            truncate_width_with_ellipsis(&route, route_width),
             metadata,
         );
     }

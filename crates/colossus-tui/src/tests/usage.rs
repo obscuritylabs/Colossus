@@ -453,3 +453,49 @@ fn token_badge_preserves_counts_status_permissions_and_security_at_supported_wid
     assert_eq!(usage_footer_text(&unknown, 4), "tok—");
     assert!(usage_footer_text(&unknown, 3).is_empty());
 }
+
+#[test]
+fn compact_usage_preserves_selected_model_and_reasoning_in_sidebar_sized_footer() {
+    for width in [110, 111, 112] {
+        for usage in [None, Some(counters())] {
+            let mut source = snapshot();
+            source.footer.route = "live-deep@deep via deep · high reasoning".into();
+            source.footer.context = Some((92, 24_800));
+            source.footer.approval_mode = "deny".into();
+            source.footer.usage = Some(report("direct", usage.clone()));
+            source
+                .security_posture
+                .findings
+                .push(SecurityPostureFinding {
+                    code: "storage.plaintext".into(),
+                    severity: SecurityPostureSeverity::Warning,
+                    summary: "Plaintext journal".into(),
+                    remediation: "Use storage keys".into(),
+                });
+            let state = TuiState::from_snapshot(source);
+            let mut terminal =
+                Terminal::new(TestBackend::new(width, FOOTER_HEIGHT)).expect("terminal");
+            terminal
+                .draw(|frame| render_footer(frame, &state, frame.area(), false))
+                .expect("footer");
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            for expected in [
+                "ready",
+                "deny",
+                "live-deep@deep via deep · high reasoning",
+                "ctx 92/24800",
+                "⚠ Security: 1",
+            ] {
+                assert!(rendered.contains(expected), "{width}: {rendered}");
+            }
+            let tokens = if usage.is_some() { "1.2k" } else { "tok—" };
+            assert!(rendered.contains(tokens), "{width}: {rendered}");
+        }
+    }
+}
