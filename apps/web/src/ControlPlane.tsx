@@ -94,6 +94,8 @@ export function AuthenticatedApp({
   loadMe,
   onSignOut,
   signOutError = "",
+  sessionRefreshError = "",
+  checkingSession = false,
   signingOut = false,
 }: {
   me: Me;
@@ -103,6 +105,8 @@ export function AuthenticatedApp({
   loadMe: () => void;
   onSignOut: () => void;
   signOutError?: string;
+  sessionRefreshError?: string;
+  checkingSession?: boolean;
   signingOut?: boolean;
 }) {
   const navigation = useNavigation(),
@@ -747,7 +751,22 @@ export function AuthenticatedApp({
           </span>
         }
         classification={settings?.classification}
-        announcement={announcements.notice}
+        announcement={
+          <>
+            {announcements.notice}
+            {sessionRefreshError ? (
+              <div role="alert" className="alert project-alert">
+                <span>{sessionRefreshError}</span>
+                <Button
+                  disabled={checkingSession || signingOut}
+                  onClick={loadMe}
+                >
+                  Retry session check
+                </Button>
+              </div>
+            ) : null}
+          </>
+        }
         user={
           <ControlPlaneAccountMenu
             name={me.user.display_name}

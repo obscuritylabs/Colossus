@@ -214,6 +214,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "publicPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
         "mode": {
           "type": "string",
           "enum": [

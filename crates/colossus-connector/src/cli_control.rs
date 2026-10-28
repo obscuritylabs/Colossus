@@ -213,7 +213,16 @@ mod tests {
         #[cfg(windows)]
         let temporary = tempfile::Builder::new()
             .prefix("colossus-connector-control-")
-            .tempdir_in(std::env::var_os("USERPROFILE").expect("test user profile"))
+            .tempdir_in({
+                let parent = std::path::PathBuf::from(
+                    std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
+                        .or_else(|| std::env::var_os("USERPROFILE"))
+                        .expect("native test parent"),
+                );
+                assert!(parent.is_absolute(), "native test root must be absolute");
+                assert!(parent.is_dir(), "native test root must already exist");
+                parent
+            })
             .unwrap();
         #[cfg(not(windows))]
         let temporary = tempfile::tempdir().unwrap();

@@ -57,6 +57,8 @@ containerSecurityContext:
 # Cluster operators own the ingress controller / gateway deployment and its CRDs.
 routing:
   mode: ingress-nginx # ingress-nginx, istio, gateway-api, or none
+  # External TLS listener port for both hostnames; internal Service ports are unchanged.
+  publicPort: 443
   browserTlsSecret: colossus-browser-tls
   ingress:
     className: nginx

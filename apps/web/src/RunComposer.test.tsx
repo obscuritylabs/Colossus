@@ -52,7 +52,7 @@ const reply = (capabilities: string[], connection = "connection-one") =>
       value: { capabilities },
     }),
   );
-async function fixture(target = node("one")) {
+async function fixture(target = node("one"), hostedProject?: string) {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   Object.defineProperty(document, "fonts", {
     configurable: true,
@@ -71,6 +71,7 @@ async function fixture(target = node("one")) {
           nodes={[target]}
           nodeId={target.node.node_id}
           lockedRuntime
+          hostedProject={hostedProject}
           busy={false}
           label="Message"
           action="Send"
@@ -349,6 +350,156 @@ it("probes a connected replica with no local advertisements and respects unsuppo
     offline.presence!.ready = false;
     await f.render(offline);
     expect(fetch).toHaveBeenCalledTimes(2);
+  } finally {
+    await f.close();
+  }
+});
+
+it.each(["unchanged", "newer", "edited back"])(
+  "consumes the submitted snapshot while preserving newer composer content: %s",
+  async (edit) => {
+    const editWhilePending = edit !== "unchanged";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) => {
+        if (path.endsWith("/hosted/files")) {
+          const { file_name } = JSON.parse(String(options.body));
+          return new Response(
+            JSON.stringify({
+              artifact: { artifact_id: file_name, file_name, size_bytes: 5 },
+            }),
+          );
+        }
+        return reply([]);
+      }),
+    );
+    const f = await fixture(node("one"), "project");
+    try {
+      const input = f.container.querySelector<HTMLTextAreaElement>("textarea")!;
+      const write = async (text: string) =>
+        act(() => {
+          Object.getOwnPropertyDescriptor(
+            HTMLTextAreaElement.prototype,
+            "value",
+          )!.set!.call(input, text);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      const attach = async (name: string) => {
+        const fileInput =
+          f.container.querySelector<HTMLInputElement>('input[type="file"]')!;
+        const file = new File(["hello"], name, { type: "text/plain" });
+        Object.defineProperty(file, "arrayBuffer", {
+          value: async () => new TextEncoder().encode("hello").buffer,
+        });
+        Object.defineProperty(fileInput, "files", {
+          configurable: true,
+          value: [file],
+        });
+        await act(async () => {
+          fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+      };
+      const send = async () =>
+        act(async () => {
+          f.container
+            .querySelector("form")!
+            .dispatchEvent(
+              new Event("submit", { bubbles: true, cancelable: true }),
+            );
+        });
+      await write("Submitted question");
+      await attach("submitted.txt");
+      let complete: (result: boolean) => void = () => {
+        throw new Error("No submission");
+      };
+      f.onSubmit.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            complete = resolve;
+          }),
+      );
+      await send();
+      expect(f.onSubmit).toHaveBeenCalledTimes(1);
+      expect(f.onSubmit.mock.calls[0]![0].input).toEqual([
+        { text: "Submitted question" },
+        { artifact: "submitted.txt" },
+      ]);
+      if (editWhilePending) {
+        await write("My next question");
+        if (edit === "edited back") await write("Submitted question");
+        await attach("next.txt");
+      }
+      await act(() => complete(true));
+      expect(input.value).toBe(
+        editWhilePending
+          ? edit === "edited back"
+            ? "Submitted question"
+            : "My next question"
+          : "",
+      );
+      expect(
+        f.container.querySelector('button[aria-label="Remove submitted.txt"]'),
+      ).toBeNull();
+      if (editWhilePending) {
+        expect(
+          f.container.querySelector('button[aria-label="Remove next.txt"]'),
+        ).not.toBeNull();
+        await send();
+        expect(f.onSubmit.mock.calls[1]![0].input).toEqual([
+          {
+            text:
+              edit === "edited back"
+                ? "Submitted question"
+                : "My next question",
+          },
+          { artifact: "next.txt" },
+        ]);
+        expect(f.onSubmit.mock.calls[1]![0].idempotency_key).not.toBe(
+          f.onSubmit.mock.calls[0]![0].idempotency_key,
+        );
+      }
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+it("retains the exact failed request for an explicit retry after a delayed failure", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => reply([])),
+  );
+  const f = await fixture();
+  try {
+    const input = f.container.querySelector<HTMLTextAreaElement>("textarea")!;
+    await act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!.call(input, "Retain this reviewed request");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    let complete: ((result: boolean) => void) | undefined;
+    f.onSubmit.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          complete = resolve;
+        }),
+    );
+    const send = async () =>
+      act(async () => {
+        f.container
+          .querySelector("form")!
+          .dispatchEvent(
+            new Event("submit", { bubbles: true, cancelable: true }),
+          );
+      });
+    await send();
+    await act(() => complete!(false));
+    expect(input.value).toBe("Retain this reviewed request");
+    await send();
+    expect(f.onSubmit.mock.calls[1]![0]).toBe(f.onSubmit.mock.calls[0]![0]);
+    expect(input.value).toBe("");
   } finally {
     await f.close();
   }

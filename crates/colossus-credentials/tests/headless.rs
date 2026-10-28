@@ -9,7 +9,16 @@ fn sealed_authority_survives_restart_and_rejects_changed_key() {
     #[cfg(windows)]
     let directory = tempfile::Builder::new()
         .prefix("colossus-headless-authority-")
-        .tempdir_in(std::env::var_os("USERPROFILE").expect("test user profile"))
+        .tempdir_in({
+            let parent = std::path::PathBuf::from(
+                std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
+                    .or_else(|| std::env::var_os("USERPROFILE"))
+                    .expect("native test parent"),
+            );
+            assert!(parent.is_absolute(), "native test root must be absolute");
+            assert!(parent.is_dir(), "native test root must already exist");
+            parent
+        })
         .unwrap();
     #[cfg(not(windows))]
     let directory = tempfile::tempdir().unwrap();

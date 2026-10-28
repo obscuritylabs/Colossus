@@ -85,6 +85,11 @@ not Helm values. Replace their hostnames and choose one implementation.
 Browser routing retains `/docs/`, `/auth/`, `/api/`, direct SPA links and SSE. No prefix
 rewrite or SSE buffering is allowed. Istio and Gateway API disable request deadlines on
 the streaming browser route; configure any controller-level stream idle timeout as needed.
+`routing.publicPort` defaults to 443. Set it to an external TLS port such as 8443 when
+both hostnames use that port. This changes the advertised browser origin and connector
+endpoint only; configure your gateway or host port mapping separately. Hostname values
+remain bare DNS names, without schemes or ports. Register OIDC callback URLs with the
+same external port when using a non-default listener.
 Do not terminate connector TLS at a gateway or replace TLSRoute with GRPCRoute. Port 8443
 must receive the original client certificate and TLS session. `routing.gatewayAPI` names
 an existing Gateway and its two listener sections. Cross-namespace gateways must allow

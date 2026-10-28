@@ -1,4 +1,11 @@
-import { useContext, useEffect, useRef, useState, useId } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useId,
+} from "react";
 import { Button, ComposerModeSwitch, DropdownSelect } from "@colossus/ui";
 import { Badge } from "@colossus/ui/components/ui/badge";
 import { ConversationComposer } from "@colossus/ui/conversation";
@@ -127,28 +134,33 @@ export function RunComposer({
         ? initialRequest.research_sources
         : ["repo" as const]),
     ]);
+  const draftRevision = useRef(0);
+  const updateDraft = useCallback((value: string) => {
+    draftRevision.current++;
+    setDraft(value);
+  }, []);
   const input = useRef<HTMLTextAreaElement>(null);
   const previousPlan = useRef(false);
   useEffect(() => {
     if (planContinuation) {
       setMode(planContinuation.strategy ? "execute" : "plan");
       setRole(planContinuation.role);
-      setDraft(planPrompt(planContinuation));
+      updateDraft(planPrompt(planContinuation));
       input.current?.focus();
     } else if (previousPlan.current) {
       setMode("execute");
-      setDraft("");
+      updateDraft("");
     }
     previousPlan.current = Boolean(planContinuation);
-  }, [planContinuation]);
+  }, [planContinuation, updateDraft]);
   useEffect(() => {
     if (draftSeed) {
-      setDraft(draftSeed.text);
+      updateDraft(draftSeed.text);
       // A draft can open from a menu whose focus scope is still closing.
       const frame = requestAnimationFrame(() => input.current?.focus());
       return () => cancelAnimationFrame(frame);
     }
-  }, [draftSeed?.key, draftSeed?.text]);
+  }, [draftSeed?.key, draftSeed?.text, updateDraft]);
   const attempt = useRef<SubmissionAttempt | null>(null);
   const [failedAttempt, setFailedAttempt] = useState<SubmissionAttempt | null>(
     null,
@@ -295,9 +307,15 @@ export function RunComposer({
       };
     }
     const submitted = attempt.current;
+    const submittedRevision = draftRevision.current;
+    const submittedAttachments = new Set(
+      attachments.map((file) => file.artifact_id),
+    );
     if (await onSubmit(submitted.request)) {
-      setDraft("");
-      setAttachments([]);
+      if (draftRevision.current === submittedRevision) updateDraft("");
+      setAttachments((current) =>
+        current.filter((file) => !submittedAttachments.has(file.artifact_id)),
+      );
       if (attempt.current === submitted) attempt.current = null;
       setFailedAttempt(null);
       input.current?.focus();
@@ -306,7 +324,7 @@ export function RunComposer({
   return (
     <ConversationComposer
       value={draft}
-      onChange={setDraft}
+      onChange={updateDraft}
       textareaRef={input}
       className={
         planContinuation ? "run-composer is-plan-continuation" : "run-composer"

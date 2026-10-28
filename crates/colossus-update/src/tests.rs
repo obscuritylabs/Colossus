@@ -164,7 +164,8 @@ fn make_owner_private(_path: &std::path::Path, _mode: u32) {}
 
 #[cfg(windows)]
 fn state_tempdir() -> tempfile::TempDir {
-    let profile = std::env::var_os("USERPROFILE")
+    let profile = std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .expect("absolute USERPROFILE");

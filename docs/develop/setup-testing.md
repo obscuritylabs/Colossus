@@ -50,6 +50,32 @@ Helm chart changes additionally require Helm 3.19.0 (or an explicit `HELM` execu
 and `cargo xtask check helm`. This gate lints, renders and packages without a cluster.
 The [chart README](https://github.com/obscuritylabs/Colossus/tree/main/deploy/control-plane/chart)
 owns supported deployment options.
+For a Docker-backed Windows installation with isolated client state and cleanup,
+follow [Test Helm locally on Windows](local-helm.md).
+
+### Keep test artifacts together
+
+Put ad hoc deployment files, screenshots, logs, and test profiles under the primary
+checkout's ignored `.local/tests/<task>/` directory, including when using a linked
+worktree. Record the exact resources and paths your task owns. On Windows, select
+that task's temporary directory with process-scoped `TEMP` and `TMP` before starting
+tests; do not change the user's permanent environment or create test folders directly
+under their profile. Keep private state outside the test tool workspace and protect
+credentials with an owner-private ACL. Preserve failed-run evidence until inspected.
+Native Windows fixtures also accept `COLOSSUS_NATIVE_TEST_ROOT`. Select an existing
+absolute private directory whose entire ancestor namespace prevents replacement by
+other users. A private leaf ACL inside a shared drive or checkout may still fail
+native custody checks. In that case, use one protected test parent such as
+`%USERPROFILE%/.colossus-tests/<task>/`, and keep its exact ownership receipt and
+cleanup entry point in the checkout's task directory. The native checks still apply;
+without an override, fixtures retain their protected user-profile default. Tests of
+the production profile allocator itself still exercise that allocator and clean up
+their exact allocation.
+
+Cleanup must use the recorded ownership and resolved path boundary. Never delete
+profile directories by a broad name prefix: a browser profile or restoration backup
+may hold real user state. The local Helm harness provides a checked `-WhatIf` path
+for its own cluster and files; it does not clean unrelated tests.
 
 ## Optional mise bootstrap
 

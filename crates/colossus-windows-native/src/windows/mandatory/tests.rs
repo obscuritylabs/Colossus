@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn retained_private_allocation_accepts_low_label_without_general_sacl_privilege() {
-    let profile = std::env::var_os("USERPROFILE").expect("native user profile");
+    let profile = crate::tests::native_test_root();
     let temporary = tempfile::tempdir_in(profile).expect("fresh private fixture parent");
     let parent = temporary.path().join("owned");
     crate::create_private_directory(&parent).expect("protected parent");

@@ -2,8 +2,17 @@ use super::*;
 
 fn isolated() -> (DictationSettings, PathBuf) {
     #[cfg(windows)]
-    let temporary =
-        std::fs::canonicalize(std::env::var_os("USERPROFILE").expect("test user profile")).unwrap();
+    let temporary = std::fs::canonicalize({
+        let parent = std::path::PathBuf::from(
+            std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .expect("native test parent"),
+        );
+        assert!(parent.is_absolute(), "native test root must be absolute");
+        assert!(parent.is_dir(), "native test root must already exist");
+        parent
+    })
+    .unwrap();
     #[cfg(not(windows))]
     let temporary = std::fs::canonicalize(std::env::temp_dir()).unwrap();
     let path = temporary.join(format!(

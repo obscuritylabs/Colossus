@@ -38,7 +38,7 @@ pub(super) const TLS_SEED_ACCOUNT: &str = "tls-seed-v1";
 pub(super) const INSTANCE_SEED_ACCOUNT: &str = "instance-identity-seed-v1";
 const INSTANCE_ID_DOMAIN: &[u8] = b"colossus-public-api-instance-id-v1\0";
 
-const KNOWN_SCOPES: [&str; 7] = [
+const KNOWN_SCOPES: [&str; 8] = [
     scopes::RUNS_EXECUTE,
     scopes::RUNS_READ,
     scopes::RUNS_CONTROL,
@@ -46,6 +46,7 @@ const KNOWN_SCOPES: [&str; 7] = [
     scopes::APPROVALS_RESPOND,
     scopes::AGENT_MESSAGES_READ,
     scopes::AGENT_MESSAGES_SEND,
+    colossus_api::HUMAN_TERMINAL_SCOPE,
 ];
 const UNSUPPORTED_PUBLIC_TOOLS: [&str; 1] = ["agent.delegate"];
 
@@ -2193,6 +2194,119 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn explicit_human_terminal_scope_is_enrolled_and_persisted() {
+        use colossus_grpc::{CredentialRepository as _, JournalCredentialRepository};
+        use colossus_policy::DenyApproval;
+        use colossus_runtime::{Runtime, RuntimeConfig, RuntimeOpenOptions};
+
+        let directory = tempfile::tempdir().expect("private fixture");
+        let config = RuntimeConfig::offline_template(directory.path().join("runtime.redb"));
+        let server = WorkerServer::open_at_workspace(
+            &config,
+            Arc::new(DenyApproval),
+            RuntimeOpenOptions::for_workspace(directory.path()).expect("workspace"),
+        )
+        .expect("offline worker");
+        let store = MemoryStore::default();
+        let environment = PublicApiEnvironment::open(&directory.path().join("api"), &store)
+            .expect("public API authority");
+        let roles = ["primary".into()];
+        let reader = enroll_application(
+            &environment,
+            &server,
+            &store,
+            EnrollmentRequest {
+                application_id: "app:terminal-reader",
+                scopes: &[scopes::RUNS_READ.into()],
+                roles: &roles,
+                tools: &[],
+                destination_service: "com.example.terminal-test",
+                destination_account: "reader",
+                replace_destination: false,
+                retirement_source: None,
+            },
+        )
+        .expect("ordinary read grant");
+        assert_eq!(reader.scopes, [scopes::RUNS_READ]);
+        let destinations = store.values.lock().expect("destinations").len();
+        for unknown in [
+            "runs:*",
+            "terminals:*",
+            "terminals:unknown",
+            "unknown:scope",
+        ] {
+            assert_eq!(
+                enroll_application(
+                    &environment,
+                    &server,
+                    &store,
+                    EnrollmentRequest {
+                        application_id: "app:terminal-invalid",
+                        scopes: &[unknown.into()],
+                        roles: &roles,
+                        tools: &[],
+                        destination_service: "com.example.terminal-test",
+                        destination_account: "invalid",
+                        replace_destination: false,
+                        retirement_source: None,
+                    },
+                )
+                .expect_err("unknown and wildcard scopes remain closed"),
+                PublicApiAdminError::InvalidScope
+            );
+        }
+        assert_eq!(
+            store.values.lock().expect("destinations").len(),
+            destinations
+        );
+        let terminal = enroll_application(
+            &environment,
+            &server,
+            &store,
+            EnrollmentRequest {
+                application_id: "app:terminal-explicit",
+                scopes: &[
+                    scopes::RUNS_READ.into(),
+                    colossus_api::HUMAN_TERMINAL_SCOPE.into(),
+                ],
+                roles: &roles,
+                tools: &[],
+                destination_service: "com.example.terminal-test",
+                destination_account: "terminal",
+                replace_destination: false,
+                retirement_source: None,
+            },
+        )
+        .expect("explicit human-terminal enrollment");
+        assert_eq!(
+            terminal.scopes,
+            [scopes::RUNS_READ, colossus_api::HUMAN_TERMINAL_SCOPE]
+        );
+        drop(server);
+        let reopened = Runtime::open_with_options(
+            &config,
+            Arc::new(DenyApproval),
+            None,
+            RuntimeOpenOptions::for_workspace(directory.path()).expect("workspace"),
+        )
+        .expect("reopen authoritative journal");
+        let repository = JournalCredentialRepository::new(reopened.journal());
+        for enrolled in [&reader, &terminal] {
+            let record = repository
+                .get(&enrolled.credential_id)
+                .expect("read durable grant")
+                .expect("persisted credential");
+            assert!(record.is_active());
+            assert_eq!(record.application_id(), enrolled.application_id);
+            let record = serde_json::to_value(record).expect("grant metadata");
+            assert_eq!(record["scopes"], serde_json::json!(enrolled.scopes));
+            assert_eq!(record["allowed_roles"], serde_json::json!(["primary"]));
+            assert_eq!(record["allowed_tools"], serde_json::json!([]));
+        }
+    }
+
     #[test]
     fn exact_known_scope_and_keyring_identifier_validation_is_closed() {
         assert!(
@@ -2202,6 +2316,7 @@ mod tests {
             ])
             .is_ok()
         );
+        assert!(normalize_scopes(&[colossus_api::HUMAN_TERMINAL_SCOPE.into()]).is_ok());
         assert!(KNOWN_SCOPES.contains(&scopes::RUNS_EXECUTE));
         assert!(validate_keyring_identifier("com.example.app").is_ok());
         assert!(validate_keyring_identifier("bad value").is_err());

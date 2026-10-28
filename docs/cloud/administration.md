@@ -8,22 +8,9 @@ icon: lucide/users
 
 # Projects and access
 
-Use **Control Plane Admin** to manage users and projects. A global administrator can
-manage the service and shared project resources; personal hosted conversations and
-execution remain private to their owners.
-
-The application sidebar has two administration entry points: **Project Admin** for the
-selected project's settings and **Control Plane Admin** for instance administrators.
-Each opens a secondary section list. Collapse either sidebar independently; on narrow
-screens, **Toggle administration navigation** opens the section list without covering
-the page permanently. Entries follow the signed-in account's current permissions.
-
-Create and edit forms have their own addresses. Copy the browser address to share a
-provider, model, MCP, Search, variable, secret, user, or announcement form with another
-authorized person. Opening a link or refreshing loads the saved resource in its exact
-scope. Unsaved changes require a discard decision before leaving; drafts and secret
-values are never included in the address. Failed saves retain the proposal, and conflicts
-require reviewing the current settings before another write.
+Use **Control Plane Admin** for instance users, projects, and shared resources.
+Use **Project Admin** for the selected project's settings. Personal hosted conversations
+and execution remain private to their owners, including from global administrators.
 
 ## Create a project and grant access
 
@@ -35,8 +22,13 @@ require reviewing the current settings before another write.
 | --- | --- |
 | Viewer | Read |
 | Operator | Read, execute, and control |
+| Terminal operator | Read, execute, control, and open human shells on enabled hosts |
 | Approver | Read, control, and answer effect approvals |
 | Project administrator | Read, execute, control, and administer the project |
+
+Terminal access requires the Terminal operator role and
+[local host enablement](connect-runtimes.md#enable-a-web-shell). Operator, Approver,
+Project administrator, and global administrator access do not imply Terminal permission.
 
 Membership is explicit for every project, including child projects. Parent access
 does not grant child access. Archived projects retain history and administration
@@ -46,6 +38,20 @@ Project permissions intersect the connected runtime's local grant. For example,
 Approver access cannot authorize a tool the runtime has not exposed. A personal
 hosted owner with Execute and Control can answer their own exact one-use approval;
 shared execution retains the separate project Approve requirement.
+
+## Navigate administration
+
+Each administration entry point opens a section list with the options your account can
+access. Collapse either sidebar independently. On narrow screens, use **Toggle
+administration navigation** to open the section list.
+
+Create and edit forms have separate addresses. Copy the browser address to share a
+provider, model, MCP, Search, variable, secret, user, or announcement form with another
+authorized person. A link or refresh loads the saved resource in its exact scope.
+Addresses never contain drafts or secret values.
+
+When leaving a form with unsaved changes, choose whether to discard them. Failed saves
+keep the proposal. After a conflict, review the current settings before writing again.
 
 ## Review a user
 
@@ -95,17 +101,24 @@ before inviting users: its primary route should point to the intended inherited
 or project model. Users then supply their private credentials, or use a shared
 credential already assigned by an administrator.
 
-Connection definitions do not grant access to credentials. Choose personal authentication
-when each user supplies their own key, shared authentication when an administrator will
-attach a shared key, or no authentication for an anonymous service. Users manage their
-private keys in **Settings → Personal → Credentials** and account connections in
-**Connected accounts**. Project administrators manage project keys in
-**Project Admin → Secrets**. A global administrator can save an instance key
-in **Control Plane Admin → Secrets**, choose a project, and explicitly assign it to
-an eligible shared connection. That assignment takes precedence over project keys;
-project administrators cannot replace it. Rotation or removal of an instance key affects
-all of its assignments, even when the page shows only the selected project's connections.
-Saved secrets are encrypted and never returned to the browser.
+### Assign credentials
+
+Choose the connection's authentication mode:
+
+- **Personal:** each user supplies a private key in **Settings → Personal → Credentials**
+  or connects an account through **Connected accounts**.
+- **Shared:** an administrator assigns a key to the connection. Project keys are managed
+  in **Project Admin → Secrets**.
+- **None:** the service accepts anonymous requests.
+
+For an instance key, open **Control Plane Admin → Secrets**, save the key, choose a
+project, and assign it to an eligible shared connection. An instance assignment takes
+precedence over project keys and cannot be replaced by a project administrator.
+Rotating or removing that key affects every assignment, even if the page shows only
+one project's connections. Saved secrets are encrypted and never returned to the browser.
+Creating a connection definition alone does not grant access to a credential.
+
+### Set variables and Search routes
 
 **Variables** stores nonsecret configuration values at instance, project, or personal
 scope. Projects inherit instance values and can override or reset them. Personal values

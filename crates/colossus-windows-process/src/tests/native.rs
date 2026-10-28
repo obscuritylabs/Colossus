@@ -1,5 +1,6 @@
 //! Real networkless AppContainer/Job conformance; no WFP or loopback exemption.
 use super::*;
+
 use colossus_windows_native::{ExclusiveAppContainerProfile, system_windows_directory};
 use std::io::Read as _;
 use std::io::Write as _;
@@ -8,6 +9,16 @@ use tokio::io::{AsyncBufReadExt as _, BufReader};
 
 const PARENT_CRASH_SID: &str = "COLOSSUS_WINDOWS_JOB_FIXTURE_SID";
 const PARENT_CRASH_HOME: &str = "COLOSSUS_WINDOWS_JOB_FIXTURE_HOME";
+
+fn native_test_root() -> std::path::PathBuf {
+    let parent = std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .expect("absolute native test parent");
+    assert!(parent.is_dir(), "native test root must already exist");
+    parent
+}
 
 fn networkless_request(sid: String, home: PathBuf, payload: &str) -> SpawnRequest {
     let system = system_windows_directory().unwrap();
@@ -69,7 +80,7 @@ async fn kernel_job_kills_the_retained_appcontainer_child_after_parent_process_c
         .as_nanos();
     let mut profile =
         ExclusiveAppContainerProfile::create(&format!("colossus.browser.{nonce:032x}")).unwrap();
-    let temporary = tempfile::tempdir_in(std::env::var_os("USERPROFILE").unwrap()).unwrap();
+    let temporary = tempfile::tempdir_in(native_test_root()).unwrap();
     let mut parent = Command::new(std::env::current_exe().unwrap())
         .args([
             "--ignored",
@@ -149,7 +160,7 @@ async fn appcontainer_job_retains_and_terminates_descendants_after_the_direct_ch
     let mut profile =
         ExclusiveAppContainerProfile::create(&format!("colossus.browser.{nonce:032x}"))
             .expect("exclusive fixture package");
-    let user_profile = std::env::var_os("USERPROFILE").unwrap();
+    let user_profile = native_test_root();
     let temporary = tempfile::tempdir_in(user_profile).unwrap();
     let home = temporary.path().to_string_lossy().into_owned();
     let admitted_path = temporary.path().join("owned-profile");

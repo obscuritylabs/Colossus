@@ -12,13 +12,21 @@ const BOOTSTRAP_PARENT_FIXTURE_ENVIRONMENT: &str =
     "COLOSSUS_WINDOWS_NATIVE_BOOTSTRAP_PARENT_FIXTURE_V1";
 
 #[cfg(windows)]
+pub(crate) fn native_test_root() -> std::path::PathBuf {
+    let parent = std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .expect("absolute native test parent");
+    assert!(parent.is_dir(), "native test root must already exist");
+    parent
+}
+
+#[cfg(windows)]
 fn user_profile_tempdir(prefix: &str) -> tempfile::TempDir {
     // Packaged hosts may redirect new LocalAppData children into a different
     // canonical hierarchy. Protected native fixtures need trusted, stable ancestry.
-    let user_profile = std::env::var_os("USERPROFILE")
-        .map(std::path::PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .expect("absolute Windows user profile");
+    let user_profile = native_test_root();
     tempfile::Builder::new()
         .prefix(prefix)
         .tempdir_in(user_profile)
@@ -557,7 +565,7 @@ fn immutable_component_binding_blocks_byte_and_namespace_replacement_until_relea
 #[cfg(windows)]
 #[test]
 fn immutable_component_directory_accepts_protected_ancestry_on_an_ordinary_windows_volume() {
-    let user_profile = std::env::var_os("USERPROFILE").expect("native user profile");
+    let user_profile = native_test_root();
     let temporary = tempfile::tempdir_in(user_profile).expect("fresh native fixture parent");
     let component = temporary.path().join("component");
     crate::create_private_directory(&component).expect("private component");

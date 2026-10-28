@@ -6,10 +6,19 @@ pub(super) fn directory() -> tempfile::TempDir {
     // Protected native state requires an owner-controlled ancestor namespace.
     // Windows' shared temporary directory does not establish that authority.
     #[cfg(windows)]
-    let directory = tempfile::Builder::new()
-        .prefix("colossus-cloud-transport-")
-        .tempdir_in(std::env::var_os("USERPROFILE").expect("test user profile"))
-        .unwrap();
+    let directory = {
+        let parent = std::path::PathBuf::from(
+            std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
+                .unwrap_or_else(|| std::env::var_os("USERPROFILE").expect("test user profile")),
+        );
+        assert!(parent.is_absolute(), "native test root must be absolute");
+        // The caller provisions a private ancestor; ColossusHome below still
+        // verifies native custody instead of trusting this environment variable.
+        tempfile::Builder::new()
+            .prefix("colossus-cloud-transport-")
+            .tempdir_in(parent)
+            .unwrap()
+    };
     #[cfg(not(windows))]
     let directory = tempfile::tempdir().unwrap();
     directory

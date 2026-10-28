@@ -169,6 +169,7 @@ nav = [
     { "Contributing" = "develop/contributing.md" },
     { "Front-end development" = "develop/frontend.md" },
     { "Source setup and test tiers" = "develop/setup-testing.md" },
+    { "Test Helm locally on Windows" = "develop/local-helm.md" },
     { "Tiered CI/CD" = "develop/ci-cd.md" },
     { "Toolchain inventory" = "develop/toolchain-inventory.md" },
     { "Core release operations" = "develop/releasing.md" },

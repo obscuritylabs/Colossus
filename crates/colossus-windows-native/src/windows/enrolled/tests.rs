@@ -3,7 +3,7 @@ use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 
 #[test]
 fn mutable_directory_reopen_coexists_with_the_retained_delete_allocation() {
-    let profile = std::env::var_os("USERPROFILE").expect("native user profile");
+    let profile = crate::tests::native_test_root();
     let temporary = tempfile::tempdir_in(profile).expect("fresh private fixture parent");
     let parent = temporary.path().join("owned");
     crate::create_private_directory(&parent).expect("protected parent");

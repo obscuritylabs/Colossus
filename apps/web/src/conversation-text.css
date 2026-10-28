@@ -1,0 +1,54 @@
+.conversation-find {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
+  min-width: 0;
+}
+.conversation-find > label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text);
+  font-size: var(--font-size-body-sm);
+}
+.conversation-find-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.conversation-find-controls input {
+  flex: 1 1 12rem;
+  min-width: 0;
+  width: 100%;
+}
+.conversation-find-count {
+  flex: 1 1 8rem;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  overflow-wrap: anywhere;
+}
+.conversation-find-controls > button {
+  flex: none;
+  width: var(--control-height-touch);
+  min-height: var(--control-height-touch);
+  padding: 0;
+}
+.conversation-find > p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+  overflow-wrap: anywhere;
+}
+.thread-conversation .conversation-find-active {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+  scroll-margin-block: 12px;
+}
+@container chat-main (max-width: 560px) {
+  .conversation-find-controls input {
+    flex-basis: 100%;
+  }
+}

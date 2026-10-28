@@ -16,9 +16,16 @@ pub(super) struct Fixture {
 impl Fixture {
     pub fn new() -> Self {
         #[cfg(windows)]
-        let parent = std::path::PathBuf::from(
-            std::env::var_os("USERPROFILE").expect("Windows user profile"),
-        );
+        let parent = {
+            let parent = std::path::PathBuf::from(
+                std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
+                    .or_else(|| std::env::var_os("USERPROFILE"))
+                    .expect("native test parent"),
+            );
+            assert!(parent.is_absolute(), "native test root must be absolute");
+            assert!(parent.is_dir(), "native test root must already exist");
+            parent
+        };
         #[cfg(not(windows))]
         let parent =
             std::fs::canonicalize(std::env::temp_dir()).expect("canonical temporary parent");
