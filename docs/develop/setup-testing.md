@@ -62,6 +62,10 @@ that task's temporary directory with process-scoped `TEMP` and `TMP` before star
 tests; do not change the user's permanent environment or create test folders directly
 under their profile. Keep private state outside the test tool workspace and protect
 credentials with an owner-private ACL. Preserve failed-run evidence until inspected.
+Native Windows cloud-transport acceptance also accepts `COLOSSUS_NATIVE_TEST_ROOT`:
+set it to an existing absolute directory with an owner-private ACL inside the task's
+artifact root. The native home checks still apply. Without this override, those
+fixtures use the protected user-profile ancestor rather than shared Windows TEMP.
 
 Cleanup must use the recorded ownership and resolved path boundary. Never delete
 profile directories by a broad name prefix: a browser profile or restoration backup
