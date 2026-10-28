@@ -91,8 +91,10 @@ include breaking changes while the public API is still settling.
 - **release:** prepare 0.11.11-preview.3 ([0ae21c0](https://github.com/obscuritylabs/Colossus/commit/0ae21c0ebb8e3b9c9a854da6f504360beb8273e0))
 - **release:** prepare v0.11.11-preview.4 notes ([8e8df64](https://github.com/obscuritylabs/Colossus/commit/8e8df64aa6f1b3492795e91666a8e3cfa2314718))
 - **cloud:** support private native acceptance roots ([1c79663](https://github.com/obscuritylabs/Colossus/commit/1c79663f49396ddffec4479648a56159b165ed25))
+- **release:** refresh preview.4 history ([1e4d9d8](https://github.com/obscuritylabs/Colossus/commit/1e4d9d84027dd5ff8e3cb7590beb29dc46a0143d))
+- **windows:** group native fixtures under one private root ([32dcf2e](https://github.com/obscuritylabs/Colossus/commit/32dcf2ed8ff69bfb1a60df510af25971f667c46e))
 
-**Source:** [1c79663](https://github.com/obscuritylabs/Colossus/commit/1c79663f49396ddffec4479648a56159b165ed25)
+**Source:** [32dcf2e](https://github.com/obscuritylabs/Colossus/commit/32dcf2ed8ff69bfb1a60df510af25971f667c46e)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.4](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.4)
 
