@@ -89,13 +89,17 @@ async fn https(host: &str) -> Https {
         .self_signed(&key)
         .unwrap();
     let pem = cert.pem();
-    let mut tls = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![cert.der().clone()],
-            rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
-        )
-        .unwrap();
+    let mut tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![cert.der().clone()],
+        rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
+    )
+    .unwrap();
     tls.alpn_protocols = vec![b"http/1.1".to_vec()];
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -251,6 +255,8 @@ async fn http_localhost_ignores_external_resolution_and_proxy_but_preserves_tls_
 }
 
 async fn grpc(host: &str) -> (u16, String, Task) {
+    // Tonic's test server uses the process default even when both providers are linked.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let (pem, key) = certificate(host);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

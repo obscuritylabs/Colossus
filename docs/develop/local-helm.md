@@ -70,7 +70,6 @@ The web administration pages are available immediately. Use **Local Colossus** t
 test Hosted chat and managed files. Hosted execution and an enrolled Fleet worker
 are separate targets; starting this cluster does not enroll a personal runtime.
 
-The advertised connector endpoint is `https://runtimes.colossus.localhost:8443`.
 The native connector resolves the reserved `localhost` domain and its subdomains
 to loopback, including on Windows. Select the generated `browser-cert.pem` beside
 the printed private `admin-login.txt` for local CLI enrollment:

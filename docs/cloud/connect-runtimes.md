@@ -8,7 +8,7 @@ icon: lucide/plug
 
 # Connect runtimes
 
-Connect an existing Desktop workspace or CLI runtime to a Cloud project. The runtime
+Connect Desktop or a configured CLI workspace to a Cloud project. The runtime
 opens an outbound connection, so its machine needs no inbound public port. It keeps
 its own tools, credentials, policy, and sandbox.
 
@@ -181,7 +181,7 @@ automatically; `control-plane renew` also requests renewal. The standalone
 
 ## Enable a web shell
 
-Remote human shells require an explicitly enabled CLI daemon. Desktop's local
+Remote human shells require an explicitly enabled CLI runtime. Desktop's local
 Terminal setting does not enable remote access.
 
 Before enabling shells, complete the Control Plane rollout on every replica. Older

@@ -64,13 +64,17 @@ impl Server {
             .self_signed(&key)
             .unwrap();
         let pem = cert.pem();
-        let tls = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(
-                vec![cert.der().clone()],
-                rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
-            )
-            .unwrap();
+        let tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert.der().clone()],
+            rustls::pki_types::PrivatePkcs8KeyDer::from(key.serialize_der()).into(),
+        )
+        .unwrap();
         let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!(
