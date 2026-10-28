@@ -155,7 +155,9 @@ async fn proxy() -> (u16, Arc<AtomicUsize>, Task) {
         loop {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut bytes = [0; 8192];
-            stream.read(&mut bytes).await.unwrap();
+            if stream.read(&mut bytes).await.unwrap() == 0 {
+                continue;
+            }
             observed.fetch_add(1, Ordering::SeqCst);
             stream
                 .write_all(
