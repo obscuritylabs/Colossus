@@ -13,6 +13,7 @@ pub struct WorkerServer {
     replay: Arc<Mutex<ReplayGuard>>,
     maintenance: Arc<tokio::sync::Mutex<()>>,
     observability_diagnostics: Option<Arc<dyn Fn() -> Value + Send + Sync>>,
+    managed_configuration_identity: Option<String>,
     public_interactions: Arc<colossus_api_runtime::PublicInteractionRouter>,
     public_api: Option<public_api::PreparedPublicApi>,
     browser_owner: Option<Arc<colossus_runtime::browser_package::InstalledBrowserOwner>>,
@@ -20,6 +21,29 @@ pub struct WorkerServer {
 }
 
 impl WorkerServer {
+    /// Bind a trusted managed host's configuration digest to authenticated Ping metadata.
+    /// Ordinary workers omit this marker and cannot be adopted as managed CLI hosts.
+    pub fn with_managed_configuration_identity(
+        mut self,
+        identity: String,
+    ) -> Result<Self, WorkerError> {
+        if identity.len() != 64
+            || !identity
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(WorkerError::Protocol(
+                "invalid managed configuration identity".into(),
+            ));
+        }
+        self.managed_configuration_identity = Some(identity);
+        Ok(self)
+    }
+    /// Tool IDs in the resolved runtime ceiling, for a separately enrolled application grant.
+    pub fn active_tool_names(&self) -> Vec<String> {
+        self.runtime.access_resolution().active_tool_names()
+    }
+
     /// Open the runtime (and therefore acquire the writer lease) before binding IPC.
     pub fn open(
         config: &RuntimeConfig,
@@ -67,6 +91,7 @@ impl WorkerServer {
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
             observability_diagnostics: None,
+            managed_configuration_identity: None,
             public_interactions: interactions,
             public_api: None,
             browser_owner: None,
@@ -201,6 +226,7 @@ impl WorkerServer {
             replay: Arc::new(Mutex::new(ReplayGuard::default())),
             maintenance: Arc::new(tokio::sync::Mutex::new(())),
             observability_diagnostics: None,
+            managed_configuration_identity: None,
             public_interactions: interactions,
             public_api: None,
             browser_owner: None,
@@ -382,6 +408,7 @@ impl WorkerServer {
         let replay = Arc::clone(&self.replay);
         let maintenance = Arc::clone(&self.maintenance);
         let observability_diagnostics = self.observability_diagnostics.clone();
+        let managed_configuration_identity = self.managed_configuration_identity.clone();
         let approval_mode = self.approval_mode.clone();
         let key = self.authentication_key.clone();
         let mut drain_interval = tokio::time::interval(Duration::from_secs(1));
@@ -482,6 +509,7 @@ impl WorkerServer {
                     let replay = Arc::clone(&replay);
                     let maintenance = Arc::clone(&maintenance);
                     let observability_diagnostics = observability_diagnostics.clone();
+                    let managed_configuration_identity = managed_configuration_identity.clone();
                     let approval_mode = approval_mode.clone();
                     let drain_requests = drain_request_tx.clone();
                     let shutdown = shutdown_tx.clone();
@@ -494,6 +522,7 @@ impl WorkerServer {
                                 replay: replay.as_ref(),
                                 maintenance: maintenance.as_ref(),
                                 observability_diagnostics,
+                                managed_configuration_identity,
                                 approval_mode,
                                 drain_requests: &drain_requests,
                             },
@@ -978,6 +1007,7 @@ struct WorkerConnectionContext<'a> {
     replay: &'a Mutex<ReplayGuard>,
     maintenance: &'a tokio::sync::Mutex<()>,
     observability_diagnostics: Option<Arc<dyn Fn() -> Value + Send + Sync>>,
+    managed_configuration_identity: Option<String>,
     approval_mode: WorkerApprovalModeState,
     drain_requests: &'a tokio::sync::mpsc::Sender<()>,
 }
@@ -995,6 +1025,7 @@ where
         replay,
         maintenance,
         observability_diagnostics,
+        managed_configuration_identity,
         approval_mode,
         drain_requests,
     } = context;
@@ -1177,7 +1208,8 @@ where
         }
         operation => {
             let shutdown = matches!(operation, WorkerOperation::Shutdown);
-            let result = dispatch(
+            let ping = matches!(operation, WorkerOperation::Ping);
+            let mut result = dispatch(
                 &runtime,
                 operation,
                 maintenance,
@@ -1185,6 +1217,11 @@ where
                 observability_diagnostics.as_ref(),
             )
             .await;
+            if ping
+                && let (Ok(value), Some(identity)) = (&mut result, managed_configuration_identity)
+            {
+                value["managed_configuration_identity"] = Value::String(identity);
+            }
             let succeeded = result.is_ok();
             if succeeded && requests_drain {
                 // Durable work is committed at this point. Request its drain before

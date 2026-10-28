@@ -76,10 +76,11 @@ impl EnrollmentStore {
             .map_err(|_| "invalid connector identity")?
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(15));
-        let channel = tokio::time::timeout(Duration::from_secs(10), endpoint.connect())
-            .await
-            .map_err(|_| "certificate renewal channel startup timeout")?
-            .map_err(|_| "certificate renewal transport unavailable")?;
+        let channel =
+            tokio::time::timeout(Duration::from_secs(10), crate::localhost::connect(endpoint))
+                .await
+                .map_err(|_| "certificate renewal channel startup timeout")?
+                .map_err(|_| "certificate renewal transport unavailable")?;
         let certificate = RuntimeConnectionClient::new(channel)
             .max_decoding_message_size(65536)
             .max_encoding_message_size(65536)

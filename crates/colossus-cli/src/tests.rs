@@ -10,6 +10,9 @@ mod development_credentials;
 #[path = "worker_codex_auth_tests.rs"]
 mod worker_codex_auth;
 
+#[path = "cloud_command_tests.rs"]
+mod cloud_commands;
+
 struct PrivateTempDir {
     #[cfg(windows)]
     path: PathBuf,

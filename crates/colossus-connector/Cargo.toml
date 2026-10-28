@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 clap.workspace = true
+crossterm.workspace = true
 colossus-cloud-protocol.workspace = true
 colossus-cloud-executor.workspace = true
 colossus-credentials.workspace = true
@@ -17,6 +18,7 @@ colossus-ports.workspace = true
 colossus-sdk = { workspace = true, features = ["serialization", "keyring"] }
 async-trait.workspace = true
 futures.workspace = true
+hyper-util.workspace = true
 fs4.workspace = true
 hex.workspace = true
 rcgen.workspace = true
@@ -28,6 +30,7 @@ sysinfo.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tonic = { workspace = true, features = ["transport", "tls-ring"] }
+tower = { workspace = true, features = ["util"] }
 url.workspace = true
 uuid.workspace = true
 zeroize = { workspace = true, features = ["derive"] }
@@ -35,6 +38,8 @@ x509-parser.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
 
 [lints]
 workspace = true

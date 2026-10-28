@@ -47,19 +47,20 @@ the harness does not change Windows trust, browser profiles, or the hosts file.
 Configure your test browser's trust deliberately before signing in. Command-line
 smoke checks trust the exact generated certificate and resolve the hostname to loopback.
 
-Both browser and connector names must resolve locally before enrolling a native
-runtime. If Windows cannot resolve `.localhost` names, an administrator can configure:
+The advertised connector endpoint is `https://runtimes.colossus.localhost:8443`.
+The native connector resolves the reserved `localhost` domain and its subdomains
+to loopback, including on Windows. Select the generated `browser-cert.pem` beside
+the printed private `admin-login.txt` for local CLI enrollment:
 
-```text
-127.0.0.1 colossus.localhost runtimes.colossus.localhost
+```powershell
+colossus cloud enroll https://colossus.localhost:8443/api/enroll `
+  --enrollment-ca-file C:/secure/browser-cert.pem
 ```
 
-The advertised connector endpoint is `https://runtimes.colossus.localhost:8443`.
-Normal native CLI HTTPS enrollment requires a browser certificate that chains to the
-client's bundled public CA roots. Browser certificate exceptions and Windows trust-store
-imports do not configure that client. The generated self-signed certificate is sufficient
-for the harness's explicit-CA probes; arrange a publicly trusted endpoint before normal
-native enrollment.
+Use the actual certificate path from your deployment; it is the public trust anchor,
+not its private key. The CLI verifies the original hostname and certificate. The
+connector's subsequent mTLS connection uses the independently enrolled connector CA.
+Browser certificate exceptions and Windows trust-store imports do not select CLI trust.
 Follow [Connect runtimes](../cloud/connect-runtimes.md), then use the
 [web shell procedure](../cloud/work.md#open-a-shell-on-a-connected-host).
 Terminal access still requires the worker opt-in, connector grant, and project role.

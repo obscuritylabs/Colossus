@@ -1,5 +1,5 @@
 use crate::cli_control::{Control, Report};
-use crate::{ConnectorStatus, EnrollmentStore, RuntimeConnector};
+use crate::{ConnectorStatus, EnrollmentStore, EnrollmentTrust, RuntimeConnector};
 use clap::{Args, Subcommand};
 use colossus_credentials::{EnvironmentKeyStore, PlatformCredentialVault};
 use colossus_home::{ColossusHome, ConfinedRoot};
@@ -8,22 +8,17 @@ use colossus_sdk::{
     ApiMajor, Colossus, DaemonConnectOptions, InstanceId, KeyringCredentialProvider, TlsFingerprint,
 };
 use serde::Deserialize;
-use std::{
-    io::{BufRead, BufReader, Read, Write},
-    path::PathBuf,
-    str::FromStr,
-    sync::Arc,
-};
+use std::{io::Read, path::PathBuf, str::FromStr, sync::Arc};
 use zeroize::Zeroizing;
 
 /// Portable CLI and standalone connector lifecycle operations.
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum ConnectorCommand {
     /// Read metadata-only policy beneath the dedicated local application's authority.
     Policy(LocalArguments),
     /// Explicitly share the local application's workspace sessions with a dedicated cloud application.
     ShareWorkspace(ShareWorkspaceArguments),
-    /// Enroll one independently verified local daemon; invitation is read from stdin.
+    /// Enroll a runtime using a Cloud URL and a hidden invitation prompt.
     Enroll(EnrollArguments),
     /// Maintain its outbound connection until Ctrl-C; accepted runs survive disconnect.
     Run(LocalArguments),
@@ -39,7 +34,7 @@ pub enum ConnectorCommand {
     Forget(StorageArguments),
 }
 /// Local operator disclosure beneath its own authenticated application credential.
-#[derive(Args)]
+#[derive(Clone, Args)]
 pub struct ShareWorkspaceArguments {
     /// Exact independently enrolled cloud application ID, such as app:colossus-cloud.
     #[arg(long)]
@@ -55,7 +50,7 @@ pub struct ShareWorkspaceArguments {
     pub local: LocalArguments,
 }
 /// Secret-storage references shared by all connector commands.
-#[derive(Args)]
+#[derive(Clone, Args)]
 pub struct StorageArguments {
     /// Opaque local enrollment name, permitting multiple explicitly selected nodes.
     #[arg(long, default_value = "active")]
@@ -65,27 +60,60 @@ pub struct StorageArguments {
     pub vault_key_variable: Option<String>,
 }
 /// Independently enrolled local daemon connection references.
-#[derive(Args)]
+#[derive(Clone, Args)]
 pub struct LocalArguments {
-    /// Owner-private JSON containing exact descriptor, instance, pin, and dedicated keyring references.
+    /// Advanced: protected connection references for an independently enrolled external daemon.
     #[arg(long)]
-    pub local_config: PathBuf,
+    pub local_config: Option<PathBuf>,
+    /// Explicitly permit this managed connector to answer policy approvals.
+    #[arg(long, conflicts_with = "local_config")]
+    pub allow_approvals: bool,
+    /// Explicitly enable human shells in the managed worker and its connector grant.
+    #[arg(long, conflicts_with = "local_config")]
+    pub enable_human_terminals: bool,
     /// Native credential authority and enrollment identity.
     #[command(flatten)]
     pub storage: StorageArguments,
 }
 /// Single-use cloud enrollment references; no invitation is accepted through argv or environment.
-#[derive(Args)]
+#[derive(Clone, Args)]
 pub struct EnrollArguments {
     /// Exact HTTPS enrollment endpoint obtained from the authenticated web fleet view.
-    #[arg(long)]
-    pub enrollment_url: String,
+    #[arg(value_name = "URL", conflicts_with = "enrollment_url")]
+    pub url: Option<String>,
+    /// Advanced-compatible spelling of the enrollment URL.
+    #[arg(long, required_unless_present = "url")]
+    pub enrollment_url: Option<String>,
+    /// Explicit PEM trust anchor for private/local HTTPS; hostname verification stays enabled.
+    #[arg(long, value_name = "PEM")]
+    pub enrollment_ca_file: Option<PathBuf>,
     /// Explicitly permit HTTP enrollment on loopback for local acceptance only.
     #[arg(long)]
     pub allow_loopback_http: bool,
     /// Independently verified local daemon and native vault references.
     #[command(flatten)]
     pub local: LocalArguments,
+}
+
+impl ConnectorCommand {
+    /// Whether the full CLI must bind its ordinary workspace/configuration and own a worker.
+    pub fn requires_managed_runtime(&self) -> bool {
+        match self {
+            Self::Enroll(arguments) => arguments.local.local_config.is_none(),
+            Self::Run(arguments) | Self::Policy(arguments) => arguments.local_config.is_none(),
+            _ => false,
+        }
+    }
+}
+
+impl EnrollArguments {
+    /// Exactly one URL, independent of its positional or legacy flag spelling.
+    pub fn selected_url(&self) -> Result<&str, &'static str> {
+        match (&self.url, &self.enrollment_url) {
+            (Some(url), None) | (None, Some(url)) => Ok(url),
+            _ => Err("supply one enrollment URL"),
+        }
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -137,14 +165,15 @@ fn store(arguments: &StorageArguments) -> Result<EnrollmentStore, Box<dyn std::e
     Ok(EnrollmentStore::new(vault, &arguments.name)?)
 }
 async fn local(arguments: &LocalArguments) -> Result<Colossus, Box<dyn std::error::Error>> {
-    let parent = arguments
-        .local_config
+    let local_config = arguments.local_config.as_ref().ok_or(
+        "managed enrollment requires `colossus cloud`; standalone/external connections require --local-config",
+    )?;
+    let parent = local_config
         .parent()
         .ok_or("local config must be an absolute protected file")?;
     let root = ConfinedRoot::bind(parent)?;
     let file = root.open_existing_file(
-        arguments
-            .local_config
+        local_config
             .file_name()
             .ok_or("invalid local config")?
             .as_ref(),
@@ -203,6 +232,78 @@ async fn local(arguments: &LocalArguments) -> Result<Colossus, Box<dyn std::erro
 /// Execute the shared `colossus control-plane` / `colossus-connector` command surface.
 /// Credentials and tokens never appear in status output or process arguments.
 pub async fn run_cli(command: ConnectorCommand) -> Result<(), Box<dyn std::error::Error>> {
+    run_cli_with_invitation(command, None).await
+}
+
+/// Native-only, one-use invitation input and the exact trust selection reviewed with it.
+/// This value must never be logged, serialized, or sent through a renderer/argument channel.
+pub struct PreparedEnrollment {
+    url: String,
+    name: String,
+    vault_key_variable: Option<String>,
+    ca_file: Option<PathBuf>,
+    trust: EnrollmentTrust,
+    token: Zeroizing<String>,
+}
+
+/// Read invitation input before a managed host starts serving accepted work.
+/// Retained exchanges reuse their encrypted invitation instead of prompting again.
+pub fn prepare_enrollment_invitation(
+    arguments: &EnrollArguments,
+) -> Result<PreparedEnrollment, Box<dyn std::error::Error>> {
+    let endpoint = enrollment_endpoint(arguments)?;
+    let trust = enrollment_trust(arguments.enrollment_ca_file.as_deref())?;
+    eprintln!("Cloud origin: {}", endpoint.origin().ascii_serialization());
+    let enrollment = store(&arguments.local.storage)?;
+    let token = if enrollment.has_saved_exchange()? {
+        eprintln!("Using this name's retained enrollment exchange; no new invitation is consumed.");
+        Zeroizing::new(String::new())
+    } else {
+        crate::cli_prompt::read_invitation()?
+    };
+    Ok(PreparedEnrollment {
+        url: arguments.selected_url()?.to_owned(),
+        name: arguments.local.storage.name.clone(),
+        vault_key_variable: arguments.local.storage.vault_key_variable.clone(),
+        ca_file: arguments.enrollment_ca_file.clone(),
+        trust,
+        token,
+    })
+}
+
+fn enrollment_endpoint(arguments: &EnrollArguments) -> Result<url::Url, &'static str> {
+    let endpoint =
+        url::Url::parse(arguments.selected_url()?).map_err(|_| "invalid enrollment URL")?;
+    if !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+        || endpoint.host_str().is_none()
+        || !(endpoint.scheme() == "https"
+            || (arguments.allow_loopback_http
+                && endpoint.scheme() == "http"
+                && matches!(
+                    endpoint.host_str(),
+                    Some("localhost" | "127.0.0.1" | "[::1]")
+                )))
+    {
+        return Err("enrollment requires HTTPS without URL credentials, query, or fragment");
+    }
+    Ok(endpoint)
+}
+
+/// Execute a native CLI operation with invitation input already collected in memory.
+/// Managed hosts use this to keep blocking terminal input outside their worker lifetime.
+pub async fn run_cli_with_invitation(
+    command: ConnectorCommand,
+    invitation: Option<PreparedEnrollment>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if command.requires_managed_runtime() {
+        return Err("use `colossus cloud` for a managed runtime; standalone connectors require --local-config".into());
+    }
+    if invitation.is_some() && !matches!(command, ConnectorCommand::Enroll(_)) {
+        return Err("prepared invitation requires an enrollment command".into());
+    }
     match command {
         ConnectorCommand::Policy(arguments) => {
             let client = local(&arguments).await?;
@@ -230,25 +331,31 @@ pub async fn run_cli(command: ConnectorCommand) -> Result<(), Box<dyn std::error
             println!("connector certificate renewed");
         }
         ConnectorCommand::Enroll(arguments) => {
+            let enrollment_url = arguments.selected_url()?.to_owned();
+            let prepared = match invitation {
+                Some(prepared) => prepared,
+                None => prepare_enrollment_invitation(&arguments)?,
+            };
+            if prepared.url != enrollment_url
+                || prepared.name != arguments.local.storage.name
+                || prepared.vault_key_variable != arguments.local.storage.vault_key_variable
+                || prepared.ca_file != arguments.enrollment_ca_file
+            {
+                return Err("prepared invitation belongs to another enrollment selection".into());
+            }
             let client = local(&arguments.local).await?;
-            eprint!("One-use Control Plane invitation: ");
-            std::io::stderr().flush()?;
-            let mut token = Zeroizing::new(String::new());
-            BufReader::new(std::io::stdin())
-                .take(66)
-                .read_line(&mut token)?;
-            let token = Zeroizing::new(token.trim().to_owned());
             let enrollment = store(&arguments.local.storage)?;
             let config = enrollment
-                .enroll(
-                    arguments.enrollment_url,
-                    token,
+                .enroll_with_trust(
+                    enrollment_url,
+                    prepared.token,
                     client
                         .instance_id()
                         .ok_or("local instance unavailable")?
                         .to_string(),
                     client.capabilities().iter().map(str::to_owned).collect(),
                     arguments.allow_loopback_http,
+                    prepared.trust,
                 )
                 .await?;
             Control::new(&arguments.local.storage.name)?.save(&Report::saved(Some(&config)))?;
@@ -380,4 +487,48 @@ pub async fn run_cli(command: ConnectorCommand) -> Result<(), Box<dyn std::error
         }
     }
     Ok(())
+}
+
+fn enrollment_trust(
+    path: Option<&std::path::Path>,
+) -> Result<EnrollmentTrust, Box<dyn std::error::Error>> {
+    let Some(path) = path else {
+        return Ok(EnrollmentTrust::public_roots());
+    };
+    let file = std::fs::File::open(path).map_err(|_| "enrollment trust file unavailable")?;
+    let mut bytes = Vec::new();
+    file.take((EnrollmentTrust::MAX_PEM_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "enrollment trust file unavailable")?;
+    Ok(EnrollmentTrust::from_pem(&bytes)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn standalone_managed_enrollment_is_rejected_before_input_or_custody() {
+        let error = run_cli(ConnectorCommand::Enroll(EnrollArguments {
+            url: Some("https://cloud.example.test/api/enroll".into()),
+            enrollment_url: None,
+            enrollment_ca_file: Some("absent-private-ca.pem".into()),
+            allow_loopback_http: false,
+            local: LocalArguments {
+                local_config: None,
+                allow_approvals: false,
+                enable_human_terminals: false,
+                storage: StorageArguments {
+                    name: "fixture".into(),
+                    vault_key_variable: None,
+                },
+            },
+        }))
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "use `colossus cloud` for a managed runtime; standalone connectors require --local-config"
+        );
+    }
 }

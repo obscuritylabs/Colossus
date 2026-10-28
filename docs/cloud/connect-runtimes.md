@@ -29,6 +29,94 @@ does not revoke the enrollment.
 
 ## Enroll a CLI daemon
 
+From a configured workspace, run the enrollment URL shown in Fleet:
+
+```sh
+colossus cloud enroll https://colossus.example.com/api/enroll
+```
+
+Review the displayed Cloud origin, workspace, configuration, and local application
+grant, then paste the invitation at the hidden prompt. The command prepares its own
+protected connection references and dedicated local credential; you do not write
+connection JSON or copy certificate fingerprints. The invitation never enters argv.
+Piped input is also read from stdin.
+
+The command starts a local worker and its outbound connector in the foreground.
+Keep it running while using the runtime from Cloud. **Ctrl-C** checkpoints and stops
+the worker it owns. To reconnect later, select the same workspace, configuration,
+Colossus home, and enrollment name:
+
+```sh
+colossus cloud run
+```
+
+Use the ordinary CLI `--workspace` and `--config` options when selecting a runtime
+explicitly. For several connections, choose a name at enrollment and reuse it:
+
+```sh
+colossus --workspace /work/project --config /secure/runtime.yaml cloud enroll \
+  https://colossus.example.com/api/enroll --name engineering
+colossus --workspace /work/project --config /secure/runtime.yaml cloud run \
+  --name engineering
+```
+
+The saved name binds the workspace, configuration, local instance, and grant. A
+changed or missing binding fails closed. Restore its matching private state, or
+choose a new name for a deliberately different connection. Retrying an interrupted
+enrollment uses the saved invitation and CSR rather than asking for another token.
+
+By default, the dedicated application can execute, read, and control runs using the
+configured `primary` role and its existing allowed tools, and answer user prompts.
+Local policy and sandbox restrictions still apply. Policy approval responses and
+human shells require separate explicit enrollment choices: `--allow-approvals` and
+`--enable-human-terminals`. An existing name cannot silently gain either permission.
+
+In another terminal, inspect or disconnect the connection:
+
+```sh
+colossus cloud status --name engineering
+colossus cloud disconnect --name engineering
+```
+
+Disconnect leaves accepted work with the foreground worker. Use **Ctrl-C** in its
+owning terminal when you want that worker to stop. Use `revoke` to remove Cloud
+authority before `forget` or uninstalling; forgetting local enrollment alone does not
+revoke the remote node. If revocation fails, retain the record so you can retry.
+Certificates renew automatically; `cloud renew` also requests renewal.
+
+### Trust a private enrollment endpoint
+
+Publicly trusted HTTPS needs no extra option. For a local or private endpoint,
+obtain its public trust-anchor certificate from the deployment operator and supply
+it explicitly:
+
+```sh
+colossus cloud enroll https://colossus.localhost:9443/api/enroll \
+  --enrollment-ca-file /secure/colossus-browser.pem
+```
+
+The file contains one public X.509 certificate, at most 16 KiB. A self-signed server
+certificate can be the explicit anchor. TLS still verifies the hostname and
+certificate validity; this option does not change OS trust or system DNS.
+
+The native CLI routes `localhost` and names ending in `.localhost` directly to
+loopback for enrollment, connection, renewal, and revocation, following
+[RFC 6761](https://datatracker.ietf.org/doc/html/rfc6761#section-6.3). It bypasses
+proxies for those names and literal loopback addresses while keeping the original
+hostname for TLS verification. Other hostnames still use normal resolution and
+proxy settings. Browser certificate trust remains a separate setup step.
+
+Repeat the same trust option when retrying an interrupted enrollment. Its retained
+exchange rejects a different origin, runtime, or trust anchor. Later `cloud run` and
+certificate renewal use the separately enrolled connector CA and mutual TLS.
+
+### Connect an independently managed worker
+
+Use `--local-config` when you already manage a separate public worker and its
+application grant. This advanced path leaves the worker's lifecycle with its
+existing supervisor. The `control-plane` spelling remains available as an alias
+for `cloud`; the standalone `colossus-connector` uses this external-worker path.
+
 Use an existing runtime configuration and an owner-private public API directory.
 The worker must be stopped while enrolling the local application.
 
@@ -100,7 +188,13 @@ Before enabling shells, complete the Control Plane rollout on every replica. Old
 replicas cannot parse the Terminal operator role or provide the relay. Linux workers
 also need kernel pidfd support and readable `/proc` for ordinary job cleanup.
 
-Enable all three access controls:
+For a managed CLI runtime, select `--enable-human-terminals` on its first
+`cloud enroll` command. This explicitly enables the owned worker and adds the local
+connector's terminal scope. The human still needs the project's **Terminal operator**
+role. A saved connection without shell authority requires a new enrollment name to
+add it.
+
+For an independently managed worker, enable all three access controls:
 
 1. During offline application enrollment, add `--scope terminals:control` to the
    connector application's local grant.
@@ -136,16 +230,33 @@ automatically resent after disconnect.
 
 ## Run unattended
 
-Supervise the worker and connector separately under the same selected OS user:
+Supervise the managed `colossus cloud run` command under the selected OS account:
 systemd on Linux, launchd on macOS, or your Windows service supervisor/Task Scheduler.
+Keep the same workspace, configuration, private Colossus home, and enrollment name.
+The command stays in the foreground and owns its worker; it does not install a
+background service.
+
+For the advanced external-worker path, supervise the worker and connector separately.
 Preserve their private state directories and exact enrollment selector. Give
 concurrent CLI daemon/connector pairs separate `COLOSSUS_HOME` directories; one native
 vault has an exclusive process lease. Desktop manages its shared vault.
 
 If the native credential store will not be unlocked, inject a random 32-byte hex
-wrapping key through a protected secret environment. Set the worker's
-`--public-api-vault-key-variable COLOSSUS_HEADLESS_KEY` during enrollment and hosting.
-Add this selector to the connector configuration:
+wrapping key through a protected process environment. Managed enrollment uses that
+selector for both its local application credential and connector vault:
+
+```sh
+colossus cloud enroll https://colossus.example.com/api/enroll \
+  --name engineering --vault-key-variable COLOSSUS_HEADLESS_KEY
+colossus cloud run --name engineering --vault-key-variable COLOSSUS_HEADLESS_KEY
+```
+
+Retain the same wrapping key for every lifecycle command. A missing or changed key
+fails closed; it never regenerates established credentials.
+
+For an external worker, set
+`--public-api-vault-key-variable COLOSSUS_HEADLESS_KEY` during worker enrollment and
+hosting. Add this selector to the protected connector configuration:
 
 ```json
 {

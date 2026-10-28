@@ -118,8 +118,10 @@ async fn runtime_command(
         return dev_credentials::run(command, &cli.workspace)
             .map_err(|error| Box::new(error) as Box<dyn Error>);
     }
-    if let Command::Cloud(command) = cli.command {
-        return colossus_connector::run_cli(command).await;
+    if !matches!(&cli.command, Command::Cloud(command) if command.requires_managed_runtime()) {
+        if let Command::Cloud(command) = cli.command {
+            return colossus_connector::run_cli(command).await;
+        }
     }
     // Metadata validation precedes home/runtime/worker acquisition. The selected
     // account remains native-only and no credential is loaded until a provider permit.
@@ -267,6 +269,19 @@ async fn runtime_command(
             runtime_options = runtime_options
                 .with_computer_host(colossus_runtime::RuntimeComputerHost::new(Arc::new(driver)));
         }
+    }
+    if let Command::Cloud(command) = cli.command {
+        if cli.worker_required || cli.desktop_worker_auth || cli.approval_mode.is_some() {
+            return Err("managed Cloud enrollment uses its explicit connector grant; TUI worker and approval-mode flags are unavailable".into());
+        }
+        return managed_cloud::run(
+            command,
+            &config,
+            runtime_options,
+            &config_path,
+            &home_workspace,
+        )
+        .await;
     }
     let config_resolution = config_resolution_report(
         &config_selection,
