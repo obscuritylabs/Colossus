@@ -194,6 +194,22 @@ async fn dispatch_general(
         WorkerOperation::SessionList { limit } => Ok(serde_json::to_value(
             runtime.list_sessions(limit.clamp(1, 1_000))?,
         )?),
+        WorkerOperation::SessionCatalog { archived, limit } => {
+            Ok(serde_json::to_value(if archived {
+                runtime.list_archived_sessions(limit.clamp(1, 100))?
+            } else {
+                runtime.list_sessions(limit.clamp(1, 100))?
+            })?)
+        }
+        WorkerOperation::SessionLifecycle { session_id } => Ok(serde_json::to_value(
+            runtime.session_lifecycle(&session_id)?,
+        )?),
+        WorkerOperation::SessionSetArchived {
+            session_id,
+            archived,
+        } => Ok(serde_json::to_value(
+            runtime.set_session_archived(&session_id, archived)?,
+        )?),
         WorkerOperation::SessionMessages { session_id } => Ok(serde_json::to_value(
             runtime.session_messages(&session_id)?,
         )?),

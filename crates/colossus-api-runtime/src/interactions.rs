@@ -58,8 +58,26 @@ struct ActivePublicRun {
     timeout: Duration,
 }
 
-tokio::task_local! {
-    static ACTIVE_PUBLIC_RUN: ActivePublicRun;
+struct PublicRunScope;
+
+static ACTIVE_PUBLIC_RUN: PublicRunScope = PublicRunScope;
+
+impl PublicRunScope {
+    fn scope<F: std::future::Future>(
+        &self,
+        run: ActivePublicRun,
+        future: F,
+    ) -> impl std::future::Future<Output = F::Output> {
+        colossus_ports::RunInteractionContext::capture()
+            .with(Arc::new(run))
+            .scope(future)
+    }
+
+    fn try_with<T>(&self, read: impl FnOnce(&ActivePublicRun) -> T) -> Result<T, ()> {
+        colossus_ports::RunInteractionContext::current::<ActivePublicRun>()
+            .map(|run| read(&run))
+            .ok_or(())
+    }
 }
 
 type PendingSender = oneshot::Sender<Result<InteractionResponse, ()>>;

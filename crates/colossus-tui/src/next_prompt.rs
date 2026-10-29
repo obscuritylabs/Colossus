@@ -18,6 +18,8 @@ pub(super) struct NextPromptState {
     generation: u64,
     task: Option<tokio::task::AbortHandle>,
     dismissed: bool,
+    model_suspended: bool,
+    canonical_mode: Option<colossus_contracts::NextPromptMode>,
     pub(super) auxiliary_tokens: Option<u64>,
 }
 
@@ -43,6 +45,22 @@ impl NextPromptState {
         self.generation = self.generation.wrapping_add(1);
     }
 
+    pub(super) fn suspend_model(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+        self.model = None;
+        self.model_suspended = true;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    pub(super) fn resume_model(&mut self, mode: colossus_contracts::NextPromptMode) {
+        // Preview cancellation can restore an older local presentation snapshot.
+        // Canonical opt-out must still fence paid generation independently.
+        self.canonical_mode = Some(mode);
+        self.model_suspended = mode != colossus_contracts::NextPromptMode::Model;
+    }
+
     pub(super) fn dismiss(&mut self) {
         self.dismissed = true;
     }
@@ -63,17 +81,21 @@ impl NextPromptState {
 
 impl TuiState {
     pub(super) fn suggested_next_prompt(&self) -> Option<&str> {
+        let mode = self
+            .next_prompt
+            .canonical_mode
+            .unwrap_or(self.preferences.next_prompt_mode);
         if self.is_busy()
             || self.overlay.is_some()
             || !self.composer.draft.is_empty()
             || !self.pending_images.is_empty()
             || !self.queue.is_empty()
             || self.next_prompt.dismissed
-            || self.preferences.next_prompt_mode == colossus_contracts::NextPromptMode::Off
+            || mode == colossus_contracts::NextPromptMode::Off
         {
             return None;
         }
-        if self.preferences.next_prompt_mode == colossus_contracts::NextPromptMode::Model {
+        if mode == colossus_contracts::NextPromptMode::Model {
             self.next_prompt
                 .model
                 .as_deref()
@@ -89,7 +111,8 @@ pub(super) fn schedule_next_prompt(
     host: Arc<dyn InteractiveHost>,
     events: mpsc::Sender<HostEvent>,
 ) {
-    let eligible = !state.is_busy()
+    let eligible = !state.next_prompt.model_suspended
+        && !state.is_busy()
         && state.overlay.is_none()
         && state.composer.draft.is_empty()
         && state.queue.is_empty()
@@ -144,7 +167,10 @@ pub(super) fn apply_next_prompt(
     text: Option<String>,
     auxiliary_tokens: Option<u64>,
 ) {
-    if state.session_id == session_id && state.next_prompt.generation == generation {
+    if !state.next_prompt.model_suspended
+        && state.session_id == session_id
+        && state.next_prompt.generation == generation
+    {
         state.next_prompt.task = None;
         state.next_prompt.model =
             text.and_then(|text| colossus_presentation::normalize_prompt(&text));

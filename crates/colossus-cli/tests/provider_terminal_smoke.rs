@@ -184,18 +184,33 @@ fn event_count(events: &[Value], event_type: &str) -> usize {
         .count()
 }
 
-fn wait_for_worker(binary: &Path, config: &Path) {
+fn wait_for_worker(binary: &Path, config: &Path, worker: &mut Child) {
     let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_status = None;
     while Instant::now() < deadline {
-        if run(binary, config, &["worker", "--status"])
-            .status
-            .success()
-        {
+        let output = run(binary, config, &["worker", "--status"]);
+        if output.status.success() {
             return;
         }
+        let mut stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        for secret in ["terminal-secret", JOURNAL_KEY, SIGNING_KEY] {
+            stderr = stderr.replace(secret, "[REDACTED]");
+        }
+        let diagnostic = format!(
+            "status={} stderr={}",
+            output.status,
+            stderr.chars().take(1024).collect::<String>()
+        );
+        if let Some(status) = worker.try_wait().expect("worker startup status") {
+            panic!("worker exited before becoming ready: {status}; {diagnostic}");
+        }
+        last_status = Some(diagnostic);
         thread::sleep(Duration::from_millis(20));
     }
-    panic!("worker did not become ready");
+    panic!(
+        "worker did not become ready; {}",
+        last_status.as_deref().unwrap_or("status was not queried")
+    );
 }
 
 fn wait_for_exit(child: &mut Child) {
@@ -1032,14 +1047,16 @@ fn model_doctor_can_release_bounded_redacted_provider_response_diagnostics() {
     let (origin, server) = doctor_server("400 Bad Request", response);
     let config = write_doctor_config(directory.path(), &origin);
 
-    let worker = command(binary, &config)
+    // The command owns the isolated Windows home until the worker has stopped.
+    let mut worker_command = command(binary, &config);
+    let worker = worker_command
         .arg("worker")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("start worker");
     let mut worker = ChildGuard(worker);
-    wait_for_worker(binary, &config);
+    wait_for_worker(binary, &config, &mut worker.0);
 
     let catalog = run(binary, &config, &["provider", "doctor", "live"]);
     assert!(
@@ -1100,14 +1117,16 @@ fn tui_model_doctor_releases_bounded_redacted_provider_response_diagnostics() {
     let (origin, server) = doctor_server("400 Bad Request", "tool schema rejected terminal-secret");
     let config = write_doctor_config(directory.path(), &origin);
 
-    let worker = command(binary, &config)
+    // The command owns the isolated Windows home until the worker has stopped.
+    let mut worker_command = command(binary, &config);
+    let worker = worker_command
         .arg("worker")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("start worker");
     let mut worker = ChildGuard(worker);
-    wait_for_worker(binary, &config);
+    wait_for_worker(binary, &config, &mut worker.0);
 
     let catalog = run(binary, &config, &["provider", "doctor", "live"]);
     assert!(
@@ -1171,14 +1190,16 @@ fn provider_doctor_reports_ready_through_worker_after_catalog_and_generation_suc
     );
     let config = write_doctor_config(directory.path(), &origin);
 
-    let worker = command(binary, &config)
+    // The command owns the isolated Windows home until the worker has stopped.
+    let mut worker_command = command(binary, &config);
+    let worker = worker_command
         .arg("worker")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("start worker");
     let mut worker = ChildGuard(worker);
-    wait_for_worker(binary, &config);
+    wait_for_worker(binary, &config, &mut worker.0);
     let output = run(binary, &config, &["provider", "doctor", "live"]);
     assert!(
         output.status.success(),
@@ -1434,13 +1455,22 @@ sandbox:
         "{terminal}"
     );
     assert_eq!(
-        terminal.matches("[tool] start echo").count(),
+        terminal.matches("[tool] Run tool · echo · running").count(),
         2,
         "{terminal}"
     );
-    assert_eq!(terminal.matches("Completed echo").count(), 2, "{terminal}");
-    assert!(terminal.contains("terminal-tool-one"), "{terminal}");
-    assert!(terminal.contains("terminal-tool-two"), "{terminal}");
+    assert_eq!(
+        terminal
+            .lines()
+            .filter(|line| line.starts_with("Run tool · echo · ") && line.ends_with(" · completed"))
+            .count(),
+        2,
+        "{terminal}"
+    );
+    // Compact rows hide payloads; the provider-request checks below still verify
+    // both exact released observations survive continuation and the later turn.
+    assert!(!terminal.contains("terminal-tool-one"), "{terminal}");
+    assert!(!terminal.contains("terminal-tool-two"), "{terminal}");
     assert!(terminal.contains("connected"), "{terminal}");
     assert!(!terminal.contains("\x1b["));
     let result: Value = serde_json::from_slice(&run_output.stdout).expect("run JSON");
@@ -1490,14 +1520,16 @@ sandbox:
     assert!(terminal_output.contains("terminal-connected"));
     assert!(!terminal_output.contains("\x1b["));
 
-    let worker = command(binary, &config)
+    // The command owns the isolated Windows home until the worker has stopped.
+    let mut worker_command = command(binary, &config);
+    let worker = worker_command
         .arg("worker")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("start worker");
     let mut worker = ChildGuard(worker);
-    wait_for_worker(binary, &config);
+    wait_for_worker(binary, &config, &mut worker.0);
     let worker_run = run(
         binary,
         &config,
@@ -1669,11 +1701,26 @@ sandbox:
     let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
     assert_eq!(result["output"], "The subagent said hi.");
     let terminal = String::from_utf8_lossy(&output.stderr);
-    assert!(terminal.contains("Completed agent.delegate"), "{terminal}");
+    assert!(
+        terminal
+            .lines()
+            .any(|line| line.starts_with("Delegate work · ") && line.ends_with(" · completed")),
+        "{terminal}"
+    );
     assert!(terminal.contains("Child agent running"), "{terminal}");
     assert!(terminal.contains("Child agent completed"), "{terminal}");
-    assert!(terminal.contains("Completed agent.result"), "{terminal}");
-    assert!(!terminal.contains("Failed agent.result"), "{terminal}");
+    assert!(
+        terminal
+            .lines()
+            .any(|line| line.starts_with("Read agent result · ") && line.ends_with(" · completed")),
+        "{terminal}"
+    );
+    assert!(
+        !terminal
+            .lines()
+            .any(|line| line.starts_with("Read agent result · ") && line.ends_with(" · failed")),
+        "{terminal}"
+    );
     assert!(terminal.contains("Hi, Alex! Ping received."), "{terminal}");
 
     let requests = server.join().expect("subagent provider server");
@@ -1719,7 +1766,10 @@ fn delegated_children_run_concurrently_and_release_lifecycle_output() {
     assert_eq!(result["output"], "Both children completed.");
     let terminal = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
-        terminal.matches("Completed agent.delegate").count(),
+        terminal
+            .lines()
+            .filter(|line| line.starts_with("Delegate work · ") && line.ends_with(" · completed"))
+            .count(),
         2,
         "{terminal}"
     );
@@ -1850,8 +1900,16 @@ sandbox:
         String::from_utf8_lossy(&output.stderr)
     );
     let terminal = String::from_utf8_lossy(&output.stderr);
-    assert!(terminal.contains("[tool] start echo"), "{terminal}");
-    assert!(terminal.contains("Completed echo"), "{terminal}");
+    assert!(
+        terminal.contains("[tool] Run tool · echo · running"),
+        "{terminal}"
+    );
+    assert!(
+        terminal
+            .lines()
+            .any(|line| line.starts_with("Run tool · echo · ") && line.ends_with(" · completed")),
+        "{terminal}"
+    );
     assert!(
         terminal.contains("responses-connected [REDACTED]"),
         "{terminal}"
@@ -2026,7 +2084,7 @@ sandbox:
         2,
         "{terminal}"
     );
-    assert!(!terminal.contains("[file] start filesystem.write"));
+    assert!(!terminal.contains("[file] Write file"));
     let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
     assert_eq!(result["output"], "recovered");
     let run_id = result["run_id"].as_str().expect("run id");
@@ -2212,18 +2270,22 @@ data: [DONE]
         let directory = tempdir().expect("usage workspace");
         let (origin, server) = sse_server(vec![TOOL, FINAL]);
         let config = write_failure_config(directory.path(), &origin, "echo");
-        let mut worker = with_worker.then(|| {
-            let process = command(binary, &config)
+        // Retain the command's home beyond the closure and through worker shutdown.
+        let mut worker_command = with_worker.then(|| command(binary, &config));
+        let mut worker = worker_command.as_mut().map(|command| {
+            let process = command
                 .arg("worker")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
                 .expect("start usage worker");
-            wait_for_worker(binary, &config);
-            ChildGuard(process)
+            let mut worker = ChildGuard(process);
+            wait_for_worker(binary, &config, &mut worker.0);
+            worker
         });
         let output = if line_mode {
-            let mut terminal = command(binary, &config)
+            let mut terminal_command = command(binary, &config);
+            let mut terminal = terminal_command
                 .arg("tui")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -2311,18 +2373,22 @@ data: [DONE]
         let directory = tempdir().expect("partial usage workspace");
         let (origin, server) = sse_server(vec![TOOL, FAILURE]);
         let config = write_failure_config(directory.path(), &origin, "echo");
-        let mut worker = with_worker.then(|| {
-            let process = command(binary, &config)
+        // Retain the command's home beyond the closure and through worker shutdown.
+        let mut worker_command = with_worker.then(|| command(binary, &config));
+        let mut worker = worker_command.as_mut().map(|command| {
+            let process = command
                 .arg("worker")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
                 .expect("start partial usage worker");
-            wait_for_worker(binary, &config);
-            ChildGuard(process)
+            let mut worker = ChildGuard(process);
+            wait_for_worker(binary, &config, &mut worker.0);
+            worker
         });
         let output = if line_mode {
-            let mut terminal = command(binary, &config)
+            let mut terminal_command = command(binary, &config);
+            let mut terminal = terminal_command
                 .args(["--output", "human", "tui"])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -2509,10 +2575,20 @@ data: [DONE]
             let terminal = terminal_support::Terminal::start(command);
             terminal.wait("Enter sends");
             terminal.resize(40, 140);
+            terminal.command("/goal Prove final iteration token accounting", "Run usage");
+            // Join visible transcript cells across wrapped rows, excluding the sidebar.
             let screen =
-                terminal.command("/goal Prove final iteration token accounting", "Run usage");
+                terminal.wait_until_visual_rows("visible final Goal completion", |_, rows| {
+                    rows.iter()
+                        .map(|row| {
+                            row.split_once('│')
+                                .map_or(row.as_str(), |(transcript, _)| transcript)
+                                .trim()
+                        })
+                        .collect::<String>()
+                        .contains("GOAL_USAGE_FINISHED")
+                });
             let case = format!("worker={with_worker} reported={final_reports_usage}:\n{screen}");
-            assert!(screen.contains("GOAL_USAGE_FINISHED"), "{case}");
             if final_reports_usage {
                 assert!(screen.contains("45 tokens"), "{case}");
                 assert!(

@@ -54,6 +54,8 @@ mod posture;
 mod prompt_predictions;
 mod sharing;
 mod telemetry;
+mod tool_activity;
+use tool_activity::ToolActivityContexts;
 mod watch;
 use telemetry::{ExecutionSource, RunTelemetry};
 
@@ -1414,6 +1416,7 @@ impl RuntimeAgentRunApi {
                 writer: Arc::clone(&writer),
                 accepts_related_run_events: true,
                 output: Default::default(),
+                tool_contexts: Default::default(),
             };
             let objective = request
                 .input
@@ -1482,6 +1485,7 @@ impl RuntimeAgentRunApi {
             writer: Arc::clone(&writer),
             accepts_related_run_events,
             output: Default::default(),
+            tool_contexts: Default::default(),
         };
         let kind = match request.plan_action.as_ref() {
             Some(PlanRunAction::Execute { strategy, .. }) => {
@@ -2087,6 +2091,7 @@ struct PublicRunObserver {
     writer: Arc<RunWriter>,
     accepts_related_run_events: bool,
     output: crate::output_projection::OutputProjection,
+    tool_contexts: ToolActivityContexts,
 }
 
 #[async_trait]
@@ -2098,15 +2103,26 @@ impl RunEventObserver for PublicRunObserver {
             ));
         }
         self.output.apply(&mut envelope.event);
+        let context = ToolActivityContexts::prepare(&envelope);
+        let mut update = public_event(envelope.event);
+        self.tool_contexts.apply(context, &mut update);
         self.writer
-            .append(public_event(envelope.event))
+            .append(update)
             .map(|_| ())
             .map_err(|_| ModelProviderError::Failed("public run feed is unavailable".into()))
     }
 }
 
 fn public_event(event: RunEvent) -> RunUpdateKind {
-    match event {
+    let duration = if let RunEvent::ToolCompleted {
+        duration_seconds, ..
+    } = &event
+    {
+        Some(*duration_seconds)
+    } else {
+        None
+    };
+    let mut update = match event {
         RunEvent::Provider { event } => match event {
             ProviderEvent::Retry { retry } => RunUpdateKind::ProviderRetry { retry },
             ProviderEvent::ModelDelta { text } => RunUpdateKind::OutputDelta { text },
@@ -2258,7 +2274,17 @@ fn public_event(event: RunEvent) -> RunUpdateKind {
                 },
             }
         }
+    };
+    if let RunUpdateKind::ToolActivity { activity } = &mut update
+        && activity.tool_name != SUBAGENT_ACTIVITY_TOOL
+    {
+        let mut display = tool_activity::presentation(activity);
+        if let Some(duration) = duration {
+            display.add_fact("Duration", format!("{duration:.2}s"));
+        }
+        activity.summary = display.summary();
     }
+    update
 }
 
 fn bounded_tool_activity_text(value: &str) -> Option<String> {
@@ -2285,7 +2311,9 @@ fn released_tool_input(call: &ToolCall) -> Option<String> {
     if call.name == "shell.run" {
         return None;
     }
-    bounded_tool_activity_text(&serde_json::to_string(&call.arguments).ok()?)
+    bounded_tool_activity_text(&colossus_presentation::tool_activity_json_preview(
+        &call.arguments,
+    ))
 }
 
 fn released_tool_preview(result: &ToolResult) -> Option<String> {
@@ -2980,7 +3008,7 @@ fn public_activity(projected: &ProjectedSessionActivity) -> Result<SessionActivi
             format: content.format.clone(),
             value: content.value.clone(),
         };
-    Ok(SessionActivity {
+    let mut activity = SessionActivity {
         activity_id: projected.activity_id.clone(),
         run_id: projected.run_id.clone(),
         turn: projected.turn,
@@ -3024,7 +3052,11 @@ fn public_activity(projected: &ProjectedSessionActivity) -> Result<SessionActivi
         source_event_types: projected.source_event_types.clone(),
         first_sequence: projected.first_sequence,
         last_sequence: projected.last_sequence,
-    })
+    };
+    if let Some(summary) = tool_activity::historical_summary(&activity) {
+        activity.summary = summary;
+    }
+    Ok(activity)
 }
 
 fn activity_matches(activity: &SessionActivity, request: &ListSessionActivityRequest) -> bool {
@@ -3394,7 +3426,8 @@ mod tests {
         };
         assert_eq!(activity.state, ToolActivityState::Cancelled);
         assert_eq!(activity.tool_name, "filesystem.list");
-        assert!(activity.summary.contains("cancelled before start"));
+        assert!(activity.summary.contains("List files"));
+        assert!(activity.summary.contains("cancelled"));
         assert_eq!(activity.input, None);
         assert_eq!(activity.preview, None);
     }

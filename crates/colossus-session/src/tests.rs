@@ -4,6 +4,8 @@ use colossus_contracts::{
 };
 use colossus_testkit::{InMemoryEventJournal, assert_session_repository_conformance};
 
+mod lifecycle;
+
 fn actor() -> Actor {
     Actor {
         actor_type: ActorType::User,

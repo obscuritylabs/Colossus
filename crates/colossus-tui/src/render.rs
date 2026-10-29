@@ -11,6 +11,19 @@ pub(super) fn render(
     transcript_start: usize,
     screen_mode: ScreenMode,
 ) {
+    let now = Instant::now();
+    let area = frame.area();
+    prepare_startup_animation(state, area, screen_mode, now);
+    if let Some(animation) = state.startup_animation.as_mut() {
+        // The entry screen owns the viewport; hidden workspace controls cannot
+        // receive clicks or create a selection until the normal UI is drawn.
+        state.agents.area = None;
+        state.workspace_hits.clear();
+        state.tool_hits.clear();
+        state.text_selection.regions.clear();
+        animation.render(frame.buffer_mut(), area, &state.preferences, now);
+        return;
+    }
     if let Some(recovery) = state.provider_recovery.as_mut() {
         recovery.clear_hit_areas();
     }
@@ -31,6 +44,40 @@ pub(super) fn render(
     state.text_selection.remember(frame.buffer_mut());
 }
 
+fn prepare_startup_animation(
+    state: &mut TuiState,
+    area: Rect,
+    screen_mode: ScreenMode,
+    now: Instant,
+) {
+    if state.startup_animation.is_none() {
+        return;
+    }
+    let eligible = screen_mode == ScreenMode::Alternate
+        && state.welcome_visible
+        && area.width >= crate::startup::MIN_SPLASH_WIDTH
+        && area.height >= crate::startup::MIN_SPLASH_HEIGHT
+        && state.transcript.is_empty()
+        && state.pending_sandbox_boundary_acknowledgement.is_none()
+        && !state.sandbox_boundary_acknowledgement_in_progress
+        && state.overlay.is_none()
+        && !state.workspace_center
+        && state.operation.is_none()
+        && state.provider_recovery.is_none()
+        && !state.selecting_text
+        && !state.text_selection.active()
+        && state.composer.draft.is_empty()
+        && state.scroll_from_bottom == 0;
+    if !eligible
+        || state
+            .startup_animation
+            .as_mut()
+            .is_some_and(|animation| !animation.prepare(now))
+    {
+        state.startup_animation = None;
+    }
+}
+
 fn render_content(
     frame: &mut Frame<'_>,
     state: &mut TuiState,
@@ -39,6 +86,12 @@ fn render_content(
 ) {
     let area = frame.area();
     state.agents.area = None;
+    state.workspace_hits.clear();
+    state.tool_hits.clear();
+    if state.workspace_center {
+        crate::workspace_view::render_center(frame, state, area);
+        return;
+    }
     let minimum_height = match screen_mode {
         ScreenMode::Alternate => MINIMUM_TERMINAL_HEIGHT,
         ScreenMode::Inline => MINIMUM_INLINE_VIEWPORT_HEIGHT,
@@ -57,6 +110,11 @@ fn render_content(
 
     if let Some(Overlay::HistorySearch(search)) = state.overlay.as_mut() {
         render_history_search(frame, &state.history, &state.preferences, search, area);
+        return;
+    }
+
+    if matches!(state.overlay, Some(Overlay::ToolDetails(_))) {
+        crate::tool_details::render(frame, state, area);
         return;
     }
 
@@ -117,7 +175,7 @@ fn render_content(
         composer_height(state, content_area.width).min(
             content_area
                 .height
-                .saturating_sub(recovery_height + FOOTER_HEIGHT + 3)
+                .saturating_sub(recovery_height + FOOTER_HEIGHT + 4)
                 .max(3),
         )
     } else {
@@ -151,16 +209,17 @@ fn render_content(
             Constraint::Length(completion_height),
             Constraint::Length(decision_height),
             Constraint::Length(recovery_height),
+            Constraint::Length(1), // Clear separation above the composer.
             Constraint::Length(composer_height),
             Constraint::Length(FOOTER_HEIGHT),
         ])
         .split(content_area);
     state.text_selection.regions.push(rows[0]);
     state.text_selection.regions.push(Rect::new(
-        rows[5].x + 1,
-        rows[5].y + 1,
-        rows[5].width.saturating_sub(2),
-        rows[5].height.saturating_sub(2),
+        rows[6].x + 1,
+        rows[6].y + 1,
+        rows[6].width.saturating_sub(2),
+        rows[6].height.saturating_sub(2),
     ));
     state.transcript_height = usize::from(
         rows[0]
@@ -196,8 +255,8 @@ fn render_content(
     if recovery_height > 0 {
         render_provider_recovery(frame, state, rows[4]);
     }
-    render_composer(frame, state, rows[5]);
-    render_footer(frame, state, rows[6], header_height == 0);
+    render_composer(frame, state, rows[6]);
+    render_footer(frame, state, rows[7], header_height == 0);
     if state.overlay.is_some() && decision_height == 0 {
         render_overlay(frame, state, area);
     }
@@ -265,25 +324,49 @@ pub(super) fn render_transcript(
     } else {
         Vec::new()
     };
+    let (mut transcript, mut image_placements, tool_placements) =
+        transcript_lines_range_with_images(
+            state,
+            width,
+            transcript_start.min(state.transcript.len()),
+            state.transcript.len(),
+            !lines.is_empty(),
+        );
+    let visible = usize::from(transcript_area.height);
+
     let welcome_line_count = lines.len();
-    let (mut transcript, mut image_placements) = transcript_lines_range_with_images(
-        state,
-        width,
-        transcript_start.min(state.transcript.len()),
-        state.transcript.len(),
-        !lines.is_empty(),
-    );
     for placement in &mut image_placements {
         placement.line = placement.line.saturating_add(welcome_line_count);
     }
     lines.append(&mut transcript);
-    let visible = usize::from(transcript_area.height);
     let live_top = lines.len().saturating_sub(visible);
     let top = live_top.saturating_sub(state.scroll_from_bottom);
-    let paragraph = Paragraph::new(lines)
-        .scroll((u16::try_from(top).unwrap_or(u16::MAX), 0))
-        .wrap(Wrap { trim: false });
+    // Slice before rendering: Paragraph's u16 scroll offset cannot address long histories.
+    let paragraph = Paragraph::new(
+        lines
+            .into_iter()
+            .skip(top)
+            .take(visible)
+            .collect::<Vec<_>>(),
+    )
+    .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, transcript_area);
+    for (line, index) in tool_placements {
+        let line = line.saturating_add(welcome_line_count);
+        if line >= top && line < top.saturating_add(visible) {
+            state.tool_hits.push(crate::tool_details::ToolHit::new(
+                Rect::new(
+                    transcript_area.x,
+                    transcript_area.y + (line - top) as u16,
+                    transcript_area.width,
+                    1,
+                ),
+                index,
+                state,
+            ));
+        }
+    }
+
     if state.preview_cache.native_graphics() {
         let bottom = top.saturating_add(visible);
         for placement in image_placements {
@@ -328,7 +411,7 @@ pub(super) fn desired_inline_viewport_height(
     if width < MINIMUM_TERMINAL_WIDTH {
         return MINIMUM_TERMINAL_HEIGHT.min(screen_height);
     }
-    if state.overlay.is_some() {
+    if state.overlay.is_some() || state.workspace_center {
         return screen_height;
     }
 
@@ -342,7 +425,8 @@ pub(super) fn desired_inline_viewport_height(
         .saturating_add(completion_height)
         .saturating_add(provider_recovery_height(state))
         .saturating_add(composer_height)
-        .saturating_add(FOOTER_HEIGHT);
+        .saturating_add(FOOTER_HEIGHT)
+        .saturating_add(1);
     let mut transcript_line_count = transcript_lines_range(
         state,
         usize::from(chat_width).max(20),
@@ -632,10 +716,15 @@ fn transcript_lines_range_with_images<'a>(
     start: usize,
     end: usize,
     leading_separator: bool,
-) -> (Vec<Line<'a>>, Vec<TranscriptImagePlacement>) {
+) -> (
+    Vec<Line<'a>>,
+    Vec<TranscriptImagePlacement>,
+    Vec<(usize, usize)>,
+) {
     let palette = TerminalPalette::for_preferences(&state.preferences);
     let mut lines = Vec::new();
     let mut image_placements = Vec::new();
+    let mut tool_placements = Vec::new();
     let mut visible_entries = 0_usize;
     let start = start.min(state.transcript.len());
     let end = end.min(state.transcript.len());
@@ -651,6 +740,39 @@ fn transcript_lines_range_with_images<'a>(
             lines.push(Line::default());
         }
         visible_entries += 1;
+        let inspectable = state
+            .transcript_sources
+            .get(entry_index)
+            .and_then(Option::as_ref)
+            .is_some_and(TranscriptRenderSource::inspectable);
+        if inspectable {
+            tool_placements.push((lines.len(), entry_index));
+            if state.preferences.events_mode == colossus_contracts::EventDisplayMode::Compact {
+                // Summaries were bounded once at ingestion. Never reformat the raw source
+                // or clone a large document just to paint a collapsed event row.
+                if let Some(PresentationBlock::Text(summary)) = entry.document.blocks.first() {
+                    let style = if entry.kind == TranscriptKind::Error {
+                        palette.error_style()
+                    } else {
+                        palette.tool_style()
+                    };
+                    lines.push(Line::from(Span::styled(
+                        truncate_width_with_ellipsis(
+                            &format!(
+                                "▸ {} {summary}",
+                                state.transcript_sources[entry_index]
+                                    .as_ref()
+                                    .expect("tool source")
+                                    .status_marker()
+                            ),
+                            width,
+                        ),
+                        ratatui_style(style),
+                    )));
+                    continue;
+                }
+            }
+        }
         let (marker, label) = match entry.kind {
             TranscriptKind::User => ("›", "You"),
             TranscriptKind::Assistant => ("●", "Colossus"),
@@ -693,7 +815,7 @@ fn transcript_lines_range_with_images<'a>(
         let (rendered, images) = if state.security_posture_entry == Some(entry_index) {
             (security_posture_lines(state, content_width), Vec::new())
         } else {
-            transcript_document_lines(state, &entry.document, content_width)
+            transcript_document_lines(state, &entry.document, content_width, inspectable)
         };
         let rendered_start = lines.len();
         image_placements.extend(images.into_iter().map(|(line, digest)| {
@@ -711,15 +833,22 @@ fn transcript_lines_range_with_images<'a>(
             line
         }));
     }
-    (lines, image_placements)
+    (lines, image_placements, tool_placements)
 }
 
 fn transcript_document_lines(
     state: &TuiState,
     document: &PresentationDocument,
     width: usize,
+    inline_tool: bool,
 ) -> (Vec<Line<'static>>, Vec<(usize, String)>) {
-    let renderer = StyledDocumentRenderer::for_transcript(state.preferences.clone(), width);
+    let mut preferences = state.preferences.clone();
+    if inline_tool && preferences.events_mode == colossus_contracts::EventDisplayMode::Verbose {
+        // The document retains structured details. Inline source snippets use the
+        // existing head/tail preview; click inspection keeps the fuller wrapped view.
+        preferences.events_mode = colossus_contracts::EventDisplayMode::Compact;
+    }
+    let renderer = StyledDocumentRenderer::for_transcript(preferences, width);
     let mut lines = Vec::new();
     let mut images = Vec::new();
     for block in &document.blocks {
@@ -1069,7 +1198,8 @@ fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
             ],
         ),
         Some(
-            Overlay::SessionBrowser(_)
+            Overlay::ToolDetails(_)
+            | Overlay::SessionBrowser(_)
             | Overlay::ThemePicker(_)
             | Overlay::HistorySearch(_)
             | Overlay::SettingsPicker(_)
@@ -1371,7 +1501,7 @@ pub(super) fn truncate_width_with_ellipsis(value: &str, maximum: usize) -> Strin
     truncated
 }
 
-fn styled_document_lines(
+pub(super) fn styled_document_lines(
     document: &PresentationDocument,
     preferences: &TerminalPreferences,
     width: usize,

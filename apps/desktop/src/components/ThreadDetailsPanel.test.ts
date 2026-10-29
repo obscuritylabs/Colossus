@@ -61,7 +61,7 @@ const view: RunView = {
           callId: "call-search",
           toolName: "repo.search",
           state: "completed",
-          summary: "tool execution completed",
+          summary: "Searched repository",
           preview: "Matched the selected-Space guard.",
         },
       },

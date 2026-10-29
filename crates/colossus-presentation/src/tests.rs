@@ -1,9 +1,9 @@
 use super::{
     EventDisplayMode, EventSourcedPresentationRepository, MAX_CUSTOM_THEMES, MAX_THEME_FILE_BYTES,
     PresentationBlock, PresentationDocument, PresentationTable, PresentationTone, SemanticRenderer,
-    StreamDisplayMode, StyledDocumentRenderer, TerminalDocumentRenderer, TerminalPalette,
-    TerminalPreferences, ThemeLibrary, ThemeName, TranscriptDensity, display_width,
-    document_from_json, risk_review_fallback_document,
+    StreamDisplayMode, StyledDocumentRenderer, TOOL_ACTIVITY_SUMMARY_CHARS,
+    TerminalDocumentRenderer, TerminalPalette, TerminalPreferences, ThemeLibrary, ThemeName,
+    TranscriptDensity, display_width, document_from_json, risk_review_fallback_document,
 };
 use colossus_contracts::{
     Actor, ActorType, ProviderEvent, ProviderUsage, RiskReviewFailure, RiskReviewFallbackNotice,
@@ -434,7 +434,10 @@ fn structured_json_becomes_intentional_human_tables_and_details() {
 
 #[test]
 fn comfortable_semantics_render_specialized_tool_and_error_cards() {
-    let renderer = SemanticRenderer::new(TerminalPreferences::default());
+    let renderer = SemanticRenderer::new(TerminalPreferences {
+        events_mode: EventDisplayMode::Verbose,
+        ..TerminalPreferences::default()
+    });
     let search = renderer
         .run_event(&RunEvent::ToolCompleted {
             turn: 1,
@@ -455,7 +458,7 @@ fn comfortable_semantics_render_specialized_tool_and_error_cards() {
         })
         .expect("render search")
         .expect("visible search");
-    assert!(search.contains("Completed filesystem.search"));
+    assert!(search.contains("Completed Search files"));
     assert!(search.contains("src/main.rs"));
     assert!(search.contains("fn main()"));
     assert!(!search.contains("\"matches\""));
@@ -480,9 +483,9 @@ fn comfortable_semantics_render_specialized_tool_and_error_cards() {
         })
         .expect("render pending subagent")
         .expect("visible pending subagent");
-    assert!(pending_subagent.contains("Pending agent.result"));
+    assert!(pending_subagent.contains("Pending Read agent result"));
     assert!(pending_subagent.contains("queued"));
-    assert!(!pending_subagent.contains("Failed agent.result"));
+    assert!(!pending_subagent.contains("Failed Read agent result"));
 
     let process = renderer
         .run_event(&RunEvent::ToolCompleted {
@@ -525,7 +528,7 @@ fn comfortable_semantics_render_specialized_tool_and_error_cards() {
         .expect("visible source");
     assert!(source.contains("rust · src/main.rs"));
     assert!(source.contains("1 │ fn main() {}"));
-    assert!(source.contains("path=src/main.rs"));
+    assert!(source.contains("Read file · src/main.rs"));
 
     let edit = renderer
         .run_event(&RunEvent::ToolCompleted {
@@ -617,7 +620,7 @@ fn delegated_child_lifecycle_renders_released_output() {
 #[test]
 fn compact_web_fetch_cards_bound_response_bodies_while_verbose_cards_show_them() {
     let response = format!(
-        "<!doctype html><title>Example</title>{}full-body-tail",
+        "<!doctype html><title>Example</title>\n{}\nfull-body-tail",
         "x".repeat(400)
     );
     let call = ToolCall {
@@ -637,11 +640,13 @@ fn compact_web_fetch_cards_bound_response_bodies_while_verbose_cards_show_them()
         .tool_completed_with_call(1, &result, 0.1, 0.2, Some(&call))
         .expect("render compact fetch")
         .expect("visible compact fetch");
-    assert!(compact.contains("Completed web.fetch"), "{compact}");
+    assert!(compact.contains("Fetch web content"), "{compact}");
     assert!(compact.contains("https://example.com/page"), "{compact}");
-    assert!(compact.contains("Response preview"), "{compact}");
-    assert!(compact.contains("preview only"), "{compact}");
-    assert!(compact.contains("<!doctype html>"), "{compact}");
+    assert!(!compact.contains("<!doctype html>"), "{compact}");
+    assert!(
+        compact.chars().count() <= TOOL_ACTIVITY_SUMMARY_CHARS,
+        "{compact}"
+    );
     assert!(!compact.contains("full-body-tail"), "{compact}");
 
     let verbose = SemanticRenderer::new(TerminalPreferences {
@@ -653,6 +658,16 @@ fn compact_web_fetch_cards_bound_response_bodies_while_verbose_cards_show_them()
     .expect("visible verbose fetch");
     assert!(verbose.contains("full-body-tail"), "{verbose}");
     assert!(!verbose.contains("preview only"), "{verbose}");
+    let document = crate::tool_result_document(&result, 0.1, Some(&call));
+    let PresentationBlock::Card { body, .. } = &document.blocks[0] else {
+        panic!("detail card")
+    };
+    assert!(
+        body.iter().any(
+            |block| matches!(block, PresentationBlock::Code { content, .. } if content == &response)
+        ),
+        "the bounded detail document retains the complete short response before width-dependent rendering"
+    );
 }
 
 #[test]
@@ -709,7 +724,7 @@ fn compact_raw_network_json_responses_do_not_expand_structured_bodies() {
         })
         .expect("render compact HTTP response")
         .expect("visible compact HTTP response");
-    assert!(compact.contains("Response preview"), "{compact}");
+    assert!(compact.contains("Fetch web content"), "{compact}");
     assert!(!compact.contains("must-not-render"), "{compact}");
 }
 
@@ -901,17 +916,19 @@ fn mcp_identity_remains_visible_in_terminal_lifecycle_and_result_cards() {
                     .run_event(&event)
                     .expect("render")
                     .expect("visible");
-                assert!(
-                    rendered.contains("mcp.call · GitLab · list_issues"),
-                    "{rendered}"
-                );
+                assert!(rendered.contains("Call MCP tool"), "{rendered}");
+                if matches!(event, RunEvent::ToolCancelled { .. }) {
+                    assert!(!rendered.contains("GitLab"), "{rendered}");
+                } else {
+                    assert!(rendered.contains("GitLab · list_issues"), "{rendered}");
+                }
             }
             let rendered = renderer
                 .tool_completed_with_call(1, &result, 0.25, 0.5, Some(&call))
                 .expect("render failure")
                 .expect("visible failure");
             assert!(
-                rendered.contains("mcp.call · GitLab · list_issues"),
+                rendered.contains("Call MCP tool · GitLab · list_issues"),
                 "{rendered}"
             );
         }
@@ -919,7 +936,7 @@ fn mcp_identity_remains_visible_in_terminal_lifecycle_and_result_cards() {
     let document = crate::tool_result_document(&result, 0.25, Some(&call));
     assert!(matches!(
         &document.blocks[0],
-        PresentationBlock::Card { title, .. } if title == "Failed mcp.call · GitLab · list_issues"
+        PresentationBlock::Card { title, .. } if title == "Failed Call MCP tool · GitLab · list_issues"
     ));
     let successful = ToolResult {
         images: Vec::new(),
@@ -930,7 +947,7 @@ fn mcp_identity_remains_visible_in_terminal_lifecycle_and_result_cards() {
     let document = crate::tool_result_document(&successful, 0.25, None);
     assert!(matches!(
         &document.blocks[0],
-        PresentationBlock::Card { title, .. } if title == "Completed mcp.call · Splunk · search"
+        PresentationBlock::Card { title, .. } if title == "Completed Call MCP tool · Splunk · search"
     ));
 }
 
@@ -949,7 +966,7 @@ fn semantic_tool_families_errors_and_elapsed_phases_are_distinct() {
         })
         .expect("render input wait")
         .expect("visible input wait");
-    assert_eq!(input_wait, "[input] user.ask waiting for your answer");
+    assert_eq!(input_wait, "[input] Ask user · running");
 
     for (name, label) in [
         ("filesystem.read", "[file]"),
@@ -982,18 +999,23 @@ fn semantic_tool_families_errors_and_elapsed_phases_are_distinct() {
     }
 
     let completed = renderer
-        .run_event(&RunEvent::ToolCompleted {
-            turn: 1,
-            result: ToolResult {
+        .tool_completed_with_call(
+            1,
+            &ToolResult {
                 images: Vec::new(),
                 call_id: "call-file".into(),
                 name: "filesystem.read".into(),
                 output: serde_json::json!({"path": "README.md", "bytes": 42}).to_string(),
                 exit_code: 0,
             },
-            duration_seconds: 1.25,
-            elapsed_seconds: 2.0,
-        })
+            1.25,
+            2.0,
+            Some(&ToolCall {
+                call_id: "call-file".into(),
+                name: "filesystem.read".into(),
+                arguments: serde_json::json!({"path":"README.md"}),
+            }),
+        )
         .expect("render")
         .expect("visible");
     assert!(completed.contains("Duration"));
@@ -1039,7 +1061,7 @@ fn semantic_tool_families_errors_and_elapsed_phases_are_distinct() {
         })
         .expect("error")
         .expect("visible error");
-    assert!(recoverable.contains("recoverable error"));
+    assert!(recoverable.contains("Reason: missing"));
     let phase = quiet
         .run_event(&RunEvent::Phase {
             phase: RunPhase::WaitingForModel,
@@ -1185,7 +1207,7 @@ fn every_run_event_variant_and_builtin_tool_has_compact_and_verbose_semantics() 
                 .expect("tool completion")
                 .expect("visible tool completion");
             for rendered in [started, completed] {
-                assert!(rendered.contains(&spec.name), "{mode:?}: {rendered}");
+                assert!(!rendered.trim().is_empty(), "{mode:?}: {}", spec.name);
                 assert!(!rendered.contains("\x1b["), "{mode:?}: {rendered}");
             }
         }
@@ -1545,4 +1567,98 @@ fn theme_library_enforces_file_size_count_and_color_bounds() {
         std::os::unix::fs::symlink(real, &linked).expect("directory symlink");
         assert!(ThemeLibrary::load(&[linked]).is_err());
     }
+}
+
+#[test]
+fn verbose_code_preserves_middle_lines_while_compact_keeps_its_existing_fold() {
+    let content = (1..=170)
+        .map(|line| format!("detail-row-{line:03}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let document = PresentationDocument::from_block(PresentationBlock::Code {
+        language: Some("text".into()),
+        content,
+    });
+    let verbose = TerminalDocumentRenderer::new(
+        TerminalPreferences {
+            events_mode: EventDisplayMode::Verbose,
+            ..TerminalPreferences::default()
+        },
+        52,
+    )
+    .render(&document);
+    assert!(verbose.contains("detail-row-075"));
+    assert!(verbose.contains("detail-row-160"));
+    assert!(!verbose.contains("detail-row-161"));
+    assert!(verbose.contains("display limit"));
+    let compact =
+        TerminalDocumentRenderer::new(TerminalPreferences::default(), 52).render(&document);
+    assert!(!compact.contains("detail-row-075"));
+    assert!(compact.contains("detail-row-170"));
+    assert!(compact.contains("142 lines omitted"));
+    assert!(verbose.lines().all(|line| display_width(line) <= 52));
+}
+
+#[test]
+fn verbose_code_wraps_long_unicode_source_without_losing_bounded_content() {
+    let content = format!("    HEAD{}MIDDLE{}TAIL", "界".repeat(100), "é".repeat(100));
+    let document = PresentationDocument::from_block(PresentationBlock::Code {
+        language: None,
+        content: content.clone(),
+    });
+    let preferences = TerminalPreferences {
+        events_mode: EventDisplayMode::Verbose,
+        ..TerminalPreferences::default()
+    };
+    // The CLI document renderer intentionally clamps its viewport to at least 40 columns.
+    for width in [40, 64] {
+        let verbose = TerminalDocumentRenderer::new(preferences.clone(), width).render(&document);
+        let reconstructed = verbose
+            .lines()
+            .filter_map(|line| line.strip_prefix("│ "))
+            .collect::<String>();
+        assert_eq!(
+            reconstructed, content,
+            "source must wrap without clipping at width {width}"
+        );
+        assert!(
+            verbose.lines().all(|line| display_width(line) <= width),
+            "terminal width {width}: {verbose}"
+        );
+    }
+    // The TUI styled renderer supports narrower viewports and must honor 32 columns.
+    for width in [32, 64] {
+        let styled =
+            StyledDocumentRenderer::for_transcript(preferences.clone(), width).render(&document);
+        assert!(
+            styled
+                .iter()
+                .all(|line| display_width(&line.plain_text()) <= width)
+        );
+        let reconstructed = styled
+            .iter()
+            .map(super::StyledLine::plain_text)
+            .filter_map(|line| line.strip_prefix("│ ").map(str::to_owned))
+            .collect::<String>();
+        assert_eq!(
+            reconstructed, content,
+            "styled source must wrap without clipping at width {width}"
+        );
+    }
+    let oversized = format!(
+        "{}NOT_IN_PREVIEW",
+        "x".repeat(crate::TOOL_ACTIVITY_DETAIL_BYTES + 4096)
+    );
+    let document = PresentationDocument::from_block(PresentationBlock::Code {
+        language: None,
+        content: oversized.clone(),
+    });
+    let verbose = TerminalDocumentRenderer::new(preferences, 80).render(&document);
+    assert!(!verbose.contains("NOT_IN_PREVIEW"));
+    assert!(verbose.contains("display limit"));
+    assert!(verbose.matches('x').count() <= crate::TOOL_ACTIVITY_DETAIL_BYTES);
+    let PresentationBlock::Code { content, .. } = &document.blocks[0] else {
+        panic!("code")
+    };
+    assert_eq!(content, &oversized, "original result remains unchanged");
 }

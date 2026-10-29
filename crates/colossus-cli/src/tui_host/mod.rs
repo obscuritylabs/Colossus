@@ -43,7 +43,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -462,6 +462,8 @@ fn interactive_runtime_error(error: &RuntimeError) -> String {
 mod common;
 mod model_selection;
 use model_selection::*;
+mod operations;
+use operations::HostOperationGate;
 mod embedded;
 mod plugins;
 mod shell;

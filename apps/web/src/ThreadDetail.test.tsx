@@ -866,7 +866,10 @@ describe("human cloud conversation authority", () => {
           call_id: "same-call",
           tool_name: "mcp.call",
           state,
-          summary: `${task.task_id} ${state}`,
+          summary:
+            state === "requested"
+              ? "Call MCP tool · requested"
+              : `Call MCP tool · ${task.task_id === "first" ? "GitLab" : "Splunk"} · search · ${state} · ${task.task_id} ${state}`,
           ...(state === "requested"
             ? {
                 input: JSON.stringify({
@@ -905,7 +908,9 @@ describe("human cloud conversation authority", () => {
       expect(turn.dataset.runId).toBe(`run-${owner}`);
       expect(
         turn.querySelector(".shared-activity-tool > summary")?.textContent,
-      ).toContain(`mcp.call · ${index === 0 ? "GitLab" : "Splunk"} · search`);
+      ).toContain(
+        `Call MCP tool · ${index === 0 ? "GitLab" : "Splunk"} · search · completed`,
+      );
       expect(
         [...turn.children].map(
           (child) =>

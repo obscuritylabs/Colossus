@@ -25,30 +25,37 @@ impl Runtime {
         task: &str,
         role: &str,
     ) -> Result<SubagentJob, RuntimeError> {
-        let lineage = format!("manual-{}", Uuid::now_v7());
-        let prepared = self.prepare_agent_instructions("", "")?;
-        let instruction_snapshot_id = if let Some(snapshot) = prepared.snapshot {
-            self.instruction_snapshots.persist(&snapshot)?;
-            Some(snapshot.id().to_owned())
-        } else {
-            None
-        };
-        serde_json::from_value(
-            scope_plugin_catalog(
-                prepared.plugins,
-                self.execute_work_operation(WorkOperation::SubagentCreate {
-                    session_id: session_id.into(),
-                    parent_run_id: lineage.clone(),
-                    parent_call_id: lineage,
-                    task: task.into(),
-                    role: role.into(),
-                    allowed_tools: None,
-                    instruction_snapshot_id,
+        self.native_session_lifecycle
+            .during(
+                session_id,
+                Box::pin(async {
+                    let lineage = format!("manual-{}", Uuid::now_v7());
+                    let prepared = self.prepare_agent_instructions("", "")?;
+                    let instruction_snapshot_id = if let Some(snapshot) = prepared.snapshot {
+                        self.instruction_snapshots.persist(&snapshot)?;
+                        Some(snapshot.id().to_owned())
+                    } else {
+                        None
+                    };
+                    serde_json::from_value(
+                        scope_plugin_catalog(
+                            prepared.plugins,
+                            self.execute_work_operation(WorkOperation::SubagentCreate {
+                                session_id: session_id.into(),
+                                parent_run_id: lineage.clone(),
+                                parent_call_id: lineage,
+                                task: task.into(),
+                                role: role.into(),
+                                allowed_tools: None,
+                                instruction_snapshot_id,
+                            }),
+                        )
+                        .await?,
+                    )
+                    .map_err(|error| RuntimeError::Config(error.to_string()))
                 }),
             )
-            .await?,
-        )
-        .map_err(|error| RuntimeError::Config(error.to_string()))
+            .await?
     }
 
     /// Return scheduler counts without changing queued state.
@@ -90,11 +97,25 @@ impl Runtime {
 
     /// Requeue one failed, cancelled, or interrupted child job.
     pub async fn requeue_subagent(&self, id: &str) -> Result<SubagentJob, RuntimeError> {
-        serde_json::from_value(
-            self.execute_work_operation(WorkOperation::SubagentRequeue { id: id.into() })
-                .await?,
-        )
-        .map_err(|error| RuntimeError::Config(error.to_string()))
+        let session_id = self
+            .work
+            .get_subagent(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("subagent {id}")))?
+            .session_id;
+        self.native_session_lifecycle
+            .during(
+                &session_id,
+                Box::pin(async {
+                    serde_json::from_value(
+                        self.execute_work_operation(WorkOperation::SubagentRequeue {
+                            id: id.into(),
+                        })
+                        .await?,
+                    )
+                    .map_err(|error| RuntimeError::Config(error.to_string()))
+                }),
+            )
+            .await?
     }
 
     /// Drain queued jobs with bounded local concurrency using normal child agent runs.
@@ -176,8 +197,10 @@ impl Runtime {
                             continue;
                         }
                     };
+                let interactions =
+                    subagent_interaction_context(&self.subagent_event_sinks, &job.parent_run_id);
                 set.spawn(
-                    scope_run_snapshots(snapshot, catalog, async move {
+                    interactions.scope(scope_run_snapshots(snapshot, catalog, async move {
                         let child_instructions = format!(
                             "You are a durable Colossus child agent for job {}. Complete only the assigned task. Nested delegation is disabled. Return a concise result for the parent.",
                             job.id
@@ -201,7 +224,7 @@ impl Runtime {
                             )
                             .await;
                         (job.id, result)
-                    })
+                    }))
                     .instrument(tracing::Span::current()),
                 );
             }
@@ -279,8 +302,9 @@ impl Runtime {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&job.parent_run_id)
             .cloned();
-        if let Some(events) = events {
-            let _ = events
+        if let Some(sink) = events {
+            let _ = sink
+                .events
                 .send(BufferedRunEvent {
                     envelope: RunEventEnvelope {
                         schema_version: 1,

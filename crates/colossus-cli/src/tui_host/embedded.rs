@@ -7,6 +7,7 @@ pub(crate) struct EmbeddedInteractiveHost {
     model_selections: ModelSelections,
     router: Arc<TuiPromptRouter>,
     approvals: Arc<TuiApprovalProvider>,
+    operations: HostOperationGate,
 }
 
 impl EmbeddedInteractiveHost {
@@ -22,6 +23,7 @@ impl EmbeddedInteractiveHost {
             model_selections: ModelSelections::default(),
             router,
             approvals,
+            operations: HostOperationGate::default(),
         }
     }
 
@@ -63,6 +65,7 @@ impl EmbeddedInteractiveHost {
         let usage_run_id = usage_selection.run_id(summary.last_run_id.as_deref());
         let usage =
             usage_run_id.and_then(|run_id| self.runtime.run_token_usage(session_id, run_id).ok());
+        let approval = self.approvals.mode_snapshot()?;
         Ok(FooterState {
             role: route.role.clone(),
             route: route_label(&route),
@@ -72,7 +75,8 @@ impl EmbeddedInteractiveHost {
             usage,
             message_count: summary.message_count,
             status: status.into(),
-            approval_mode: self.approvals.mode().as_str().into(),
+            approval_mode: approval.mode.unwrap_or(ApprovalMode::Deny).as_str().into(),
+            approval_mode_revision: approval.revision,
         })
     }
 
@@ -93,6 +97,36 @@ impl EmbeddedInteractiveHost {
         arguments: &str,
         events: &mpsc::Sender<HostEvent>,
     ) -> Result<Option<HostCommandResult>, String> {
+        if !matches!(
+            name,
+            "theme"
+                | "stream"
+                | "events"
+                | "reasoning"
+                | "suggestions"
+                | "multiline"
+                | "transcript"
+                | "trace"
+        ) {
+            return Ok(None);
+        }
+        // Human theme selection must not block an opt-out in another session.
+        // Its preview snapshot is never the profile written after selection.
+        let selected_theme = if name == "theme" && arguments.trim().is_empty() {
+            let preferences = self
+                .runtime
+                .presentation_preferences()
+                .map_err(|error| error.to_string())?;
+            let Some(selected) = browse_themes(events, &self.themes, &preferences).await? else {
+                return Ok(Some(HostCommandResult::document(
+                    PresentationDocument::new(),
+                )));
+            };
+            Some(selected)
+        } else {
+            None
+        };
+        let _edit = self.operations.edit_preferences().await;
         let mut preferences = self
             .runtime
             .presentation_preferences()
@@ -103,15 +137,9 @@ impl EmbeddedInteractiveHost {
         let changed = match name {
             "theme" => {
                 let argument = arguments.trim();
-                if argument.is_empty() {
-                    let selected = browse_themes(events, &self.themes, &preferences).await?;
-                    let Some(selected) = selected else {
-                        return Ok(Some(HostCommandResult::document(
-                            PresentationDocument::new(),
-                        )));
-                    };
+                if let Some(selected) = selected_theme.as_deref() {
                     self.themes
-                        .select(&selected, &mut preferences)
+                        .select(selected, &mut preferences)
                         .map_err(|error| error.to_string())?;
                     true
                 } else if argument == "list" {
@@ -1214,6 +1242,29 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             })
             .map_err(|error| error.to_string())
     }
+
+    async fn presentation_preferences(&self) -> Result<TerminalPreferences, String> {
+        let _presentation = self.operations.enter_presentation().await;
+        self.runtime
+            .presentation_preferences()
+            .map_err(|error| error.to_string())
+    }
+
+    async fn session_work_status(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<colossus_tui::SidebarSnapshot>, String> {
+        let work = self
+            .runtime
+            .work_state(session_id)
+            .map_err(|error| error.to_string())?;
+        Ok(Some(super::sidebar::sidebar_snapshot(
+            work,
+            None,
+            Vec::new(),
+        )))
+    }
+
     async fn sidebar_status(
         &self,
         session_id: &str,
@@ -1245,9 +1296,67 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             .map_err(|error| error.to_string())
     }
 
+    async fn sessions(&self) -> Result<Vec<SessionSummary>, String> {
+        self.session_catalog(false).await
+    }
+
+    async fn session_catalog(&self, archived: bool) -> Result<Vec<SessionSummary>, String> {
+        let sessions = if archived {
+            self.runtime.list_archived_sessions(100)
+        } else {
+            self.runtime.list_sessions(100)
+        }
+        .map_err(|error| error.to_string())?;
+        Ok(root_session_catalogue(
+            sessions,
+            self.runtime
+                .list_subagents(None, None, 1_000)
+                .map_err(|error| error.to_string()),
+        ))
+    }
+
+    async fn preview_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<InteractiveSessionBrowserMessage>, String> {
+        self.runtime
+            .get_session(session_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "The selected session was not found.".to_owned())?;
+        let mut collector = SessionPreviewCollector::new();
+        while collector.wants_older_page() {
+            let page = self
+                .runtime
+                .session_messages_page(
+                    session_id,
+                    collector.before_sequence(),
+                    SESSION_BROWSER_PAGE_LIMIT,
+                )
+                .map_err(|error| error.to_string())?;
+            collector.absorb(page);
+        }
+        Ok(collector.finish())
+    }
+
+    async fn set_session_archived(&self, session_id: &str, archived: bool) -> Result<(), String> {
+        let _operation = self.operations.enter(false).await?;
+        self.runtime
+            .set_session_archived(session_id, archived)
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
         let fresh_session = request.session_id.is_none() && !request.resume_latest;
         let session = if let Some(session_id) = request.session_id {
+            let lifecycle = self
+                .runtime
+                .session_lifecycle(&session_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("session not found: {session_id}"))?;
+            if lifecycle.archived {
+                return Err("This session is archived. Restore it from Sessions > Archived before opening it.".into());
+            }
             self.runtime
                 .get_session(&session_id)
                 .map_err(|error| error.to_string())?
@@ -1304,6 +1413,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         mode: SandboxBoundaryMode,
         events: mpsc::Sender<HostEvent>,
     ) -> Result<bool, String> {
+        let _operation = self.operations.enter(false).await?;
         let acknowledge = sandbox_boundary_acknowledgement_choice(mode);
         let (response_tx, response_rx) = oneshot::channel();
         events
@@ -1327,12 +1437,14 @@ impl InteractiveHost for EmbeddedInteractiveHost {
     }
 
     async fn attach_image(&self, path: &str) -> Result<ModelImageReference, String> {
+        let _operation = self.operations.enter(false).await?;
         crate::artifact_commands::import_image_reference(&self.runtime, &PathBuf::from(path))
             .await
             .map_err(|error| error.to_string())
     }
 
     async fn preview_image(&self, image: &ModelImageReference) -> Result<Vec<u8>, String> {
+        let _operation = self.operations.enter(false).await?;
         self.runtime
             .preview_run_input_image(image)
             .await
@@ -1347,44 +1459,56 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostCommandResult, String> {
-        self.router.install(Some(events.clone()));
-        let result = match command {
-            RuntimeCommand::Shell { command } => self
-                .runtime
-                .run_user_shell(session_id, &command, &control)
-                .await
-                .map(|result| HostCommandResult::document(super::shell::shell_document(&result)))
-                .map_err(|error| error.to_string()),
-            RuntimeCommand::Known { name, arguments } => {
-                self.runtime
-                    .with_model_selection(
-                        self.model_selections.get(session_id)?,
-                        self.execute_known(
-                            &name,
-                            &arguments,
-                            session_id,
-                            sticky_skills,
-                            &events,
-                            &control,
-                        ),
-                    )
-                    .await
-            }
-            RuntimeCommand::Permissions(mode) => {
-                let changed = mode.is_some();
-                if let Some(mode) = mode {
-                    self.approvals.set_mode(mode.into());
+        let operation = self
+            .operations
+            .enter(matches!(command, RuntimeCommand::Permissions(Some(_))))
+            .await?;
+        self.router
+            .scope(events.clone(), async {
+                match command {
+                    RuntimeCommand::Shell { command } => self
+                        .runtime
+                        .run_user_shell(session_id, &command, &control)
+                        .await
+                        .map(|result| {
+                            HostCommandResult::document(super::shell::shell_document(&result))
+                        })
+                        .map_err(|error| error.to_string()),
+                    RuntimeCommand::Known { name, arguments } => {
+                        self.runtime
+                            .with_model_selection(
+                                self.model_selections.get(session_id)?,
+                                self.execute_known(
+                                    &name,
+                                    &arguments,
+                                    session_id,
+                                    sticky_skills,
+                                    &events,
+                                    &control,
+                                ),
+                            )
+                            .await
+                    }
+                    RuntimeCommand::Permissions(mode) => {
+                        let changed = mode.is_some();
+                        if let Some(mode) = mode {
+                            operation.apply_permission_change(&control, || {
+                                self.approvals.set_mode(mode.into())
+                            })?;
+                        }
+                        let mode = self.approvals.mode();
+                        Ok(HostCommandResult {
+                            footer: Some(self.footer(session_id, "ready").await?),
+                            ..HostCommandResult::document(approval_mode_document(
+                                Some(mode),
+                                changed,
+                            ))
+                        })
+                    }
+                    RuntimeCommand::Plan(command) => self.plan_command(command, session_id).await,
                 }
-                let mode = self.approvals.mode();
-                Ok(HostCommandResult {
-                    footer: Some(self.footer(session_id, "ready").await?),
-                    ..HostCommandResult::document(approval_mode_document(Some(mode), changed))
-                })
-            }
-            RuntimeCommand::Plan(command) => self.plan_command(command, session_id).await,
-        };
-        self.router.install(None);
-        result
+            })
+            .await
     }
 
     async fn run_turn(
@@ -1393,6 +1517,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostRunResult, String> {
+        let _operation = self.operations.enter(false).await?;
         let skill_names = self
             .runtime
             .list_plugins()
@@ -1409,34 +1534,37 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         request.explicit_skills =
             colossus_contracts::merge_plugin_selections(&explicit_skills, &request.explicit_skills);
         let content = interactive_model_content(request.prompt.clone(), request.images.clone());
-        self.router.install(Some(events.clone()));
-        let mut observer = ChannelRunObserver { sender: events };
+        let mut observer = ChannelRunObserver {
+            sender: events.clone(),
+        };
         let options = self.model_selections.get(&request.session_id)?;
         self.runtime
             .model_route_with_options("primary", &options)
             .map_err(|error| error.to_string())?;
         let outcome = self
-            .runtime
-            .with_model_selection(
-                options,
-                self.runtime
-                    .run_with_mode_with_skills_stream_controlled_content(
-                        request.mode,
-                        "primary",
-                        "You are Colossus.",
-                        &content,
-                        None,
-                        Some(&request.session_id),
-                        &request.explicit_skills,
-                        &request.sticky_skills,
-                        request.include_provider_response_diagnostics,
-                        &mut observer,
-                        &control,
-                    ),
+            .router
+            .scope(
+                events,
+                self.runtime.with_model_selection(
+                    options,
+                    self.runtime
+                        .run_with_mode_with_skills_stream_controlled_content(
+                            request.mode,
+                            "primary",
+                            "You are Colossus.",
+                            &content,
+                            None,
+                            Some(&request.session_id),
+                            &request.explicit_skills,
+                            &request.sticky_skills,
+                            request.include_provider_response_diagnostics,
+                            &mut observer,
+                            &control,
+                        ),
+                ),
             )
             .await
             .map_err(|error| interactive_runtime_error(&error));
-        self.router.install(None);
         let outcome = outcome?;
         let status = match &outcome {
             AgentRunOutcome::Completed { .. } => "ok",
@@ -1472,6 +1600,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostPlanExecutionResult, String> {
+        let _operation = self.operations.enter(false).await?;
         let selected = approved_plan_at_revision(
             self.runtime
                 .get_plan(&request.plan_id)
@@ -1487,27 +1616,30 @@ impl InteractiveHost for EmbeddedInteractiveHost {
                 FooterUsageSelection::Unavailable,
             )
             .await?;
-        self.router.install(Some(events.clone()));
-        let mut observer = ChannelRunObserver { sender: events };
+        let mut observer = ChannelRunObserver {
+            sender: events.clone(),
+        };
         let options = self.model_selections.get(&request.session_id)?;
         let outcome = self
-            .runtime
-            .with_model_selection(
-                options,
-                self.runtime.execute_plan_stream_controlled(
-                    "primary",
-                    &request.session_id,
-                    &request.plan_id,
-                    request.revision,
-                    request.strategy,
-                    None,
-                    &mut observer,
-                    &control,
+            .router
+            .scope(
+                events,
+                self.runtime.with_model_selection(
+                    options,
+                    self.runtime.execute_plan_stream_controlled(
+                        "primary",
+                        &request.session_id,
+                        &request.plan_id,
+                        request.revision,
+                        request.strategy,
+                        None,
+                        &mut observer,
+                        &control,
+                    ),
                 ),
             )
             .await
             .map_err(|error| interactive_runtime_error(&error));
-        self.router.install(None);
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -1582,10 +1714,15 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         &self,
         session_id: &str,
         entry: String,
-        _events: mpsc::Sender<HostEvent>,
+        events: mpsc::Sender<HostEvent>,
     ) -> Result<(), String> {
-        self.runtime
-            .append_terminal_history_for_session(session_id, &entry)
+        let _presentation = self.operations.enter_presentation().await;
+        self.router
+            .scope(
+                events,
+                self.runtime
+                    .append_terminal_history_for_session(session_id, &entry),
+            )
             .await
             .map(|_| ())
             .map_err(|error| error.to_string())
@@ -1595,10 +1732,23 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         &self,
         session_id: &str,
         preferences: TerminalPreferences,
-        _events: mpsc::Sender<HostEvent>,
+        events: mpsc::Sender<HostEvent>,
     ) -> Result<TerminalPreferences, String> {
-        self.runtime
-            .save_presentation_preferences_for_session(session_id, preferences)
+        let _presentation = self.operations.enter_presentation().await;
+        let _edit = self.operations.edit_preferences().await;
+        let current = self
+            .runtime
+            .presentation_preferences()
+            .map_err(|error| error.to_string())?;
+        let mut preferences = preferences;
+        super::common::preserve_model_opt_out(&mut preferences, &current);
+
+        self.router
+            .scope(
+                events,
+                self.runtime
+                    .save_presentation_preferences_for_session(session_id, preferences),
+            )
             .await
             .map_err(|error| error.to_string())
     }

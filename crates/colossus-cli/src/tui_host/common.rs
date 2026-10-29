@@ -1,5 +1,18 @@
 use super::*;
 
+/// Whole-profile UI saves may restore an older preview. Paid suggestions require
+/// the explicit suggestions command, never promotion by an unrelated snapshot.
+pub(super) fn preserve_model_opt_out(
+    incoming: &mut TerminalPreferences,
+    current: &TerminalPreferences,
+) {
+    if incoming.next_prompt_mode == colossus_contracts::NextPromptMode::Model
+        && current.next_prompt_mode != colossus_contracts::NextPromptMode::Model
+    {
+        incoming.next_prompt_mode = current.next_prompt_mode;
+    }
+}
+
 pub(super) fn presentation_status(
     name: &str,
     arguments: &str,
@@ -33,6 +46,22 @@ pub(super) fn resumable_sessions(
 ) -> Vec<SessionSummary> {
     sessions.retain(|session| session.message_count > 0);
     sessions.truncate(limit);
+    sessions
+}
+
+pub(super) fn root_session_catalogue(
+    mut sessions: Vec<SessionSummary>,
+    jobs: Result<Vec<colossus_contracts::SubagentJob>, String>,
+) -> Vec<SessionSummary> {
+    // Child inventory is optional enrichment. A large retained job payload can
+    // exceed worker IPC's response cap; the valid session catalogue remains usable.
+    if let Ok(jobs) = jobs {
+        let children = jobs
+            .into_iter()
+            .map(|job| job.child_session_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        sessions.retain(|session| !children.contains(&session.id));
+    }
     sessions
 }
 
@@ -233,10 +262,15 @@ fn actor_type_label(actor_type: ActorType) -> &'static str {
     }
 }
 
-/// One active TUI event destination shared by trusted approval and input providers.
+struct TuiPromptRoute {
+    owner: Arc<()>,
+    sender: mpsc::Sender<HostEvent>,
+}
+
+/// Operation-scoped TUI destination shared by trusted approval and input providers.
 #[derive(Default)]
 pub(crate) struct TuiPromptRouter {
-    pub(super) sender: Mutex<Option<mpsc::Sender<HostEvent>>>,
+    owner: Arc<()>,
     next_id: AtomicU64,
 }
 
@@ -245,15 +279,29 @@ impl TuiPromptRouter {
         format!("{prefix}:{}", self.next_id.fetch_add(1, Ordering::Relaxed))
     }
 
-    pub(super) fn install(&self, sender: Option<mpsc::Sender<HostEvent>>) {
-        if let Ok(mut current) = self.sender.lock() {
-            *current = sender;
-        }
+    pub(super) async fn scope<F: std::future::Future>(
+        &self,
+        sender: mpsc::Sender<HostEvent>,
+        operation: F,
+    ) -> F::Output {
+        colossus_ports::RunInteractionContext::capture()
+            .with(Arc::new(TuiPromptRoute {
+                owner: Arc::clone(&self.owner),
+                sender,
+            }))
+            .scope(operation)
+            .await
+    }
+
+    fn sender(&self) -> Result<mpsc::Sender<HostEvent>, String> {
+        colossus_ports::RunInteractionContext::current::<TuiPromptRoute>()
+            .filter(|route| Arc::ptr_eq(&route.owner, &self.owner))
+            .map(|route| route.sender.clone())
+            .ok_or_else(|| "no interactive client is attached to this operation".into())
     }
 
     fn notice(&self, document: PresentationDocument) {
-        let sender = self.sender.lock().ok().and_then(|sender| sender.clone());
-        if let Some(sender) = sender {
+        if let Ok(sender) = self.sender() {
             // Approval-review notices are presentation-only and must never hold up
             // the permit path when the renderer is paused or disconnected.
             let _ = sender.try_send(HostEvent::Notice(document));
@@ -269,12 +317,7 @@ impl TuiPromptRouter {
         choices: Vec<String>,
         allow_free_form: bool,
     ) -> Result<PromptResponse, String> {
-        let sender = self
-            .sender
-            .lock()
-            .map_err(|_| "interactive prompt router is poisoned".to_owned())?
-            .clone()
-            .ok_or_else(|| "no interactive client is attached".to_owned())?;
+        let sender = self.sender()?;
         let (response_tx, response_rx) = oneshot::channel();
         sender
             .send(HostEvent::Prompt(InteractivePrompt {
@@ -299,30 +342,86 @@ impl TuiPromptRouter {
 /// Trusted approval provider that mints proof only after the TUI returns allow.
 pub(crate) struct TuiApprovalProvider {
     pub(crate) router: Arc<TuiPromptRouter>,
-    mode: AtomicU8,
+    mode: HostApprovalModes,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ApprovalModeSnapshot {
+    pub(super) mode: Option<ApprovalMode>,
+    pub(super) revision: u64,
+}
+
+/// One authoritative mode and revision pair, scoped to this host's lifetime.
+pub(super) struct HostApprovalModes(Mutex<ApprovalModeSnapshot>);
+
+impl HostApprovalModes {
+    pub(super) fn new(mode: Option<ApprovalMode>) -> Self {
+        Self(Mutex::new(ApprovalModeSnapshot { mode, revision: 0 }))
+    }
+
+    pub(super) fn snapshot(&self) -> Result<ApprovalModeSnapshot, String> {
+        self.0
+            .lock()
+            .map(|mode| *mode)
+            .map_err(|_| "TUI approval mode lock is poisoned".to_owned())
+    }
+
+    pub(super) fn set(&self, mode: ApprovalMode) -> Result<(), String> {
+        self.change(mode, false)
+    }
+
+    pub(super) fn initialize(&self, mode: ApprovalMode) -> Result<(), String> {
+        self.change(mode, true)
+    }
+
+    fn change(&self, mode: ApprovalMode, initialize: bool) -> Result<(), String> {
+        let mut current = self
+            .0
+            .lock()
+            .map_err(|_| "TUI approval mode lock is poisoned".to_owned())?;
+        if initialize && current.mode.is_some() {
+            return Ok(());
+        }
+        let revision = current
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| "TUI approval mode revision limit reached".to_owned())?;
+        *current = ApprovalModeSnapshot {
+            mode: Some(mode),
+            revision,
+        };
+        Ok(())
+    }
 }
 
 impl TuiApprovalProvider {
     pub(crate) fn new(router: Arc<TuiPromptRouter>, mode: ApprovalMode) -> Self {
         Self {
             router,
-            mode: AtomicU8::new(mode as u8),
+            mode: HostApprovalModes::new(Some(mode)),
         }
     }
 
     pub(crate) fn mode(&self) -> ApprovalMode {
-        match self.mode.load(Ordering::Acquire) {
-            value if value == ApprovalMode::Deny as u8 => ApprovalMode::Deny,
-            value if value == ApprovalMode::RiskAuto as u8 => ApprovalMode::RiskAuto,
-            value if value == ApprovalMode::FullAccess as u8 => ApprovalMode::FullAccess,
-            _ => ApprovalMode::Ask,
-        }
+        self.mode
+            .snapshot()
+            .ok()
+            .and_then(|snapshot| snapshot.mode)
+            .unwrap_or(ApprovalMode::Deny)
     }
 
-    pub(crate) fn set_mode(&self, mode: ApprovalMode) {
-        self.mode.store(mode as u8, Ordering::Release);
+    pub(super) fn mode_snapshot(&self) -> Result<ApprovalModeSnapshot, String> {
+        self.mode.snapshot()
+    }
+
+    pub(crate) fn set_mode(&self, mode: ApprovalMode) -> Result<(), String> {
+        self.mode.set(mode)
     }
 }
+
+#[cfg(test)]
+#[path = "approval_mode_tests.rs"]
+mod approval_mode_tests;
 
 #[async_trait]
 impl ApprovalProvider for TuiApprovalProvider {

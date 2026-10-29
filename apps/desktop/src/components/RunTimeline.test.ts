@@ -356,6 +356,46 @@ describe("RunTimeline assistant output", () => {
     expect(markup).toContain('aria-label="Failure details"');
   });
 
+  it.each([
+    ["filesystem.read", "books"],
+    ["filesystem.search", "search"],
+    ["repo.map", "folder-open"],
+    ["filesystem.write", "pencil"],
+    ["image.view", "photo"],
+    ["web.fetch", "world"],
+    ["mcp.call", "plug"],
+    ["browser.snapshot", "browser"],
+    ["agent.delegate", "arrow-right"],
+    ["shell.run", "terminal-2"],
+    ["extension.review", "terminal-2"],
+  ])(
+    "renders the existing %s icon beside its canonical summary",
+    (toolName, icon) => {
+      const markup = renderOutput("Done", "completed", "complete", [
+        {
+          runId: "run-markdown-test",
+          sequence: 1,
+          createdAt: "2026-07-21T12:00:00Z",
+          update: {
+            type: "tool_activity",
+            activity: {
+              callId: "call-icon",
+              toolName,
+              state: "completed",
+              summary: "Canonical released summary",
+            },
+          },
+        },
+      ]);
+      const heading = markup.match(
+        /class="compact-tool-activity[^>]*><summary>(.*?)<\/summary>/su,
+      )?.[1];
+      expect(heading).toContain(`tabler-icon-${icon}`);
+      expect(heading).toContain("Canonical released summary");
+      expect(heading).toContain('class="feed-marker" aria-hidden="true"');
+    },
+  );
+
   it("coalesces tool transitions into one expandable compact row", () => {
     const updates: RunUpdate[] = [
       {
@@ -368,7 +408,7 @@ describe("RunTimeline assistant output", () => {
             callId: "call-1",
             toolName: "repo.map",
             state: "requested",
-            summary: "validated tool call requested",
+            summary: "Preparing to map the repository",
           },
         },
       },
@@ -382,7 +422,7 @@ describe("RunTimeline assistant output", () => {
             callId: "call-1",
             toolName: "repo.map",
             state: "started",
-            summary: "tool execution started at turn 1",
+            summary: "Mapping repository structure",
           },
         },
       },
@@ -396,7 +436,7 @@ describe("RunTimeline assistant output", () => {
             callId: "call-1",
             toolName: "repo.map",
             state: "completed",
-            summary: "tool execution completed at turn 1",
+            summary: "Mapped repository structure",
             preview:
               '{"root":".","files":[{"path":"src/main.rs","bytes":42}],"file_count":1}',
           },
@@ -416,7 +456,7 @@ describe("RunTimeline assistant output", () => {
     expect(markup).toContain("requested");
     expect(markup).toContain("started");
     expect(markup).toContain("completed");
-    expect(markup).toContain("tool execution completed at turn 1");
+    expect(markup).toContain("Mapping repository structure");
     expect(markup).toContain('class="tool-activity-preview"');
     expect(markup).toContain("<pre>");
     expect(markup).toContain("src/main.rs");
@@ -440,7 +480,7 @@ describe("RunTimeline assistant output", () => {
               callId: "call-mcp",
               toolName: "mcp.call",
               state: "started",
-              summary: "tool execution started at turn 1",
+              summary: "Calling GitLab · list_issues",
               input: JSON.stringify({
                 server: "GitLab",
                 tool: "list_issues",
@@ -459,7 +499,10 @@ describe("RunTimeline assistant output", () => {
               callId: "call-mcp",
               toolName: "mcp.call",
               state,
-              summary: `tool execution ${state} at turn 1`,
+              summary:
+                state === "completed"
+                  ? "Called GitLab · list_issues"
+                  : "Couldn’t call GitLab · list_issues",
             },
           },
         },
@@ -672,7 +715,7 @@ describe("RunTimeline assistant output", () => {
             callId: "call-shell",
             toolName: "shell.run",
             state: "requested",
-            summary: "validated tool call requested",
+            summary: "Preparing to run a shell command",
           },
         },
       },
@@ -686,7 +729,7 @@ describe("RunTimeline assistant output", () => {
             callId: "call-shell",
             toolName: "shell.run",
             state: "started",
-            summary: "tool execution started at turn 1",
+            summary: "Running git status --short",
             input: '{"command":"git status --short","cwd":"."}',
           },
         },
@@ -716,7 +759,7 @@ describe("RunTimeline assistant output", () => {
             callId: "call-write",
             toolName: "filesystem.write",
             state: "completed",
-            summary: "tool execution completed at turn 1",
+            summary: "Created sample.txt",
             input: '{"path":"notes/sample.txt","mode":"create"}',
           },
         },

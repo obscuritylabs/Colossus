@@ -36,6 +36,11 @@ pub(super) struct ProcessSessions {
     active: Arc<AtomicUsize>,
     registry: StdMutex<Registry>,
 }
+
+pub(super) struct ActiveProcessOwner {
+    pub(super) session_id: String,
+    pub(super) subagent_id: Option<String>,
+}
 #[derive(Default)]
 struct Registry {
     runs: BTreeMap<String, RunOwner>,
@@ -88,6 +93,44 @@ fn state(session: &ManagedSession) -> std::sync::MutexGuard<'_, SessionState> {
 }
 
 impl ProcessSessions {
+    pub(super) fn rollback_run_registration(
+        &self,
+        context: &ExecutionContext,
+        actor: &Actor,
+    ) -> bool {
+        let Some(id) = context.run_id.as_deref() else {
+            return false;
+        };
+        let mut registry = self.registry();
+        if registry
+            .runs
+            .get(id)
+            .is_some_and(|run| run.context == *context && run.actor == *actor)
+        {
+            registry.runs.remove(id);
+            return true;
+        }
+        false
+    }
+
+    /// Snapshot only owners from the bounded managed-process registry. Do not hold
+    /// the process lock while the caller resolves canonical delegated ancestry.
+    pub(super) fn active_session_owners(&self) -> Vec<ActiveProcessOwner> {
+        self.registry()
+            .sessions
+            .values()
+            .filter_map(|session| {
+                let current = state(session);
+                (current.summary.status.is_active()
+                    || current.summary.status == ProcessSessionStatus::OutcomeUnknown)
+                    .then(|| ActiveProcessOwner {
+                        session_id: current.summary.session_id.clone(),
+                        subagent_id: current.summary.subagent_id.clone(),
+                    })
+            })
+            .collect()
+    }
+
     pub(super) fn journal(&self) -> &Arc<dyn EventJournal> {
         &self.journal
     }

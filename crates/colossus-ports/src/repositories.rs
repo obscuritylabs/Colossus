@@ -25,8 +25,36 @@ pub trait SessionRepository: Send + Sync {
     /// Reconstruct one session summary from canonical events.
     fn get_session(&self, id: &str) -> Result<Option<SessionSummary>, StoreError>;
 
-    /// List recent reconstructed sessions, newest first.
+    /// List recent unarchived reconstructed sessions, newest first.
     fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, StoreError>;
+
+    /// List archived native sessions without altering their conversation history.
+    fn list_archived_sessions(&self, _limit: usize) -> Result<Vec<SessionSummary>, StoreError> {
+        Ok(Vec::new())
+    }
+
+    /// Read canonical native visibility, or the initial state for an existing session.
+    fn session_lifecycle(&self, id: &str) -> Result<Option<SessionLifecycle>, StoreError> {
+        Ok(self.get_session(id)?.map(|_| SessionLifecycle {
+            session_id: id.into(),
+            archived: false,
+            revision: 0,
+        }))
+    }
+
+    /// Compare and set native visibility. The runtime separately owns active-run admission.
+    /// Adapters without durable lifecycle support reject writes.
+    fn set_session_archived(
+        &self,
+        _id: &str,
+        _archived: bool,
+        _expected_revision: u64,
+        _actor: Actor,
+    ) -> Result<SessionLifecycle, StoreError> {
+        Err(StoreError::Adapter(
+            "native session lifecycle writes unavailable".into(),
+        ))
+    }
 
     /// Append one message using optimistic session-stream concurrency.
     fn append_message(

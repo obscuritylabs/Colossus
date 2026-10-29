@@ -1877,7 +1877,18 @@ impl AgentService {
             for event in post_commit_events {
                 emit_run_event(&mut released_observer, &run_id, &session_id, event).await?;
             }
-            if let Some((error, code, message, event_type, payload)) = terminal {
+            // Stop can close an approval, making the settled tool return Denied.
+            // Preserve its actual observation and effect evidence above, then let
+            // explicit cancellation own the run terminal. Do not relabel an
+            // unconfirmed effect or any other terminal failure as cancellation.
+            let stopped_denial = control.is_some_and(RunControl::is_cancelled)
+                && matches!(
+                    terminal.as_ref(),
+                    Some((AgentError::Tool(ToolError::Denied(_)), ..))
+                );
+            if let Some((error, code, message, event_type, payload)) = terminal
+                && !stopped_denial
+            {
                 self.append(
                     &stream_id,
                     &mut stream_version,

@@ -1,7 +1,7 @@
 //! Metadata-only work status and observed MCP activity for the right rail.
 
 use super::*;
-use crate::agents::{MIN_CHAT_WIDTH, PANEL_WIDTH};
+use crate::agents::panel_width;
 use colossus_contracts::{GoalStatus, TaskStatus};
 
 const MAX_MCP_SERVERS: usize = 64;
@@ -217,16 +217,18 @@ fn safe_label(label: &str) -> String {
 
 impl TuiState {
     pub(super) fn sidebar_width(&self, width: u16) -> u16 {
-        if self.sidebar.loaded() && width >= MIN_CHAT_WIDTH + PANEL_WIDTH {
-            PANEL_WIDTH
+        if self.sidebar.loaded() || !self.workspace_sessions.is_empty() {
+            panel_width(width)
         } else {
             self.agents.width(width)
         }
     }
 
     pub(super) fn sidebar_inline_height(&self, width: u16) -> u16 {
-        if self.sidebar.loaded() && self.sidebar_width(width) > 0 {
-            12
+        if (self.sidebar.loaded() || !self.workspace_sessions.is_empty())
+            && self.sidebar_width(width) > 0
+        {
+            12 + crate::workspace_view::sessions_height(self, u16::MAX)
         } else {
             self.agents.inline_height(width)
         }

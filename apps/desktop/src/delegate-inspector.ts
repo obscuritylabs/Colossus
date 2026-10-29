@@ -1,3 +1,4 @@
+import { toolActivityLabel } from "@colossus/ui/lib/tool-activity";
 import { safeDisplayLabel } from "./presenters";
 import type { RunView } from "./state";
 import type { ThreadDelegateInspection, ToolActivityState } from "./types";
@@ -19,27 +20,6 @@ interface MutableDelegateActivity extends DelegateActivityItem {
   startedAtMs: number | null;
   finishedAtMs: number | null;
   order: number;
-}
-
-const TOOL_TITLES: Readonly<Record<string, string>> = {
-  "filesystem.list": "Listed workspace files",
-  "filesystem.read": "Read workspace files",
-  "repo.file_summary": "Reviewed file summary",
-  "repo.map": "Mapped repository structure",
-  "repo.search": "Searched repository",
-  "shell.run": "Ran a shell command",
-  "web.search": "Searched web sources",
-  "agent.result": "Returned findings",
-};
-
-function activityTitle(toolName: string): string {
-  const known = TOOL_TITLES[toolName];
-  if (known !== undefined) {
-    return known;
-  }
-  const readable = toolName.replaceAll(".", " ").replaceAll("_", " ");
-  const label = safeDisplayLabel(readable, "Tool activity", 72);
-  return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
 function timestampMs(timestamp: string): number | null {
@@ -88,7 +68,7 @@ export function selectDelegateActivities(
         : (current?.finishedAtMs ?? null);
     calls.set(activity.callId, {
       callId: activity.callId,
-      title: activityTitle(activity.toolName),
+      title: toolActivityLabel(activity.summary, activity.toolName),
       toolName: safeDisplayLabel(activity.toolName, "tool", 64),
       state: activity.state,
       durationLabel: elapsedLabel(startedAtMs, finishedAtMs),
@@ -127,7 +107,7 @@ export function selectInspectedDelegateActivities(
       const finishedAtMs = timestampMs(activity.completedAt ?? "");
       return {
         callId: activity.callId,
-        title: activityTitle(activity.toolName),
+        title: toolActivityLabel(activity.summary, activity.toolName),
         toolName: safeDisplayLabel(activity.toolName, "tool", 64),
         state: activity.state,
         durationLabel: elapsedLabel(startedAtMs, finishedAtMs),

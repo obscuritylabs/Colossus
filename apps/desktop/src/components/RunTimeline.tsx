@@ -427,7 +427,7 @@ function ToolActivityItem({
   const releasedInput = toolActivityInputValue(group);
   const input =
     releasedInput === null ? null : formatToolActivityText(releasedInput);
-  const label = presentToolActivity(activity, releasedInput);
+  const label = presentToolActivity(activity);
   if (images.length > 0) {
     return (
       <Suspense fallback={<p>{label.title}</p>}>

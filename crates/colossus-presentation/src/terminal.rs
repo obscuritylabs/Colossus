@@ -764,7 +764,23 @@ impl TerminalDocumentRenderer {
             width.saturating_sub(3).max(1),
         );
         let mut lines = vec![palette.meta.paint(&format!("┌─ {label}"), self.color)];
-        let content = sanitize_terminal_text(content);
+        let verbose = self.preferences.events_mode == EventDisplayMode::Verbose;
+        let (preview, omitted_content) = if verbose {
+            let mut byte_end = content.len().min(TOOL_ACTIVITY_DETAIL_BYTES);
+            while !content.is_char_boundary(byte_end) {
+                byte_end -= 1;
+            }
+            let prefix = &content[..byte_end];
+            let end = prefix
+                .split_inclusive('\n')
+                .take(TOOL_ACTIVITY_DETAIL_LINES)
+                .map(str::len)
+                .sum::<usize>();
+            (&prefix[..end], end < content.len())
+        } else {
+            (content, false)
+        };
+        let content = sanitize_terminal_text(preview);
         let numbered = language.is_some_and(|language| language.contains(" · "));
         let source_lines = content.lines().collect::<Vec<_>>();
         let line_count = source_lines.len().max(1);
@@ -772,7 +788,12 @@ impl TerminalDocumentRenderer {
         if content.is_empty() {
             lines.push(format!("{} ", palette.meta.paint("│", self.color)));
         } else {
-            for index in bounded_line_indexes(source_lines.len(), 20, 8) {
+            let indexes = if verbose {
+                (0..source_lines.len()).map(Some).collect()
+            } else {
+                bounded_line_indexes(source_lines.len(), 20, 8)
+            };
+            for index in indexes {
                 let Some(index) = index else {
                     let omitted = source_lines.len().saturating_sub(28);
                     lines.push(format!(
@@ -789,15 +810,34 @@ impl TerminalDocumentRenderer {
                 } else {
                     String::new()
                 };
-                let value = truncate_width(
-                    source_lines[index],
-                    inner.saturating_sub(display_width(&prefix)),
-                );
+                let content_width = inner.saturating_sub(display_width(&prefix)).max(1);
+                let values = if verbose {
+                    wrap_verbatim(source_lines[index], content_width)
+                } else {
+                    vec![truncate_width(source_lines[index], content_width)]
+                };
+                for (continuation, value) in values.into_iter().enumerate() {
+                    let prefix = if continuation == 0 {
+                        prefix.clone()
+                    } else {
+                        " ".repeat(display_width(&prefix))
+                    };
+                    lines.push(format!(
+                        "{} {}{}",
+                        palette.meta.paint("│", self.color),
+                        palette.meta.paint(&prefix, self.color),
+                        palette.assistant.paint(&value, self.color)
+                    ));
+                }
+            }
+        }
+        if omitted_content {
+            for notice in wrap_verbatim("… additional code omitted at the display limit …", inner)
+            {
                 lines.push(format!(
-                    "{} {}{}",
+                    "{} {}",
                     palette.meta.paint("│", self.color),
-                    palette.meta.paint(&prefix, self.color),
-                    palette.assistant.paint(&value, self.color)
+                    palette.meta.paint(&notice, self.color)
                 ));
             }
         }

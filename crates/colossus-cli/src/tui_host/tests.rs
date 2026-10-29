@@ -3,6 +3,10 @@ use colossus_contracts::SessionMessage;
 
 #[path = "command_approval_tests.rs"]
 mod command_approval_tests;
+#[path = "concurrency_tests.rs"]
+mod concurrency_tests;
+#[path = "preferences_concurrency_tests.rs"]
+mod preferences_concurrency_tests;
 
 #[test]
 fn tui_display_status_commands_report_current_values_without_changing_preferences() {
@@ -533,16 +537,18 @@ async fn theme_browser_releases_exact_reversible_preview_preferences() {
 async fn embedded_tui_receives_automatic_approval_as_a_non_blocking_notice() {
     let router = Arc::new(TuiPromptRouter::default());
     let (sender, mut events) = mpsc::channel(1);
-    router.install(Some(sender));
-    let provider = TuiApprovalProvider::new(router, ApprovalMode::RiskAuto);
+    let provider = TuiApprovalProvider::new(Arc::clone(&router), ApprovalMode::RiskAuto);
 
-    provider
-        .automatic_approval_granted(AutomaticApprovalNotice {
-            action: "network.http".into(),
-            resource: "https://example.test/resource".into(),
-            risk_level: colossus_contracts::RiskLevel::Low,
-            reason: "bodyless GET to an exact configured origin".into(),
-        })
+    router
+        .scope(
+            sender,
+            provider.automatic_approval_granted(AutomaticApprovalNotice {
+                action: "network.http".into(),
+                resource: "https://example.test/resource".into(),
+                risk_level: colossus_contracts::RiskLevel::Low,
+                reason: "bodyless GET to an exact configured origin".into(),
+            }),
+        )
         .await;
 
     let HostEvent::Notice(document) = events.recv().await.expect("notice") else {
@@ -561,43 +567,44 @@ async fn embedded_tui_drops_automatic_approval_when_notice_queue_is_full() {
     sender
         .try_send(HostEvent::Notice(PresentationDocument::new()))
         .expect("fill notice queue");
-    router.install(Some(sender));
-    let provider = TuiApprovalProvider::new(router, ApprovalMode::RiskAuto);
+    let provider = TuiApprovalProvider::new(Arc::clone(&router), ApprovalMode::RiskAuto);
 
     tokio::time::timeout(
         Duration::from_millis(100),
-        provider.automatic_approval_granted(AutomaticApprovalNotice {
-            action: "web.search".into(),
-            resource: "configured search provider".into(),
-            risk_level: colossus_contracts::RiskLevel::Low,
-            reason: "read-only configured search".into(),
-        }),
+        router.scope(
+            sender,
+            provider.automatic_approval_granted(AutomaticApprovalNotice {
+                action: "web.search".into(),
+                resource: "configured search provider".into(),
+                risk_level: colossus_contracts::RiskLevel::Low,
+                reason: "read-only configured search".into(),
+            }),
+        ),
     )
     .await
     .expect("a best-effort notice must not wait for queue capacity");
 
     assert!(matches!(events.recv().await, Some(HostEvent::Notice(_))));
-    assert!(matches!(
-        events.try_recv(),
-        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-    ));
+    assert!(
+        events.try_recv().is_err(),
+        "the full queue drops the notice"
+    );
 }
 
 #[tokio::test]
 async fn embedded_tui_receives_risk_review_failure_before_manual_approval() {
     let router = Arc::new(TuiPromptRouter::default());
     let (sender, mut events) = mpsc::channel(1);
-    router.install(Some(sender));
-    let provider = TuiApprovalProvider::new(router, ApprovalMode::RiskAuto);
+    let provider = TuiApprovalProvider::new(Arc::clone(&router), ApprovalMode::RiskAuto);
 
-    provider
+    router.scope(sender, provider
         .risk_review_fallback(RiskReviewFallbackNotice {
             action: "web.search".into(),
             resource: "http://127.0.0.1:8888/search".into(),
             failure: colossus_contracts::RiskReviewFailure::InvalidAssessment,
             reason: "The risk evaluator response failed strict validation, so manual approval is required."
                 .into(),
-        })
+        }))
         .await;
 
     let HostEvent::Notice(document) = events.recv().await.expect("notice") else {
@@ -614,8 +621,7 @@ async fn embedded_tui_receives_risk_review_failure_before_manual_approval() {
 async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
     let router = Arc::new(TuiPromptRouter::default());
     let (sender, mut events) = mpsc::channel(1);
-    router.install(Some(sender));
-    let provider = TuiApprovalProvider::new(router, ApprovalMode::RiskAuto);
+    let provider = TuiApprovalProvider::new(Arc::clone(&router), ApprovalMode::RiskAuto);
     let mut request = colossus_policy::effect_request(
         colossus_policy::system_actor("tui-test"),
         "mcp.call",
@@ -632,8 +638,11 @@ async fn embedded_tui_manual_prompt_explains_risk_auto_ineligibility() {
         obligations: colossus_contracts::PolicyObligations::default(),
     };
     let approval = tokio::spawn(async move {
-        provider
-            .request_approval(&request, "request-hash", &decision, None)
+        router
+            .scope(
+                sender,
+                provider.request_approval(&request, "request-hash", &decision, None),
+            )
             .await
     });
 
@@ -689,7 +698,7 @@ async fn embedded_tui_permission_mode_changes_apply_to_the_live_provider() {
     assert_eq!(provider.mode(), ApprovalMode::Ask);
     assert!(!provider.risk_auto_enabled());
 
-    provider.set_mode(ApprovalMode::Deny);
+    provider.set_mode(ApprovalMode::Deny).expect("deny mode");
     assert!(
         provider
             .request_approval(&request, "deny-hash", &decision, None)
@@ -698,10 +707,14 @@ async fn embedded_tui_permission_mode_changes_apply_to_the_live_provider() {
             .is_none()
     );
 
-    provider.set_mode(ApprovalMode::RiskAuto);
+    provider
+        .set_mode(ApprovalMode::RiskAuto)
+        .expect("risk-auto mode");
     assert!(provider.risk_auto_enabled());
 
-    provider.set_mode(ApprovalMode::FullAccess);
+    provider
+        .set_mode(ApprovalMode::FullAccess)
+        .expect("full-access mode");
     assert!(
         provider
             .request_approval(&request, "allow-hash", &decision, None)

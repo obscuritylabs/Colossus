@@ -205,17 +205,21 @@ fn embedded_and_worker_tui_switch_models_and_reasoning_without_losing_history() 
                 && !screen.contains("fast ·")
         });
         terminal.resize_frame(24, 55);
-        // A clipped wide frame still contains the title. The browser moves its
-        // left margin from two columns to one only after the narrow redraw.
+        // A clipped wide frame still contains the title. Require exactly one
+        // leading column after the narrow redraw, allowing its session context.
         terminal.wait_until_visual_rows("narrow filtered model picker", |screen, rows| {
             screen.contains("/ deep")
-                && rows
-                    .iter()
-                    .any(|row| row.starts_with(" Choose model · 1 choices"))
+                && rows.iter().any(|row| {
+                    row.strip_prefix(' ').is_some_and(|header| {
+                        !header.starts_with(char::is_whitespace)
+                            && header.contains("Choose model · 1 choices")
+                    })
+                })
         });
         terminal.send(b"\r");
         terminal.wait("Enter sends");
-        terminal.resize(40, 140);
+        // Leave room for the complete reasoning footer beside the wider sidebar.
+        terminal.resize(40, 180);
         open_picker(&terminal, "/effort", "Choose reasoning effort");
         terminal.send(b"low");
         terminal.wait_until("filtered reasoning picker", |screen| {

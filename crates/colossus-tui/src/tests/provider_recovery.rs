@@ -86,7 +86,7 @@ fn provider_recovery_wraps_the_draft_inside_the_sidebar_column() {
         assert!(rendered.contains("draft-start"), "{rendered}");
         assert!(rendered.contains("draft-end"), "{rendered}");
         assert!(rendered.contains("[ Retry ]  [ Dismiss ]"), "{rendered}");
-        assert_eq!(state.agents.area.unwrap().width, 28);
+        assert_eq!(state.agents.area.unwrap().width, 36);
     }
 }
 

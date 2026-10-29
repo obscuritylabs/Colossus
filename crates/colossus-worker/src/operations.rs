@@ -454,6 +454,25 @@ pub enum WorkerOperation {
         /// Bounded result limit.
         limit: usize,
     },
+    /// List one canonical archive-lifecycle partition of local sessions.
+    SessionCatalog {
+        /// Select archived sessions rather than ordinary history.
+        archived: bool,
+        /// Bounded result limit, clamped to 100.
+        limit: usize,
+    },
+    /// Read the canonical archive lifecycle for one local session.
+    SessionLifecycle {
+        /// Exact durable session identity in this runtime workspace.
+        session_id: String,
+    },
+    /// Persist archive or restore for an idle local session.
+    SessionSetArchived {
+        /// Exact durable session identity in this runtime workspace.
+        session_id: String,
+        /// Archive when true; restore when false.
+        archived: bool,
+    },
     /// Reconstruct append-only messages for one session.
     SessionMessages {
         /// Exact session identifier.

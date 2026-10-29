@@ -23,6 +23,11 @@ interface. The default view fills the alternate screen. Add the global
 | `Shift-Enter` | Insert a newline if your terminal reports the modifier. |
 | `Ctrl-J` | Insert a newline, including when Shift-Enter is indistinguishable from Enter. |
 | `Ctrl-R` | Search earlier submitted prompts. |
+| `F2` | Open or close the Sessions browser on its Open tab. |
+| `F3` | Toggle compact tool summaries and expanded inline results in the conversation. Keeps the draft and reading position. |
+| Click a tool row | Inspect that event in detail. Left/Right selects an event; Up/Down, PageUp/PageDown, Home/End scroll; Esc closes. Requires captured mouse input in the full-screen view. |
+| `Alt-N` | Start a new session while existing sessions continue. |
+| `Alt-Left` / `Alt-Right` | Switch between workspace sessions. |
 | `Up` / `Down` | Move through wrapped or multiline draft rows. Up from the first row browses submitted prompts; Down past the newest restores your draft. |
 | `Tab` / `Right` | Accept a visible completion. |
 | `Up` / `Down` / `Shift-Tab` | Move through completion suggestions. |
@@ -54,6 +59,39 @@ interrupt behavior.
 Typing `/` at the start of a draft offers slash-command completion. Typing `@` at a
 skill token offers active plugin skills as `@PLUGIN/SKILL`. Esc closes suggestions.
 
+### Workspace sessions
+
+The right sidebar pins workspace sessions below the current session's agent and
+status details. In the default full-screen view, click a session once to switch
+to it. Press F6 or Esc first if terminal-native text selection is enabled. The
+sidebar grows to 36 columns when space allows, keeping at least 64 columns for
+the conversation; narrower terminals retain the smaller sidebar or hide it.
+
+F2 and `/sessions` open the Sessions browser on **Open**. `/resume` opens its
+**History** tab. The left pane lists sessions with status, update time, and message
+count; the right pane previews recent messages and session work. A single click
+selects a browser row for preview; Enter opens it. Compact terminals show the list.
+
+| Key | Action in the Sessions browser |
+| --- | --- |
+| `Tab` / `Shift-Tab` | Cycle Open, History, and Archived. |
+| `/` | Search the current list. |
+| `Up` / `Down` | Highlight a session. |
+| `Home` / `End` | Select the first or last session. |
+| `PageUp` / `PageDown` | Scroll the selected session's preview. |
+| `Enter` | Open the highlighted unarchived session. |
+| `n` | Start a new session. |
+| `r` | Refresh the saved-session catalogue. |
+| `s` | Stop the highlighted running or waiting session; other sessions continue. |
+| `a` | Archive an idle session with no unsent draft or queued turns. |
+| `u` | Restore the highlighted session from Archived to History. |
+| `Esc` / `F2` | Return to the conversation. While editing a search, Esc first leaves search editing. |
+
+Working and decision indicators describe sessions retained by this terminal.
+Saved sessions that are not open here show **ready**; this is not a live status
+check of another terminal or Desktop. See [Sessions](../use/sessions.md) for
+concurrency, archive/restore, retention, and exit behavior.
+
 ### Approvals and pickers
 
 | Key | Context | Action |
@@ -65,22 +103,22 @@ skill token offers active plugin skills as `@PLUGIN/SKILL`. Esc closes suggestio
 | `PageUp` / `PageDown` | Approval dock | Scroll the active section. |
 | `Enter` | Approval dock | Confirm the selected decision; nothing is preselected. |
 | `Esc` | Approval dock | Dismiss and deny the request. |
-| `/` | Session or theme browser | Search. Esc leaves search before closing the browser. |
-| `Up` / `Down` | Session or theme browser | Select a session or preview a theme. |
-| `PageUp` / `PageDown` | Session or history browser | Scroll the selected preview. |
+| `/` | Theme browser | Search. Esc leaves search before closing the browser. |
+| `Up` / `Down` | Theme browser | Preview a theme. |
+| `PageUp` / `PageDown` | History browser | Scroll the selected preview. |
 | `Up` / `Down` | History browser | Select an earlier prompt; typing filters the list. |
 | `Enter` | History browser | Place the selected prompt in the composer for editing. |
 | `Esc` | History browser | Close and preserve the draft. |
-| `Enter` | Session or theme browser | Resume the session or save the selected theme. |
+| `Enter` | Theme browser | Save the selected theme. |
 | `Esc` | Theme browser | Cancel and restore the original theme. |
 | `D` / `G` | Plan execution dock | Select Direct or Goal Mode; Enter confirms. |
 
-Session, theme, and history browsers fill the screen with a list on the left and
+Theme and history browsers fill the screen with a list on the left and
 an inspecting view on the right. Narrow terminals show the list without the view.
 Closing a browser restores the conversation and draft.
 
 The approval dock preserves the composer draft. Cancelling, timing out, or
-disconnecting does not grant approval. For the browser workflows, see
+disconnecting does not grant approval. For session and theme workflows, see
 [Sessions](../use/sessions.md) and [Theme](../use/theme.md).
 
 ## Commands
@@ -95,7 +133,7 @@ Use `/help` for arguments and commands available in your installed version.
 | Family | Commands |
 | --- | --- |
 | Help and exit | `/help`, `/exit` |
-| Sessions | `/sessions`, `/session show`, `/session new`, `/session resume`, `/resume` |
+| Sessions | `/sessions`, `/session show`, `/session new`, `/session resume [SESSION_ID]`, `/resume [SESSION_ID]` |
 | Permissions | `/permissions` opens a chooser; `/permissions deny\|ask\|risk-auto\|full-access` sets a mode directly |
 | Model selection | `/model` and `/effort` open searchable pickers; `/model PROFILE` and `/effort high` set a value directly. Use `default` to restore the configured setting. |
 | Tools and work | `/tools`, `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/goal resume GOAL_ID`, `/agents`, `/agents drain` |
@@ -114,8 +152,10 @@ Use `/help` for arguments and commands available in your installed version.
 | Bundles | `/bundle verify` |
 
 `/decisions` lists active workspace decisions. `/tasks` and `/plans` show records in
-the current session. `/resume` without an ID opens a searchable browser; pass an
-exact session ID when you know it. `/research QUESTION` uses standard depth with
+the current session. `/sessions` opens Open in the Sessions browser; `/resume`
+without an ID opens History in the same browser. `/session new` and `/resume SESSION_ID` navigate immediately,
+including during a run; the previous session keeps working. `/research QUESTION`
+uses standard depth with
 repository, web, and MCP sources; use the CLI `research run` route to choose depth
 or sources explicitly.
 
@@ -143,9 +183,9 @@ process:
 | `/goal resume GOAL_ID` | Continue an Active goal with its remaining budget. |
 
 `/plan` toggles Execute and Plan modes; `/plan on` enters Plan Mode. Mode and
-selection are local to the TUI process. They reset after restart, and switching
-sessions clears the selection. The plan record itself remains durable. Approval of
-a plan does not preapprove tools used during execution.
+selection are local to each open session in the TUI process. Switching sessions
+retains them; restarting resets them. The plan record itself remains durable.
+Approval of a plan does not preapprove tools used during execution.
 
 ## Attachments and diagnostics
 
@@ -162,8 +202,8 @@ appears later in a conversation, `/provider diagnostics on` exposes the next
 provider-facing request in the error card until you turn it off or exit. That
 request may contain conversation content, so review it before sharing.
 
-While a run is active, the composer can queue up to eight future turns. A failure
-or cancellation pauses the queue for your decision. Finalized output remains in
+While a run is active, each session's composer can queue up to eight future turns.
+A failure or cancellation pauses the queue for your decision. Finalized output remains in
 the transcript viewport; an active run does not move you away from older
 content you are reading. With `--no-alt-screen`, finalized output goes to native
 terminal scrollback.
