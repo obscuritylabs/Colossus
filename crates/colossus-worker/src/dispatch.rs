@@ -206,6 +206,26 @@ async fn dispatch_general(
             before_sequence,
             limit.clamp(1, 100),
         )?)?),
+        WorkerOperation::PredictNextPrompt {
+            session_id,
+            source_run_id,
+            role,
+            model_profile,
+        } => {
+            let prediction = runtime
+                .predict_next_prompt(
+                    &session_id,
+                    &source_run_id,
+                    &role,
+                    &model_profile,
+                    colossus_contracts::Actor {
+                        actor_type: colossus_contracts::ActorType::User,
+                        id: "cli".into(),
+                    },
+                )
+                .await?;
+            Ok(serde_json::to_value(prediction)?)
+        }
         WorkerOperation::SessionLatest => Ok(serde_json::to_value(runtime.latest_session()?)?),
         WorkerOperation::WorkState { session_id } => {
             Ok(serde_json::to_value(runtime.work_state(&session_id)?)?)

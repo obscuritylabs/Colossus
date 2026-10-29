@@ -27,11 +27,14 @@ pub(crate) mod commands;
     )
 ))]
 pub(crate) mod contained;
+mod diagnostics;
 pub(crate) mod dto;
 mod guest;
 mod inspection;
 mod manager;
+pub(crate) mod preferences;
 mod presentation;
+mod profile;
 mod registry;
 pub(crate) mod viewport;
 #[cfg(all(windows, feature = "embedded-chromium-preview"))]

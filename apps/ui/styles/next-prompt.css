@@ -1,0 +1,26 @@
+.shared-next-prompt {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  color: var(--muted);
+}
+.shared-next-prompt-accept {
+  min-width: 0;
+  max-width: 100%;
+  text-align: left;
+  justify-content: flex-start;
+  gap: 8px;
+  white-space: normal;
+}
+.shared-next-prompt-label,
+.shared-next-prompt-usage {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+.shared-next-prompt kbd {
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding-inline: 4px;
+}

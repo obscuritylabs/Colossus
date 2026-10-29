@@ -51,6 +51,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument as _;
 use uuid::Uuid;
 mod posture;
+mod prompt_predictions;
 mod sharing;
 mod telemetry;
 mod watch;
@@ -1642,6 +1643,16 @@ impl RuntimeAgentRunApi {
 
 #[async_trait]
 impl AgentRunApi for RuntimeAgentRunApi {
+    fn supports_next_prompt_prediction(&self) -> bool {
+        true
+    }
+    async fn predict_next_prompt(
+        &self,
+        caller: &CallerContext,
+        request: colossus_api::PredictNextPromptRequest,
+    ) -> ApiResult<colossus_api::NextPromptPrediction> {
+        self.next_prompt_prediction(caller, request).await
+    }
     fn communication(&self) -> Option<Arc<dyn colossus_api::AgentCommunicationApi>> {
         Some(Arc::new(
             crate::communication::RuntimeCommunicationApi::new(

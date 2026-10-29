@@ -9,6 +9,34 @@ fn event_stream(project: &str, task: &str) -> String {
     format!("cloud.output:{project}:{task}")
 }
 
+fn validate_prediction_reply(
+    task: &CloudTask,
+    source_run_id: &str,
+    reply: &CloudReply,
+) -> CloudResult<()> {
+    match reply {
+        CloudReply::NextPromptPrediction { prediction }
+            if task.run_id.as_deref() == Some(source_run_id)
+                && prediction.source_run_id == source_run_id
+                && prediction.text.as_ref().is_none_or(|text| {
+                    let trimmed = text.trim();
+                    !trimmed.is_empty() && text.chars().count() <= 240
+                        && !text.chars().any(|character| character.is_control()
+                            || matches!(character, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+                        && !trimmed.starts_with('/') && !trimmed.starts_with('!')
+                        && !trimmed.starts_with('`')
+                })
+                && prediction.usage.as_ref().is_none_or(|usage| {
+                    usage.input_tokens.checked_add(usage.output_tokens)
+                        .is_some_and(|sum| sum <= usage.total_tokens)
+                        && usage.cached_input_tokens.is_none_or(|cached| cached <= usage.input_tokens)
+                        && usage.reasoning_tokens.is_none_or(|reasoning| reasoning <= usage.output_tokens)
+                }) => Ok(()),
+        CloudReply::Failed { .. } => Ok(()),
+        _ => Err(CloudError::InvalidArgument),
+    }
+}
+
 impl CloudRepository {
     /// Read one task-bound receipt within the caller's authorized project.
     pub async fn get_command(
@@ -83,25 +111,79 @@ impl CloudRepository {
         if command.task_id != task_id || command.node_id != node.node_id {
             return Err(CloudError::PermissionDenied);
         }
+        // A replay must pass the same authority and bounds checks as the first
+        // receipt, even when an existing prediction lets it return without a write.
+        let prediction_task = if let Command::PredictNextPrompt { source_run_id } = &command.command
+        {
+            if let Some(lease) = &self.lease {
+                let now = time::OffsetDateTime::now_utc()
+                    .unix_timestamp()
+                    .try_into()
+                    .map_err(|_| CloudError::Storage)?;
+                self.store.verify_lease(lease, now).await?;
+            }
+            let task = self.task(&node.project_id, task_id).await?;
+            if task.node_id != node.node_id {
+                return Err(CloudError::PermissionDenied);
+            }
+            validate_prediction_reply(&task, source_run_id, &reply)?;
+            Some(task)
+        } else {
+            None
+        };
         if let Some(existing) = &command.reply {
+            let upgrade_prediction = if let (
+                Command::PredictNextPrompt { source_run_id },
+                CloudReply::NextPromptPrediction {
+                    prediction: previous,
+                },
+                CloudReply::NextPromptPrediction { prediction },
+            ) = (&command.command, existing, &reply)
+            {
+                if previous.source_run_id != *source_run_id {
+                    return Err(CloudError::Conflict);
+                }
+                // A pending observer may have won the first receipt race. Only
+                // that empty placeholder can gain the one attempt's final data.
+                // Retain every first informative result, including usage-only.
+                if previous.text.is_some()
+                    || previous.usage.is_some()
+                    || (prediction.text.is_none() && prediction.usage.is_none())
+                {
+                    return Ok(());
+                }
+                true
+            } else {
+                false
+            };
             // A replayed read may observe a newer projection watermark. Keep the
             // first durably retained read receipt; mutations still require exact replies.
-            if matches!(
-                command.command,
-                Command::History { .. } | Command::InspectInboxes { .. }
-            ) && matches!(
-                reply,
-                CloudReply::History { .. } | CloudReply::Inboxes { .. } | CloudReply::Failed { .. }
-            ) {
+            if !upgrade_prediction
+                && matches!(
+                    command.command,
+                    Command::History { .. } | Command::InspectInboxes { .. }
+                )
+                && matches!(
+                    reply,
+                    CloudReply::History { .. }
+                        | CloudReply::Inboxes { .. }
+                        | CloudReply::Failed { .. }
+                )
+            {
                 return Ok(());
             }
-            return if existing == &reply {
-                Ok(())
-            } else {
-                Err(CloudError::Conflict)
-            };
+            if !upgrade_prediction {
+                return if existing == &reply {
+                    Ok(())
+                } else {
+                    Err(CloudError::Conflict)
+                };
+            }
         }
-        let mut task = self.task(&node.project_id, task_id).await?;
+        let mut task = match prediction_task {
+            Some(task) => task,
+            None => self.task(&node.project_id, task_id).await?,
+        };
         if task.node_id != node.node_id {
             return Err(CloudError::PermissionDenied);
         }
@@ -198,6 +280,12 @@ impl CloudRepository {
                     "cloud.task.dispatch-failed.v1",
                     &task,
                 )?);
+            }
+            (
+                Command::PredictNextPrompt { source_run_id },
+                CloudReply::NextPromptPrediction { .. },
+            ) => {
+                validate_prediction_reply(&task, source_run_id, &reply)?;
             }
             (Command::Cancel { run_id, .. }, CloudReply::Cancelled { response })
                 if response.run.run_id == *run_id => {}

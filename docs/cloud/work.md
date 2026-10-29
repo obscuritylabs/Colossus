@@ -62,6 +62,22 @@ Each account can pin up to 32 chats per project. Pins are saved in this browser,
 separately for each account and project. Clearing browser storage removes them. If
 storage is unavailable, pins last only for the current browser session.
 
+## Choose next prompt suggestions
+
+Open **Settings → Appearance → Next prompt suggestions** to choose **Off**,
+**Local**, or **Model prediction**. This browser saves the choice.
+
+**Local** is the default. It offers an explicit next step from the completed answer
+without making another provider request. **Model prediction** sends bounded recent
+user and assistant text to the model used by that turn for one short prediction.
+It may use additional provider tokens, shown separately as **Prediction** when the
+provider reports them. A runtime without prediction support falls back to Local.
+
+Click a suggestion, or press **Tab** in the empty editor, to insert it into your
+draft. Edit it and send when ready. Suggestions never send automatically or replace
+text you have already written. Press **Esc** to dismiss one. New or running turns
+hide the preceding turn's suggestion.
+
 ## Work with a connected agent
 
 1. Open **Fleet**, choose a host, then a workspace.

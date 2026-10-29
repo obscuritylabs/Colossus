@@ -48,6 +48,9 @@ pub(crate) async fn browser_context(
     state.browser.require_open()?;
     let selected = state.browser_selection().await;
     state.browser.selection_changed(selected.clone());
+    if let Some(scope) = &*selected {
+        state.browser.load_human_preferences(scope)?;
+    }
     #[cfg(any(
         feature = "macos-contained-browser-diagnostic",
         any(

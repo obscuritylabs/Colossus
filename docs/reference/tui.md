@@ -107,6 +107,7 @@ Use `/help` for arguments and commands available in your installed version.
 | Images | `/attach PATH`, `/attachments`, `/detach INDEX`, `/detach all` |
 | Theme | `/theme`, `/theme list`, `/theme preview`, `/theme validate`, `/theme scaffold`, `/theme reset` |
 | Display | `/stream`, `/events`, `/reasoning`, `/transcript`, `/multiline` open setting choosers; direct value arguments remain supported. `/trace` toggles compact events. |
+| Next prompt | `/suggestions` opens a chooser; `/suggestions off\|local\|model` saves the mode. Local is the default and makes no provider request. Model makes one bounded auxiliary request per completed source turn and reports its tokens separately. Tab inserts a suggestion into the empty draft; Esc dismisses it. |
 | Preferences | `/tui prefs`, `/tui save`, `/tui reset` |
 | Telemetry and diagnostics | `/telemetry`, `/telemetry metrics`, `/audit verify`, `/projection status`, `/models doctor [PROFILE]`, `/provider doctor [PROFILE]`, `/provider diagnostics` |
 | Workflows | `/workflow list`, `/workflow status`; schedule `list`, `show`, `enable`, `disable`, `tick`; webhook `list`, `show`, `enable`, `disable`; subscription `list`, `show`, `enable`, `disable`, `tick` |

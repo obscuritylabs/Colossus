@@ -1273,7 +1273,8 @@ pub(super) async fn dispatch_to_worker_if_active(
         | Command::Codex(_)
         | Command::SandboxHelper
         | Command::Cloud(_)
-        | Command::DevelopmentCredentials(_) => Ok(false),
+        | Command::DevelopmentCredentials(_)
+        | Command::Worktree(_) => Ok(false),
     }
 }
 

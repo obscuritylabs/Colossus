@@ -76,6 +76,24 @@ function renderRevisionComposer(): string {
 }
 
 describe("WorkComposer capabilities", () => {
+  it("renders an editable next-prompt action only for an empty usable draft", () => {
+    const prediction = {
+      nextPrompt: "Verify the result",
+      predictionTokens: 23,
+      onAcceptNextPrompt: vi.fn(),
+      onDismissNextPrompt: vi.fn(),
+    };
+    const markup = renderComposer(true, prediction);
+    expect(markup).toContain("Suggested next prompt");
+    expect(markup).toContain("Prediction: 23 tokens");
+    expect(markup).toContain('type="button"');
+    expect(
+      renderComposer(true, { ...prediction, prompt: "My existing draft" }),
+    ).not.toContain("Suggested next prompt");
+    expect(
+      renderComposer(true, { ...prediction, canCompose: false }),
+    ).not.toContain("Suggested next prompt");
+  });
   it("offers a standalone Goal without Plan continuation and shares explicit iteration controls", () => {
     const markup = renderComposer(false, {
       mode: "goal",

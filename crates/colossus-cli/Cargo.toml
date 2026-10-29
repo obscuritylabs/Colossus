@@ -43,6 +43,7 @@ colossus-tui.workspace = true
 colossus-update.workspace = true
 colossus-worker.workspace = true
 colossus-workflow.workspace = true
+colossus-worktrees.workspace = true
 crossterm.workspace = true
 fs4.workspace = true
 getrandom.workspace = true
@@ -73,6 +74,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+git2.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 ed25519-dalek.workspace = true

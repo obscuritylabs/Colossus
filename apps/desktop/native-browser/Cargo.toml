@@ -15,7 +15,7 @@ native-test-driver = ["objc2-foundation/NSData", "objc2-foundation/NSJSONSeriali
 [dependencies]
 async-trait = { version = "0.1.89", optional = true }
 colossus-native-browser-pki = { version = "=0.1.0", path = "../../../native/browser/pki", optional = true }
-colossus-browser-presentation = { version = "=0.11.11-preview.4", path = "../../../crates/colossus-browser-presentation", optional = true }
+colossus-browser-presentation = { version = "=0.11.11-preview.5", path = "../../../crates/colossus-browser-presentation", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", optional = true }
 sha2 = { version = "0.10.9", optional = true }

@@ -63,6 +63,7 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::SessionMessages { .. } => "session_messages",
         WorkerOperation::SessionMessagesPage { .. } => "session_messages_page",
         WorkerOperation::SessionLatest => "session_latest",
+        WorkerOperation::PredictNextPrompt { .. } => "predict_next_prompt",
         WorkerOperation::WorkState { .. } => "work_state",
         WorkerOperation::PresentationGet => "presentation_get",
         WorkerOperation::PresentationHistory { .. } => "presentation_history",

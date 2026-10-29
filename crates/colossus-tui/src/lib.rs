@@ -107,6 +107,7 @@ mod footer;
 mod header;
 mod history_search;
 mod model_picker;
+mod next_prompt;
 mod plan_execution;
 mod preview;
 mod provider_recovery;

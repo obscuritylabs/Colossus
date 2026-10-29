@@ -82,7 +82,7 @@ test("tabs survive closing the pane and switching app surfaces", async ({
     .click();
   await expect(address).toHaveValue("https://example.com/docs");
   await page
-    .getByRole("button", { name: "Clear session", exact: true })
+    .getByRole("button", { name: "Close all tabs", exact: true })
     .click();
   await expect(
     page.getByRole("heading", { name: "Browse beside your work" }),
@@ -221,7 +221,7 @@ test("browser uses two compact rows and keeps pane actions visible with many tab
     expect(viewport!.y - bounds!.y).toBeLessThanOrEqual(100);
   }
   await page
-    .getByRole("button", { name: "Clear session", exact: true })
+    .getByRole("button", { name: "Close all tabs", exact: true })
     .click();
   await expect(
     page.getByRole("heading", { name: "Browse beside your work" }),

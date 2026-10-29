@@ -43,6 +43,9 @@ pub(super) struct Registry {
     pub(super) selected: HashMap<String, String>,
     pub(super) profiles: HashMap<String, tempfile::TempDir>,
     pub(super) sessions: HashMap<String, String>,
+    pub(super) human_preferences: HashMap<String, super::profile::HumanBrowserPreferences>,
+    pub(super) human_profiles: HashMap<String, super::profile::HumanProfileLease>,
+    pub(super) diagnostics: HashMap<String, super::diagnostics::BrowserDiagnostics>,
     #[cfg(any(
         feature = "windows-browser-development",
         feature = "windows-browser-functional-preview"
@@ -72,6 +75,37 @@ impl Registry {
             engine.agent_control_available = true;
             engine.message = None;
         }
+        #[cfg(windows)]
+        if (self
+            .scope
+            .as_ref()
+            .and_then(|scope| self.human_preferences.get(scope))
+            .is_some_and(super::profile::HumanBrowserPreferences::system_mode)
+            && !self.tabs.iter().any(|tab| {
+                Some(&tab.scope) == self.scope.as_ref()
+                    && self
+                        .scope
+                        .as_ref()
+                        .and_then(|scope| self.selected.get(scope))
+                        == Some(&tab.dto.id)
+                    && !matches!(tab.view, BrowserView::Empty)
+            }))
+            || self.tabs.iter().any(|tab| {
+                Some(&tab.scope) == self.scope.as_ref()
+                    && self
+                        .scope
+                        .as_ref()
+                        .and_then(|scope| self.selected.get(scope))
+                        == Some(&tab.dto.id)
+                    && tab.view.system_view().is_some()
+            })
+        {
+            engine = BrowserEngineDto {
+                kind: "webview2", preview: false, ready: true,
+                message: Some("Human WebView2 profile. Saved sign-ins are never shared with agent Chromium sessions.".into()),
+                agent_control_available: false,
+            };
+        }
         if self.draining {
             engine.ready = false;
             engine.message = Some(DRAINING_MESSAGE.into());
@@ -92,6 +126,16 @@ impl Registry {
                     dto
                 })
                 .collect(),
+            diagnostics: self
+                .tabs
+                .iter()
+                .filter(|tab| Some(&tab.scope) == self.scope.as_ref())
+                .filter_map(|tab| {
+                    self.diagnostics
+                        .get(&tab.dto.id)
+                        .map(|diagnostics| (tab.dto.id.clone(), diagnostics.clone()))
+                })
+                .collect(),
             selected_tab_id: self
                 .scope
                 .as_ref()
@@ -109,7 +153,18 @@ impl Registry {
         if matches!(tab.dto.control, "completed" | "expired") {
             return;
         }
+        if let Some(diagnostics) = self.diagnostics.get_mut(id) {
+            diagnostics.event(&event);
+        }
         match event {
+            BrowserEvent::HttpStatus(status) => {
+                if status == 401 || status == 403 {
+                    tab.dto.notice = Some(format!(
+                        "The server returned HTTP {status}. Open connection details to check the browser profile, redirects and client-certificate challenge. No credentials are logged."
+                    ));
+                }
+            }
+            BrowserEvent::Redirected | BrowserEvent::NavigationFailure(_) => {}
             BrowserEvent::Expired => {
                 tab.dto.control = "expired";
                 tab.dto.page.loading = false;
@@ -123,6 +178,12 @@ impl Registry {
                 tab.heartbeat = None;
             }
             BrowserEvent::Loading(loading) => {
+                if loading && !tab.dto.page.loading {
+                    if let Some(diagnostics) = self.diagnostics.get_mut(id) {
+                        diagnostics.reset();
+                    }
+                    tab.dto.notice = None;
+                }
                 tab.dto.page.loading = loading;
                 if loading {
                     tab.dto.error = None;
@@ -163,8 +224,14 @@ impl Registry {
                 tab.dto.error = Some("The website's certificate could not be verified. Check its hostname, expiry, and native CA trust configuration. TLS verification cannot be bypassed.".into());
             }
             BrowserEvent::AuthenticationRequired => {
-                tab.dto.page.loading = false;
-                tab.dto.notice = Some("This website requires a client certificate. A native identity must be provisioned and reviewed for this exact HTTPS origin.".into());
+                if tab.view.system_view().is_none() {
+                    tab.dto.page.loading = false;
+                }
+                tab.dto.notice = Some(if tab.view.system_view().is_some() {
+                    "This website requested a client certificate. Select the intended identity in the native Windows certificate chooser; TLS verification stays enabled."
+                } else {
+                    "This website requires a client certificate. A native identity must be provisioned and reviewed for this exact HTTPS origin."
+                }.into());
             }
         }
     }

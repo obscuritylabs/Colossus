@@ -15,6 +15,7 @@ import "./conversation-text.css";
 import { ThreadAgentInboxes } from "./ThreadAgentInboxes";
 import { WebLink } from "./WebLink";
 import { releasedRunUsage } from "./message-usage";
+import { loadNextPrompt } from "./next-prompt";
 import {
   WorkSurfaceHeader,
   SESSION_WORKSPACE_VIEWS,
@@ -351,6 +352,13 @@ export function ThreadDetail({
     () => conversationProjection(detail, events),
     [detail, events],
   );
+  const predictionTask = tasks[0];
+  const nextPromptSource = useMemo(() => {
+    if (!predictionTask?.run_id || taskStatus(predictionTask) !== "completed" || predictionTask.source_read_only || thread.active_task_id || thread.queued_task_ids?.length) return null;
+    const output = projection.messages.filter(message => message.task_id === predictionTask.task_id && message.role === "assistant").map(message => message.text).join("\n");
+    return output ? { key: JSON.stringify([project, thread.thread_id, predictionTask.run_id]), output } : null;
+  }, [project, thread.thread_id, thread.active_task_id, thread.queued_task_ids?.length, predictionTask, projection.messages]);
+  const loadPromptPrediction = useCallback((signal: AbortSignal) => predictionTask?.run_id ? loadNextPrompt(`/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(predictionTask.task_id)}`, predictionTask.run_id, signal) : Promise.resolve(null), [project, predictionTask?.task_id, predictionTask?.run_id]);
   const textScope = JSON.stringify([
     project,
     initial.thread_id,
@@ -1588,6 +1596,8 @@ export function ThreadDetail({
         />
       ) : null}
       <RunComposer
+        nextPromptSource={nextPromptSource}
+        loadPromptPrediction={loadPromptPrediction}
         onPolicy={onPolicy}
         nodes={composerNodes}
         nodeId={thread.node_id}

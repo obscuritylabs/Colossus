@@ -26,6 +26,42 @@ Pasting more than 1,000 characters into the message box shows a short **Pasted C
 
 For a first task, try asking the agent to explain the repository without changing files. To inspect its response and evidence, open [Session views](session-views.md).
 
+## Capture another Windows app
+
+Open **Settings → Global → Composer & companion**, enable **App Shots**, and review
+the native confirmation. With the app you want to share in front, press
+**Control+Alt+Shift+S**. Desktop opens a preview of that window’s screenshot and any
+available visible accessibility text. Expand **View captured text** to inspect it;
+clear **Include captured text** to attach only the image. Password-marked text fields
+are excluded, but the screenshot can still contain anything visible in the window.
+
+Choose **Attach to current draft**, add your message, and send when ready. **Discard**
+or **Escape** closes the preview. Switching chats or workspaces discards the pending
+capture. Captures stay in memory for up to ten minutes until you attach or discard
+them; attaching uploads the selected parts to that chat’s runtime as ordinary input
+artifacts. Nothing is sent to a model until you send the message.
+
+App Shots start off. Change the shortcut in the same settings page if it conflicts
+with another app. Capture supports visible ordinary-user windows on Windows; elevated,
+protected, minimized, or unavailable windows may refuse capture. Accessibility text is
+limited to visible labels exposed by the app, so some captures have only an image.
+This shortcut does not enable agent computer control.
+
+## Suggest the next prompt
+
+After a completed response, Desktop can offer a next step above an empty composer.
+Press **Tab** while the editor is focused, or click the suggestion, to insert an
+editable draft. **Escape** dismisses it. Sending always takes a separate action.
+
+Choose **Off**, **Local**, or **Model** under **Settings → Global → Composer & companion**.
+**Local** is the default and extracts an offered next action from the completed
+response without another provider call; some responses have no suggestion. **Model**
+uses the completed run’s model and bounded recent released user/assistant messages
+for one short prediction. It uses additional provider tokens, shown separately as
+**Prediction** usage. Tools and system messages are excluded. Unavailable predictions
+fall back to Local. Switching context, editing the draft, or starting another run
+hides stale suggestions.
+
 ## Choose a model and reasoning level
 
 For a managed local workspace, select the model bubble above your draft. Search the

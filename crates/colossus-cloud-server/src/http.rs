@@ -45,6 +45,7 @@ pub(crate) fn router(state: Arc<State>) -> Router {
         .route("/api/projects/{project}/tasks/{task}/cancel",post(cancel))
         .route("/api/projects/{project}/tasks/{task}/respond",post(respond))
         .route("/api/projects/{project}/tasks/{task}/inboxes",post(inspect_inboxes))
+        .route("/api/projects/{project}/tasks/{task}/next-prompt",post(predict_next_prompt))
         .merge(crate::resources::router()).merge(crate::terminal::router()).merge(crate::admin::router()).merge(crate::announcements::router()).merge(crate::observability::router()).merge(crate::settings::router()).merge(crate::chat::router()).merge(crate::hosted::router()).merge(crate::chat_settings::router()).merge(crate::chat_credentials::router()).merge(crate::global_settings::router())
         .fallback_service(spa::service(&state.config.web_root))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::HeaderName::from_static("x-content-type-options"), header::HeaderValue::from_static("nosniff")))
@@ -936,6 +937,18 @@ struct InspectInboxesInput {
     participant_id: Option<String>,
     #[serde(default)]
     after_sequence: u64,
+}
+async fn predict_next_prompt(
+    Extract(state): Extract<Arc<State>>,
+    Path((project, task)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>> {
+    let caller = state.auth.caller(&headers, &project, true).await?;
+    let command = db(state.repo.clone(), move |repo| async move {
+        repo.predict_next_prompt(&caller, &task).await
+    })
+    .await?;
+    Ok(Json(serde_json::json!({"command": command})))
 }
 async fn inspect_inboxes(
     Extract(state): Extract<Arc<State>>,

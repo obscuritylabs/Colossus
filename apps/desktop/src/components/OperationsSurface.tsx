@@ -73,6 +73,7 @@ interface OperationsSurfaceProps {
   onAddExternalTarget: () => void;
   onRemoveExternalTarget: (targetId: string) => void;
   onChooseWorkspace: () => void;
+  onWorkspaceOpened?: ((status: DesktopStatus) => void) | undefined;
   onConfigureManaged: () => void;
   onRestartManaged: () => void;
   onSetTerminalEnabled: (enabled: boolean) => void;
@@ -265,6 +266,7 @@ function SettingsView({
   onAddExternalTarget,
   onRemoveExternalTarget,
   onChooseWorkspace,
+  onWorkspaceOpened,
   onConfigureManaged,
   onRestartManaged,
   onSetTerminalEnabled,
@@ -291,6 +293,7 @@ function SettingsView({
   | "onAddExternalTarget"
   | "onRemoveExternalTarget"
   | "onChooseWorkspace"
+  | "onWorkspaceOpened"
   | "onConfigureManaged"
   | "onRestartManaged"
   | "onSetTerminalEnabled"
@@ -339,6 +342,7 @@ function SettingsView({
           updateChecking={updateChecking}
           updateMessage={updateMessage}
           onChooseWorkspace={onChooseWorkspace}
+          onWorkspaceOpened={onWorkspaceOpened}
           onConfigureManaged={onConfigureManaged}
           onRestartManaged={onRestartManaged}
           onAddExternalTarget={onAddExternalTarget}
@@ -820,6 +824,7 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
           onAddExternalTarget={props.onAddExternalTarget}
           onRemoveExternalTarget={props.onRemoveExternalTarget}
           onChooseWorkspace={props.onChooseWorkspace}
+          onWorkspaceOpened={props.onWorkspaceOpened}
           onConfigureManaged={props.onConfigureManaged}
           onRestartManaged={props.onRestartManaged}
           onSetTerminalEnabled={props.onSetTerminalEnabled}

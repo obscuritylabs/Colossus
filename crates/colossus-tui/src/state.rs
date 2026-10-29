@@ -393,6 +393,7 @@ pub struct TuiState {
     /// Process-local canonical selected plan; cleared on session switches and restart.
     pub selected_plan: Option<PlanRecord>,
     pub(super) composer: Composer,
+    pub(super) next_prompt: crate::next_prompt::NextPromptState,
     pub(super) dictation: crate::dictation::DictationState,
     pub(super) history: Vec<String>,
     pub(super) completions: Vec<String>,
@@ -497,6 +498,7 @@ impl TuiState {
             mode: InteractiveMode::Execute,
             selected_plan: None,
             composer: Composer::default(),
+            next_prompt: crate::next_prompt::NextPromptState::default(),
             dictation: crate::dictation::DictationState::default(),
             history: snapshot.history,
             completions: with_mode_completions(snapshot.completions),
@@ -858,6 +860,9 @@ impl TuiState {
     }
 
     pub(super) fn completion_candidates(&self) -> Vec<&str> {
+        if self.composer.draft.is_empty() && !self.composer.completion_hidden {
+            return self.suggested_next_prompt().into_iter().collect();
+        }
         if self.composer.completion_hidden
             || self.composer.cursor != self.composer.draft.len()
             || self.composer.draft.is_empty()
@@ -937,11 +942,14 @@ impl TuiState {
     }
 
     pub(super) fn hide_completion(&mut self) -> bool {
-        if self.completion_menu_candidates().is_empty() {
+        if self.completion_menu_candidates().is_empty() && self.suggested_next_prompt().is_none() {
             return false;
         }
         self.composer.completion_index = None;
         self.composer.completion_hidden = true;
+        if self.composer.draft.is_empty() {
+            self.next_prompt.dismiss();
+        }
         true
     }
 

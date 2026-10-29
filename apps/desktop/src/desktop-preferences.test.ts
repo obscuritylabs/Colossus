@@ -37,6 +37,7 @@ describe("Desktop tool preferences", () => {
         }),
       ),
     ).toEqual({
+      nextPromptMode: "local",
       gitAutoRefresh: false,
       gitDefaultView: "history",
       browserNewTabUrl: "https://example.com/",

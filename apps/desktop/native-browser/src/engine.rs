@@ -22,6 +22,35 @@ pub async fn harden(
     Ok(())
 }
 
+/// Harden an explicitly selected human `WebView2` profile. This grants no agent
+/// handoff and never changes the default temporary Chromium session policy.
+///
+/// # Errors
+/// Fails closed unless the actual native privacy mode and User-Agent match.
+#[cfg(windows)]
+pub async fn harden_human_profile(
+    view: &Webview,
+    policy: NavigationPolicy,
+    sink: EventSink,
+    persistent: bool,
+    user_agent: String,
+) -> Result<(), BrowserError> {
+    dispatch(view, move |native| {
+        platform::harden_human_profile(&native, policy, sink, persistent, &user_agent)
+    })
+    .await?;
+    platform::restrict_file_picker(view).await
+}
+
+/// Clear the selected human profile through `WebView2`'s native profile API.
+///
+/// # Errors
+/// A missing or failed completion is reported; it is never treated as a clear.
+#[cfg(windows)]
+pub async fn clear_site_data(view: &Webview) -> Result<(), BrowserError> {
+    platform::clear_site_data(view).await
+}
+
 /// Apply one closed navigation operation on the `WebView`'s owning thread.
 ///
 /// # Errors

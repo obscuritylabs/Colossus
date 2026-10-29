@@ -27,6 +27,12 @@ pub struct PageState {
 #[derive(Clone, Debug)]
 pub enum BrowserEvent {
     Loading(bool),
+    /// Native main-document response status; never response headers or body.
+    HttpStatus(u16),
+    /// A redirect occurred, without retaining a potentially secret URL.
+    Redirected,
+    /// Native engine error category code, without page data or credentials.
+    NavigationFailure(i32),
     Failed,
     Crashed,
     /// The supervised context reached its original fixed authority deadline.

@@ -285,6 +285,11 @@ impl BoundPublicGrpcServer {
         if !local_addr.ip().is_loopback() || local_addr.port() == 0 {
             return Err(PublicGrpcServerError::NonLoopbackBind);
         }
+        let system = if agent_runs.supports_next_prompt_prediction() {
+            system.with_prompt_prediction()
+        } else {
+            system
+        };
         let system = if agent_runs.supports_runtime_policy_posture() {
             system.with_policy_posture()
         } else {

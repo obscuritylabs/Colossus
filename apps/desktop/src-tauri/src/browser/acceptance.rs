@@ -31,12 +31,18 @@ mod chromium;
     feature = "windows-browser-development"
 ))]
 mod contained_diagnostic;
+#[cfg(windows)]
+mod human_profile;
 #[cfg(feature = "embedded-chromium-preview")]
 mod pki;
 
 // Keep platform-exclusive native lifecycle branches in one source-only harness.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn run() -> i32 {
+    #[cfg(windows)]
+    if std::env::args().nth(1).as_deref() == Some("--human-profile") {
+        return human_profile::run();
+    }
     println!("NATIVE_BROWSER_HOST_PID {}", std::process::id());
     println!("Starting native browser acceptance");
     let address = std::env::args().nth(1).expect("native browser fixture URL");

@@ -50,6 +50,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             handle_host_event(&mut state, host_event);
         }
         agent_refresh.schedule(&state, Arc::clone(&host), event_tx.clone());
+        crate::next_prompt::schedule_next_prompt(&mut state, Arc::clone(&host), event_tx.clone());
         crate::dictation::tick(&mut state, event_tx.clone());
         if let Some(line) = crate::dictation::take_send(&mut state) {
             submit_line(&mut state, line, Arc::clone(&host), event_tx.clone());
@@ -1173,6 +1174,7 @@ pub(super) fn start_line(
         }
         InteractiveCommand::Invalid(message) => state.append_entry(error_entry(&message)),
         InteractiveCommand::Turn(prompt) => {
+            state.next_prompt.clear();
             if state.mode == InteractiveMode::Research && !state.pending_images.is_empty() {
                 state.append_entry(error_entry(
                     "Research mode does not accept image inputs. Use /detach all or switch to Execute or Plan mode.",
@@ -1643,6 +1645,18 @@ pub(super) fn handle_local_command(
 
 pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
     match event {
+        HostEvent::NextPrompt {
+            session_id,
+            generation,
+            text,
+            auxiliary_tokens,
+        } => crate::next_prompt::apply_next_prompt(
+            state,
+            session_id,
+            generation,
+            text,
+            auxiliary_tokens,
+        ),
         HostEvent::Sidebar {
             session_id,
             session_epoch,
@@ -1791,6 +1805,8 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                     state.pending_images.clear();
                     let selection_valid = apply_plan_selection(state, plan_selection);
                     finalize_assistant(state, &result.output);
+                    state.next_prompt.completed(&result);
+                    state.composer.completion_hidden = false;
                     state.replace_footer(footer);
                     if selection_valid {
                         offer_plan_review(state);
@@ -2166,6 +2182,7 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
         state.text_selection.clear();
         state.selecting_text = false;
         if state.session_id != session_id {
+            state.next_prompt.clear();
             state.sticky_skills.clear();
             state.agents = crate::agents::AgentTree::default();
             state.run_usage = RunUsageState::restored(&session_id, None);

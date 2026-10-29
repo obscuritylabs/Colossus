@@ -578,6 +578,15 @@ impl WorkerInteractiveHost {
                 preferences.show_reasoning = parse_toggle(arguments, preferences.show_reasoning)?;
                 true
             }
+            "suggestions" => {
+                preferences.next_prompt_mode = match arguments.trim() {
+                    "off" => colossus_contracts::NextPromptMode::Off,
+                    "on" | "local" => colossus_contracts::NextPromptMode::Local,
+                    "model" => colossus_contracts::NextPromptMode::Model,
+                    _ => return Err("/suggestions expects off, local, or model".into()),
+                };
+                true
+            }
             "multiline" => {
                 preferences.multiline = parse_toggle(arguments, preferences.multiline)?;
                 true
@@ -1446,6 +1455,28 @@ impl WorkerInteractiveHost {
 
 #[async_trait]
 impl InteractiveHost for WorkerInteractiveHost {
+    async fn predict_next_prompt(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        role: &str,
+        model_profile: &str,
+    ) -> Result<(Option<String>, Option<u64>), String> {
+        let value = self
+            .value(WorkerOperation::PredictNextPrompt {
+                session_id: session_id.into(),
+                source_run_id: run_id.into(),
+                role: role.into(),
+                model_profile: model_profile.into(),
+            })
+            .await?;
+        let prediction: colossus_runtime::RuntimePromptPrediction =
+            serde_json::from_value(value).map_err(|error| error.to_string())?;
+        Ok((
+            prediction.text,
+            prediction.usage.map(|usage| usage.total_tokens),
+        ))
+    }
     async fn sidebar_status(
         &self,
         session_id: &str,

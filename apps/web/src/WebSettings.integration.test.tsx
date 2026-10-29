@@ -26,6 +26,7 @@ const appearance: ComponentProps<typeof WebSettings>["appearance"] = {
   darkPalette: "colossus",
   textSize: "comfortable",
   sendShortcut: "enter",
+  nextPromptMode: "local",
   palettes: parseThemePalettes(DEFAULT_THEME_PALETTES),
 };
 const base: ComponentProps<typeof WebSettings> = {

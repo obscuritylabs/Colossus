@@ -495,6 +495,10 @@ fn validate_frame(
     )
 }
 
+#[cfg(test)]
+#[path = "client/compatibility_tests.rs"]
+mod compatibility_tests;
+
 #[cfg(all(test, unix))]
 mod tests {
     use std::{fs, os::unix::fs::PermissionsExt as _};

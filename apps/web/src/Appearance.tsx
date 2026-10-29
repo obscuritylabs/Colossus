@@ -24,12 +24,14 @@ import {
   type ThemePalettes,
 } from "@colossus/ui/lib/palette";
 import "@colossus/ui/styles/appearance.css";
+import type { NextPromptMode } from "@colossus/ui/lib/next-prompt";
 
 type Appearance = {
   colorTheme: "system" | "dark" | "light";
   darkPalette: DarkPalettePreference;
   textSize: "compact" | "comfortable" | "large";
   sendShortcut: "enter" | "modEnter";
+  nextPromptMode: NextPromptMode;
   palettes: ThemePalettes;
 };
 const storageKey = "colossus.web.appearance.v1";
@@ -38,9 +40,11 @@ const defaults: Appearance = {
   darkPalette: "colossus",
   textSize: "comfortable",
   sendShortcut: "enter",
+  nextPromptMode: "local",
   palettes: parseThemePalettes(DEFAULT_THEME_PALETTES),
 };
 export const SendShortcutContext = createContext<"enter" | "modEnter">("enter");
+export const NextPromptModeContext = createContext<NextPromptMode>("local");
 
 function readAppearance(): Appearance {
   try {
@@ -56,6 +60,7 @@ function readAppearance(): Appearance {
     return {
       palettes: parseThemePalettes(value.palettes),
       sendShortcut: value.sendShortcut === "modEnter" ? "modEnter" : "enter",
+      nextPromptMode: value.nextPromptMode === "off" || value.nextPromptMode === "model" ? value.nextPromptMode : "local",
       colorTheme: ["system", "dark", "light"].includes(value.colorTheme ?? "")
         ? value.colorTheme!
         : defaults.colorTheme,
@@ -189,6 +194,12 @@ export function AppearanceSettings({
         >
           <option value="enter">Enter to send</option>
           <option value="modEnter">Ctrl / Cmd + Enter to send</option>
+        </DropdownSelect>
+      </label>
+      <label className="appearance-send-shortcut">
+        <span><strong>Next prompt suggestions</strong><small>Local uses explicit next steps. Model sends recent conversation text to its configured provider for one short prediction and may use additional tokens. Suggestions fill your draft and never send automatically.</small></span>
+        <DropdownSelect aria-label="Next prompt suggestions" value={appearance.nextPromptMode} onChange={event => onChange({ ...appearance, nextPromptMode: event.target.value === "off" || event.target.value === "model" ? event.target.value : "local" })}>
+          <option value="off">Off</option><option value="local">Local · no extra tokens</option><option value="model">Model prediction</option>
         </DropdownSelect>
       </label>
       {isGlobalAdmin && onEnvironmentSettings ? (

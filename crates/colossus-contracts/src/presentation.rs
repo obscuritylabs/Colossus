@@ -202,6 +202,30 @@ impl TranscriptDensity {
     }
 }
 
+/// How an editor offers an editable continuation after a completed conversation turn.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NextPromptMode {
+    /// Never offer a prediction.
+    Off,
+    /// Extract an explicit next action locally, without provider requests.
+    #[default]
+    Local,
+    /// Request one bounded prediction from the conversation's model.
+    Model,
+}
+
+impl NextPromptMode {
+    /// Stable preference and command spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Local => "local",
+            Self::Model => "model",
+        }
+    }
+}
+
 /// Strict versioned interactive-terminal presentation preferences.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -223,6 +247,9 @@ pub struct TerminalPreferences {
     pub show_reasoning: bool,
     /// Transcript vertical density.
     pub transcript_density: TranscriptDensity,
+    /// Editable next prompt predictions; Local makes no additional provider calls.
+    #[serde(default)]
+    pub next_prompt_mode: NextPromptMode,
 }
 
 impl Default for TerminalPreferences {
@@ -236,6 +263,7 @@ impl Default for TerminalPreferences {
             events_mode: EventDisplayMode::Compact,
             show_reasoning: true,
             transcript_density: TranscriptDensity::Comfortable,
+            next_prompt_mode: NextPromptMode::Local,
         }
     }
 }

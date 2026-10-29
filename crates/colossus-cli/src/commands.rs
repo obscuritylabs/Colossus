@@ -2,6 +2,8 @@ use super::*;
 
 #[derive(Subcommand)]
 pub(super) enum Command {
+    /// Manage local Git worktrees without loading a provider or runtime.
+    Worktree(crate::worktree_args::WorktreeCommand),
     /// Explicit offline development-only credential preparation and reviewed rewrap.
     #[command(name = "dev-credentials", hide = !cfg!(debug_assertions))]
     DevelopmentCredentials(DevelopmentCredentialsCommand),

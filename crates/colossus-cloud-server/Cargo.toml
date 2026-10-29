@@ -61,7 +61,7 @@ colossus-grpc.workspace = true
 colossus-connector.workspace = true
 tempfile.workspace = true
 tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect", "handshake"] }
-colossus-control-plane-client = { version = "=0.11.11-preview.4", path = "../colossus-control-plane-client" }
+colossus-control-plane-client = { version = "=0.11.11-preview.5", path = "../colossus-control-plane-client" }
 colossus-testkit.workspace = true
 serde-saphyr.workspace = true
 p256.workspace = true

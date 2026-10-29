@@ -12,6 +12,7 @@ mod driver;
 mod focus_settle;
 #[cfg(any(windows, test))]
 mod geometry;
+mod human_appshot;
 #[cfg(any(windows, test))]
 mod input_marker;
 #[cfg(any(windows, test))]
@@ -29,6 +30,9 @@ mod trusted;
 mod wire;
 
 pub use driver::NativeComputerDriver;
+pub use human_appshot::{
+    ForegroundAppshot, HumanAppshot, prepare_foreground_appshot, run_appshot_worker_if_requested,
+};
 pub use trusted::{NativeProcessIdentity, TrustedComputerContext};
 
 /// Dispatch the fixed private helper mode before composing a normal host runtime.

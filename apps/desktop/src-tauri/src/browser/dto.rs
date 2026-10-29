@@ -24,6 +24,8 @@ pub(crate) struct BrowserSnapshotDto {
     pub(crate) tabs: Vec<BrowserTabDto>,
     pub(crate) selected_tab_id: Option<String>,
     pub(crate) engine: BrowserEngineDto,
+    pub(crate) diagnostics:
+        std::collections::HashMap<String, super::diagnostics::BrowserDiagnostics>,
 }
 
 #[derive(Clone, Debug, Serialize)]

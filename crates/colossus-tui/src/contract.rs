@@ -777,6 +777,17 @@ pub struct InteractivePrompt {
 
 /// Typed background event consumed by the sole terminal owner.
 pub enum HostEvent {
+    /// Optional auxiliary text, fenced to its completed source generation.
+    NextPrompt {
+        /// Selected canonical session when generation began.
+        session_id: String,
+        /// Editor-local completed-source generation fence.
+        generation: u64,
+        /// Bounded optional editable prompt; never a submitted command.
+        text: Option<String>,
+        /// Separate provider-reported auxiliary usage, when available.
+        auxiliary_tokens: Option<u64>,
+    },
     /// Metadata-only status refresh, fenced to the requested session selection.
     Sidebar {
         /// Exact selected session when the read began.
@@ -864,6 +875,16 @@ pub enum OperationResult {
 /// Embedded and worker-backed application boundary consumed by the TUI.
 #[async_trait]
 pub trait InteractiveHost: Send + Sync {
+    /// Explicit opt-in auxiliary model request; never appends a conversation turn.
+    async fn predict_next_prompt(
+        &self,
+        _session_id: &str,
+        _run_id: &str,
+        _role: &str,
+        _model_profile: &str,
+    ) -> Result<(Option<String>, Option<u64>), String> {
+        Ok((None, None))
+    }
     /// Resolve session, transcript, preferences, history, completions, and footer.
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String>;
 

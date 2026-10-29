@@ -1,0 +1,110 @@
+.worktree-settings {
+  display: grid;
+  gap: 20px;
+}
+.worktree-settings h3,
+.worktree-settings h4,
+.worktree-settings p {
+  margin: 0;
+}
+.worktree-settings h3 {
+  font-size: var(--font-size-heading-sm);
+  color: var(--text-strong);
+}
+.worktree-settings h4,
+.worktree-settings strong {
+  font-size: var(--font-size-body-sm);
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.worktree-settings p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-body);
+}
+.worktree-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-panel);
+  min-width: 0;
+}
+.worktree-group > header,
+.worktree-row,
+.worktree-defaults,
+.worktree-create,
+.worktree-empty {
+  padding: 16px;
+}
+.worktree-group > header {
+  border-bottom: 1px solid var(--border);
+}
+.worktree-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+.worktree-row > div:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.worktree-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.worktree-path {
+  overflow-wrap: anywhere;
+}
+.worktree-defaults,
+.worktree-create {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: end;
+}
+.worktree-settings label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-strong);
+  font-size: var(--font-size-body-sm);
+}
+.worktree-settings .worktree-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: center;
+}
+.worktree-check input {
+  accent-color: var(--blue);
+  width: var(--font-size-body);
+  height: var(--font-size-body);
+}
+.worktree-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.worktree-list li {
+  border-top: 1px solid var(--border);
+}
+.worktree-settings .worktree-error {
+  color: var(--red);
+}
+@media (max-width: 760px) {
+  .worktree-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .worktree-defaults,
+  .worktree-create {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .worktree-buttons {
+    flex-shrink: 1;
+  }
+}

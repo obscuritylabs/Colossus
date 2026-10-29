@@ -421,6 +421,49 @@ impl CloudRepository {
         .await
     }
 
+    /// Queue one stable opt-in auxiliary prediction under execution authority.
+    pub async fn predict_next_prompt(
+        &self,
+        caller: &CloudCaller,
+        task_id: &str,
+    ) -> CloudResult<PendingCommand> {
+        caller.require(CloudPermission::Execute)?;
+        let task = self.task_for_caller(caller, task_id).await?;
+        if task.source_read_only {
+            return Err(CloudError::PermissionDenied);
+        }
+        // An optional prediction must never wake or send an unknown operation to
+        // an older/offline connector. Advertisement is metadata, not authority.
+        let now = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp())
+            .map_err(|_| CloudError::Storage)?;
+        let presence = self
+            .store
+            .read_lease(caller.project_id(), &task.node_id, now)
+            .await?;
+        if !presence
+            .capabilities
+            .iter()
+            .any(|capability| capability == colossus_sdk::NEXT_PROMPT_CAPABILITY)
+        {
+            return Err(CloudError::Conflict);
+        }
+        if task
+            .snapshot
+            .as_ref()
+            .is_none_or(|snapshot| snapshot.run.status != colossus_sdk::RunStatus::Completed)
+        {
+            return Err(CloudError::Conflict);
+        }
+        let source_run_id = task.run_id.clone().ok_or(CloudError::Conflict)?;
+        self.queue_mutation(
+            caller,
+            &task,
+            "next-prompt-prediction-v1",
+            Command::PredictNextPrompt { source_run_id },
+        )
+        .await
+    }
+
     async fn queue_mutation(
         &self,
         caller: &CloudCaller,

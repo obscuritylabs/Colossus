@@ -153,6 +153,23 @@ For a multi-step change, `/plan new` starts a plan you can review before executi
 The [Planning guide](planning.md) covers approving it and choosing Direct or Goal
 Mode. For source-backed questions, see [Research](research.md).
 
+## Suggest the next prompt
+
+After a completed turn, the empty editor can offer an explicit next action from the
+assistant's answer. Press **Tab** to insert it as an editable draft, or **Esc** to
+dismiss it. Sending the draft remains a separate action.
+
+The default `/suggestions local` extracts explicit next steps on your computer and
+uses no additional provider tokens. Choose `/suggestions model` for a short
+conversation-aware prediction: it sends bounded recent user and assistant text to
+the model used by the completed turn, makes at most one auxiliary request per source
+turn, and may use additional tokens. Its reported tokens appear separately as
+**Prediction**. If no prediction is available, an explicit local next step may still
+appear. `/suggestions off` hides suggestions. Enter `/suggestions` to choose a mode;
+the preference is saved with your terminal settings.
+
+Suggestions leave existing drafts untouched and disappear while another turn runs.
+
 ## Leave and come back
 
 Press Ctrl-C while idle, or enter `/exit`, to leave the TUI. During an active run,

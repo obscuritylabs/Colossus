@@ -22,5 +22,8 @@ not duplicate current configuration or operator procedures.
 - [ADR 0010: Control Plane Helm and database trust](0010-control-plane-helm-database-boundary.md)
 - [ADR 0011: Human terminals through Fleet](0011-fleet-human-terminals.md)
 
+- [ADR 0012: Human-managed Git worktrees](0012-managed-worktrees.md)
+- [ADR 0013: Human App Shots and Desktop companion](0013-human-app-shots.md)
+
 Use the next sequential number. Record context, decision, consequences, status, and the
 date; link to canonical current documentation rather than copying it.

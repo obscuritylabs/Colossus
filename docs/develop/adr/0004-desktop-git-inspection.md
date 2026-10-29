@@ -93,3 +93,7 @@ and interaction, not native filesystem authorization.
 Future Git writes and agent automation require separate review. Agent effects must
 remain behind runtime-owned ports with policy, approval, audit, cancellation, and
 uncertain-outcome handling; Desktop read commands cannot grant that authority.
+
+Human-managed worktree creation and removal are now a separate native service
+under [ADR 0012](0012-managed-worktrees.md). This inspector keeps its read-only
+authority; it does not expose those mutations to the renderer or agent tools.

@@ -251,3 +251,65 @@
   font-family: var(--font-mono);
   font-size: var(--font-size-caption);
 }
+
+.browser-profile-settings {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+.browser-profile-settings .desktop-preference-note {
+  padding: 0;
+}
+.browser-profile-settings .desktop-preference-toggle {
+  padding: 0 0 16px;
+}
+.browser-profile-settings [role="status"],
+.browser-profile-settings [role="alert"] {
+  margin: 0;
+  font-size: var(--font-size-body-sm);
+}
+.browser-profile-settings h4 {
+  margin: 0;
+  font-size: var(--font-size-body);
+}
+.browser-profile-user-agent {
+  display: grid;
+  gap: 8px;
+}
+.browser-profile-user-agent small {
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+  font-weight: normal;
+}
+.browser-profile-user-agent input {
+  width: 100%;
+  min-width: 0;
+  font-weight: normal;
+}
+.browser-profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.browser-profile-confirm {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.browser-connection-details dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 8px 12px;
+}
+.browser-connection-details dt {
+  color: var(--muted);
+}
+.browser-connection-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 520px) {
+  .browser-connection-details dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

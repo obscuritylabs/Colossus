@@ -68,6 +68,21 @@ Define reusable standalone MCP servers under **Global → MCP**, then enable and
 
 **Global → Search** stores search services; **Workspace → Search** chooses routing for this workspace. **Workspace → Research** contains its research behavior. **Global → Telemetry** defines connections, while **Workspace → Telemetry** controls what this workspace exports. Saved destinations do not imply successful delivery; use their available health tests and diagnostics.
 
+## Developer companion
+
+In **Global → Composer & companion**, enable **Show mini hacker** for a small floating
+companion. It starts off and makes no sound. Its label follows the selected chat:
+ready, working, needs your input, or complete. Drag the character to move it. **Open**
+returns to Colossus; **Hide** turns it off until you enable it again.
+
+Choose **Mini** or **Comfortable**, toggle **Keep companion on top**, or turn animation
+off. Animation always respects your operating system’s reduced-motion preference.
+The companion receives status labels only, not prompts or response content. Its
+position is restored when it still fits a connected monitor.
+
+See [Work](work.md#capture-another-windows-app) for the App Shots shortcut and
+[next-prompt settings](work.md#suggest-the-next-prompt).
+
 ## Desktop preferences and support
 
 Under **Global → Desktop**, adjust appearance, additional CA certificates, a client certificate and key, update checks, and diagnostic export. A PEM CA bundle is copied into private native storage after validation; Desktop displays its certificate count and fingerprints, not the original path. Importing or removing it restarts Managed Local. Use this when a private provider or organizational TLS gateway requires extra trust.

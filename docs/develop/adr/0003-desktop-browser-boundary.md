@@ -61,6 +61,51 @@ host objects, autofill, password saving, script dialogs, context menus, browser
 accelerators, and external file drops are disabled. WebKit uses a replacement delegate
 and removes inherited scripts and message handlers before external navigation.
 
+## Explicit Windows human sign-in profiles
+
+The default owned Chromium composition is described in [ADR 0008](0008-owned-chromium-browser.md).
+Its temporary-profile admission and agent session ownership remain unchanged.
+Desktop can explicitly select the existing hardened Windows WebView2 adapter for
+human browsing by enabling **Remember sign-ins** or setting a custom **User-Agent**.
+This is a named engine choice, not an automatic fallback after Chromium failure.
+
+The native controller obtains the workspace from an AppState selection lease and
+checks its generation before reading or changing preferences. The renderer supplies
+no profile path or workspace identity. Profiles use a SHA-256 workspace key beneath
+the private Desktop settings root, with retained no-reparse custody and an exclusive
+writer lease held through application shutdown. Every new saved-profile admission
+checks 512 MiB and 32,768-entry bounds. These are admission checks, not a hard quota
+on data written during an already-open WebView2 session. At most 32 saved-profile
+leases remain open in one application; a restart releases inactive leases.
+
+The native adapter verifies the actual WebView2 private/saved mode and custom
+User-Agent before external navigation. Existing messaging, host-object, autofill,
+permission, file-picker and navigation restrictions still apply. TLS uses normal
+Windows trust. Client-certificate requests are observed categorically and retain
+the native Windows identity chooser. No private key or raw cookie crosses renderer
+IPC. Cookie encryption is owned by the Windows engine; site data is not claimed to
+be encrypted merely because its directory is private.
+
+Saved profiles are human-only and do not grant an agent handoff. Agent Chromium
+does not open this profile, read its cookies or borrow its native environment.
+Clearing data uses WebView2's fixed ALL_PROFILE browsing-data API and requires its
+completion before reporting success. Clearing stays available above the admission
+cap. Saving settings closes affected human views, while agent attachments retain
+their separate runtime authority. A failed clear or uncertain settings write is
+reported; it is not silently retried or treated as success.
+
+Connection diagnostics expose only origin and categorical observations. Native
+navigation IDs fence stale completion callbacks. HTTP status and redirect count are
+reported by WebView2; an engine that does not provide them is shown as such. These
+diagnostics do not claim to bypass site authentication or embedded-browser policy.
+
+The source-only Windows `browser-acceptance --human-profile` harness exercises
+separate-process sign-in persistence, workspace isolation, actual User-Agent,
+clear/restart, authentication metadata and strict HTTPS/client-certificate flows
+against owned loopback fixtures. Its native execution receipts are required in
+addition to renderer screenshots; source and fixture success alone do not establish
+installed-byte or signing acceptance.
+
 ## Platform acceptance
 
 Normal Windows installations offer Browser in the shared right-side tool pane.

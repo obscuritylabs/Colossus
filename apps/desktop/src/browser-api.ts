@@ -47,12 +47,41 @@ export interface BrowserCertificateStatus {
 export type BrowserCertificateAction =
   "status" | "import_ca" | "import_client_identity" | "review_client_identity";
 
+export interface HumanBrowserPreferences {
+  rememberSignIns: boolean;
+  userAgent: string;
+}
+
+export interface BrowserPreferencesStatus {
+  generation: number;
+  available: boolean;
+  preferences: HumanBrowserPreferences;
+  message: string;
+}
+
+export type BrowserPreferencesAction =
+  | { type: "status" | "clear_data" | "reset" }
+  | { type: "save"; preferences: HumanBrowserPreferences };
+
+export interface BrowserDiagnostics {
+  origin: string | null;
+  httpStatus: number | null;
+  redirects: number;
+  nativeError: number | null;
+  clientCertificateRequested: boolean;
+  tlsFailed: boolean;
+  persistent: boolean;
+  customUserAgent: boolean;
+  systemEngine: boolean;
+}
+
 export interface BrowserSnapshot {
   available: boolean;
   generation: number;
   tabs: BrowserTab[];
   selectedTabId: string | null;
   engine?: BrowserEngine;
+  diagnostics?: Record<string, BrowserDiagnostics>;
 }
 
 export type BrowserAction =
@@ -84,6 +113,10 @@ export interface BrowserApi {
   context(runId?: string, conversationId?: string): Promise<BrowserSnapshot>;
   command(generation: number, action: BrowserAction): Promise<BrowserSnapshot>;
   viewport(request: BrowserViewport): Promise<void>;
+  preferences?(
+    generation: number,
+    action: BrowserPreferencesAction,
+  ): Promise<BrowserPreferencesStatus>;
   certificates?(
     generation: number,
     action: BrowserCertificateAction,
@@ -101,6 +134,8 @@ export const nativeBrowserApi: BrowserApi = {
   command: (generation, action) =>
     invoke("browser_command", { request: { generation, action } }),
   viewport: (request) => invoke("browser_viewport", { request }),
+  preferences: (generation, action) =>
+    invoke("browser_preferences", { request: { generation, action } }),
   certificates: (generation, action, appearance, tabId) =>
     invoke("browser_certificates", {
       request: { generation, action, appearance, tabId },

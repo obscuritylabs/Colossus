@@ -26,6 +26,30 @@ function read(relative) {
   return readFileSync(join(repository, relative), "utf8");
 }
 
+test("companion authority excludes generic event observation and listener control", () => {
+  const companion = JSON.parse(
+    read("apps/desktop/src-tauri/capabilities/developer-pet.json"),
+  );
+  assert.equal(companion.local, true);
+  assert.equal(companion.remote, undefined);
+  assert.equal(companion.windows, undefined);
+  assert.deepEqual(companion.webviews, ["developer-pet"]);
+  assert.deepEqual(companion.permissions, [
+    "allow-pet-context",
+    "allow-pet-action",
+    "core:window:allow-start-dragging",
+  ]);
+  for (const permission of [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-appshot-preview",
+    "allow-attach-appshot",
+    "allow-sync-pet-status",
+  ]) {
+    assert.ok(!companion.permissions.includes(permission), permission);
+  }
+});
+
 test("certificate review authority belongs only to its exact trusted child", () => {
   const child = JSON.parse(
     read("apps/desktop/src-tauri/capabilities/client-identity-review.json"),

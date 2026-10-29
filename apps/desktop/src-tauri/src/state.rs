@@ -280,6 +280,7 @@ impl ExternalHealth {
 
 /// Native-only authenticated clients and local process state shared by narrow commands.
 pub(crate) struct AppState {
+    pub(crate) worktree_selection: crate::workspace_worktrees::WorkspaceWorktreeState,
     pub(crate) configuration_updates: Mutex<
         HashMap<
             String,
@@ -465,6 +466,7 @@ impl Default for AppState {
             browser: crate::browser::BrowserManager::default(),
             cloud_connections: Mutex::new(HashMap::new()),
             cloud_operation: Mutex::new(()),
+            worktree_selection: crate::workspace_worktrees::WorkspaceWorktreeState::default(),
             configuration_updates: Mutex::new(HashMap::new()),
             targets: RwLock::new(HashMap::new()),
             credential_vault: StdMutex::new(None),

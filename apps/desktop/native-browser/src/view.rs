@@ -11,7 +11,7 @@ use crate::{BrowserError, NavigationAction, PageState};
 pub enum BrowserView {
     /// Local address-entry placeholder. It owns no guest, network, or input authority.
     Empty,
-    /// Existing human browsing adapter retained until native Chromium acceptance.
+    /// Human-only platform view; Windows can explicitly retain a private sign-in profile.
     System(Webview),
     /// Explicitly enabled embedded Chromium preview.
     #[cfg(feature = "cef-preview")]

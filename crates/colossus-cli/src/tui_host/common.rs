@@ -11,6 +11,10 @@ pub(super) fn presentation_status(
     let (value, title) = match name {
         "stream" => (json!({"stream": preferences.stream_mode}), "Streaming"),
         "events" => (json!({"events": preferences.events_mode}), "Events"),
+        "suggestions" => (
+            json!({"suggestions": preferences.next_prompt_mode, "model_uses_additional_tokens": true}),
+            "Next prompt suggestions",
+        ),
         "transcript" => (
             json!({"transcript": preferences.transcript_density}),
             "Transcript",

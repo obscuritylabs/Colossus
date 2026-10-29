@@ -82,10 +82,11 @@ pub(super) fn finalize_runtime_command<T>(
 
 #[tokio::main]
 pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
+    let mut worktree_usage = None;
     #[cfg(target_os = "linux")]
     {
         let mut browser = None;
-        let result = runtime_command(&mut browser).await;
+        let result = runtime_command(&mut browser, &mut worktree_usage).await;
         if let Some(browser) = browser
             && let Err(cleanup) = browser.shutdown().await
         {
@@ -100,13 +101,14 @@ pub(super) async fn runtime_main() -> Result<(), Box<dyn Error>> {
         result
     }
     #[cfg(not(target_os = "linux"))]
-    runtime_command().await
+    runtime_command(&mut worktree_usage).await
 }
 
 async fn runtime_command(
     #[cfg(target_os = "linux")] browser: &mut Option<browser_bundle::BrowserOwner>,
+    worktree_usage: &mut Option<colossus_worktrees::WorkspaceLease>,
 ) -> Result<(), Box<dyn Error>> {
-    let cli = match Cli::try_parse() {
+    let mut cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) if error.kind() == ErrorKind::MissingSubcommand => {
             let mut arguments = std::env::args_os().collect::<Vec<_>>();
@@ -116,6 +118,28 @@ async fn runtime_command(
         Err(error) => error.exit(),
     };
     set_output_mode(cli.output);
+    if let Command::Worktree(command) = &cli.command {
+        if cli.worker_required
+            || cli.desktop_worker_auth
+            || cli.approval_mode.is_some()
+            || cli.config.is_some()
+        {
+            return Err(
+                "worktree operations are offline and do not accept runtime/authentication flags"
+                    .into(),
+            );
+        }
+        match worktree_commands::run(command, &cli.workspace)? {
+            None => return Ok(()),
+            Some(path) => {
+                cli.workspace = path;
+                cli.command = Command::Tui {
+                    session: None,
+                    resume: false,
+                };
+            }
+        }
+    }
     if let Command::DevelopmentCredentials(command) = &cli.command {
         if cli.worker_required
             || cli.desktop_worker_auth
@@ -140,6 +164,9 @@ async fn runtime_command(
         }
         _ => None,
     };
+    // Retain through runtime, worker, TUI, terminal and browser shutdown. Every
+    // managed-worktree process joins the same cross-process shared-use lease.
+    *worktree_usage = colossus_worktrees::acquire_workspace_lease(&cli.workspace)?;
     let home = ColossusHome::resolve_and_ensure()?;
     if let Command::Update(update) = &cli.command {
         match update.command.as_ref() {
@@ -1359,6 +1386,7 @@ async fn runtime_command(
             runtime.drain_subagents().await?;
             deferred_run_response = Some(DeferredRunResponse::new(&runtime, &result, &result.output)?);
         }
+        Command::Worktree(_) => return Err("worktree dispatch must finish before runtime startup".into()),
         Command::Echo { message } => {
             let result = runtime.echo(&message).await?;
             println!("{}", String::from_utf8_lossy(&result.bytes));

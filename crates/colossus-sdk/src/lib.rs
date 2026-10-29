@@ -67,6 +67,7 @@ pub use colossus_api::{
     HumanTerminalOperation, HumanTerminalReply, HumanTerminalRequest, HumanTerminalSession,
     HumanTerminalSignal, HumanTerminalStatus,
 };
+pub use colossus_api::{NEXT_PROMPT_CAPABILITY, NextPromptPrediction, PredictNextPromptRequest};
 pub use plugins::*;
 pub use workflows::*;
 

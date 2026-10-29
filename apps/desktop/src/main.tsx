@@ -107,6 +107,20 @@ if (
       );
     },
   );
+} else if (
+  new URLSearchParams(window.location.search).get("surface") === "developer-pet"
+) {
+  void import("./components/MiniHackerPet").then(
+    ({ default: MiniHackerPet }) => {
+      createRoot(root).render(
+        <AppearanceProvider initialPreference={initialAppearance}>
+          <AppErrorBoundary>
+            <MiniHackerPet />
+          </AppErrorBoundary>
+        </AppearanceProvider>,
+      );
+    },
+  );
 } else if (terminalSurface) {
   void import("./TerminalWindow").then(({ default: TerminalWindow }) => {
     createRoot(root).render(
