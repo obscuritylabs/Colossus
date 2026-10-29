@@ -339,7 +339,7 @@ pub(super) async fn dispatch_to_worker_if_active(
                             max_iterations: *goal_max_iterations,
                             source_plan_id: Some(plan_id.clone()),
                         })
-                        .await?
+                        .await
                 } else {
                     client
                         .call(WorkerOperation::PlanRun {
@@ -347,10 +347,23 @@ pub(super) async fn dispatch_to_worker_if_active(
                             plan_id: plan_id.clone(),
                             max_turns: *max_turns,
                         })
-                        .await?
+                        .await
+                };
+                let result = match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let scope = if *goal {
+                            RunUsageScope::LastGoalIteration
+                        } else {
+                            RunUsageScope::Run
+                        };
+                        print_worker_observed_usage(&client, None, scope, StreamTarget::Stderr)
+                            .await;
+                        return Err(error.into());
+                    }
                 };
                 client.call(WorkerOperation::Drain).await?;
-                print_json(&result)?;
+                print_worker_run_response(&client, &result).await?;
                 return Ok(true);
             }
             let prompt = prompt
@@ -374,6 +387,7 @@ pub(super) async fn dispatch_to_worker_if_active(
             } else {
                 session.clone()
             };
+            let usage_session_id = session_id.clone();
             let operation = if *plan {
                 WorkerOperation::RunPlan {
                     role: role.clone(),
@@ -397,17 +411,36 @@ pub(super) async fn dispatch_to_worker_if_active(
                     sticky_skills: Vec::new(),
                 }
             };
-            let result = if *stream {
+            let (result, usage_identity) = if *stream {
                 let mut observer = TerminalStreamObserver::new(StreamTarget::Stderr);
-                let result = client.run_model(operation, &mut observer).await;
+                let mut usage_observer =
+                    UsageTrackingObserver::new(&mut observer, usage_session_id.as_deref());
+                let result = client.run_model(operation, &mut usage_observer).await;
+                let identity = usage_observer.into_identity();
                 observer.finish_line()?;
-                result?
+                (result, identity)
             } else {
                 let mut observer = SilentStreamObserver;
-                client.run_model(operation, &mut observer).await?
+                let mut usage_observer =
+                    UsageTrackingObserver::new(&mut observer, usage_session_id.as_deref());
+                let result = client.run_model(operation, &mut usage_observer).await;
+                (result, usage_observer.into_identity())
+            };
+            let result = match result {
+                Ok(result) => result,
+                Err(error) => {
+                    print_worker_observed_usage(
+                        &client,
+                        usage_identity.as_ref(),
+                        RunUsageScope::Run,
+                        StreamTarget::Stderr,
+                    )
+                    .await;
+                    return Err(error.into());
+                }
             };
             client.call(WorkerOperation::Drain).await?;
-            print_json(&result)?;
+            print_worker_run_response(&client, &result).await?;
             Ok(true)
         }
         Command::Echo { message } => {

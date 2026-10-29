@@ -21,6 +21,11 @@ mod desktop_instance;
 pub use desktop_instance::{DesktopInstance, DesktopInstanceOwner, DesktopLaunchGuard};
 
 #[cfg(windows)]
+mod console;
+#[cfg(windows)]
+pub use console::{ConsoleObserver, ConsoleScreenSnapshot, ConsoleSnapshot};
+
+#[cfg(windows)]
 mod conpty;
 #[cfg(windows)]
 mod process;

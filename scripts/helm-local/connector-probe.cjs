@@ -8,8 +8,11 @@ const port = Number(rawPort);
 if (!root || !Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error('Expected run directory and TCP port.');
 }
-const ca = fs.readFileSync(path.join(root, 'private/connector-ca.pem'));
-const expected = new X509Certificate(fs.readFileSync(path.join(root, 'private/connector-server.pem'))).fingerprint256;
+const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+if (manifest.schemaVersion !== 3 || manifest.profile !== 'full-hosted-v1') throw new Error('Complete local hosting profile required.');
+const privateRoot = manifest.hosted.privateAllocation.path;
+const ca = fs.readFileSync(path.join(privateRoot, 'connector-ca.pem'));
+const expected = new X509Certificate(fs.readFileSync(path.join(privateRoot, 'connector-server.pem'))).fingerprint256;
 const receipt = { hostname: 'runtimes.colossus.localhost', port, certificateMatchesBackend: false, certificateVerified: false, negotiatedProtocol: null, clientCertificateRequired: false };
 const socket = tls.connect({ host: '127.0.0.1', port, servername: receipt.hostname, ALPNProtocols: ['h2'], ca, rejectUnauthorized: true });
 const timer = setTimeout(() => socket.destroy(new Error('Connector probe timed out')), 10000);

@@ -410,8 +410,10 @@ pub(super) async fn line_runner(
             let mut observer =
                 TerminalStreamObserver::with_preferences(StreamTarget::Stdout, preferences.clone());
             let control = RunControl::default();
-            let (outcome, written_plan) = {
-                let mut plan_observer = LinePlanEventObserver::new(&mut observer);
+            let (outcome, written_plan, usage_identity) = {
+                let mut usage_observer =
+                    UsageTrackingObserver::new(&mut observer, Some(&active_session_id));
+                let mut plan_observer = LinePlanEventObserver::new(&mut usage_observer);
                 let outcome = runtime
                     .run_with_mode_with_skills_stream_controlled(
                         mode,
@@ -427,7 +429,8 @@ pub(super) async fn line_runner(
                         &control,
                     )
                     .await;
-                (outcome, plan_observer.into_written_plan())
+                let written_plan = plan_observer.into_written_plan();
+                (outcome, written_plan, usage_observer.into_identity())
             };
             if let Some(plan) = written_plan
                 && let Err(error) = plan_state.refresh_selected(plan, &active_session_id)
@@ -437,6 +440,12 @@ pub(super) async fn line_runner(
             let outcome = match outcome {
                 Ok(outcome) => outcome,
                 Err(error) => {
+                    print_embedded_observed_usage(
+                        runtime,
+                        usage_identity.as_ref(),
+                        RunUsageScope::Run,
+                        StreamTarget::Stderr,
+                    );
                     eprintln!("run failed; terminal input remains available: {error}");
                     continue;
                 }
@@ -449,6 +458,12 @@ pub(super) async fn line_runner(
             } else {
                 print_json(&outcome)?;
             }
+            print_embedded_observed_usage(
+                runtime,
+                usage_identity.as_ref(),
+                RunUsageScope::Run,
+                StreamTarget::Stdout,
+            );
             if let Some(plan) = plan_state.selected()
                 && plan_state.enabled()
             {
@@ -640,6 +655,13 @@ async fn run_embedded_plan_command(
             let mut observer =
                 TerminalStreamObserver::with_preferences(StreamTarget::Stdout, preferences.clone());
             let control = RunControl::default();
+            let usage_scope = if matches!(strategy, PlanExecutionStrategy::Goal { .. }) {
+                RunUsageScope::LastGoalIteration
+            } else {
+                RunUsageScope::Run
+            };
+            let mut usage_observer =
+                UsageTrackingObserver::new(&mut observer, Some(active_session_id));
             let outcome = runtime
                 .execute_plan_stream_controlled(
                     "primary",
@@ -648,13 +670,20 @@ async fn run_embedded_plan_command(
                     selected.revision,
                     strategy,
                     None,
-                    &mut observer,
+                    &mut usage_observer,
                     &control,
                 )
                 .await;
+            let usage_identity = usage_observer.into_identity();
             let outcome = match outcome {
                 Ok(outcome) => outcome,
                 Err(error) => {
+                    print_embedded_observed_usage(
+                        runtime,
+                        usage_identity.as_ref(),
+                        usage_scope,
+                        StreamTarget::Stderr,
+                    );
                     reconcile_embedded_plan_after_execution_error(
                         runtime,
                         &selected.id,
@@ -669,6 +698,12 @@ async fn run_embedded_plan_command(
             }
             state.apply_execution_outcome(&outcome);
             print_json(&outcome)?;
+            print_embedded_observed_usage(
+                runtime,
+                usage_identity.as_ref(),
+                usage_scope,
+                StreamTarget::Stdout,
+            );
         }
     }
     Ok(())
@@ -769,17 +804,38 @@ async fn resume_embedded_goal(
     let mut observer =
         TerminalStreamObserver::with_preferences(StreamTarget::Stdout, preferences.clone());
     let control = RunControl::default();
+    let mut usage_observer = UsageTrackingObserver::new(&mut observer, Some(active_session_id));
     let outcome = runtime
         .resume_goal_stream_controlled(
             "primary",
             active_session_id,
             goal_id,
-            &mut observer,
+            &mut usage_observer,
             &control,
         )
-        .await?;
+        .await;
+    let usage_identity = usage_observer.into_identity();
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            print_embedded_observed_usage(
+                runtime,
+                usage_identity.as_ref(),
+                RunUsageScope::LastGoalIteration,
+                StreamTarget::Stderr,
+            );
+            return Err(error.into());
+        }
+    };
     if let Some(output) = goal_output(&outcome) {
         observer.finish_response(output)?;
     }
-    print_json(&outcome)
+    print_json(&outcome)?;
+    print_embedded_observed_usage(
+        runtime,
+        usage_identity.as_ref(),
+        RunUsageScope::LastGoalIteration,
+        StreamTarget::Stdout,
+    );
+    Ok(())
 }

@@ -45,6 +45,7 @@ mod semantic;
 mod terminal;
 mod themes;
 mod tool_activity;
+mod usage;
 
 pub use command_approval::{approval_risk_summary, command_approval_document};
 pub use document::{
@@ -65,6 +66,7 @@ pub use tool_activity::{
     ToolActivityPresentation, retained_tool_activity_document, tool_activity_document,
     tool_activity_json_preview, tool_activity_presentation,
 };
+pub use usage::run_token_usage_document;
 
 use document::human_field_name;
 use palette::TextStyle;

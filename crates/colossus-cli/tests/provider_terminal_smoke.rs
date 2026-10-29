@@ -6,6 +6,10 @@ mod process_support;
 #[path = "support/plugin_provider.rs"]
 mod plugin_provider;
 
+#[path = "support/terminal.rs"]
+#[allow(dead_code)]
+mod terminal_support;
+
 use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{
@@ -2220,4 +2224,382 @@ fn max_turn_empty_output_and_malformed_recovery_have_distinct_terminal_states() 
     assert_eq!(event_count(&malformed_events, "error.v1"), 3);
     assert_eq!(event_count(&malformed_events, "run.max_turns.v1"), 0);
     assert_eq!(event_count(&malformed_events, "tool.call.started.v1"), 0);
+}
+
+#[test]
+fn human_run_usage_sums_multiple_model_calls_in_embedded_and_worker_modes() {
+    const TOOL: &str = r#"data: {"id":"usage-tool","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"usage-call","type":"function","function":{"name":"echo","arguments":"{\"text\":\"usage-check\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: {"id":"usage-tool","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":4},"completion_tokens_details":{"reasoning_tokens":1}}}
+
+data: [DONE]
+
+"#;
+    const FINAL: &str = r#"data: {"id":"usage-final","choices":[{"index":0,"delta":{"content":"counted"},"finish_reason":"stop"}]}
+
+data: {"id":"usage-final","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":3,"total_tokens":30,"prompt_tokens_details":{"cached_tokens":8},"completion_tokens_details":{"reasoning_tokens":2}}}
+
+data: [DONE]
+
+"#;
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    for (with_worker, line_mode) in [(false, false), (true, false), (false, true), (true, true)] {
+        let directory = tempdir().expect("usage workspace");
+        let (origin, server) = sse_server(vec![TOOL, FINAL]);
+        let config = write_failure_config(directory.path(), &origin, "echo");
+        let mut worker = with_worker.then(|| {
+            let process = command(binary, &config)
+                .arg("worker")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("start usage worker");
+            wait_for_worker(binary, &config);
+            ChildGuard(process)
+        });
+        let output = if line_mode {
+            let mut terminal = command(binary, &config)
+                .arg("tui")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("start line terminal");
+            terminal
+                .stdin
+                .take()
+                .expect("terminal input")
+                .write_all(b"Use echo and then answer.\n/exit\n")
+                .expect("submit line");
+            terminal.wait_with_output().expect("line output")
+        } else {
+            run(
+                binary,
+                &config,
+                &[
+                    "--output",
+                    "human",
+                    "run",
+                    "Use echo and then answer.",
+                    "--max-turns",
+                    "4",
+                ],
+            )
+        };
+        assert!(
+            output.status.success(),
+            "worker={with_worker} stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let human = String::from_utf8_lossy(&output.stdout);
+        assert!(human.contains("counted"), "{human}");
+        assert!(human.contains("45 tokens"), "{human}");
+        for expected in ["30", "5", "12", "3"] {
+            assert!(human.contains(expected), "{human}");
+        }
+        assert!(human.to_lowercase().contains("cached"), "{human}");
+        assert!(human.to_lowercase().contains("reasoning"), "{human}");
+        for hidden in ["terminal-secret", "run_id", "session_id"] {
+            assert!(!human.contains(hidden), "{human}");
+        }
+        assert_eq!(
+            event_count(&audited_run_events(binary, &config), "provider.usage.v1"),
+            2,
+        );
+        if let Some(worker) = worker.as_mut() {
+            assert!(
+                run(binary, &config, &["worker", "--shutdown"])
+                    .status
+                    .success()
+            );
+            wait_for_exit(&mut worker.0);
+        }
+        let requests = server.join().expect("usage provider");
+        assert_eq!(
+            requests.len(),
+            2,
+            "metadata reads must not call the provider"
+        );
+    }
+}
+
+#[test]
+fn human_failed_run_retains_reported_usage_without_changing_json_errors() {
+    const TOOL: &str = r#"data: {"id":"partial-usage","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"partial-call","type":"function","function":{"name":"echo","arguments":"{\"text\":\"partial\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: {"id":"partial-usage","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":4}}}
+
+data: [DONE]
+
+"#;
+    const FAILURE: &str = "data: malformed-provider-json\n\n";
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    for (with_worker, line_mode, json_output) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (false, false, true),
+        (true, false, true),
+    ] {
+        let directory = tempdir().expect("partial usage workspace");
+        let (origin, server) = sse_server(vec![TOOL, FAILURE]);
+        let config = write_failure_config(directory.path(), &origin, "echo");
+        let mut worker = with_worker.then(|| {
+            let process = command(binary, &config)
+                .arg("worker")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("start partial usage worker");
+            wait_for_worker(binary, &config);
+            ChildGuard(process)
+        });
+        let output = if line_mode {
+            let mut terminal = command(binary, &config)
+                .args(["--output", "human", "tui"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("start partial usage line terminal");
+            terminal
+                .stdin
+                .take()
+                .expect("line input")
+                .write_all(b"Use echo then answer.\n/exit\n")
+                .expect("submit line");
+            terminal.wait_with_output().expect("partial line output")
+        } else {
+            run(
+                binary,
+                &config,
+                &[
+                    "--output",
+                    if json_output { "json" } else { "human" },
+                    "run",
+                    "Use echo then answer.",
+                    "--max-turns",
+                    "4",
+                ],
+            )
+        };
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.success(), line_mode, "{stderr}");
+        if json_output {
+            assert!(!stderr.to_lowercase().contains("run usage"), "{stderr}");
+            assert!(!stderr.contains("15 tokens"), "{stderr}");
+        } else {
+            assert!(stderr.contains("15 tokens"), "{stderr}");
+            assert!(stderr.to_lowercase().contains("cached"), "{stderr}");
+            assert!(!stderr.contains("run_id"), "{stderr}");
+            assert!(!stderr.contains("session_id"), "{stderr}");
+        }
+        if let Some(worker) = worker.as_mut() {
+            assert!(
+                run(binary, &config, &["worker", "--shutdown"])
+                    .status
+                    .success()
+            );
+            wait_for_exit(&mut worker.0);
+        }
+        assert_eq!(
+            server.join().expect("partial usage provider").len(),
+            2,
+            "usage lookup must not retry provider work"
+        );
+    }
+}
+
+fn goal_usage_process(
+    binary: &Path,
+    config: &Path,
+    home: &process_support::IsolatedUserHome,
+) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .current_dir(config.parent().expect("goal usage workspace"))
+        .arg("--config")
+        .arg(config)
+        .env("HOME", home.path())
+        .env("COLOSSUS_HOME", home.colossus_home())
+        .env("COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY", JOURNAL_KEY)
+        .env("COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY", SIGNING_KEY);
+    #[cfg(windows)]
+    command
+        .env("USERPROFILE", home.path())
+        .env("LOCALAPPDATA", home.local_app_data())
+        .env("TEMP", home.temporary_directory())
+        .env("TMP", home.temporary_directory());
+    command
+}
+
+#[test]
+fn tui_goal_usage_reports_only_the_final_iteration_in_both_hosts() {
+    const FIRST: &str = r#"data: {"id":"goal-first","choices":[{"index":0,"delta":{"content":"First bounded step finished."},"finish_reason":"stop"}]}
+
+data: {"id":"goal-first","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1501}}
+
+data: [DONE]
+
+"#;
+    const COMPLETE: &str = r#"data: {"id":"goal-complete","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"goal-finish","type":"function","function":{"name":"goal_update","arguments":"{\"status\":\"complete\",\"summary\":\"GOAL_USAGE_FINISHED\",\"blocked_reason\":\"\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: {"id":"goal-complete","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":15}}
+
+data: [DONE]
+
+"#;
+    const COMPLETE_UNREPORTED: &str = r#"data: {"id":"goal-complete","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"goal-finish","type":"function","function":{"name":"goal_update","arguments":"{\"status\":\"complete\",\"summary\":\"GOAL_USAGE_FINISHED\",\"blocked_reason\":\"\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
+    const FINAL: &str = r#"data: {"id":"goal-final","choices":[{"index":0,"delta":{"content":"GOAL_USAGE_FINISHED"},"finish_reason":"stop"}]}
+
+data: {"id":"goal-final","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":3,"total_tokens":30}}
+
+data: [DONE]
+
+"#;
+    const FINAL_UNREPORTED: &str = r#"data: {"id":"goal-final","choices":[{"index":0,"delta":{"content":"GOAL_USAGE_FINISHED"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    for with_worker in [false, true] {
+        for final_reports_usage in [true, false] {
+            let directory = tempdir().expect("goal usage workspace");
+            let home = process_support::isolated_user_home(directory.path());
+            let responses = if final_reports_usage {
+                vec![FIRST, COMPLETE, FINAL]
+            } else {
+                vec![FIRST, COMPLETE_UNREPORTED, FINAL_UNREPORTED]
+            };
+            let (origin, server) = sse_server(responses);
+            let config = write_failure_config(directory.path(), &origin, "goal.update");
+            let mut document: Value =
+                serde_json::from_slice(&fs::read(&config).expect("goal config"))
+                    .expect("config JSON");
+            document["access"]["actions"]["allow"] = json!([
+                "provider.openai.chat",
+                "goal.create",
+                "goal.update",
+                "goal.iteration.record",
+                "presentation.history.append",
+                "context.show",
+                "plugin.list"
+            ]);
+            fs::write(
+                &config,
+                serde_json::to_vec_pretty(&document).expect("goal config JSON"),
+            )
+            .expect("write goal config");
+            let mut worker = with_worker.then(|| {
+                let process = goal_usage_process(binary, &config, &home)
+                    .arg("worker")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("start goal usage worker");
+                let worker = ChildGuard(process);
+                let deadline = Instant::now() + Duration::from_secs(10);
+                loop {
+                    if goal_usage_process(binary, &config, &home)
+                        .args(["worker", "--status"])
+                        .output()
+                        .expect("goal worker status")
+                        .status
+                        .success()
+                    {
+                        break;
+                    }
+                    assert!(Instant::now() < deadline, "goal usage worker did not start");
+                    thread::sleep(Duration::from_millis(20));
+                }
+                worker
+            });
+            let mut command = portable_pty::CommandBuilder::new(binary);
+            command.cwd(directory.path());
+            command.arg("--config");
+            command.arg(&config);
+            command.args(["--alt-screen", "--approval-mode", "full-access"]);
+            if with_worker {
+                command.arg("--worker-required");
+            }
+            command.arg("tui");
+            command.env("HOME", home.path());
+            command.env("COLOSSUS_HOME", home.colossus_home());
+            command.env("COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY", JOURNAL_KEY);
+            command.env("COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY", SIGNING_KEY);
+            #[cfg(windows)]
+            {
+                command.env("USERPROFILE", home.path());
+                command.env("LOCALAPPDATA", home.local_app_data());
+                command.env("TEMP", home.temporary_directory());
+                command.env("TMP", home.temporary_directory());
+            }
+            let terminal = terminal_support::Terminal::start(command);
+            terminal.wait("Enter sends");
+            terminal.resize(40, 140);
+            let screen =
+                terminal.command("/goal Prove final iteration token accounting", "Run usage");
+            let case = format!("worker={with_worker} reported={final_reports_usage}:\n{screen}");
+            assert!(screen.contains("GOAL_USAGE_FINISHED"), "{case}");
+            if final_reports_usage {
+                assert!(screen.contains("45 tokens"), "{case}");
+                assert!(
+                    screen.contains("Input 30") && screen.contains("Output 5"),
+                    "{case}"
+                );
+            } else {
+                assert!(
+                    screen.contains("Token usage was not reported for this run."),
+                    "{case}"
+                );
+                assert!(screen.contains("tok—"), "{case}");
+                assert!(!screen.contains("0 tokens"), "{case}");
+            }
+            for stale in ["1,501 tokens", "1,546 tokens", "1.5k", "terminal-secret"] {
+                assert!(!screen.contains(stale), "{case}");
+            }
+            // Release the embedded journal writer before inspecting durable Goal state.
+            drop(terminal);
+            let goals = goal_usage_process(binary, &config, &home)
+                .args(["goals", "list"])
+                .output()
+                .expect("list completed goals");
+            assert!(
+                goals.status.success(),
+                "{}",
+                String::from_utf8_lossy(&goals.stderr)
+            );
+            let goals: Vec<Value> = serde_json::from_slice(&goals.stdout).expect("goals JSON");
+            assert_eq!(goals.len(), 1);
+            assert_eq!(goals[0]["status"], "complete");
+            assert_eq!(goals[0]["iterations_completed"], 2);
+            if let Some(worker) = worker.as_mut() {
+                assert!(
+                    goal_usage_process(binary, &config, &home)
+                        .args(["worker", "--shutdown"])
+                        .output()
+                        .expect("shutdown goal worker")
+                        .status
+                        .success()
+                );
+                wait_for_exit(&mut worker.0);
+            }
+            let requests = server.join().expect("goal usage provider");
+            assert_eq!(
+                requests.len(),
+                3,
+                "usage metadata must not repeat provider work"
+            );
+            assert!(requests[0].contains("Prove final iteration token accounting"));
+            assert!(requests[1].contains("Continue Goal Mode"));
+            assert!(requests[2].contains("goal-finish"));
+        }
+    }
 }

@@ -59,6 +59,18 @@ impl Runtime {
             .map_err(Into::into)
     }
 
+    /// Restore reported usage for one exact session-bound run through its durable tail.
+    ///
+    /// This reads the canonical run stream and preserves missing provider accounting.
+    pub fn run_token_usage(
+        &self,
+        session_id: &str,
+        run_id: &str,
+    ) -> Result<RunTokenUsage, RuntimeError> {
+        self.telemetry
+            .run_token_usage(session_id, run_id)
+            .map_err(Into::into)
+    }
     /// Aggregate metadata-only counters over recent runs.
     pub fn telemetry_metrics(
         &self,

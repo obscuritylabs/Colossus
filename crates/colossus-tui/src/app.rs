@@ -1267,6 +1267,7 @@ pub(super) fn start_line(
             ));
             state.provider_recovery = None;
             state.operation = Some(OperationKind::Run);
+            state.begin_run_usage(true);
             state.started_at = Some(Instant::now());
             state.activity = Some("waiting for model".into());
             let control = RunControl::default();
@@ -1293,6 +1294,7 @@ fn start_host_command(
 ) {
     state.provider_recovery = None;
     state.operation = Some(OperationKind::Command);
+    state.begin_run_usage(command_starts_run_usage(&command));
     state.started_at = Some(Instant::now());
     state.activity = Some(if let RuntimeCommand::Shell { command } = &command {
         state.append_entry(TranscriptEntry {
@@ -1547,6 +1549,7 @@ fn start_plan_execution(
     event_tx: mpsc::Sender<HostEvent>,
 ) {
     state.operation = Some(OperationKind::Run);
+    state.begin_run_usage(true);
     state.started_at = Some(Instant::now());
     state.activity = Some(match request.strategy {
         PlanExecutionStrategy::Direct => "executing approved plan".into(),
@@ -1870,7 +1873,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                     state.pending_images.clear();
                     let selection_valid = apply_plan_selection(state, plan_selection);
                     finalize_assistant(state, &result.output);
-                    state.footer = footer;
+                    state.replace_footer(footer);
                     if selection_valid {
                         offer_plan_review(state);
                     }
@@ -1883,7 +1886,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 })) => {
                     state.pending_images.clear();
                     apply_plan_selection(state, plan_selection);
-                    state.footer = footer;
+                    state.replace_footer(footer);
                     state.append_entry(TranscriptEntry {
                         sequence: None,
                         kind: TranscriptKind::Command,
@@ -1906,7 +1909,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                         ));
                     }
                     let selection_valid = apply_plan_selection(state, result.plan_selection);
-                    state.footer = result.footer;
+                    state.replace_footer(result.footer);
                     if !result.document.is_empty() {
                         state.append_entry(TranscriptEntry {
                             sequence: None,
@@ -1996,6 +1999,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                     false
                 }
             };
+            state.finish_run_usage();
             if successful && !state.queue_paused {
                 // The event loop starts this on its next key/tick iteration through a
                 // synthetic queue drain in `draw`; this avoids re-entrant host spawning.
@@ -2107,6 +2111,9 @@ fn offer_plan_execution_choice(state: &mut TuiState) {
 }
 
 pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope) {
+    if state.run_usage.observe(&envelope) {
+        state.footer.usage = state.run_usage.current().cloned();
+    }
     if envelope.session_id == state.session_id {
         state.sidebar.observe(&envelope.event);
     }
@@ -2276,6 +2283,8 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
         if state.session_id != session_id {
             state.sticky_skills.clear();
             state.agents = crate::agents::AgentTree::default();
+            state.run_usage = RunUsageState::restored(&session_id, None);
+            state.footer.usage = None;
         }
         state.session_id = session_id;
         state.provider_recovery = None;
@@ -2304,7 +2313,7 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
         state.sticky_skills = sticky_skills;
     }
     if let Some(footer) = result.footer {
-        state.footer = footer;
+        state.replace_command_footer(footer);
     }
     apply_plan_selection(state, result.plan_selection) && continue_queue
 }

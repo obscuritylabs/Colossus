@@ -36,6 +36,7 @@ colossus-plugins.workspace = true
 colossus-presentation.workspace = true
 colossus-ports.workspace = true
 colossus-runtime.workspace = true
+colossus-sdk = { workspace = true, features = ["serialization", "keyring"] }
 colossus-sandbox.workspace = true
 colossus-sidecar-protocol.workspace = true
 colossus-tui.workspace = true
@@ -74,7 +75,6 @@ serde_json.workspace = true
 [dev-dependencies]
 rcgen.workspace = true
 rustls.workspace = true
-colossus-sdk.workspace = true
 ed25519-dalek.workspace = true
 hmac.workspace = true
 sha2.workspace = true

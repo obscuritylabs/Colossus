@@ -1,4 +1,5 @@
 use super::*;
+use colossus_presentation::{ToolActivityPhase, tool_activity_presentation};
 use colossus_worker_protocol::{
     WorkerDelegateActivity, WorkerDelegateActivityState, WorkerDelegateStatus,
     WorkerThreadDelegateInspection,
@@ -15,7 +16,6 @@ struct MutableActivity {
     call_id: String,
     tool_name: String,
     state: Option<WorkerDelegateActivityState>,
-    summary: String,
     input: Option<String>,
     preview: Option<String>,
     started_at: String,
@@ -45,10 +45,6 @@ fn required_payload_string(payload: &Value, field: &str) -> Option<String> {
     Some(value.to_owned())
 }
 
-fn payload_turn(payload: &Value) -> u64 {
-    payload.get("turn").and_then(Value::as_u64).unwrap_or(0)
-}
-
 fn delegate_status(status: SubagentStatus) -> WorkerDelegateStatus {
     match status {
         SubagentStatus::Queued => WorkerDelegateStatus::Queued,
@@ -58,6 +54,27 @@ fn delegate_status(status: SubagentStatus) -> WorkerDelegateStatus {
         SubagentStatus::Cancelled => WorkerDelegateStatus::Cancelled,
         SubagentStatus::Interrupted => WorkerDelegateStatus::Interrupted,
     }
+}
+
+fn activity_summary(activity: &MutableActivity, state: WorkerDelegateActivityState) -> String {
+    let phase = match state {
+        WorkerDelegateActivityState::Started => ToolActivityPhase::Started,
+        WorkerDelegateActivityState::Completed => ToolActivityPhase::Completed,
+        WorkerDelegateActivityState::Cancelled => ToolActivityPhase::Cancelled,
+        WorkerDelegateActivityState::Failed => ToolActivityPhase::Failed,
+    };
+    // These fields have already passed this inspection's existing release gates:
+    // validated input after start, and successful post-policy output only.
+    let input = activity
+        .input
+        .as_deref()
+        .filter(|input| input.len() <= colossus_presentation::TOOL_ACTIVITY_DETAIL_BYTES)
+        .and_then(|input| serde_json::from_str(input).ok());
+    let output = activity
+        .preview
+        .as_deref()
+        .filter(|_| state == WorkerDelegateActivityState::Completed);
+    tool_activity_presentation(&activity.tool_name, phase, input.as_ref(), output).summary()
 }
 
 fn activity_index(
@@ -129,8 +146,6 @@ fn released_activities(
                 let activity = &mut activities[index];
                 activity.tool_name = tool_name;
                 activity.state = Some(WorkerDelegateActivityState::Started);
-                activity.summary =
-                    format!("tool execution started at turn {}", payload_turn(&payload));
                 activity.input = requested_inputs.remove(&call_id);
                 activity.started_at = event.occurred_at;
             }
@@ -153,11 +168,6 @@ fn released_activities(
                 } else {
                     WorkerDelegateActivityState::Failed
                 });
-                activity.summary = if exit_code == 0 {
-                    "tool execution completed".into()
-                } else {
-                    "tool execution failed".into()
-                };
                 if activity.started_at.is_empty() {
                     activity.started_at = event.occurred_at.clone();
                 }
@@ -180,10 +190,6 @@ fn released_activities(
                 let activity = &mut activities[index];
                 activity.tool_name = tool_name;
                 activity.state = Some(WorkerDelegateActivityState::Cancelled);
-                activity.summary = format!(
-                    "tool execution was cancelled before start at turn {}",
-                    payload_turn(&payload)
-                );
                 activity.started_at = event.occurred_at.clone();
                 activity.completed_at = Some(event.occurred_at);
             }
@@ -194,11 +200,13 @@ fn released_activities(
     Ok(activities
         .into_iter()
         .filter_map(|activity| {
+            let state = activity.state?;
+            let summary = activity_summary(&activity, state);
             Some(WorkerDelegateActivity {
                 call_id: activity.call_id,
                 tool_name: activity.tool_name,
-                state: activity.state?,
-                summary: bounded_text(&activity.summary, MAX_ACTIVITY_TEXT_BYTES),
+                state,
+                summary,
                 input: activity.input,
                 preview: activity.preview,
                 started_at: activity.started_at,
@@ -361,5 +369,125 @@ mod tests {
         assert_eq!(activities[0].preview.as_deref(), Some("/workspace"));
         assert!(!format!("{activities:?}").contains("private child reasoning"));
         assert!(!format!("{activities:?}").contains("must not be released"));
+    }
+
+    #[test]
+    fn inspected_repository_map_uses_shared_summary_from_released_fields() {
+        let journal = InMemoryEventJournal::default();
+        let input = json!({"root": "src"});
+        append(
+            &journal,
+            0,
+            "tool.call.requested.v1",
+            json!({"call_id": "call-map", "name": "repo.map", "arguments": input}),
+            "agent-child",
+        );
+        append(
+            &journal,
+            1,
+            "tool.call.started.v1",
+            json!({"turn": 1, "call_id": "call-map", "name": "repo.map"}),
+            "agent-child",
+        );
+        let started = released_activities(&journal, "agent-child", "session-child", "run-child")
+            .expect("started repository map");
+        assert_eq!(started.len(), 1);
+        assert_eq!(
+            started[0].summary,
+            tool_activity_presentation("repo.map", ToolActivityPhase::Started, Some(&input), None)
+                .summary()
+        );
+        assert_eq!(started[0].summary, "Map repository · src · running");
+
+        let output = json!({"file_count": 3, "files": ["body is not a row label"]}).to_string();
+        append(
+            &journal,
+            2,
+            "tool.call.completed.v1",
+            json!({
+                "call_id": "call-map", "name": "repo.map", "output": output, "exit_code": 0,
+            }),
+            "agent-child",
+        );
+        let completed = released_activities(&journal, "agent-child", "session-child", "run-child")
+            .expect("completed repository map");
+        assert_eq!(completed.len(), 1);
+        assert_eq!(
+            completed[0].summary,
+            tool_activity_presentation(
+                "repo.map",
+                ToolActivityPhase::Completed,
+                Some(&input),
+                Some(&output),
+            )
+            .summary()
+        );
+        assert_eq!(
+            completed[0].summary,
+            "Map repository · src · Files: 3 · completed"
+        );
+        assert_eq!(completed[0].preview.as_deref(), Some(output.as_str()));
+        assert!(!completed[0].summary.contains("body is not a row label"));
+    }
+
+    #[test]
+    fn inspected_summaries_never_use_failed_output_or_unstarted_input() {
+        let journal = InMemoryEventJournal::default();
+        let events = [
+            (
+                "tool.call.requested.v1",
+                json!({
+                    "call_id": "call-failed", "name": "repo.map", "arguments": {"root": "src"},
+                }),
+            ),
+            (
+                "tool.call.started.v1",
+                json!({"call_id": "call-failed", "name": "repo.map"}),
+            ),
+            (
+                "tool.call.completed.v1",
+                json!({
+                    "call_id": "call-failed", "name": "repo.map", "exit_code": 1,
+                    "output": json!({
+                        "root": "WITHHELD_OUTPUT_ROOT", "file_count": 9001,
+                        "error": {"message": "WITHHELD_ERROR"},
+                    }).to_string(),
+                }),
+            ),
+            (
+                "tool.call.requested.v1",
+                json!({
+                    "call_id": "call-cancelled", "name": "repo.map",
+                    "arguments": {"root": "WITHHELD_UNSTARTED_INPUT"},
+                }),
+            ),
+            (
+                "tool.call.cancelled.v1",
+                json!({
+                    "call_id": "call-cancelled", "name": "repo.map",
+                    "output": "WITHHELD_CANCELLED_OUTPUT",
+                }),
+            ),
+        ];
+        for (version, (event_type, payload)) in events.into_iter().enumerate() {
+            append(&journal, version as u64, event_type, payload, "agent-child");
+        }
+
+        let activities = released_activities(&journal, "agent-child", "session-child", "run-child")
+            .expect("released activities");
+        assert_eq!(activities.len(), 2);
+        assert_eq!(activities[0].state, WorkerDelegateActivityState::Failed);
+        assert_eq!(
+            activities[0].summary,
+            "Map repository · src · Reason: Tool reported failure · failed"
+        );
+        assert_eq!(activities[0].preview, None);
+        assert_eq!(activities[1].state, WorkerDelegateActivityState::Cancelled);
+        assert_eq!(activities[1].summary, "Map repository · cancelled");
+        assert_eq!(activities[1].input, None);
+        assert_eq!(activities[1].preview, None);
+        let released = format!("{activities:?}");
+        assert!(!released.contains("WITHHELD_"));
+        assert!(!released.contains("9001"));
     }
 }

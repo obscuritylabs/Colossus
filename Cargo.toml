@@ -119,6 +119,7 @@ getrandom = "0.4.3"
 hex = "0.4.3"
 hmac = "0.12.1"
 http = "1.4.2"
+hyper-util = { version = "0.1.20", features = ["tokio"] }
 futures = "0.3.31"
 flate2 = "1.1.9"
 fs4 = "0.13.1"
@@ -178,7 +179,7 @@ url = "2.5.8"
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 portable-pty = "0.9.0"
-pulldown-cmark = "0.13.4"
+pulldown-cmark = "0.13.5"
 opentelemetry = { version = "0.32.0", features = ["logs", "metrics", "trace"] }
 opentelemetry-appender-tracing = "0.32.0"
 opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic", "http-proto", "logs", "metrics", "reqwest-client", "reqwest-rustls", "tls-webpki-roots", "trace"] }

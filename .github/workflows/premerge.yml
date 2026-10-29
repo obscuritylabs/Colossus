@@ -398,6 +398,18 @@ jobs:
           node-version: 22.18.0
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
+      - name: Test complete local hosting ownership and recovery
+        id: helm_local_contracts
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $testTemp = Join-Path $env:GITHUB_WORKSPACE '.local/tests/helm-contract-temp'
+          New-Item -ItemType Directory -Path $testTemp -Force | Out-Null
+          $env:TEMP = $testTemp
+          $env:TMP = $testTemp
+          node --test ./scripts/helm-local/hosted-probe.test.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/helm-local/test-contract.ps1
       - name: Install locked Desktop dependencies
         working-directory: apps/desktop
         run: npm ci --ignore-scripts
@@ -495,6 +507,7 @@ jobs:
           CODEX_AUTH_OUTCOME: ${{ steps.windows_codex_auth.outcome }}
           COMPUTER_OUTCOME: ${{ steps.computer_portable.outcome }}
           HOME_OUTCOME: ${{ steps.windows_home.outcome }}
+          HELM_LOCAL_OUTCOME: ${{ steps.helm_local_contracts.outcome }}
           NATIVE_OUTCOME: ${{ steps.windows_native.outcome }}
           SDK_PATH_OUTCOME: ${{ steps.windows_sdk_path.outcome }}
           RENDERER_TEST_OUTCOME: ${{ steps.renderer_tests.outcome }}
@@ -510,6 +523,7 @@ jobs:
             "windows-native=$NATIVE_OUTCOME" \
             "windows-sdk-path=$SDK_PATH_OUTCOME" \
             "windows-home=$HOME_OUTCOME" \
+            "windows-local-hosting=$HELM_LOCAL_OUTCOME" \
             "windows-codex-auth=$CODEX_AUTH_OUTCOME" \
             "windows-computer-protocol-and-build=$COMPUTER_OUTCOME" \
             "worker-and-sandbox=$WORKER_OUTCOME"

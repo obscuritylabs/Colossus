@@ -1,101 +1,143 @@
 ---
 title: Test Helm locally on Windows
-description: Run an isolated Control Plane in Docker, verify it, and remove its test resources.
+description: Run the complete local Control Plane in Docker, verify it, and remove its owned test resources.
 audience: developer
 type: how-to
 ---
 
 # Test Helm locally on Windows
 
-Use the local harness to test the chart in a Docker-backed kind cluster. It creates
-one server, one documentation pod, and a persistent PostgreSQL database. Envoy Gateway
-terminates browser HTTPS and passes the connector's mutual TLS through unchanged.
-This single-node profile exercises deployment; it does not establish production
-availability-zone, capacity, or NetworkPolicy enforcement.
+The local harness installs the web UI, documentation, Fleet, and Hosted execution in
+a Docker-backed kind cluster. Hosted state uses verified-TLS PostgreSQL and an HTTPS
+checkpoint authority with a separate encrypted database. The production chart keeps
+Hosted opt-in; the local harness supplies its keys, databases, and configuration.
+
+This is one local node. Three API replicas exercise cross-replica behavior; they do
+not provide availability-zone resilience or establish NetworkPolicy enforcement.
 
 ## Prepare the tools
 
 Have Docker Desktop running its Linux engine, with hardware virtualization enabled.
-Install PowerShell 7, Git, kind, Helm 3.19+, kubectl, and Node.js from the
+Allocate at least 16 GiB of Docker memory for this profile. It runs three API pods,
+one documentation pod, two PostgreSQL instances, the checkpoint authority, and Envoy.
+Each API pod permits two resident Hosted runtimes and a 1 GiB disposable cache.
+
+Install PowerShell 7.2 or newer, Git, kind, Helm 3.19+, kubectl, and Node.js from the
 [source toolchain](toolchain-inventory.md). Put their executables on `PATH`, or pass
-`-Kind`, `-Helm`, `-Docker`, `-Kubectl`, and `-Node` paths to the harness. Node runs the
-connector TLS check; without it, the receipt records that check as skipped.
+`-Kind`, `-Helm`, `-Docker`, `-Kubectl`, and `-Node` paths to the harness. Node is required
+for the Hosted API and connector checks. Certificates and keys use PowerShell/.NET;
+Python and a separate PKI tool are unnecessary.
 
 Run from a source checkout containing the chart version you want to test. The default
 server and documentation images match that version and must already be published.
-The harness downloads a pinned Envoy Gateway chart and uses a digest-pinned Kubernetes
-node image. Initial setup requires network access and enough Docker memory and disk
-for the cluster and three application images.
+The harness uses a pinned Envoy Gateway package and digest-pinned dependency images.
+Initial setup needs network access and enough disk for those images, an 8 GiB
+controller database volume, and a 1 GiB checkpoint-authority database volume.
 
 ## Start a disposable deployment
 
-Use a distinct name for each deployment. This example uses port 8443 so it can run
-beside an existing local installation on 443:
+Choose a fresh name and an unused port. This example leaves installations on ports 443 and
+8443 available:
 
 ```powershell
-pwsh ./scripts/helm-local.ps1 -Action up -Name sandbox -Port 8443
+pwsh ./scripts/helm-local.ps1 -Action up -Name sandbox -Port 9443
 ```
 
-Setup waits for the cluster and applications, then checks health, anonymous access
-denial, administrator sign-in, the web entry point, documentation search, and connector
-TLS. A failed command retains its files for inspection. Run the same command again
-to retry an owned deployment; changing its port requires a new name or cleanup first.
+Setup creates the owned resources and waits for readiness. It checks health,
+administrator sign-in, Hosted administration APIs, the web entry point,
+documentation search, and connector TLS. A failed command retains its files and
+ownership receipts for inspection. Reuse the same name to resume an owned current
+profile; changing the port requires another name or cleanup first. Only one
+`up`, `test`, or `down` operation can run per deployment. If it reports busy, let
+the current operation finish and inspect its result before trying again.
 
-Open `https://colossus.localhost:8443`. Read the generated `admin` credential privately
-from `.local/tests/helm-sandbox/private/admin-login.txt`. The certificate is self-signed;
-the harness does not change Windows trust, browser profiles, or the hosts file.
-Configure your test browser's trust deliberately before signing in. Command-line
-smoke checks trust the exact generated certificate and resolve the hostname to loopback.
+The project **Local Colossus** (`local`) starts with the offline Echo provider and
+the supported controlled tool configuration. The initial administrator receives the
+Terminal Operator role in that project so it can execute Hosted work. No vendor
+credential is imported and no paid provider call is needed for setup. Configure a
+real provider deliberately in the web UI before using it for model work.
 
-Both browser and connector names must resolve locally before enrolling a native
-runtime. If Windows cannot resolve `.localhost` names, an administrator can configure:
+## Sign in and connect runtimes
 
-```text
-127.0.0.1 colossus.localhost runtimes.colossus.localhost
+Open `https://colossus.localhost:9443`. Read the generated `admin` credential privately
+from the `admin-login.txt` path printed by the harness, inside its protected allocation.
+The password is not printed. The certificate is self-signed. Configure your test browser's trust
+before signing in. The harness does not change Windows trust, browser profiles, or
+the hosts file. Its command-line checks trust the exact certificate and resolve the
+hostname to loopback.
+
+The web administration pages are available immediately. Use **Local Colossus** to
+test Hosted chat and managed files. Hosted execution and an enrolled Fleet worker
+are separate targets; starting this cluster does not enroll a personal runtime.
+
+The native connector resolves the reserved `localhost` domain and its subdomains
+to loopback, including on Windows. Select the generated `browser-cert.pem` beside
+the printed private `admin-login.txt` for local CLI enrollment:
+
+```powershell
+colossus cloud enroll https://colossus.localhost:9443/api/enroll `
+  --enrollment-ca-file C:/secure/browser-cert.pem
 ```
 
-The advertised connector endpoint is `https://runtimes.colossus.localhost:8443`.
-Normal native CLI HTTPS enrollment requires a browser certificate that chains to the
-client's bundled public CA roots. Browser certificate exceptions and Windows trust-store
-imports do not configure that client. The generated self-signed certificate is sufficient
-for the harness's explicit-CA probes; arrange a publicly trusted endpoint before normal
-native enrollment.
+The advertised connector endpoint is `https://runtimes.colossus.localhost:9443`.
+Use the actual certificate path from your deployment; it is the public trust anchor,
+not its private key. The CLI verifies the original hostname and certificate. The
+connector's subsequent mTLS connection uses the independently enrolled connector CA.
+Browser certificate exceptions and Windows trust-store imports do not select CLI trust.
 Follow [Connect runtimes](../cloud/connect-runtimes.md), then use the
 [web shell procedure](../cloud/work.md#open-a-shell-on-a-connected-host).
-Terminal access still requires the worker opt-in, connector grant, and project role.
+Remote shell access still requires the worker opt-in, connector grant, and project role.
+The harness does not grant model tools a human terminal.
 
 ## Check or upgrade the same installation
 
 ```powershell
 pwsh ./scripts/helm-local.ps1 -Action test -Name sandbox
-pwsh ./scripts/helm-local.ps1 -Action up -Name sandbox -Port 8443
+pwsh ./scripts/helm-local.ps1 -Action up -Name sandbox -Port 9443
 ```
 
-`test` reads the recorded port and uses the dedicated kubeconfig. `up` performs a Helm
-upgrade with the current checkout's chart and selected images. Keep the same deployment
-name to retain its database, auth key, and connector identity. Back up anything valuable
-before testing an upgrade; a Helm rollback does not reverse database migrations.
+`test` uses the recorded port, dedicated kubeconfig, and existing profile. `up` uses
+the current checkout's chart and selected images while retaining the deployment's
+database identities, auth key, connector identity, Hosted masters, and anchor state.
+A missing retained key fails setup; deleting a key is not a recovery procedure.
+Back up valuable state before upgrading. Helm rollback does not reverse database
+migrations or account changes; see [deployment recovery](../cloud/deployment/operations.md).
 
 To test images built from changed source, give both explicit image references and load
 them into kind:
 
 ```powershell
-pwsh ./scripts/helm-local.ps1 -Action up -Name sandbox -Port 8443 `
+pwsh ./scripts/helm-local.ps1 -Action up -Name sandbox -Port 9443 `
   -ControlPlaneImage colossus-control-plane:my-change `
   -DocumentationImage colossus-documentation:my-change -LoadImages
 ```
 
-Build both images first using the repository Dockerfiles. `-LoadImages` selects the
-local loaded images without pulling replacements. Record the source commit and image
-IDs with your test results; testing a released image does not verify unbuilt source.
+Build both images first using the repository Dockerfiles. `-LoadImages` uses the
+selected local images without pulling replacements. Record the source commit and
+image IDs; released images do not verify unbuilt source changes.
+
+### Keep an older deployment intact
+
+Schema 2 manifests belong to the earlier local profile. Current `up` and `test` reject
+them before changing files, client settings, or cluster resources. This also protects
+an older installation that was extended manually: the harness cannot infer ownership
+of its databases, keys, and external authority from a profile name.
+
+Use a fresh `-Name` to try the complete profile alongside it. A new deployment starts
+with new accounts and data; it does not import the old database or enrollments. Keep
+the existing deployment and matching keys until a backed-up database migration is
+reviewed and verified. `down` and `down -WhatIf` still recognize the older ownership
+manifest for deliberate cleanup. Previews also remain available; an older-profile
+`up -WhatIf` or `test -WhatIf` reports the migration requirement without changing state.
 
 ## Find the evidence and clean up
 
-All harness state belongs under the **primary checkout's** `.local/tests/helm-NAME`,
-including when the script runs from a linked worktree. The directory holds the ownership
-manifest, private kubeconfig and certificates, client caches, logs, and verification
-receipts. The process restores its original client environment when it exits. Docker
-retains the kind node and its database in the Linux engine until cleanup.
+The **primary checkout's** `.local/tests/helm-NAME` holds the ownership manifest,
+client caches, logs, and verification receipts, even from a linked worktree. The
+kubeconfig, credentials, PKI, and master material use one protected allocation under
+`%USERPROFILE%/.colossus-tests/helm-NAME-UUID`. The manifest binds that exact allocation
+to the deployment; repeated `up` reuses it. No action changes the permanent user
+environment or scans the profile for similarly named directories.
 
 Preview cleanup, then remove the exact owned cluster:
 
@@ -104,21 +146,23 @@ pwsh ./scripts/helm-local.ps1 -Action down -Name sandbox -WhatIf
 pwsh ./scripts/helm-local.ps1 -Action down -Name sandbox
 ```
 
-Deleting this cluster deletes its PostgreSQL data. Files remain by default so you can
-inspect failures and retain receipts. After exporting anything needed, remove the owned
-run directory explicitly:
+Deleting the cluster deletes both PostgreSQL databases. Run files and private material
+remain by default for inspection and recovery. After exporting what you need, remove
+the exact owned run directory and private allocation explicitly:
 
 ```powershell
 pwsh ./scripts/helm-local.ps1 -Action down -Name sandbox -RemoveFiles
 ```
 
-Cleanup validates the exact manifest, resource identities, path boundary, and absence
-of reparse points. It refuses unknown directories and deployments created by older
-harnesses. `-RemoveImages` removes only images recorded as owned and whose IDs and
-ownership labels still match. It does not remove supplied images merely because you
-loaded them into the test cluster. `-WhatIf` makes no Docker or kind calls. No action
-performs a global Docker prune or searches your user profile for folders to delete.
+If the manifest records locally built owned images, also supply `-RemoveImages` before
+discarding their receipts. Image removal requires the recorded ID and ownership labels;
+supplied or published images do not become owned merely because they were loaded.
 
-For production prerequisites, backups, and routing choices, use
+Cleanup checks the manifest, container identities, private allocation, resolved path
+boundaries, and reparse points. Unknown or replaced resources stop cleanup. `-WhatIf`
+does not create files, generate credentials, or invoke Docker, kind, or Helm.
+No action performs a global Docker prune or removes the protected test parent.
+
+For production prerequisites and independently administered services, use
 [Install with Helm](../cloud/deployment/kubernetes.md) and
-[deployment operations](../cloud/deployment/operations.md).
+[Hosted deployment](../cloud/deployment/hosted-chat.md).

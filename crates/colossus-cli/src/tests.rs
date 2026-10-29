@@ -10,6 +10,9 @@ mod development_credentials;
 #[path = "worker_codex_auth_tests.rs"]
 mod worker_codex_auth;
 
+#[path = "cloud_command_tests.rs"]
+mod cloud_commands;
+
 struct PrivateTempDir {
     #[cfg(windows)]
     path: PathBuf,
@@ -389,7 +392,7 @@ fn danger_full_access_warning_is_not_suppressed_for_non_terminal_invocations() {
 }
 
 #[test]
-fn run_output_is_response_only_for_humans_and_structured_for_automation() {
+fn run_output_keeps_private_metadata_for_automation_and_renders_human_text() {
     let value = json!({
         "run_id": "run-private-metadata",
         "session_id": "session-private-metadata",
@@ -401,6 +404,7 @@ fn run_output_is_response_only_for_humans_and_structured_for_automation() {
     let terminal = render_run_output(
         &value,
         value["output"].as_str().expect("response"),
+        None,
         OutputMode::Auto,
         true,
         80,
@@ -423,6 +427,7 @@ fn run_output_is_response_only_for_humans_and_structured_for_automation() {
     let explicit_human = render_run_output(
         &value,
         value["output"].as_str().expect("response"),
+        None,
         OutputMode::Human,
         false,
         80,
@@ -436,6 +441,7 @@ fn run_output_is_response_only_for_humans_and_structured_for_automation() {
         let structured = render_run_output(
             &value,
             value["output"].as_str().expect("response"),
+            None,
             mode,
             terminal,
             80,

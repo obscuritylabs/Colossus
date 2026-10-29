@@ -2042,3 +2042,59 @@ async fn client_discloses_no_operation_to_an_unauthenticated_server() {
         Err(WorkerError::Io(_))
     ));
 }
+
+#[test]
+fn run_token_usage_operation_keeps_both_exact_identities_in_the_wire_contract() {
+    let operation = WorkerOperation::RunTokenUsage {
+        session_id: "session-usage".into(),
+        run_id: "run-usage".into(),
+    };
+    let encoded = serde_json::to_value(&operation).expect("serialize usage query");
+    assert_eq!(
+        encoded,
+        json!({
+            "operation": "run_token_usage", "session_id": "session-usage", "run_id": "run-usage"
+        })
+    );
+    assert_eq!(operation_name(&operation), "run_token_usage");
+    assert!(matches!(
+        serde_json::from_value::<WorkerOperation>(encoded).expect("deserialize usage query"),
+        WorkerOperation::RunTokenUsage { session_id, run_id }
+            if session_id == "session-usage" && run_id == "run-usage"
+    ));
+    assert!(
+        serde_json::from_value::<WorkerOperation>(json!({
+            "operation": "run_token_usage", "session_id": "session-usage", "run_id": "run-usage",
+            "usage": { "total_tokens": 0 }
+        }))
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn run_token_usage_worker_query_preserves_missing_accounting_without_creating_a_run() {
+    let fixture = hosted_worker_fixture_with_configure(|_| {}).await;
+    let session = fixture
+        .client
+        .call(WorkerOperation::SessionCreate { title: None })
+        .await
+        .expect("create query session");
+    let session_id = session["id"].as_str().expect("session id").to_owned();
+    let error = fixture
+        .client
+        .call(WorkerOperation::RunTokenUsage {
+            session_id: session_id.clone(),
+            run_id: "missing-run".into(),
+        })
+        .await
+        .expect_err("absent run is not fabricated zero usage");
+    assert!(error.to_string().contains("run token usage"));
+    let after = fixture
+        .client
+        .call(WorkerOperation::SessionGet { session_id })
+        .await
+        .expect("session after read-only query");
+    assert_eq!(after["message_count"], 0);
+    assert!(after["last_run_id"].is_null());
+    fixture.stop().await;
+}

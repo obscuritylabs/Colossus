@@ -7,14 +7,14 @@ use async_trait::async_trait;
 use colossus_contracts::{
     AgentRunMode, AgentRunOutcome, ModelContent, ModelContentPart, ModelImageReference,
     ModelMessageRole, PlanDraftTarget, PlanExecutionStrategy, PlanRecord, PlanStatus,
-    ProviderEvent, RunEvent, RunEventEnvelope, SandboxBoundaryMode, SecurityPostureReport,
-    SessionMessage, SessionMessagePage, SessionSummary, SubagentJob, SubagentStatus,
-    TerminalPreferences, ThemeTextStyle,
+    ProviderEvent, RunEvent, RunEventEnvelope, RunTokenUsage, SandboxBoundaryMode,
+    SecurityPostureReport, SessionMessage, SessionMessagePage, SessionSummary, SubagentJob,
+    SubagentStatus, TerminalPreferences, ThemeTextStyle,
 };
 use colossus_ports::RunControl;
 use colossus_presentation::{
     PresentationBlock, PresentationDocument, PresentationTone, SemanticRenderer,
-    StyledDocumentRenderer, TerminalPalette,
+    StyledDocumentRenderer, TerminalPalette, run_token_usage_document,
 };
 #[cfg(unix)]
 use crossterm::event::{
@@ -122,6 +122,7 @@ mod terminal;
 mod theme_picker;
 mod tool_details;
 mod transcript;
+mod usage;
 mod workspace;
 mod workspace_view;
 
@@ -161,6 +162,7 @@ use render::*;
 use state::*;
 use terminal::*;
 use transcript::*;
+use usage::*;
 
 #[cfg(test)]
 mod tests;
