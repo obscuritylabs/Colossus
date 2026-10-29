@@ -16,9 +16,12 @@ import {
   IconCircle,
   IconEdit,
   IconFile,
+  IconFolderOpen,
   IconInfoCircle,
   IconListDetails,
   IconLoader2,
+  IconPencil,
+  IconPhoto,
   IconPlayerPlay,
   IconPlayerStop,
   IconPlug,
@@ -26,6 +29,7 @@ import {
   IconSparkles,
   IconTargetArrow,
   IconTerminal2,
+  IconWorld,
 } from "@tabler/icons-react";
 import { lazy, Suspense, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -354,9 +358,29 @@ function toolActivityInputValue(group: ToolActivityGroup): string | null {
 }
 
 function ToolActivityIcon({ kind }: { kind: ActivityLabelKind }) {
-  if (kind === "mcp") return <IconPlug size={16} stroke={1.7} />;
-  if (kind === "browser") return <IconBrowser size={16} stroke={1.7} />;
-  return <IconTerminal2 size={16} stroke={1.7} />;
+  switch (kind) {
+    case "browser":
+      return <IconBrowser size={16} stroke={1.7} />;
+    case "image":
+      return <IconPhoto size={16} stroke={1.7} />;
+    case "read":
+      return <IconBooks size={16} stroke={1.7} />;
+    case "search":
+      return <IconSearch size={16} stroke={1.7} />;
+    case "list":
+      return <IconFolderOpen size={16} stroke={1.7} />;
+    case "write":
+      return <IconPencil size={16} stroke={1.7} />;
+    case "web":
+      return <IconWorld size={16} stroke={1.7} />;
+    case "mcp":
+      return <IconPlug size={16} stroke={1.7} />;
+    case "delegate":
+      return <IconArrowRight size={16} stroke={1.8} />;
+    case "run":
+    case "generic":
+      return <IconTerminal2 size={16} stroke={1.7} />;
+  }
 }
 
 function toolActivityPreview(activity: ToolActivity): string {

@@ -84,30 +84,15 @@ pub(super) fn open(state: &mut TuiState, index: usize) {
     }));
 }
 
-pub(super) fn open_latest(state: &mut TuiState) {
-    let index = state
-        .tool_hits
-        .iter()
-        .rev()
-        .find(|hit| hit.current(state))
-        .map(|hit| hit.index)
-        .or_else(|| {
-            (0..state.transcript.len())
-                .rev()
-                .find(|&index| inspectable(state, index))
-        });
-    if let Some(index) = index {
-        open(state, index);
-    }
-}
-
 pub(super) fn key(state: &mut TuiState, key: KeyEvent) {
     let Some(Overlay::ToolDetails(details)) = state.overlay.as_mut() else {
         return;
     };
     match key.code {
-        KeyCode::Esc | KeyCode::F(3) => {
+        KeyCode::Esc => state.overlay = None,
+        KeyCode::F(3) => {
             state.overlay = None;
+            state.toggle_event_details();
         }
         KeyCode::Up => details.scroll = details.scroll.saturating_sub(1),
         KeyCode::Down => details.scroll = details.scroll.saturating_add(1),

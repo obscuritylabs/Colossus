@@ -2,7 +2,18 @@ import { toolActivityLabel } from "@colossus/ui/lib/tool-activity";
 import { safeDisplayLabel } from "./presenters";
 import type { ToolActivity } from "./types";
 
-export type ActivityLabelKind = "browser" | "generic" | "mcp";
+export type ActivityLabelKind =
+  | "browser"
+  | "delegate"
+  | "generic"
+  | "image"
+  | "list"
+  | "mcp"
+  | "read"
+  | "run"
+  | "search"
+  | "web"
+  | "write";
 
 export interface ActivityLabel {
   title: string;
@@ -18,12 +29,69 @@ export interface NoticeLabel {
 export function presentToolActivity(activity: ToolActivity): ActivityLabel {
   return {
     title: toolActivityLabel(activity.summary, activity.toolName),
-    kind: activity.toolName.startsWith("mcp.")
-      ? "mcp"
-      : activity.toolName.startsWith("browser.")
-        ? "browser"
-        : "generic",
+    kind: toolActivityKind(activity.toolName),
   };
+}
+
+// Icons describe the registered tool family, independently of released summary text.
+// Never derive a label or icon from tool arguments or output.
+function toolActivityKind(toolName: string): ActivityLabelKind {
+  switch (toolName) {
+    case "image.view":
+      return "image";
+    case "filesystem.read":
+    case "fs.read":
+    case "patch.preview":
+    case "repo.read_many":
+    case "repo.file_summary":
+    case "workspace.inspect":
+      return "read";
+    case "filesystem.write":
+    case "fs.write":
+    case "filesystem.replace":
+    case "workspace.apply_patch":
+    case "patch.apply":
+    case "patch.reverse":
+      return "write";
+    case "filesystem.list":
+    case "fs.list":
+    case "repo.map":
+    case "repo.map_structure":
+      return "list";
+    case "filesystem.search":
+    case "fs.search":
+    case "repo.search":
+    case "repo.symbol_search":
+    case "repo.references":
+      return "search";
+    case "web.search":
+    case "web.fetch":
+    case "docs.fetch":
+      return "web";
+    case "shell.run":
+    case "shell.read":
+    case "shell.wait":
+    case "shell.list":
+    case "shell.stop":
+    case "process.spawn":
+    case "process.start":
+    case "process.poll":
+    case "process.read":
+    case "process.write":
+    case "process.stop":
+    case "process.list":
+      return "run";
+    case "agent.delegate":
+    case "agent.result":
+    case "agent.subagent_update":
+      return "delegate";
+    default:
+      return toolName.startsWith("mcp.")
+        ? "mcp"
+        : toolName.startsWith("browser.")
+          ? "browser"
+          : "generic";
+  }
 }
 
 function titleCaseIdentifier(value: string): string {

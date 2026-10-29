@@ -815,7 +815,7 @@ fn transcript_lines_range_with_images<'a>(
         let (rendered, images) = if state.security_posture_entry == Some(entry_index) {
             (security_posture_lines(state, content_width), Vec::new())
         } else {
-            transcript_document_lines(state, &entry.document, content_width)
+            transcript_document_lines(state, &entry.document, content_width, inspectable)
         };
         let rendered_start = lines.len();
         image_placements.extend(images.into_iter().map(|(line, digest)| {
@@ -840,8 +840,15 @@ fn transcript_document_lines(
     state: &TuiState,
     document: &PresentationDocument,
     width: usize,
+    inline_tool: bool,
 ) -> (Vec<Line<'static>>, Vec<(usize, String)>) {
-    let renderer = StyledDocumentRenderer::for_transcript(state.preferences.clone(), width);
+    let mut preferences = state.preferences.clone();
+    if inline_tool && preferences.events_mode == colossus_contracts::EventDisplayMode::Verbose {
+        // The document retains structured details. Inline source snippets use the
+        // existing head/tail preview; click inspection keeps the fuller wrapped view.
+        preferences.events_mode = colossus_contracts::EventDisplayMode::Compact;
+    }
+    let renderer = StyledDocumentRenderer::for_transcript(preferences, width);
     let mut lines = Vec::new();
     let mut images = Vec::new();
     for block in &document.blocks {

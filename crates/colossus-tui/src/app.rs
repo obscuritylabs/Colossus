@@ -509,7 +509,7 @@ fn handle_key(
         return;
     }
     if key.code == KeyCode::F(3) {
-        crate::tool_details::open_latest(state);
+        state.toggle_event_details();
         return;
     }
     if state.agents.handle_key(key) {

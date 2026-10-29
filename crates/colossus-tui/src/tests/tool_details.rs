@@ -1,5 +1,17 @@
 use super::*;
 
+fn open_latest(state: &mut TuiState) {
+    let index = (0..state.transcript_sources.len())
+        .rev()
+        .find(|&index| {
+            state.transcript_sources[index]
+                .as_ref()
+                .is_some_and(TranscriptRenderSource::inspectable)
+        })
+        .expect("inspectable event");
+    crate::tool_details::open(state, index);
+}
+
 fn state_with_result(output: String) -> TuiState {
     let mut state = TuiState::from_snapshot(snapshot());
     state.transcript.clear();
@@ -85,7 +97,7 @@ fn large_results_are_one_row_until_inspected_and_raw_source_is_retained() {
     }
     let before = draw(&mut state, 120, 32);
     assert!(!text(&before).contains("HEAD-DETAIL"));
-    crate::tool_details::open_latest(&mut state);
+    open_latest(&mut state);
     assert!(state.transient_inline_screen_active());
     let details = text(&draw(&mut state, 120, 32));
     assert!(details.contains("HEAD-DETAIL"), "{details}");
@@ -198,7 +210,7 @@ fn inspector_navigation_and_approval_preemption_preserve_the_draft() {
         "SECOND-DETAIL".into(),
     );
     state.composer.insert("keep draft");
-    crate::tool_details::open_latest(&mut state);
+    open_latest(&mut state);
     assert!(text(&draw(&mut state, 80, 24)).contains("SECOND-DETAIL"));
     handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
     assert!(text(&draw(&mut state, 80, 24)).contains("FIRST-DETAIL"));
@@ -294,7 +306,7 @@ fn asynchronous_pickers_preempt_read_only_inspection() {
     for theme in [false, true] {
         let mut state = state_with_result("detail".into());
         state.composer.insert("keep this draft");
-        crate::tool_details::open_latest(&mut state);
+        open_latest(&mut state);
         let (response, mut receiver) = oneshot::channel();
         let event = if theme {
             HostEvent::ThemePicker(theme_picker(response))
@@ -344,7 +356,7 @@ fn expanded_file_details_can_scroll_to_middle_lines() {
         .map(|line| format!("DETAIL-LINE-{line:03}\n"))
         .collect::<String>();
     let mut state = state_with_result(body);
-    crate::tool_details::open_latest(&mut state);
+    open_latest(&mut state);
     assert!(text(&draw(&mut state, 80, 24)).contains("[ Close ]"));
     for _ in 0..2 {
         handle_overlay_key(
@@ -355,4 +367,45 @@ fn expanded_file_details_can_scroll_to_middle_lines() {
     let middle = text(&draw(&mut state, 80, 24));
     assert!(middle.contains("DETAIL-LINE-040"), "{middle}");
     assert!(!middle.contains("lines omitted"));
+}
+
+#[test]
+fn inspector_keeps_repository_metadata_and_readable_rows_out_of_the_compact_stream() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.transcript.clear();
+    state.transcript_sources.clear();
+    result(
+        &mut state,
+        "map",
+        "repo.map",
+        serde_json::json!({
+            "root": ".", "file_count": 2, "truncated": false,
+            "extension_counts": {"rs": 2},
+            "files": ["src/main.rs", "src/lib.rs"]
+        })
+        .to_string(),
+    );
+    assert_eq!(transcript_lines(&state, 120).len(), 1);
+    assert!(!text(&draw(&mut state, 120, 40)).contains("src/lib.rs"));
+    open_latest(&mut state);
+    let visible = text(&draw(&mut state, 120, 40));
+    for expected in [
+        "Map repository",
+        "Status",
+        "Duration",
+        "0.20s",
+        "Exit",
+        "Root",
+        "File count",
+        "Extension counts",
+        "src/main.rs",
+        "src/lib.rs",
+    ] {
+        assert!(visible.contains(expected), "missing {expected}: {visible}");
+    }
+    assert!(!visible.contains("json preview"), "{visible}");
+    assert!(!visible.contains("\"file_count\""), "{visible}");
+    handle_overlay_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(state.overlay.is_none());
+    assert_eq!(transcript_lines(&state, 120).len(), 1);
 }

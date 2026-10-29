@@ -814,6 +814,78 @@ impl TuiState {
         }
     }
 
+    /// Expand or collapse current-session events without leaving the transcript.
+    pub(super) fn toggle_event_details(&mut self) {
+        let old_scroll = self.scroll_from_bottom;
+        let anchor = if old_scroll > 0 {
+            let (ranges, total) = self.transcript_entry_line_ranges();
+            let top = total
+                .saturating_sub(self.transcript_height)
+                .saturating_sub(old_scroll);
+            ranges
+                .into_iter()
+                .find_map(|(index, range)| range.contains(&top).then(|| (index, top - range.start)))
+        } else {
+            None
+        };
+        let mut preferences = self.preferences.clone();
+        preferences.events_mode = match preferences.events_mode {
+            colossus_contracts::EventDisplayMode::Verbose => {
+                colossus_contracts::EventDisplayMode::Compact
+            }
+            colossus_contracts::EventDisplayMode::Compact
+            | colossus_contracts::EventDisplayMode::Off => {
+                colossus_contracts::EventDisplayMode::Verbose
+            }
+        };
+        // This toggle restores an entry anchor below, rather than the ordinary
+        // preference reflow's absolute row. Keep live output following the bottom.
+        self.scroll_from_bottom = 0;
+        self.set_preferences(preferences);
+        if old_scroll > 0 {
+            let (ranges, total) = self.transcript_entry_line_ranges();
+            let maximum = total.saturating_sub(self.transcript_height);
+            self.scroll_from_bottom = anchor
+                .and_then(|(index, offset)| {
+                    ranges.into_iter().find_map(|(entry, range)| {
+                        (entry == index && !range.is_empty()).then(|| {
+                            let top = range.start + offset.min(range.len() - 1);
+                            maximum.saturating_sub(top)
+                        })
+                    })
+                })
+                .unwrap_or_else(|| old_scroll.min(maximum));
+        }
+        self.tool_hits.clear();
+        self.tool_click = None;
+        self.text_selection.clear();
+        self.composer.completion_index = None;
+        self.composer.completion_hidden = true;
+    }
+
+    fn transcript_entry_line_ranges(&self) -> (Vec<(usize, std::ops::Range<usize>)>, usize) {
+        let mut ranges = Vec::new();
+        let mut total = 0_usize;
+        let mut visible_entries = 0_usize;
+        for (index, entry) in self.transcript.iter().enumerate() {
+            if entry.document.is_empty() {
+                continue;
+            }
+            let count = crate::render::transcript_lines_range(
+                self,
+                self.transcript_width,
+                index,
+                index + 1,
+                visible_entries > 0,
+            )
+            .len();
+            visible_entries += 1;
+            ranges.push((index, total..total.saturating_add(count)));
+            total = total.saturating_add(count);
+        }
+        (ranges, total)
+    }
+
     pub(super) fn set_preferences(&mut self, preferences: TerminalPreferences) {
         let old_line_count = if self.scroll_from_bottom > 0 {
             transcript_lines(self, self.transcript_width).len()

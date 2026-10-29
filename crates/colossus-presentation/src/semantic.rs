@@ -444,10 +444,11 @@ impl SemanticRenderer {
         if self.preferences.transcript_density == TranscriptDensity::Comfortable
             || self.preferences.events_mode == EventDisplayMode::Verbose
         {
-            return Ok(Some(self.render_document(tool_activity_document(
-                &activity,
-                Some(&result.output),
-                self.preferences.events_mode == EventDisplayMode::Verbose,
+            return Ok(Some(self.render_document(tool_result_document_with_mode(
+                result,
+                duration_seconds,
+                call,
+                self.preferences.events_mode,
             ))));
         }
         Ok(Some(format!(
@@ -677,12 +678,21 @@ fn tool_result_document_with_mode(
         call.map(|call| &call.arguments),
         Some(&result.output),
     );
-    activity.add_fact("Duration", format!("{duration_seconds:.2}s"));
-    tool_activity_document(
-        &activity,
-        Some(&result.output),
-        events_mode == EventDisplayMode::Verbose,
-    )
+    let detailed = events_mode == EventDisplayMode::Verbose;
+    if !detailed {
+        activity.add_fact("Duration", format!("{duration_seconds:.2}s"));
+    }
+    let mut document = tool_activity_document(&activity, Some(&result.output), detailed);
+    if detailed
+        && let Some(PresentationBlock::Card { body, .. }) = document.blocks.first_mut()
+        && let Some(PresentationBlock::KeyValue(metadata)) = body.first_mut()
+    {
+        // Execution metadata comes from the result envelope, independent of payload fields
+        // and the compact summary's four-fact limit.
+        metadata.push(("Duration".into(), format!("{duration_seconds:.2}s")));
+        metadata.push(("Exit".into(), result.exit_code.to_string()));
+    }
+    document
 }
 
 /// Build the canonical semantic work-state document for terminal and TUI backends.

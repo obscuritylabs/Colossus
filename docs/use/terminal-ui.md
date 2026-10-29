@@ -97,17 +97,23 @@ call, with its target, available counts, and outcome. The same shared summaries
 appear in Desktop and VS Code. Large file contents and tables stay out of the
 transcript until requested.
 
-Click a tool row in the full-screen view or press F3 to open details. F3 chooses
-the latest visible tool event, falling back to the latest loaded event. Use
-Left/Right to move between events and PageUp/PageDown to scroll. Esc returns to
-your preserved draft. Dragging still selects text. In inline mode, F3 opens a
-transient details screen and returns to native scrollback when closed.
+Press F3 to toggle between compact summaries and expanded results in the same
+conversation. Expanded results show status, timing, readable fields, tables, and
+short code snippets. The composer and sidebar stay visible, and your draft and
+reading position are preserved. `/events compact` and `/events verbose` select
+these same modes. Use `/prefs save` to save the current preference.
 
-Details are a bounded preview (up to 64 KiB and 160 logical lines; tables show
-up to 20 rows and 8 columns). A truncation notice identifies omitted content;
-the retained result is unchanged. `/events verbose` expands these previews in
-the transcript. `/events off` suppresses successful live tool rows while keeping
-failures visible. Restored results say **recorded** because saved model messages
+Click a tool row in the full-screen view for a longer, scrollable detail preview.
+Use Left/Right to move between events and PageUp/PageDown to scroll. Esc closes
+the inspector; F3 closes it and toggles the conversation mode. Dragging still
+selects text.
+
+Details are bounded (up to 64 KiB and 160 logical lines; tables show up to 20 rows
+and 8 columns). Inline code snippets show up to 20 opening and 8 closing lines.
+A truncation notice identifies omitted content; the retained result is unchanged.
+With `--no-alt-screen`, F3 changes live and future output; previously committed
+native scrollback keeps its original formatting. `/events off` suppresses
+successful live tool rows while keeping failures visible. Restored results say **recorded** because saved model messages
 do not include an authoritative exit status.
 
 ## Read token usage

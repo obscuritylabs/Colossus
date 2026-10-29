@@ -24,7 +24,8 @@ interface. The default view fills the alternate screen. Add the global
 | `Ctrl-J` | Insert a newline, including when Shift-Enter is indistinguishable from Enter. |
 | `Ctrl-R` | Search earlier submitted prompts. |
 | `F2` | Open or close the Sessions browser on its Open tab. |
-| `F3` or click a tool row | Inspect the most recent visible tool event, or the clicked event. Inside details, Left/Right selects an event; Up/Down, PageUp/PageDown, Home/End scroll; Esc closes. Mouse clicking requires captured input in the full-screen view. |
+| `F3` | Toggle compact tool summaries and expanded inline results in the conversation. Keeps the draft and reading position. |
+| Click a tool row | Inspect that event in detail. Left/Right selects an event; Up/Down, PageUp/PageDown, Home/End scroll; Esc closes. Requires captured mouse input in the full-screen view. |
 | `Alt-N` | Start a new session while existing sessions continue. |
 | `Alt-Left` / `Alt-Right` | Switch between workspace sessions. |
 | `Up` / `Down` | Move through wrapped or multiline draft rows. Up from the first row browses submitted prompts; Down past the newest restores your draft. |

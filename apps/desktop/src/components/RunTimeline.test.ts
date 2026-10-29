@@ -356,6 +356,46 @@ describe("RunTimeline assistant output", () => {
     expect(markup).toContain('aria-label="Failure details"');
   });
 
+  it.each([
+    ["filesystem.read", "books"],
+    ["filesystem.search", "search"],
+    ["repo.map", "folder-open"],
+    ["filesystem.write", "pencil"],
+    ["image.view", "photo"],
+    ["web.fetch", "world"],
+    ["mcp.call", "plug"],
+    ["browser.snapshot", "browser"],
+    ["agent.delegate", "arrow-right"],
+    ["shell.run", "terminal-2"],
+    ["extension.review", "terminal-2"],
+  ])(
+    "renders the existing %s icon beside its canonical summary",
+    (toolName, icon) => {
+      const markup = renderOutput("Done", "completed", "complete", [
+        {
+          runId: "run-markdown-test",
+          sequence: 1,
+          createdAt: "2026-07-21T12:00:00Z",
+          update: {
+            type: "tool_activity",
+            activity: {
+              callId: "call-icon",
+              toolName,
+              state: "completed",
+              summary: "Canonical released summary",
+            },
+          },
+        },
+      ]);
+      const heading = markup.match(
+        /class="compact-tool-activity[^>]*><summary>(.*?)<\/summary>/su,
+      )?.[1];
+      expect(heading).toContain(`tabler-icon-${icon}`);
+      expect(heading).toContain("Canonical released summary");
+      expect(heading).toContain('class="feed-marker" aria-hidden="true"');
+    },
+  );
+
   it("coalesces tool transitions into one expandable compact row", () => {
     const updates: RunUpdate[] = [
       {
@@ -408,7 +448,7 @@ describe("RunTimeline assistant output", () => {
 
     expect(
       markup.match(
-        /<details class="compact-tool-activity activity-tool-thread activity-state-completed activity-kind-generic">/g,
+        /<details class="compact-tool-activity activity-tool-thread activity-state-completed activity-kind-list">/g,
       ),
     ).toHaveLength(1);
     expect(markup).toContain("Mapped repository structure");
@@ -727,7 +767,7 @@ describe("RunTimeline assistant output", () => {
     ]);
 
     expect(markup).toContain("Created sample.txt");
-    expect(markup).toContain("activity-kind-generic");
+    expect(markup).toContain("activity-kind-write");
   });
 
   it("uses friendly Research labels and collapses adjacent duplicate notices", () => {

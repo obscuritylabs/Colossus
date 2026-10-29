@@ -61,7 +61,7 @@ describe("viewed image activity", () => {
       },
     ]);
     expect(presentToolActivity(activity)).toEqual({
-      kind: "generic",
+      kind: "image",
       title: "Viewed 1 image",
     });
     expect(

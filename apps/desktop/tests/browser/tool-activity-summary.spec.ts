@@ -34,6 +34,7 @@ for (const [colorTheme, darkPalette, width] of [
     const heading = row.locator(":scope > summary");
     await expect(heading).toContainText("Mapped repository structure");
     await expect(heading).toContainText("repo.map_structure");
+    await expect(heading.locator(".tabler-icon-folder-open")).toBeVisible();
     await expect(row).toHaveJSProperty("open", false);
     await heading.click();
     await expect(row).toHaveJSProperty("open", true);

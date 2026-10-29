@@ -56,6 +56,17 @@ fn send(writer: &mut dyn std::io::Write, bytes: &[u8]) {
     writer.flush().unwrap();
 }
 
+fn toggle(writer: &mut dyn std::io::Write) {
+    send(
+        writer,
+        if cfg!(windows) {
+            b"\x1b[114;61;0;1;0;1_\x1b[114;61;0;0;0;1_"
+        } else {
+            b"\x1bOR"
+        },
+    );
+}
+
 fn capture(output: &Arc<Mutex<Vec<u8>>>, name: &str) {
     if let Some(directory) = std::env::var_os("COLOSSUS_TUI_CAPTURE_DIR") {
         let path = std::path::PathBuf::from(directory);
@@ -82,7 +93,7 @@ fn capture(output: &Arc<Mutex<Vec<u8>>>, name: &str) {
 }
 
 #[test]
-fn compact_tool_rows_and_details_work_in_a_native_terminal() {
+fn f3_toggles_inline_tool_results_without_leaving_the_conversation() {
     for mode in ["alternate", "inline"] {
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -130,24 +141,50 @@ fn compact_tool_rows_and_details_work_in_a_native_terminal() {
                 assert!(screen_contents(&output, 32, 120).contains("Map repository"));
                 assert!(screen_contents(&output, 32, 120).contains("Files: 200"));
             }
+            wait_for_screen(&output, 32, 120, "ready");
             send(&mut writer, b"preserved draft");
             wait_for_screen(&output, 32, 120, "preserved draft");
             capture(&output, &format!("{mode}-compact"));
-            send(
-                &mut writer,
-                if cfg!(windows) {
-                    b"\x1b[114;61;0;1;0;1_\x1b[114;61;0;0;0;1_"
-                } else {
-                    b"\x1bOR"
-                },
-            );
-            wait_for_screen(&output, 32, 120, "FILE-DETAIL-BEGIN");
-            capture(&output, &format!("{mode}-details"));
-            assert!(!screen_contents(&output, 32, 120).contains("FILE-DETAIL-TAIL"));
-            send(&mut writer, b"\x1b");
-            wait_for_screen(&output, 32, 120, "preserved draft");
+            toggle(&mut writer);
+            if mode == "inline" {
+                // Native scrollback is immutable. The new mode applies to the next turn,
+                // without entering a transient alternate screen or duplicating history.
+                send(&mut writer, &[3]);
+                send(&mut writer, b"expanded repository\r");
+            }
+            wait_for_screen(&output, 32, 120, "lines omitted");
             wait_for_screen(&output, 32, 120, "ready");
-            capture(&output, &format!("{mode}-compact"));
+            if mode == "inline" {
+                send(&mut writer, b"preserved draft");
+            } else {
+                send(&mut writer, b"\x1b[5~");
+                wait_for_screen(&output, 32, 120, "Duration");
+            }
+            wait_for_screen(&output, 32, 120, "preserved draft");
+            let expanded = screen_contents(&output, 32, 120);
+            assert!(expanded.contains("Message · Enter sends"), "{expanded}");
+            assert!(!expanded.contains("Tool details"), "{expanded}");
+            assert!(!expanded.contains("[ Close ]"), "{expanded}");
+            assert!(!expanded.contains("json preview"), "{expanded}");
+            capture(&output, &format!("{mode}-expanded-inline"));
+            toggle(&mut writer);
+            if mode == "inline" {
+                send(&mut writer, &[3]);
+                send(&mut writer, b"compact repository\r");
+            }
+            wait_for_screen(&output, 32, 120, "▸ ✓ Read file");
+            wait_for_screen(&output, 32, 120, "ready");
+            if mode == "inline" {
+                send(&mut writer, b"preserved draft");
+            }
+            wait_for_screen(&output, 32, 120, "preserved draft");
+            let compact = screen_contents(&output, 32, 120);
+            assert!(!compact.contains("Tool details"), "{compact}");
+            if mode == "alternate" {
+                assert!(!compact.contains("lines omitted"), "{compact}");
+                assert!(!compact.contains("FILE-DETAIL-BEGIN"), "{compact}");
+            }
+            capture(&output, &format!("{mode}-compact-restored"));
             send(&mut writer, &[3]);
             thread::sleep(Duration::from_millis(60));
             send(&mut writer, &[3]);

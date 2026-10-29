@@ -207,12 +207,22 @@ pub(super) fn render_footer(
     if let Some(context) = context {
         append_footer_segment(&mut spans, &mut used, content_width, context, metadata);
     }
-    if !state.tool_hits.is_empty() {
+    if state
+        .transcript_sources
+        .iter()
+        .flatten()
+        .any(TranscriptRenderSource::inspectable)
+    {
         append_footer_segment(
             &mut spans,
             &mut used,
             content_width,
-            "F3 details".into(),
+            if state.preferences.events_mode == colossus_contracts::EventDisplayMode::Verbose {
+                "F3 compact"
+            } else {
+                "F3 expand"
+            }
+            .into(),
             metadata,
         );
     }
