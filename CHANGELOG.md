@@ -72,6 +72,7 @@ include breaking changes while the public API is still settling.
 #### Documentation
 
 - retain the dependency exception reference ([b415d61](https://github.com/obscuritylabs/Colossus/commit/b415d6176ad27924e9781f3bb113bb331a15a20d))
+- refresh preview notes after acceptance hardening ([26dd435](https://github.com/obscuritylabs/Colossus/commit/26dd43523cc1cf9c008afc703a1802f1e9a64fb2))
 
 #### Maintenance
 
@@ -98,8 +99,9 @@ include breaking changes while the public API is still settling.
 - **computer:** bind App Shot acceptance to reviewed fixture images ([d7c88a2](https://github.com/obscuritylabs/Colossus/commit/d7c88a28fdad2aa28521e93d030ac9e4176303fb))
 - **release:** record native fixture admission validation ([0aa3e6a](https://github.com/obscuritylabs/Colossus/commit/0aa3e6ad8911aabe2204d77265f23212d5d113ae))
 - harden desktop capability and native drag acceptance ([debd120](https://github.com/obscuritylabs/Colossus/commit/debd120c09456b2887fd8217aef3994e732f5e3f))
+- record native background input failure evidence ([80c8cd4](https://github.com/obscuritylabs/Colossus/commit/80c8cd4f2234b3d3ba2ee863e852ed24fd7413a2))
 
-**Source:** [debd120](https://github.com/obscuritylabs/Colossus/commit/debd120c09456b2887fd8217aef3994e732f5e3f)
+**Source:** [80c8cd4](https://github.com/obscuritylabs/Colossus/commit/80c8cd4f2234b3d3ba2ee863e852ed24fd7413a2)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.5](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.5)
 
