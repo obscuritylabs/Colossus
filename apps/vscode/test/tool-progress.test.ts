@@ -34,6 +34,21 @@ function event(
   });
 }
 
+test("tool progress preserves the canonical human summary without a client tool-name map", () => {
+  const summary = "Mapped repository structure";
+  const tools = toolProgress(
+    [],
+    event("run-a", 1n, ToolActivityState.TOOL_ACTIVITY_STATE_COMPLETED, {
+      toolName: "repo.map",
+      summary,
+      preview: "Released repository details",
+    }),
+  );
+  assert.equal(tools[0]?.summary, summary);
+  assert.equal(tools[0]?.name, "repo.map");
+  assert.equal(tools[0]?.preview, "Released repository details");
+});
+
 test("tool progress scopes calls to runs and ignores replayed or older uint64 sequences", () => {
   const seq = 9007199254740993n;
   const first = toolProgress(

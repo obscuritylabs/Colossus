@@ -63,6 +63,7 @@ fn plan_mode_allowlist_blocks_implementation_and_external_mutation() {
     ));
 }
 
+mod approval_cancellation;
 mod communication;
 mod image_continuation;
 mod observation_projection;

@@ -17,7 +17,7 @@ const activity: ToolActivity = {
   callId: "view",
   toolName: "image.view",
   state: "completed",
-  summary: "Tool completed",
+  summary: "Viewed 1 image",
   preview: JSON.stringify({ images: [image] }),
 };
 
@@ -61,12 +61,13 @@ describe("viewed image activity", () => {
       },
     ]);
     expect(presentToolActivity(activity)).toEqual({
-      kind: "image",
+      kind: "generic",
       title: "Viewed 1 image",
     });
     expect(
       presentToolActivity({
         ...activity,
+        summary: "Viewed 2 images",
         preview: JSON.stringify({ images: [image, image] }),
       }).title,
     ).toBe("Viewed 2 images");
@@ -79,9 +80,13 @@ describe("viewed image activity", () => {
       { ...activity, preview: null, input: activity.preview ?? null },
     ])
       expect(viewedImages(value)).toEqual([]);
-    expect(presentToolActivity({ ...activity, state: "failed" }).title).toBe(
-      "Couldn’t view images",
-    );
+    expect(
+      presentToolActivity({
+        ...activity,
+        state: "failed",
+        summary: "Couldn’t view images",
+      }).title,
+    ).toBe("Couldn’t view images");
   });
   it("rejects malformed, remote, oversized, and unsupported image metadata", () => {
     for (const invalid of [

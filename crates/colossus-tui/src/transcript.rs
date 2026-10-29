@@ -3,30 +3,86 @@ use super::*;
 #[derive(Clone, Debug)]
 pub(super) enum TranscriptRenderSource {
     RetainedToolResult {
-        title: String,
         name: Option<String>,
         output: String,
     },
     RunEvent {
         event: Box<RunEvent>,
         call: Option<colossus_contracts::ToolCall>,
+        phase: Option<colossus_presentation::ToolActivityPhase>,
     },
 }
 
 impl TranscriptRenderSource {
+    pub(super) fn live(event: RunEvent, call: Option<colossus_contracts::ToolCall>) -> Self {
+        use colossus_presentation::{ToolActivityPhase, tool_activity_presentation};
+        let phase = match &event {
+            RunEvent::ToolCompleted { result, .. } => Some(
+                tool_activity_presentation(
+                    &result.name,
+                    if result.exit_code == 0 {
+                        ToolActivityPhase::Completed
+                    } else {
+                        ToolActivityPhase::Failed
+                    },
+                    None,
+                    Some(&result.output),
+                )
+                .phase,
+            ),
+            RunEvent::ToolCancelled { .. } => Some(ToolActivityPhase::Cancelled),
+            _ => None,
+        };
+        Self::RunEvent {
+            event: Box::new(event),
+            call,
+            phase,
+        }
+    }
+
+    pub(super) fn phase(&self) -> Option<colossus_presentation::ToolActivityPhase> {
+        match self {
+            Self::RunEvent { phase, .. } => *phase,
+            Self::RetainedToolResult { .. } => {
+                Some(colossus_presentation::ToolActivityPhase::Recorded)
+            }
+        }
+    }
+
+    pub(super) fn status_marker(&self) -> &'static str {
+        use colossus_presentation::ToolActivityPhase;
+        match self.phase() {
+            Some(ToolActivityPhase::Completed) => "✓",
+            Some(ToolActivityPhase::Failed) => "!",
+            Some(ToolActivityPhase::Cancelled) => "×",
+            Some(ToolActivityPhase::Started | ToolActivityPhase::WaitingApproval) => "◌",
+            Some(ToolActivityPhase::OutcomeUnknown) => "?",
+            _ => "·",
+        }
+    }
+
+    pub(super) fn inspectable(&self) -> bool {
+        matches!(self, Self::RetainedToolResult { .. })
+            || matches!(self, Self::RunEvent { event, .. }
+                if matches!(event.as_ref(), RunEvent::ToolCompleted { .. } | RunEvent::ToolCancelled { .. }))
+    }
+
     pub(super) fn render(&self, preferences: &TerminalPreferences) -> Option<PresentationDocument> {
         let renderer = SemanticRenderer::new(preferences.clone());
         match self {
-            Self::RetainedToolResult {
-                title,
-                name,
-                output,
-            } => Some(renderer.retained_tool_result_document(
-                title.clone(),
-                name.as_deref(),
-                output.clone(),
-            )),
-            Self::RunEvent { event, call } => {
+            Self::RetainedToolResult { name, output, .. } => Some(
+                if preferences.events_mode == colossus_contracts::EventDisplayMode::Off {
+                    PresentationDocument::new()
+                } else {
+                    colossus_presentation::retained_tool_activity_document(
+                        "Tool result",
+                        name.as_deref(),
+                        output,
+                        preferences.events_mode == colossus_contracts::EventDisplayMode::Verbose,
+                    )
+                },
+            ),
+            Self::RunEvent { event, call, .. } => {
                 renderer.run_event_document(event.as_ref(), call.as_ref())
             }
         }
@@ -37,9 +93,14 @@ pub(super) fn transcript_from_messages(
     messages: Vec<SessionMessage>,
     preferences: &TerminalPreferences,
 ) -> (Vec<TranscriptEntry>, Vec<Option<TranscriptRenderSource>>) {
+    let completed_calls = messages
+        .iter()
+        .filter(|record| record.message.role == ModelMessageRole::Tool)
+        .filter_map(|record| record.message.tool_call_id.clone())
+        .collect::<BTreeSet<_>>();
     let mut entries = Vec::new();
     let mut sources = Vec::new();
-    let mut tool_names = BTreeMap::<String, (String, String)>::new();
+    let mut tool_names = BTreeMap::<String, String>::new();
     for record in messages {
         let (kind, document, source) = match record.message.role {
             ModelMessageRole::System => continue,
@@ -61,47 +122,28 @@ pub(super) fn transcript_from_messages(
                     ));
                 }
                 for call in record.message.tool_calls {
-                    let display_name =
-                        colossus_presentation::tool_display_name(&call.name, &call.arguments);
-                    tool_names.insert(
-                        call.call_id.clone(),
-                        (call.name.clone(), display_name.clone()),
-                    );
-                    let input = if call.name == "shell.run" {
-                        // Retained model calls have no prepared, sanitized context.
-                        // Do not reconstruct command disclosure from their raw input.
-                        PresentationBlock::Text(
-                            "Raw shell input withheld; review the prepared command in its approval request."
-                                .into(),
-                        )
-                    } else {
-                        PresentationBlock::Code {
-                            language: Some("arguments".into()),
-                            content: call.arguments.to_string(),
-                        }
-                    };
-                    document.push(PresentationBlock::Card {
-                        title: format!("Requested {display_name}"),
-                        tone: PresentationTone::Tool,
-                        body: vec![input],
-                    });
+                    tool_names.insert(call.call_id.clone(), call.name.clone());
+                    if !completed_calls.contains(&call.call_id) {
+                        // Retained calls predate release; never reconstruct raw arguments.
+                        let activity = colossus_presentation::tool_activity_presentation(
+                            &call.name,
+                            colossus_presentation::ToolActivityPhase::Requested,
+                            None,
+                            None,
+                        );
+                        document.push(PresentationBlock::Text(activity.summary()));
+                    }
                 }
                 (TranscriptKind::Assistant, document, None)
             }
             ModelMessageRole::Tool => {
-                let (title, name) = record.message.tool_call_id.as_ref().map_or_else(
-                    || ("Tool result".into(), None),
-                    |id| {
-                        tool_names.get(id).map_or_else(
-                            || (format!("Tool result {id}"), None),
-                            |(name, display_name)| {
-                                (format!("Completed {display_name}"), Some(name.clone()))
-                            },
-                        )
-                    },
-                );
+                let name = record
+                    .message
+                    .tool_call_id
+                    .as_ref()
+                    .and_then(|id| tool_names.get(id))
+                    .cloned();
                 let source = TranscriptRenderSource::RetainedToolResult {
-                    title,
                     name,
                     output: record.message.content.plain_text().into_owned(),
                 };
@@ -111,7 +153,7 @@ pub(super) fn transcript_from_messages(
                 (TranscriptKind::Tool, document, Some(source))
             }
         };
-        if !document.is_empty() {
+        if !document.is_empty() || source.is_some() {
             entries.push(TranscriptEntry {
                 sequence: Some(record.sequence),
                 kind,
@@ -301,6 +343,10 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                     "Cancel".into(),
                     "Ctrl-C clears a draft; when empty, it cancels an active run or exits"
                         .into(),
+                ),
+                (
+                    "Event details".into(),
+                    "Click a tool row or F3 to inspect; Left/Right changes event; Esc closes.".into(),
                 ),
                 (
                     "Select text".into(),

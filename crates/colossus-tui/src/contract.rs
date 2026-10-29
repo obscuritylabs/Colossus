@@ -38,6 +38,9 @@ pub struct FooterState {
     pub status: String,
     /// Active approval mode.
     pub approval_mode: String,
+    /// Monotonic host-local mode revision; prevents delayed results from displaying
+    /// an earlier permission mode after another session changes it.
+    pub approval_mode_revision: u64,
 }
 
 /// Bounded status metadata for the active session and its workspace.
@@ -865,6 +868,34 @@ pub trait InteractiveHost: Send + Sync {
     /// Resolve session, transcript, preferences, history, completions, and footer.
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String>;
 
+    /// Discover at most 100 durable conversations in this host's workspace.
+    /// This read does not attach to a session or start any model work.
+    async fn sessions(&self) -> Result<Vec<SessionSummary>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Discover at most 100 conversations in one canonical archival view.
+    async fn session_catalog(&self, archived: bool) -> Result<Vec<SessionSummary>, String> {
+        if archived {
+            Ok(Vec::new())
+        } else {
+            self.sessions().await
+        }
+    }
+
+    /// Read up to eight bounded visible user/assistant messages without attaching a run.
+    async fn preview_session(
+        &self,
+        _session_id: &str,
+    ) -> Result<Vec<InteractiveSessionBrowserMessage>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Persist canonical archive/restore state. The host must reject active sessions.
+    async fn set_session_archived(&self, _session_id: &str, _archived: bool) -> Result<(), String> {
+        Err("Session archival is unavailable in this host.".into())
+    }
+
     /// Read at most 100 durable child jobs for this session, including terminal history.
     /// Hosts without child-agent discovery may retain the empty default.
     async fn subagents(&self, _session_id: &str) -> Result<Vec<SubagentJob>, String> {
@@ -875,6 +906,15 @@ pub trait InteractiveHost: Send + Sync {
     /// This must not resolve credentials, connect to MCP, or load memory payloads.
     async fn sidebar_status(&self, _session_id: &str) -> Result<Option<SidebarSnapshot>, String> {
         Ok(None)
+    }
+
+    /// Read only bounded task, goal and plan metadata for a selected session.
+    /// Native hosts avoid unrelated MCP catalog and memory work on this path.
+    async fn session_work_status(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SidebarSnapshot>, String> {
+        self.sidebar_status(session_id).await
     }
 
     /// Prompt for and acknowledge one direct-execution boundary for the active TUI session.

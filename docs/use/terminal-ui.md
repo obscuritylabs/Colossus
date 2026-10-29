@@ -24,6 +24,15 @@ press Enter to start. For example:
 
 > Explain how this repository handles configuration. Show me the relevant files.
 
+A fresh launch opens a centered entry screen: the Obscurity Labs crest spins,
+then settles above the assembling Colossus wordmark. The workspace appears after
+about 1.5 seconds. Typing or clicking skips the entry screen; typed input is kept
+in the composer. Background workspace initialization continues during the reveal.
+Startup warnings and decisions take priority and open the normal interface immediately.
+Resumed sessions, inline mode, the Mono theme, and `NO_COLOR` skip the animation.
+Set `COLOSSUS_TUI_ANIMATIONS=off` before launching to disable it. Terminals smaller
+than 40 columns or 24 rows also use the static layout.
+
 The transcript appears above the composer as work progresses. The TUI fills the
 alternate screen by default; use the mouse wheel or PageUp/PageDown to read older
 output and End to return to live output. Exiting restores your prior terminal view.
@@ -35,10 +44,14 @@ security warnings, alongside readiness, approval handling, the model route, and
 context budget. Smaller widths shorten or omit runtime details to keep status
 and warnings readable. Compact terminals omit the top bar.
 
-On wider terminals, a slim right sidebar shows subagents and workspace status,
+On wider terminals, a right sidebar shows subagents and workspace status,
 including open tasks, goals, plans, retained memory, and configured MCP servers.
 It scrolls independently from the conversation and hides when the terminal is narrow.
 MCP indicators distinguish configured availability from successful use in this session.
+Workspace sessions stay at the bottom of the sidebar; click a row once to switch.
+The sidebar grows to 36 columns when there is room and preserves at least 64
+columns for the conversation. F6 terminal-native text selection releases mouse
+capture; press F6 or Esc to return before clicking a session.
 
 Use `--no-alt-screen` for an inline interface that leaves completed output in your
 terminal's normal scrollback:
@@ -49,7 +62,10 @@ colossus -w /absolute/path/to/repository --no-alt-screen tui
 
 To return to the latest conversation, start with `tui --resume`. Use
 `tui --session SESSION_ID` when you know the exact session. Inside the TUI,
-`/resume` opens a searchable session browser.
+F2 or `/sessions` opens the Sessions browser on Open; `/resume` opens History in
+the same browser. Its right pane previews recent messages and work. Switch
+sessions there while other conversations continue running, or use Archived to
+restore a conversation you previously archived.
 
 ## Find your way around
 
@@ -73,6 +89,26 @@ skill. Use Up/Down to browse suggestions and Tab to accept one. For every comman
 and key, see [TUI commands and keys](../reference/tui.md).
 See [Context and snapshots](sessions-context.md) to read the budget and manage
 long-session history.
+
+## Read tool activity
+
+The default `/events compact` view shows one human-readable row per completed
+call, with its target, available counts, and outcome. The same shared summaries
+appear in Desktop and VS Code. Large file contents and tables stay out of the
+transcript until requested.
+
+Click a tool row in the full-screen view or press F3 to open details. F3 chooses
+the latest visible tool event, falling back to the latest loaded event. Use
+Left/Right to move between events and PageUp/PageDown to scroll. Esc returns to
+your preserved draft. Dragging still selects text. In inline mode, F3 opens a
+transient details screen and returns to native scrollback when closed.
+
+Details are a bounded preview (up to 64 KiB and 160 logical lines; tables show
+up to 20 rows and 8 columns). A truncation notice identifies omitted content;
+the retained result is unchanged. `/events verbose` expands these previews in
+the transcript. `/events off` suppresses successful live tool rows while keeping
+failures visible. Restored results say **recorded** because saved model messages
+do not include an authoritative exit status.
 
 ## Write and review a turn
 

@@ -41,37 +41,45 @@ impl Runtime {
         sticky_skills: &[String],
         target: PlanDraftTarget,
     ) -> Result<AgentRunResult, RuntimeError> {
-        self.validate_plan_target(session_id, &target)?;
-        let runtime_mode = plan_mode_instructions(&target);
-        let prepared = self.prepare_plan_agent_instructions(instructions, &runtime_mode)?;
-        let composition = compose_plugins(
-            &prepared.plugins.records,
-            &prepared.base_text,
-            explicit_skills,
-            sticky_skills,
-            self.plugins_enabled,
-        )?;
-        let instructions = prepared.complete_composed_base(&composition.instructions);
-        let active = composition
-            .active_skills
-            .iter()
-            .map(|skill| skill.id.clone())
-            .collect::<Vec<_>>();
-        scope_run_snapshots(
-            prepared.snapshot,
-            prepared.plugins,
-            self.agent.run_plan_target_in_session_with_skills(
-                role,
-                &instructions,
-                prompt,
-                max_turns.unwrap_or(self.agent_max_turns),
+        self.native_session_lifecycle
+            .during_optional(
                 session_id,
-                &active,
-                target,
-            ),
-        )
-        .await
-        .map_err(Into::into)
+                Box::pin(async {
+                    self.validate_plan_target(session_id, &target)?;
+                    let runtime_mode = plan_mode_instructions(&target);
+                    let prepared =
+                        self.prepare_plan_agent_instructions(instructions, &runtime_mode)?;
+                    let composition = compose_plugins(
+                        &prepared.plugins.records,
+                        &prepared.base_text,
+                        explicit_skills,
+                        sticky_skills,
+                        self.plugins_enabled,
+                    )?;
+                    let instructions = prepared.complete_composed_base(&composition.instructions);
+                    let active = composition
+                        .active_skills
+                        .iter()
+                        .map(|skill| skill.id.clone())
+                        .collect::<Vec<_>>();
+                    scope_run_snapshots(
+                        prepared.snapshot,
+                        prepared.plugins,
+                        self.agent.run_plan_target_in_session_with_skills(
+                            role,
+                            &instructions,
+                            prompt,
+                            max_turns.unwrap_or(self.agent_max_turns),
+                            session_id,
+                            &active,
+                            target,
+                        ),
+                    )
+                    .await
+                    .map_err(Into::into)
+                }),
+            )
+            .await?
     }
 
     /// Execute Plan Mode while forwarding policy-released provider events.
@@ -115,38 +123,46 @@ impl Runtime {
         target: PlanDraftTarget,
         observer: &mut dyn RunEventObserver,
     ) -> Result<AgentRunResult, RuntimeError> {
-        self.validate_plan_target(session_id, &target)?;
-        let runtime_mode = plan_mode_instructions(&target);
-        let prepared = self.prepare_plan_agent_instructions(instructions, &runtime_mode)?;
-        let composition = compose_plugins(
-            &prepared.plugins.records,
-            &prepared.base_text,
-            explicit_skills,
-            sticky_skills,
-            self.plugins_enabled,
-        )?;
-        let instructions = prepared.complete_composed_base(&composition.instructions);
-        let active = composition
-            .active_skills
-            .iter()
-            .map(|skill| skill.id.clone())
-            .collect::<Vec<_>>();
-        scope_run_snapshots(
-            prepared.snapshot,
-            prepared.plugins,
-            Box::pin(self.agent.run_plan_target_in_session_with_skills_stream(
-                role,
-                &instructions,
-                prompt,
-                max_turns.unwrap_or(self.agent_max_turns),
+        self.native_session_lifecycle
+            .during_optional(
                 session_id,
-                &active,
-                target,
-                observer,
-            )),
-        )
-        .await
-        .map_err(Into::into)
+                Box::pin(async {
+                    self.validate_plan_target(session_id, &target)?;
+                    let runtime_mode = plan_mode_instructions(&target);
+                    let prepared =
+                        self.prepare_plan_agent_instructions(instructions, &runtime_mode)?;
+                    let composition = compose_plugins(
+                        &prepared.plugins.records,
+                        &prepared.base_text,
+                        explicit_skills,
+                        sticky_skills,
+                        self.plugins_enabled,
+                    )?;
+                    let instructions = prepared.complete_composed_base(&composition.instructions);
+                    let active = composition
+                        .active_skills
+                        .iter()
+                        .map(|skill| skill.id.clone())
+                        .collect::<Vec<_>>();
+                    scope_run_snapshots(
+                        prepared.snapshot,
+                        prepared.plugins,
+                        Box::pin(self.agent.run_plan_target_in_session_with_skills_stream(
+                            role,
+                            &instructions,
+                            prompt,
+                            max_turns.unwrap_or(self.agent_max_turns),
+                            session_id,
+                            &active,
+                            target,
+                            observer,
+                        )),
+                    )
+                    .await
+                    .map_err(Into::into)
+                }),
+            )
+            .await?
     }
 
     /// Atomically consume and execute one approved plan through a normal agent run.
@@ -156,42 +172,55 @@ impl Runtime {
         plan_id: &str,
         max_turns: Option<u16>,
     ) -> Result<AgentRunResult, RuntimeError> {
-        let prepared = self.prepare_agent_instructions("", APPROVED_PLAN_INSTRUCTIONS)?;
-        let plan = self
+        let session_id = self
             .work
             .get_plan(plan_id)?
-            .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?;
-        if plan.status != PlanStatus::Approved {
-            return Err(RuntimeError::Config(
-                "plan execution requires one approved plan".into(),
-            ));
-        }
-        let prompt = goal_objective_from_plan(&plan);
-        let run_id = Uuid::now_v7().to_string();
-        let consumed: PlanRecord = serde_json::from_value(
-            self.execute_work_operation(WorkOperation::PlanExecute {
-                id: plan.id.clone(),
-                run_id: run_id.clone(),
-            })
-            .await?,
-        )
-        .map_err(|error| RuntimeError::Config(error.to_string()))?;
-        scope_run_snapshots(
-            prepared.snapshot,
-            prepared.plugins,
-            Box::pin(
-                self.run_with_subagent_scheduling(self.agent.run_approved_plan(
-                    role,
-                    &prepared.text,
-                    &prompt,
-                    max_turns.unwrap_or(self.agent_max_turns),
-                    &consumed.session_id,
-                    &consumed.id,
-                    &run_id,
-                )),
-            ),
-        )
-        .await
+            .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?
+            .session_id;
+        self.native_session_lifecycle
+            .during(
+                &session_id,
+                Box::pin(async {
+                    let prepared =
+                        self.prepare_agent_instructions("", APPROVED_PLAN_INSTRUCTIONS)?;
+                    let plan = self
+                        .work
+                        .get_plan(plan_id)?
+                        .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?;
+                    if plan.status != PlanStatus::Approved {
+                        return Err(RuntimeError::Config(
+                            "plan execution requires one approved plan".into(),
+                        ));
+                    }
+                    let prompt = goal_objective_from_plan(&plan);
+                    let run_id = Uuid::now_v7().to_string();
+                    let consumed: PlanRecord = serde_json::from_value(
+                        self.execute_work_operation(WorkOperation::PlanExecute {
+                            id: plan.id.clone(),
+                            run_id: run_id.clone(),
+                        })
+                        .await?,
+                    )
+                    .map_err(|error| RuntimeError::Config(error.to_string()))?;
+                    scope_run_snapshots(
+                        prepared.snapshot,
+                        prepared.plugins,
+                        Box::pin(
+                            self.run_with_subagent_scheduling(self.agent.run_approved_plan(
+                                role,
+                                &prepared.text,
+                                &prompt,
+                                max_turns.unwrap_or(self.agent_max_turns),
+                                &consumed.session_id,
+                                &consumed.id,
+                                &run_id,
+                            )),
+                        ),
+                    )
+                    .await
+                }),
+            )
+            .await?
     }
 
     /// Execute one exact approved Plan revision with streaming and cooperative cancellation.
@@ -246,34 +275,45 @@ impl Runtime {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<PlanExecutionOutcome, RuntimeError> {
-        let selected = self
-            .work
-            .get_plan(plan_id)?
-            .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?;
-        validate_public_plan_execution_selection(&selected, expected_session_id, revision)?;
-        if control.is_cancelled() {
-            return Ok(PlanExecutionOutcome::CancelledBeforeStart { plan: selected });
-        }
-        let captured = self.capture_agent_instructions("")?;
-        let approved = self
-            .approve_plan_at_revision(expected_session_id, plan_id, revision)
-            .await?;
-        self.execute_plan_stream_controlled_with_run_id(
-            role,
-            expected_session_id,
-            &approved.id,
-            approved.revision,
-            strategy,
-            max_turns,
-            captured,
-            Some(public_run_id),
-            false,
-            end_user_id,
-            remote_trace_context,
-            observer,
-            control,
-        )
-        .await
+        self.native_session_lifecycle
+            .during(
+                expected_session_id,
+                Box::pin(async {
+                    let selected = self
+                        .work
+                        .get_plan(plan_id)?
+                        .ok_or_else(|| StoreError::NotFound(format!("plan {plan_id}")))?;
+                    validate_public_plan_execution_selection(
+                        &selected,
+                        expected_session_id,
+                        revision,
+                    )?;
+                    if control.is_cancelled() {
+                        return Ok(PlanExecutionOutcome::CancelledBeforeStart { plan: selected });
+                    }
+                    let captured = self.capture_agent_instructions("")?;
+                    let approved = self
+                        .approve_plan_at_revision(expected_session_id, plan_id, revision)
+                        .await?;
+                    self.execute_plan_stream_controlled_with_run_id(
+                        role,
+                        expected_session_id,
+                        &approved.id,
+                        approved.revision,
+                        strategy,
+                        max_turns,
+                        captured,
+                        Some(public_run_id),
+                        false,
+                        end_user_id,
+                        remote_trace_context,
+                        observer,
+                        control,
+                    )
+                    .await
+                }),
+            )
+            .await?
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -293,6 +333,7 @@ impl Runtime {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<PlanExecutionOutcome, RuntimeError> {
+        self.native_session_lifecycle.during(expected_session_id, Box::pin(async {
         let plan = self
             .work
             .get_plan(plan_id)?
@@ -499,5 +540,6 @@ impl Runtime {
                 })
             }
         }
+        })).await?
     }
 }

@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "session_lifecycle_tests.rs"]
+mod session_lifecycle_tests;
+
 #[test]
 fn native_plugin_requests_preserve_the_exact_authenticated_wire_document() {
     for operation in [
@@ -1900,7 +1903,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 25);
+    assert_eq!(PROTOCOL_VERSION, 26);
     let key = [13_u8; 32];
     let mut frame =
         signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);

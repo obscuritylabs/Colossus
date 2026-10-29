@@ -216,7 +216,12 @@ fn exercise_fetch(tool: &str, limit: Option<usize>) {
     if success {
         assert!(stdout.contains("redirect-finished"), "{stdout}");
     } else {
-        assert!(stderr.contains("redirect limit exceeded"), "{stderr}");
+        // Human summaries may wrap between words at the terminal width.
+        let normalized_stderr = stderr.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            normalized_stderr.contains("redirect limit exceeded"),
+            "{stderr}"
+        );
     }
     server.join().expect("HTTP fixture");
 

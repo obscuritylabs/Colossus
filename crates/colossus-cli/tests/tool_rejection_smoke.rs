@@ -387,7 +387,7 @@ fn invalid_and_denied_tools_stop_before_effect_execution() {
     );
     let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
     assert_eq!(result["output"], "recovered");
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("[file] start"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("[file] Write file"));
     let requests = server.join().expect("arguments provider");
     assert_eq!(requests.len(), 2);
     assert!(requests[1].contains("invalid_arguments"));

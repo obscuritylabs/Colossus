@@ -32,6 +32,10 @@ mod agents;
 mod selection;
 #[path = "pty_history/status.rs"]
 mod status;
+#[path = "pty_history/tool_activity.rs"]
+mod tool_activity;
+#[path = "pty_history/workspace.rs"]
+mod workspace;
 
 // ConPTY decodes this Win32-input-mode record into a real Ctrl+J key event.
 // A bare LF is translated into Enter before crossterm's Windows backend reads it.
@@ -140,7 +144,8 @@ impl InteractiveHost for FixtureHost {
         .collect())
     }
 
-    async fn bootstrap(&self, _request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
+    async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
+        let session_id = request.session_id.unwrap_or_else(|| "019f-pty".into());
         let inline = std::env::var("COLOSSUS_TUI_MODE").as_deref() == Ok("inline");
         let empty = std::env::var_os("COLOSSUS_TUI_EMPTY").is_some();
         let first_sequence = if inline { 2 } else { 1 };
@@ -154,7 +159,7 @@ impl InteractiveHost for FixtureHost {
         } else {
             (first_sequence..=last_sequence)
                 .map(|sequence| SessionMessage {
-                    session_id: "019f-pty".into(),
+                    session_id: session_id.clone(),
                     run_id: "run-pty".into(),
                     sequence,
                     message: ModelMessage {
@@ -171,7 +176,7 @@ impl InteractiveHost for FixtureHost {
         let history_navigation_fixture =
             std::env::var_os("COLOSSUS_TUI_HISTORY_NAVIGATION_FIXTURE").is_some();
         Ok(InteractiveSnapshot {
-            session_id: "019f-pty".into(),
+            session_id,
             fresh_session: empty,
             workspace: "/workspace/Colossus".into(),
             sandbox_profile: "workspace-development".into(),
@@ -204,6 +209,7 @@ impl InteractiveHost for FixtureHost {
                 message_count: u64::from(!empty) * 5,
                 status: "ready".into(),
                 approval_mode: "ask".into(),
+                approval_mode_revision: 0,
             },
             pending_sandbox_boundary_acknowledgement: None,
             security_posture: if std::env::var_os("COLOSSUS_TUI_SECURITY_WARNINGS").is_some() {
@@ -356,7 +362,10 @@ impl InteractiveHost for FixtureHost {
         if std::env::var_os("COLOSSUS_TUI_STREAM_FIXTURE").is_none() {
             return Err("fixture does not run model turns".into());
         }
-        let output = if std::env::var_os("COLOSSUS_TUI_DICTATION_FIXTURE").is_some() {
+        let tool_fixture = std::env::var_os("COLOSSUS_TUI_TOOL_ACTIVITY_FIXTURE").is_some();
+        let output = if tool_fixture {
+            "Repository review complete. Open an event to inspect its details.".into()
+        } else if std::env::var_os("COLOSSUS_TUI_DICTATION_FIXTURE").is_some() {
             format!("Dictation accepted: {}", request.prompt)
         } else {
             (1..=30)
@@ -367,13 +376,17 @@ impl InteractiveHost for FixtureHost {
         let status_fixture = std::env::var_os("COLOSSUS_TUI_STATUS_FIXTURE").is_some();
         let call = ToolCall {
             call_id: "call-scrollback".into(),
-            name: if status_fixture {
+            name: if tool_fixture {
+                "repo.map"
+            } else if status_fixture {
                 "mcp.call"
             } else {
                 "filesystem.search"
             }
             .into(),
-            arguments: if status_fixture {
+            arguments: if tool_fixture {
+                serde_json::json!({"path":"."})
+            } else if status_fixture {
                 serde_json::json!({"server":"atlas", "tool":"search", "arguments":{}})
             } else {
                 serde_json::json!({"query": "Runtime"})
@@ -419,7 +432,10 @@ impl InteractiveHost for FixtureHost {
                         images: Vec::new(),
                         call_id: call.call_id,
                         name: call.name,
-                        output: serde_json::json!({"matches": ["runtime.rs"]}).to_string(),
+                        output: if tool_fixture {
+                            serde_json::json!({"root":".","file_count":200,"truncated":true,
+                                "files":(0..200).map(|i| format!("src/module_{i}.rs")).collect::<Vec<_>>()}).to_string()
+                        } else { serde_json::json!({"matches": ["runtime.rs"]}).to_string() },
                         exit_code: 0,
                     },
                     duration_seconds: 0.2,
@@ -428,6 +444,9 @@ impl InteractiveHost for FixtureHost {
             }))
             .await
             .map_err(|_| "stream receiver closed")?;
+        if tool_fixture {
+            tool_activity::emit_large_read(&events, &request.session_id).await?;
+        }
         events
             .send(HostEvent::Run(RunEventEnvelope {
                 schema_version: 1,
@@ -479,6 +498,7 @@ impl InteractiveHost for FixtureHost {
                 message_count: 7,
                 status: "ready".into(),
                 approval_mode: "ask".into(),
+                approval_mode_revision: 0,
             },
             plan_selection: PlanSelectionUpdate::Unchanged,
         })
@@ -563,7 +583,7 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
     let pair = pty_system
         .openpty(PtySize {
             rows: 32,
-            cols: 120,
+            cols: 148,
             pixel_width: 0,
             pixel_height: 0,
         })
@@ -603,26 +623,26 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
     writer.flush().expect("flush cursor-position answer");
 
     let welcome_ready =
-        screen_contains_within(&output, 32, 120, "⚠ Security: 2", Duration::from_secs(10));
-    let welcome = screen_contents(&output, 32, 120);
+        screen_contains_within(&output, 32, 148, "⚠ Security: 2", Duration::from_secs(10));
+    let welcome = screen_contents(&output, 32, 148);
 
     writer.write_all(b"go\r").expect("submit first turn");
     writer.flush().expect("flush first turn");
     let output_ready = screen_contains_within(
         &output,
         32,
-        120,
+        148,
         "stream-final-row-30",
         Duration::from_secs(10),
     );
     let composer_ready = screen_contains_within(
         &output,
         32,
-        120,
+        148,
         "Message · Enter sends",
         Duration::from_secs(10),
     );
-    let after_turn = screen_contents(&output, 32, 120);
+    let after_turn = screen_contents(&output, 32, 148);
 
     writer.write_all(&[3, 3]).expect("exit");
     writer.flush().expect("flush exit");
@@ -665,7 +685,7 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
         scrollback_contains(
             &output,
             32,
-            120,
+            148,
             "Journal payloads are stored as plaintext canonical JSON."
         ),
         "the detailed security posture must remain available in native history"
@@ -992,8 +1012,12 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
         .expect("composer row");
     assert_eq!(
         composer_row,
-        latest_row + 1,
-        "newest output should end directly above the composer: {rows:?}"
+        latest_row + 2,
+        "newest output should have one blank line above the composer: {rows:?}"
+    );
+    assert!(
+        rows[latest_row + 1].trim().is_empty(),
+        "the composer separator should be blank: {rows:?}"
     );
     #[cfg(unix)]
     {
@@ -1376,13 +1400,13 @@ fn completed_streaming_output_moves_immediately_into_native_scrollback() {
         "commentary preceding a tool call should be present in native terminal scrollback"
     );
     assert!(
-        scrollback_contains(&output, 24, 80, "Completed filesystem.search"),
+        scrollback_contains(&output, 24, 80, "Search files"),
         "completed tool activity should be present in native terminal scrollback"
     );
     let history = native_history_rows(&output, 24, 80, "Message · Enter sends");
     let completed_tool_row = history
         .iter()
-        .position(|row| row.contains("Completed filesystem.search"))
+        .position(|row| row.contains("Search files"))
         .expect("completed tool row");
     let final_output_row = history
         .iter()
@@ -1701,7 +1725,7 @@ fn inline_session_browser_uses_a_transient_screen_without_polluting_history() {
     }
     let browser_output_offset = output.lock().expect("output").len();
     writer
-        .write_all(b"/resume\r")
+        .write_all(b"/resume 20\r")
         .expect("open session browser");
     writer.flush().expect("flush session browser command");
     wait_for_screen(&output, 24, 80, "Resume session");
@@ -1830,7 +1854,8 @@ fn inline_theme_picker_uses_a_transient_screen_without_polluting_history() {
         picker_output
             .windows(b"\x1b[?1049h".len())
             .any(|window| window == b"\x1b[?1049h"),
-        "theme picker did not enter its transient screen"
+        "theme picker did not enter its transient screen; projected modes: {:?}",
+        terminal_mode_sequences(picker_output)
     );
     assert!(
         picker_output
@@ -1945,7 +1970,8 @@ fn inline_completion_restores_a_full_main_screen_without_changing_history() {
         completion_output
             .windows(b"\x1b[?1049h".len())
             .any(|window| window == b"\x1b[?1049h"),
-        "completion did not enter its transient screen"
+        "completion did not enter its transient screen; projected modes: {:?}",
+        terminal_mode_sequences(completion_output)
     );
     assert!(
         completion_output
@@ -2042,11 +2068,14 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
 
     writer.write_all(&[3]).expect("Ctrl-C clear draft");
     writer.flush().expect("flush draft clear");
-    thread::sleep(Duration::from_millis(50));
-    assert!(
-        !screen_contents(&output, 30, 100).contains("typing-preserves-history"),
-        "first Ctrl-C should clear the draft"
-    );
+    let clear_deadline = Instant::now() + Duration::from_secs(10);
+    while screen_contents(&output, 30, 100).contains("typing-preserves-history") {
+        assert!(
+            Instant::now() < clear_deadline,
+            "first Ctrl-C should clear the draft"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
     writer.write_all(&[3]).expect("second Ctrl-C exit");
     writer.flush().expect("flush exit");
     let status = child.wait().expect("fixture status");
@@ -2058,7 +2087,8 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
     assert!(
         raw_contains(raw.as_slice(), b"\x1b[?1000h")
             || raw_contains(raw.as_slice(), b"\x1b[?1003;1006h"),
-        "alternate-screen mouse capture was not enabled"
+        "alternate-screen mouse capture was not enabled; projected modes: {:?}",
+        terminal_mode_sequences(raw.as_slice())
     );
     assert!(
         raw_contains(raw.as_slice(), b"\x1b[?1000l")
@@ -2162,6 +2192,25 @@ fn wait_for_mouse_capture_count(output: &Arc<Mutex<Vec<u8>>>, enabled: bool, exp
 
 fn raw_contains(raw: &[u8], needle: &[u8]) -> bool {
     raw.windows(needle.len()).any(|window| window == needle)
+}
+
+fn terminal_mode_sequences(raw: &[u8]) -> std::collections::BTreeSet<String> {
+    raw.windows(2)
+        .enumerate()
+        .filter(|(_, prefix)| *prefix == b"\x1b[")
+        .filter_map(|(start, _)| {
+            let tail = &raw[start + 2..];
+            let end = tail
+                .iter()
+                .take(64)
+                .position(|byte| (0x40..=0x7e).contains(byte))?;
+            matches!(tail[end], b'h' | b'l').then(|| {
+                String::from_utf8_lossy(&raw[start..start + end + 3])
+                    .escape_debug()
+                    .to_string()
+            })
+        })
+        .collect()
 }
 
 #[cfg(windows)]

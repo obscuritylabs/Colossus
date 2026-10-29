@@ -120,3 +120,71 @@ async fn combined_lifecycle_owns_every_optional_host_combination_and_fences_befo
         }
     }
 }
+
+#[tokio::test]
+async fn native_session_lifecycle_rolls_back_failed_registration_and_preserves_duplicate_owner() {
+    let workspace = private_tempdir();
+    let mut config = RuntimeConfig::offline_template(workspace.path().join("state.redb"));
+    config.use_ephemeral_storage();
+    config.computer.enabled = true;
+    let driver = Arc::new(Computer::default());
+    let options = RuntimeOpenOptions::for_workspace(workspace.path())
+        .unwrap()
+        .with_browser_host(RuntimeBrowserHost::new(Arc::new(Browser)))
+        .with_computer_host(RuntimeComputerHost::new(driver.clone()));
+    let runtime =
+        Runtime::open_with_options(&config, Arc::new(DenyApproval), None, options).unwrap();
+    let session = runtime.create_session(None).unwrap();
+    let lifecycle = RuntimeRunLifecycle::new(
+        Arc::clone(&runtime.process_sessions),
+        runtime.browser.clone(),
+        runtime.computer.clone(),
+    )
+    .with_session_lifecycle(Arc::clone(&runtime.native_session_lifecycle));
+    let context = ExecutionContext {
+        run_id: Some("registration".into()),
+        session_id: Some(session.id.clone()),
+        ..Default::default()
+    };
+    let control = RunControl::default();
+    let invalid = Actor {
+        actor_type: ActorType::Application,
+        id: String::new(),
+    };
+    assert!(
+        lifecycle
+            .begin_run(&context, &invalid, control.clone())
+            .is_err()
+    );
+    assert!(!control.is_cancelled());
+    assert!(runtime.process_sessions.active_run_owner(&context).is_err());
+    assert!(
+        !runtime
+            .browser
+            .as_ref()
+            .unwrap()
+            .has_run_registration("registration")
+    );
+    runtime.set_session_archived(&session.id, true).unwrap();
+    runtime.set_session_archived(&session.id, false).unwrap();
+    let owner = Actor {
+        actor_type: ActorType::Application,
+        id: "app:fixture".into(),
+    };
+    lifecycle
+        .begin_run(&context, &owner, control.clone())
+        .unwrap();
+    assert!(
+        lifecycle
+            .begin_run(&context, &owner, RunControl::default())
+            .is_err()
+    );
+    assert!(!control.is_cancelled());
+    assert_eq!(
+        runtime.process_sessions.active_run_owner(&context).unwrap(),
+        owner
+    );
+    assert!(runtime.set_session_archived(&session.id, true).is_err());
+    lifecycle.finish_run("registration").await;
+    runtime.set_session_archived(&session.id, true).unwrap();
+}

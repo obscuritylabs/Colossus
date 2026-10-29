@@ -33,7 +33,6 @@ const HISTORY_APPENDED: &str = "presentation.history.appended.v1";
 const MAX_HISTORY_ENTRIES: usize = 1_000;
 const MAX_HISTORY_ENTRY_BYTES: usize = 1024 * 1024;
 const COMPACT_PREVIEW_CHARS: usize = 240;
-const VERBOSE_PREVIEW_CHARS: usize = 8 * 1024;
 const MAX_CUSTOM_THEMES: usize = 64;
 const MAX_THEME_FILE_BYTES: u64 = 64 * 1024;
 
@@ -45,6 +44,7 @@ mod repository;
 mod semantic;
 mod terminal;
 mod themes;
+mod tool_activity;
 
 pub use command_approval::{approval_risk_summary, command_approval_document};
 pub use document::{
@@ -59,8 +59,14 @@ pub use semantic::{
 };
 pub use terminal::{StyledDocumentRenderer, TerminalDocumentRenderer};
 pub use themes::{ThemeLibrary, ThemeLibraryStatus, ThemeScaffold, default_user_theme_directory};
+pub use tool_activity::{
+    TOOL_ACTIVITY_DETAIL_BYTES, TOOL_ACTIVITY_DETAIL_COLUMNS, TOOL_ACTIVITY_DETAIL_LINES,
+    TOOL_ACTIVITY_DETAIL_ROWS, TOOL_ACTIVITY_SUMMARY_CHARS, ToolActivityKind, ToolActivityPhase,
+    ToolActivityPresentation, retained_tool_activity_document, tool_activity_document,
+    tool_activity_json_preview, tool_activity_presentation,
+};
 
-use document::{human_field_name, json_block};
+use document::human_field_name;
 use palette::TextStyle;
 use semantic::bounded_text;
 #[cfg(test)]

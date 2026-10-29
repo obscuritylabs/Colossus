@@ -102,6 +102,15 @@ pub(super) fn render_footer(
             metadata,
         );
     }
+    if !state.tool_hits.is_empty() {
+        append_footer_segment(
+            &mut spans,
+            &mut used,
+            content_width,
+            "F3 details".into(),
+            metadata,
+        );
+    }
     let context = state
         .footer
         .context

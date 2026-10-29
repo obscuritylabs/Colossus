@@ -143,6 +143,7 @@ reqwest = { version = "0.12.28", default-features = false, features = ["json", "
 reqwest-otel = { package = "reqwest", version = "0.13.1", default-features = false, features = ["blocking"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29", "macros"] }
 ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
+tachyonfx = { version = "=0.25.2", default-features = false, features = ["std", "sendable"] }
 image = { version = "0.25.9", default-features = false, features = ["jpeg", "png", "webp"] }
 rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }

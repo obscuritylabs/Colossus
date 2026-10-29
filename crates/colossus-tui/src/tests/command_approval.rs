@@ -105,8 +105,15 @@ fn oversized_shell_observations_remain_private_without_the_assistant_history_pag
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(!rendered.contains("PRIVATE"), "{rendered}");
-            assert!(rendered.contains("SAFE_OUTPUT"), "{rendered}");
-            assert!(rendered.contains("withheld"), "{rendered}");
+            if mode == EventDisplayMode::Verbose {
+                assert!(rendered.contains("SAFE_OUTPUT"), "{rendered}");
+                assert!(rendered.contains("withheld"), "{rendered}");
+            } else {
+                assert!(
+                    !rendered.contains("SAFE_OUTPUT"),
+                    "compact mode hides output: {rendered}"
+                );
+            }
         }
     }
     assert_eq!(

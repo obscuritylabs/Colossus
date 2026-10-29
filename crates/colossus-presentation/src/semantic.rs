@@ -156,38 +156,19 @@ impl SemanticRenderer {
                 call,
                 elapsed_seconds,
             } => self.render_tool_started(*turn, call, *elapsed_seconds),
-            RunEvent::ToolCancelled {
-                turn,
-                call,
-                elapsed_seconds,
-            } => Ok(Some(
-                if self.preferences.transcript_density == TranscriptDensity::Comfortable {
-                    self.render_document(PresentationDocument::from_block(
-                        PresentationBlock::Card {
-                            title: format!(
-                                "Cancelled {}",
-                                tool_display_name(&call.name, &call.arguments)
-                            ),
-                            tone: PresentationTone::Warning,
-                            body: vec![PresentationBlock::KeyValue(vec![
-                                ("Turn".into(), turn.to_string()),
-                                ("Elapsed".into(), format!("{elapsed_seconds:.2}s")),
-                                (
-                                    "Reason".into(),
-                                    "operator cancelled before the effect began".into(),
-                                ),
-                            ])],
-                        },
-                    ))
-                } else {
-                    format!(
-                        "{} cancelled {} turn={} elapsed={elapsed_seconds:.2}s",
-                        self.label("tool"),
-                        tool_display_name(&call.name, &call.arguments),
-                        turn
-                    )
-                },
-            )),
+            RunEvent::ToolCancelled { call, .. } => {
+                let activity = tool_activity_presentation(
+                    &call.name,
+                    ToolActivityPhase::Cancelled,
+                    None,
+                    None,
+                );
+                Ok(Some(self.render_document(tool_activity_document(
+                    &activity,
+                    None,
+                    self.preferences.events_mode == EventDisplayMode::Verbose,
+                ))))
+            }
             RunEvent::ToolCompleted {
                 turn,
                 result,
@@ -325,25 +306,11 @@ impl SemanticRenderer {
                     self.preferences.events_mode,
                 ))
             }
-            RunEvent::ToolCancelled {
-                turn,
-                call,
-                elapsed_seconds,
-            } => Some(PresentationDocument::from_block(PresentationBlock::Card {
-                title: format!(
-                    "Cancelled {}",
-                    tool_display_name(&call.name, &call.arguments)
-                ),
-                tone: PresentationTone::Warning,
-                body: vec![PresentationBlock::KeyValue(vec![
-                    ("Turn".into(), turn.to_string()),
-                    ("Elapsed".into(), format!("{elapsed_seconds:.2}s")),
-                    (
-                        "Reason".into(),
-                        "operator cancelled before the effect began".into(),
-                    ),
-                ])],
-            })),
+            RunEvent::ToolCancelled { call, .. } => Some(tool_activity_document(
+                &tool_activity_presentation(&call.name, ToolActivityPhase::Cancelled, None, None),
+                None,
+                self.preferences.events_mode == EventDisplayMode::Verbose,
+            )),
             RunEvent::SubagentUpdated { job } => Some(subagent_document(job)),
             RunEvent::Error {
                 code,
@@ -425,138 +392,69 @@ impl SemanticRenderer {
 
     fn render_tool_started(
         &self,
-        turn: u16,
+        _turn: u16,
         call: &ToolCall,
-        elapsed_seconds: f64,
+        _elapsed_seconds: f64,
     ) -> Result<Option<String>, PresentationError> {
-        let display_name = tool_display_name(&call.name, &call.arguments);
-        if call.name == "user.ask" {
-            return Ok(Some(match self.preferences.events_mode {
-                EventDisplayMode::Verbose => format!(
-                    "{} waiting name=user.ask call_id={} turn={turn}",
-                    self.label("input"),
-                    call.call_id
-                ),
-                EventDisplayMode::Compact | EventDisplayMode::Off => {
-                    format!("{} user.ask waiting for your answer", self.label("input"))
-                }
-            }));
-        }
-        if self.preferences.events_mode == EventDisplayMode::Off {
-            return Ok(Some(format!(
-                "{} using {} elapsed={elapsed_seconds:.2}s",
-                self.label("activity"),
-                display_name
-            )));
-        }
+        let activity = tool_activity_presentation(
+            &call.name,
+            ToolActivityPhase::Started,
+            Some(&call.arguments),
+            None,
+        );
         let family = ToolFamily::from_name(&call.name);
-        // Model input precedes preparation and credential projection. Command
-        // details may be displayed only through the frozen approval context.
-        let detail = if matches!(call.name.as_str(), "shell.run" | "mcp.call") {
-            None
+        let label = if call.name == "user.ask" {
+            "input"
+        } else if self.preferences.events_mode == EventDisplayMode::Off {
+            "activity"
         } else {
-            summarize_value(&call.arguments, family.keys())
+            family.label()
         };
-        let rendered = match self.preferences.events_mode {
-            EventDisplayMode::Compact => self.with_detail(
-                format!(
-                    "{} start {} elapsed={elapsed_seconds:.2}s",
-                    self.label(family.label()),
-                    display_name,
-                ),
-                detail,
-            ),
-            EventDisplayMode::Verbose => format!(
-                "{} start name={} call_id={} turn={} elapsed={elapsed_seconds:.2}s arguments={}",
-                self.label(family.label()),
-                display_name,
-                call.call_id,
-                turn,
-                if call.name == "shell.run" {
-                    "withheld; see prepared command approval".into()
-                } else {
-                    bounded_json(&call.arguments, VERBOSE_PREVIEW_CHARS)?
-                }
-            ),
-            EventDisplayMode::Off => unreachable!("handled above"),
-        };
-        Ok(Some(rendered))
+        Ok(Some(format!(
+            "{} {}",
+            self.label(label),
+            activity.summary()
+        )))
     }
 
     fn render_tool_completed(
         &self,
-        turn: u16,
+        _turn: u16,
         result: &ToolResult,
         duration_seconds: f64,
-        elapsed_seconds: f64,
+        _elapsed_seconds: f64,
         call: Option<&ToolCall>,
     ) -> Result<Option<String>, PresentationError> {
-        let parsed = display_tool_output(Some(&result.name), &result.output);
-        let display_name =
-            tool_display_name(&result.name, call.map_or(&parsed, |call| &call.arguments));
-        let family = ToolFamily::from_name(&result.name);
-        let recoverable = parsed
-            .pointer("/error/recoverable")
-            .and_then(Value::as_bool);
-        let lifecycle_status = parsed.get("status").and_then(Value::as_str);
-        let pending =
-            result.name == "agent.result" && matches!(lifecycle_status, Some("queued" | "running"));
-        let failed_child = result.name == "agent.result"
-            && matches!(lifecycle_status, Some("failed" | "interrupted"));
-        let failed = result.exit_code != 0 || failed_child;
-        if self.preferences.events_mode == EventDisplayMode::Off && !failed {
+        let mut activity = tool_activity_presentation(
+            &result.name,
+            if result.exit_code == 0 {
+                ToolActivityPhase::Completed
+            } else {
+                ToolActivityPhase::Failed
+            },
+            call.map(|call| &call.arguments),
+            Some(&result.output),
+        );
+        if self.preferences.events_mode == EventDisplayMode::Off
+            && activity.phase != ToolActivityPhase::Failed
+        {
             return Ok(None);
         }
-        let status = if pending {
-            lifecycle_status.unwrap_or("pending")
-        } else if failed {
-            if recoverable == Some(true) {
-                "recoverable_error"
-            } else {
-                "failed"
-            }
-        } else {
-            "ok"
-        };
-        let detail = if failed {
-            parsed
-                .pointer("/error/message")
-                .and_then(Value::as_str)
-                .map(|message| bounded_text(message, COMPACT_PREVIEW_CHARS))
-        } else {
-            summarize_value(&parsed, family.keys())
-        };
-        if self.preferences.transcript_density == TranscriptDensity::Comfortable {
-            return Ok(Some(self.render_document(tool_result_document_with_mode(
-                result,
-                duration_seconds,
-                call,
-                self.preferences.events_mode,
+        activity.add_fact("Duration", format!("{duration_seconds:.2}s"));
+        if self.preferences.transcript_density == TranscriptDensity::Comfortable
+            || self.preferences.events_mode == EventDisplayMode::Verbose
+        {
+            return Ok(Some(self.render_document(tool_activity_document(
+                &activity,
+                Some(&result.output),
+                self.preferences.events_mode == EventDisplayMode::Verbose,
             ))));
         }
-        let rendered = match self.preferences.events_mode {
-            EventDisplayMode::Verbose => format!(
-                "{} complete name={} call_id={} turn={} status={} exit={} duration={duration_seconds:.2}s elapsed={elapsed_seconds:.2}s output={}",
-                self.label(family.label()),
-                display_name,
-                result.call_id,
-                turn,
-                status,
-                result.exit_code,
-                bounded_json(&parsed, VERBOSE_PREVIEW_CHARS)?
-            ),
-            EventDisplayMode::Compact | EventDisplayMode::Off => self.with_detail(
-                format!(
-                    "{} complete {} status={} exit={} duration={duration_seconds:.2}s",
-                    self.label(family.label()),
-                    display_name,
-                    status,
-                    result.exit_code,
-                ),
-                detail,
-            ),
-        };
-        Ok(Some(rendered))
+        Ok(Some(format!(
+            "{} {}",
+            self.label(ToolFamily::from_name(&result.name).label()),
+            activity.summary()
+        )))
     }
 
     /// Render a tool completion with its matching request context for richer source and process
@@ -635,55 +533,19 @@ impl SemanticRenderer {
         .map_err(|error| PresentationError::Invalid(error.to_string()))
     }
 
-    /// Rebuild one retained tool-result card when live duration and exit metadata are absent.
+    /// Rebuild bounded history without cloning output or inventing outcome metadata.
     pub fn retained_tool_result_document(
         &self,
         title: impl Into<String>,
         name: Option<&str>,
         output: String,
     ) -> PresentationDocument {
-        let parsed = serde_json::from_str::<Value>(&output).ok();
-        let shell = name == Some("shell.run")
-            || (name.is_none()
-                && parsed
-                    .as_ref()
-                    .is_some_and(colossus_contracts::is_command_output));
-        if shell {
-            let display = display_tool_output(Some("shell.run"), &output);
-            return PresentationDocument::from_block(PresentationBlock::Card {
-                title: title.into(),
-                tone: PresentationTone::Tool,
-                body: vec![
-                    PresentationBlock::Text(
-                        "Command details withheld; see prepared approval context.".into(),
-                    ),
-                    tool_output_block("shell.run", &display, None),
-                ],
-            });
-        }
-        let compact_unknown = name.is_none() && output.chars().nth(COMPACT_PREVIEW_CHARS).is_some();
-        let output = if self.preferences.events_mode != EventDisplayMode::Verbose
-            && (name.is_some_and(is_raw_web_fetch) || compact_unknown)
-        {
-            compact_response_block(
-                &output,
-                if name.is_some() {
-                    "Response preview"
-                } else {
-                    "Output preview"
-                },
-            )
-        } else {
-            PresentationBlock::Code {
-                language: None,
-                content: output,
-            }
-        };
-        PresentationDocument::from_block(PresentationBlock::Card {
-            title: title.into(),
-            tone: PresentationTone::Tool,
-            body: vec![output],
-        })
+        retained_tool_activity_document(
+            &title.into(),
+            name,
+            &output,
+            self.preferences.events_mode == EventDisplayMode::Verbose,
+        )
     }
 }
 
@@ -805,96 +667,22 @@ fn tool_result_document_with_mode(
     call: Option<&ToolCall>,
     events_mode: EventDisplayMode,
 ) -> PresentationDocument {
-    let parsed = display_tool_output(Some(&result.name), &result.output);
-    let display_name =
-        tool_display_name(&result.name, call.map_or(&parsed, |call| &call.arguments));
-    let lifecycle_status = parsed.get("status").and_then(Value::as_str);
-    let pending =
-        result.name == "agent.result" && matches!(lifecycle_status, Some("queued" | "running"));
-    let failed_child =
-        result.name == "agent.result" && matches!(lifecycle_status, Some("failed" | "interrupted"));
-    let failed = result.exit_code != 0 || failed_child;
-    let recoverable = parsed
-        .pointer("/error/recoverable")
-        .and_then(Value::as_bool);
-    let status = if pending {
-        lifecycle_status.unwrap_or("pending")
-    } else if failed {
-        if recoverable == Some(true) {
-            "recoverable_error"
+    let mut activity = tool_activity_presentation(
+        &result.name,
+        if result.exit_code == 0 {
+            ToolActivityPhase::Completed
         } else {
-            "failed"
-        }
-    } else {
-        "ok"
-    };
-    let mut body = vec![PresentationBlock::KeyValue(vec![
-        ("Status".into(), status.replace('_', " ")),
-        ("Duration".into(), format!("{duration_seconds:.2}s")),
-        ("Exit".into(), result.exit_code.to_string()),
-    ])];
-    if failed && let Some(message) = parsed.pointer("/error/message").and_then(Value::as_str) {
-        body.push(PresentationBlock::Markdown(message.into()));
-    } else if is_raw_web_fetch(&result.name) && events_mode != EventDisplayMode::Verbose {
-        body.push(compact_response_block(&result.output, "Response preview"));
-    } else {
-        body.push(tool_output_block(
-            &result.name,
-            &parsed,
-            call.map(|call| &call.arguments),
-        ));
-    }
-    let context = call
-        .and_then(|call| tool_call_context(call, ToolFamily::from_name(&result.name)))
-        .map(|value| format!(" · {}", bounded_text(&value, 60)))
-        .unwrap_or_default();
-    PresentationDocument::from_block(PresentationBlock::Card {
-        title: format!(
-            "{} {}{}",
-            if failed {
-                "Failed"
-            } else if pending {
-                "Pending"
-            } else {
-                "Completed"
-            },
-            display_name,
-            context,
-        ),
-        tone: if failed {
-            PresentationTone::Error
-        } else if pending {
-            PresentationTone::Warning
-        } else {
-            PresentationTone::Success
+            ToolActivityPhase::Failed
         },
-        body,
-    })
-}
-
-fn is_raw_web_fetch(name: &str) -> bool {
-    matches!(name, "web.fetch" | "docs.fetch" | "network.http")
-}
-
-fn compact_response_block(output: &str, title: &str) -> PresentationBlock {
-    let mut body = vec![PresentationBlock::KeyValue(vec![
-        ("Response size".into(), format!("{} bytes", output.len())),
-        (
-            "Display".into(),
-            "preview only; use /events verbose to show the full body".into(),
-        ),
-    ])];
-    if !output.is_empty() {
-        body.push(PresentationBlock::Code {
-            language: Some("preview".into()),
-            content: bounded_text(output, COMPACT_PREVIEW_CHARS),
-        });
-    }
-    PresentationBlock::Card {
-        title: title.into(),
-        tone: PresentationTone::Tool,
-        body,
-    }
+        call.map(|call| &call.arguments),
+        Some(&result.output),
+    );
+    activity.add_fact("Duration", format!("{duration_seconds:.2}s"));
+    tool_activity_document(
+        &activity,
+        Some(&result.output),
+        events_mode == EventDisplayMode::Verbose,
+    )
 }
 
 /// Build the canonical semantic work-state document for terminal and TUI backends.
@@ -1000,188 +788,10 @@ pub fn context_status_document(status: &ContextStatus) -> PresentationDocument {
     })
 }
 
-fn tool_output_block(name: &str, output: &Value, arguments: Option<&Value>) -> PresentationBlock {
-    if let Some(diff) = output.get("diff").and_then(Value::as_str) {
-        let (additions, deletions) = diff_counts(diff);
-        let title = output
-            .get("path")
-            .and_then(Value::as_str)
-            .map_or_else(|| "Changes".into(), |path| format!("Changes · {path}"));
-        return PresentationBlock::Card {
-            title,
-            tone: PresentationTone::Tool,
-            body: vec![
-                PresentationBlock::KeyValue(vec![
-                    ("Added".into(), additions.to_string()),
-                    ("Removed".into(), deletions.to_string()),
-                ]),
-                PresentationBlock::Diff(diff.into()),
-            ],
-        };
-    }
-    if (name == "git.diff" || name == "git.show" || name.ends_with(".diff"))
-        && let Some(diff) = output
-            .as_str()
-            .or_else(|| output.get("stdout").and_then(Value::as_str))
-            .or_else(|| output.get("diff").and_then(Value::as_str))
-            .or_else(|| output.get("output").and_then(Value::as_str))
-    {
-        return PresentationBlock::Diff(diff.into());
-    }
-    if matches!(
-        ToolFamily::from_name(name),
-        ToolFamily::Shell | ToolFamily::Git
-    ) {
-        let stdout = output.get("stdout").and_then(Value::as_str);
-        let stderr = output.get("stderr").and_then(Value::as_str);
-        let mut body = Vec::new();
-        if let Some(stdout) = stdout.filter(|value| !value.is_empty()) {
-            body.push(PresentationBlock::Code {
-                language: Some("stdout".into()),
-                content: stdout.into(),
-            });
-        }
-        if let Some(stderr) = stderr.filter(|value| !value.is_empty()) {
-            body.push(PresentationBlock::Code {
-                language: Some("stderr".into()),
-                content: stderr.into(),
-            });
-        }
-        if body.len() == 1 {
-            return body.remove(0);
-        }
-        if !body.is_empty() {
-            return PresentationBlock::Card {
-                title: "Process output".into(),
-                tone: PresentationTone::Neutral,
-                body,
-            };
-        }
-    }
-    if let Some(records) = [
-        "entries",
-        "matches",
-        "results",
-        "sources",
-        "tasks",
-        "decisions",
-        "plans",
-        "goals",
-        "memories",
-        "sessions",
-        "tools",
-        "resources",
-    ]
-    .iter()
-    .find_map(|key| output.get(*key).filter(|value| value.is_array()))
-    {
-        return json_block(records);
-    }
-    if let Some(text) = output.as_str() {
-        return if matches!(ToolFamily::from_name(name), ToolFamily::Files) {
-            PresentationBlock::Code {
-                language: Some(source_label(arguments)),
-                content: text.into(),
-            }
-        } else {
-            PresentationBlock::Markdown(text.into())
-        };
-    }
-    json_block(output)
-}
-
-/// Label an MCP call with its configured server and exact tool name when available.
-///
-/// Callers must supply released arguments or output. Only top-level identity fields
-/// contribute to the label; nested tool payloads cannot identify the called server.
+/// Human operation and bounded target from already released arguments.
+/// Shell input is always withheld; MCP uses only its top-level server/tool identity.
 pub fn tool_display_name(name: &str, arguments: &Value) -> String {
-    if name != "mcp.call" {
-        return name.into();
-    }
-    let identity = |key| {
-        arguments.get(key).and_then(Value::as_str).map(|value| {
-            let clean = terminal::sanitize_terminal_text(value)
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            bounded_text(&clean, 72)
-        })
-    };
-    let Some(server) = identity("server").filter(|value| !value.is_empty()) else {
-        return name.into();
-    };
-    let tool = identity("tool")
-        .filter(|value| !value.is_empty())
-        .map(|value| format!(" · {value}"))
-        .unwrap_or_default();
-    format!("{name} · {server}{tool}")
-}
-
-fn tool_call_context(call: &ToolCall, family: ToolFamily) -> Option<String> {
-    if matches!(call.name.as_str(), "shell.run" | "mcp.call") {
-        return None;
-    }
-    if matches!(family, ToolFamily::Shell)
-        && let Some(arguments) = call.arguments.get("argv").and_then(Value::as_array)
-    {
-        let command = arguments
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>()
-            .join(" ");
-        if !command.is_empty() {
-            return Some(format!("$ {command}"));
-        }
-    }
-    summarize_value(&call.arguments, family.keys())
-}
-
-fn display_tool_output(name: Option<&str>, output: &str) -> Value {
-    let parsed = serde_json::from_str(output).unwrap_or_else(|_| Value::String(output.into()));
-    if name == Some("shell.run") {
-        colossus_contracts::command_output_display(&parsed)
-            .unwrap_or_else(|| json!({"notice": "Shell output is unavailable for safe display."}))
-    } else {
-        parsed
-    }
-}
-
-fn diff_counts(diff: &str) -> (usize, usize) {
-    diff.lines().fold((0, 0), |(additions, deletions), line| {
-        if line.starts_with('+') && !line.starts_with("+++") {
-            (additions + 1, deletions)
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            (additions, deletions + 1)
-        } else {
-            (additions, deletions)
-        }
-    })
-}
-
-fn source_label(arguments: Option<&Value>) -> String {
-    let Some(path) = arguments
-        .and_then(|value| find_key(value, "path", 0))
-        .and_then(Value::as_str)
-    else {
-        return "file".into();
-    };
-    let language = Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| match extension.to_ascii_lowercase().as_str() {
-            "rs" => "rust",
-            "py" => "python",
-            "js" | "mjs" | "cjs" => "javascript",
-            "ts" | "tsx" => "typescript",
-            "md" => "markdown",
-            "yaml" | "yml" => "yaml",
-            "json" => "json",
-            "toml" => "toml",
-            "sh" | "bash" | "zsh" => "shell",
-            _ => "file",
-        })
-        .unwrap_or("file");
-    format!("{language} · {path}")
+    tool_activity_presentation(name, ToolActivityPhase::Started, Some(arguments), None).heading()
 }
 
 #[derive(Clone, Copy)]
@@ -1238,89 +848,13 @@ impl ToolFamily {
             Self::Generic => "tool",
         }
     }
-
-    const fn keys(self) -> &'static [&'static str] {
-        match self {
-            Self::Files => &[
-                "path",
-                "bytes",
-                "matches",
-                "changed",
-                "line_start",
-                "line_end",
-            ],
-            Self::Shell => &["executable", "exit_code", "stdout", "stderr", "truncated"],
-            Self::Git => &["branch", "commit", "path", "status", "summary", "stdout"],
-            Self::Work => &["id", "status", "title", "objective", "open_task_count"],
-            Self::Context => &[
-                "session_id",
-                "message_count",
-                "token_estimate",
-                "snapshot_id",
-                "compacted",
-            ],
-            Self::Repository => &["path", "symbol", "matches", "files", "summary"],
-            Self::Plugins => &["name", "digest", "status", "trusted"],
-            Self::Web => &["url", "status", "title", "media_type", "bytes"],
-            Self::Mcp => &["server", "tool", "status", "content"],
-            Self::Trace => &["run_id", "event_count", "path", "status"],
-            Self::Integrations => &["name", "tool", "status", "connected"],
-            Self::Bundles => &["name", "version", "trust_key_id", "publisher"],
-            Self::Generic => &["id", "name", "status", "message"],
-        }
-    }
 }
 
 pub(super) fn bounded_text(value: &str, max_chars: usize) -> String {
-    let mut rendered = value.chars().take(max_chars).collect::<String>();
-    if value.chars().count() > max_chars {
+    let mut characters = value.chars();
+    let mut rendered = characters.by_ref().take(max_chars).collect::<String>();
+    if characters.next().is_some() {
         rendered.push('…');
     }
     rendered.replace(['\n', '\r'], " ")
-}
-
-fn bounded_json(value: &Value, max_chars: usize) -> Result<String, PresentationError> {
-    serde_json::to_string(value)
-        .map(|encoded| bounded_text(&encoded, max_chars))
-        .map_err(|error| PresentationError::Invalid(error.to_string()))
-}
-
-fn summarize_value(value: &Value, keys: &[&str]) -> Option<String> {
-    let parts = keys
-        .iter()
-        .filter_map(|key| {
-            find_key(value, key, 0).map(|value| {
-                format!(
-                    "{key}={}",
-                    bounded_text(&scalar_summary(value), COMPACT_PREVIEW_CHARS / 2)
-                )
-            })
-        })
-        .take(4)
-        .collect::<Vec<_>>();
-    (!parts.is_empty()).then(|| parts.join(" "))
-}
-
-fn find_key<'a>(value: &'a Value, key: &str, depth: usize) -> Option<&'a Value> {
-    if depth > 2 {
-        return None;
-    }
-    let object = value.as_object()?;
-    if let Some(value) = object.get(key) {
-        return Some(value);
-    }
-    object
-        .values()
-        .find_map(|value| find_key(value, key, depth.saturating_add(1)))
-}
-
-fn scalar_summary(value: &Value) -> String {
-    match value {
-        Value::Null => "null".into(),
-        Value::Bool(value) => value.to_string(),
-        Value::Number(value) => value.to_string(),
-        Value::String(value) => value.clone(),
-        Value::Array(values) => format!("{} items", values.len()),
-        Value::Object(values) => format!("{} fields", values.len()),
-    }
 }

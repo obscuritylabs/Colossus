@@ -1430,13 +1430,22 @@ sandbox:
         "{terminal}"
     );
     assert_eq!(
-        terminal.matches("[tool] start echo").count(),
+        terminal.matches("[tool] Run tool · echo · running").count(),
         2,
         "{terminal}"
     );
-    assert_eq!(terminal.matches("Completed echo").count(), 2, "{terminal}");
-    assert!(terminal.contains("terminal-tool-one"), "{terminal}");
-    assert!(terminal.contains("terminal-tool-two"), "{terminal}");
+    assert_eq!(
+        terminal
+            .lines()
+            .filter(|line| line.starts_with("Run tool · echo · ") && line.ends_with(" · completed"))
+            .count(),
+        2,
+        "{terminal}"
+    );
+    // Compact rows hide payloads; the provider-request checks below still verify
+    // both exact released observations survive continuation and the later turn.
+    assert!(!terminal.contains("terminal-tool-one"), "{terminal}");
+    assert!(!terminal.contains("terminal-tool-two"), "{terminal}");
     assert!(terminal.contains("connected"), "{terminal}");
     assert!(!terminal.contains("\x1b["));
     let result: Value = serde_json::from_slice(&run_output.stdout).expect("run JSON");
@@ -1665,11 +1674,26 @@ sandbox:
     let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
     assert_eq!(result["output"], "The subagent said hi.");
     let terminal = String::from_utf8_lossy(&output.stderr);
-    assert!(terminal.contains("Completed agent.delegate"), "{terminal}");
+    assert!(
+        terminal
+            .lines()
+            .any(|line| line.starts_with("Delegate work · ") && line.ends_with(" · completed")),
+        "{terminal}"
+    );
     assert!(terminal.contains("Child agent running"), "{terminal}");
     assert!(terminal.contains("Child agent completed"), "{terminal}");
-    assert!(terminal.contains("Completed agent.result"), "{terminal}");
-    assert!(!terminal.contains("Failed agent.result"), "{terminal}");
+    assert!(
+        terminal
+            .lines()
+            .any(|line| line.starts_with("Read agent result · ") && line.ends_with(" · completed")),
+        "{terminal}"
+    );
+    assert!(
+        !terminal
+            .lines()
+            .any(|line| line.starts_with("Read agent result · ") && line.ends_with(" · failed")),
+        "{terminal}"
+    );
     assert!(terminal.contains("Hi, Alex! Ping received."), "{terminal}");
 
     let requests = server.join().expect("subagent provider server");
@@ -1715,7 +1739,10 @@ fn delegated_children_run_concurrently_and_release_lifecycle_output() {
     assert_eq!(result["output"], "Both children completed.");
     let terminal = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
-        terminal.matches("Completed agent.delegate").count(),
+        terminal
+            .lines()
+            .filter(|line| line.starts_with("Delegate work · ") && line.ends_with(" · completed"))
+            .count(),
         2,
         "{terminal}"
     );
@@ -1846,8 +1873,16 @@ sandbox:
         String::from_utf8_lossy(&output.stderr)
     );
     let terminal = String::from_utf8_lossy(&output.stderr);
-    assert!(terminal.contains("[tool] start echo"), "{terminal}");
-    assert!(terminal.contains("Completed echo"), "{terminal}");
+    assert!(
+        terminal.contains("[tool] Run tool · echo · running"),
+        "{terminal}"
+    );
+    assert!(
+        terminal
+            .lines()
+            .any(|line| line.starts_with("Run tool · echo · ") && line.ends_with(" · completed")),
+        "{terminal}"
+    );
     assert!(
         terminal.contains("responses-connected [REDACTED]"),
         "{terminal}"
@@ -2022,7 +2057,7 @@ sandbox:
         2,
         "{terminal}"
     );
-    assert!(!terminal.contains("[file] start filesystem.write"));
+    assert!(!terminal.contains("[file] Write file"));
     let result: Value = serde_json::from_slice(&output.stdout).expect("run JSON");
     assert_eq!(result["output"], "recovered");
     let run_id = result["run_id"].as_str().expect("run id");

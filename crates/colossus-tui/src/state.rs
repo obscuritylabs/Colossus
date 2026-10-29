@@ -345,6 +345,7 @@ pub(super) enum Overlay {
         approval_section: ApprovalSection,
         document_scroll: usize,
     },
+    ToolDetails(crate::tool_details::ToolDetailsState),
     SessionBrowser(SessionBrowserState),
     ThemePicker(ThemePickerState),
     HistorySearch(HistorySearchState),
@@ -377,6 +378,8 @@ pub struct TuiState {
     /// Retained visible transcript; system messages are never inserted.
     pub transcript: Vec<TranscriptEntry>,
     pub(super) transcript_sources: Vec<Option<TranscriptRenderSource>>,
+    pub(super) tool_hits: Vec<crate::tool_details::ToolHit>,
+    pub(super) tool_click: Option<(crate::tool_details::ToolHit, Position)>,
     /// Whether an older canonical page remains available.
     pub has_more: bool,
     /// Cursor for the next older page.
@@ -405,11 +408,19 @@ pub struct TuiState {
     pub(super) active_calls: BTreeMap<String, colossus_contracts::ToolCall>,
     pub(super) agents: crate::agents::AgentTree,
     pub(super) sidebar: crate::sidebar::SidebarState,
+    pub(super) workspace_sessions: Vec<crate::workspace_view::WorkspaceSessionRow>,
+    pub(super) workspace_center: bool,
+    pub(super) workspace_selected: usize,
+    pub(super) workspace_hits: Vec<(Rect, crate::workspace_view::WorkspaceAction)>,
+    pub(super) workspace_action: Option<crate::workspace_view::WorkspaceAction>,
+    pub(super) workspace_manager: crate::session_manager::SessionManagerState,
+    pub(super) workspace_archiving: bool,
     pub(super) queue: VecDeque<String>,
     pub(super) queue_paused: bool,
     pub(super) operation: Option<OperationKind>,
     pub(super) control: Option<RunControl>,
     pub(super) overlay: Option<Overlay>,
+    pub(super) pending_prompts: VecDeque<InteractivePrompt>,
     pub(super) pending_plan_command: Option<PlanCommand>,
     pub(super) pending_setting_command: Option<&'static str>,
     pub(super) pending_plan_execution: Option<InteractivePlanExecutionRequest>,
@@ -432,6 +443,8 @@ pub struct TuiState {
     pub(super) native_history_pages_loaded: usize,
     pub(super) transcript_epoch: u64,
     pub(super) welcome_visible: bool,
+    /// One-shot launch branding; later workspace sessions are never armed.
+    pub(super) startup_animation: Option<crate::startup::StartupAnimation>,
     pub(super) security_posture_entry: Option<usize>,
     pub(super) should_exit: bool,
 }
@@ -483,6 +496,8 @@ impl TuiState {
             sandbox_profile: snapshot.sandbox_profile,
             transcript,
             transcript_sources,
+            tool_hits: Vec::new(),
+            tool_click: None,
             has_more: snapshot.transcript.has_more,
             before_sequence: snapshot.transcript.before_sequence,
             preferences: snapshot.preferences,
@@ -504,11 +519,19 @@ impl TuiState {
             active_calls: BTreeMap::new(),
             agents: crate::agents::AgentTree::default(),
             sidebar: crate::sidebar::SidebarState::default(),
+            workspace_sessions: Vec::new(),
+            workspace_center: false,
+            workspace_selected: 0,
+            workspace_hits: Vec::new(),
+            workspace_action: None,
+            workspace_manager: crate::session_manager::SessionManagerState::default(),
+            workspace_archiving: false,
             queue: VecDeque::new(),
             queue_paused: false,
             operation: None,
             control: None,
             overlay: None,
+            pending_prompts: VecDeque::new(),
             pending_plan_command: None,
             pending_setting_command: None,
             pending_plan_execution: None,
@@ -531,6 +554,7 @@ impl TuiState {
             native_history_pages_loaded: 0,
             transcript_epoch: 0,
             welcome_visible,
+            startup_animation: None,
             security_posture_entry,
             should_exit: false,
         }
@@ -599,15 +623,18 @@ impl TuiState {
     }
 
     pub(super) fn transient_inline_screen_active(&self) -> bool {
-        matches!(
-            self.overlay,
-            Some(
-                Overlay::SessionBrowser(_)
-                    | Overlay::ThemePicker(_)
-                    | Overlay::HistorySearch(_)
-                    | Overlay::SettingsPicker(_)
+        self.workspace_center
+            || matches!(
+                self.overlay,
+                Some(
+                    Overlay::ToolDetails(_)
+                        | Overlay::SessionBrowser(_)
+                        | Overlay::ThemePicker(_)
+                        | Overlay::HistorySearch(_)
+                        | Overlay::SettingsPicker(_)
+                )
             )
-        ) || matches!(self.overlay.as_ref(), Some(Overlay::Prompt {request, ..}) if request.kind == InteractivePromptKind::ModelSelection)
+            || matches!(self.overlay.as_ref(), Some(Overlay::Prompt {request, ..}) if request.kind == InteractivePromptKind::ModelSelection)
             || self.docked_decision_active()
             || self.structured_completion_context().is_some()
     }
@@ -703,6 +730,11 @@ impl TuiState {
 
     /// Append an older page without duplicating or exposing system messages.
     pub fn prepend_page(&mut self, page: SessionMessagePage) {
+        self.tool_click = None;
+        self.tool_hits.clear();
+        if matches!(self.overlay, Some(Overlay::ToolDetails(_))) {
+            self.overlay = None;
+        }
         let (mut older, mut older_sources) =
             transcript_from_messages(page.messages, &self.preferences);
         if let Some(index) = self.security_posture_entry.as_mut() {
@@ -1007,6 +1039,7 @@ impl TuiState {
                 .is_some_and(|control| !control.is_cancelled())
         {
             self.cancel_overlay();
+            self.cancel_pending_prompts();
             if let Some(control) = &self.control {
                 control.cancel();
             }
@@ -1015,7 +1048,14 @@ impl TuiState {
             return;
         }
         self.cancel_overlay();
+        self.cancel_pending_prompts();
         self.should_exit = true;
+    }
+
+    pub(super) fn cancel_pending_prompts(&mut self) {
+        for prompt in self.pending_prompts.drain(..) {
+            let _ = prompt.response.send(PromptResponse::Cancelled);
+        }
     }
 
     pub(super) fn cancel_overlay(&mut self) -> bool {

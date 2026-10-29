@@ -247,7 +247,8 @@ pub(crate) struct WorkerInteractiveHost {
     client: Arc<WorkerClient>,
     themes: ThemeLibrary,
     model_selections: ModelSelections,
-    approval_mode: Mutex<Option<ApprovalMode>>,
+    approval_mode: HostApprovalModes,
+    operations: HostOperationGate,
     sandbox_boundary_acknowledgements: Mutex<BTreeMap<String, SandboxBoundaryAcknowledgement>>,
 }
 
@@ -261,24 +262,18 @@ impl WorkerInteractiveHost {
             client: Arc::new(client),
             themes,
             model_selections: ModelSelections::default(),
-            approval_mode: Mutex::new(approval_mode),
+            approval_mode: HostApprovalModes::new(approval_mode),
+            operations: HostOperationGate::default(),
             sandbox_boundary_acknowledgements: Mutex::new(BTreeMap::new()),
         }
     }
 
     fn approval_mode(&self) -> Result<Option<ApprovalMode>, String> {
-        self.approval_mode
-            .lock()
-            .map(|mode| *mode)
-            .map_err(|_| "TUI approval mode lock is poisoned".to_owned())
+        self.approval_mode.snapshot().map(|snapshot| snapshot.mode)
     }
 
     fn set_approval_mode(&self, mode: ApprovalMode) -> Result<(), String> {
-        *self
-            .approval_mode
-            .lock()
-            .map_err(|_| "TUI approval mode lock is poisoned".to_owned())? = Some(mode);
-        Ok(())
+        self.approval_mode.set(mode)
     }
 
     fn interactive_approval_mode(&self) -> Result<Option<WorkerApprovalMode>, String> {
@@ -372,6 +367,7 @@ impl WorkerInteractiveHost {
             .await?,
         )
         .map_err(|error| error.to_string())?;
+        let approval = self.approval_mode.snapshot()?;
         Ok(FooterState {
             role: route.role.clone(),
             route: route_label(&route),
@@ -379,11 +375,12 @@ impl WorkerInteractiveHost {
                 .map(|context| (context.token_estimate, route.limits.input_budget_tokens)),
             message_count: session.message_count,
             status: status.into(),
-            approval_mode: self
-                .approval_mode()?
+            approval_mode: approval
+                .mode
                 .map(ApprovalMode::as_str)
                 .unwrap_or("worker-default")
                 .into(),
+            approval_mode_revision: approval.revision,
         })
     }
 
@@ -1408,6 +1405,24 @@ impl WorkerInteractiveHost {
 
 #[async_trait]
 impl InteractiveHost for WorkerInteractiveHost {
+    async fn session_work_status(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<colossus_tui::SidebarSnapshot>, String> {
+        let work = serde_json::from_value(
+            self.value(WorkerOperation::WorkState {
+                session_id: session_id.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(Some(super::sidebar::sidebar_snapshot(
+            work,
+            None,
+            Vec::new(),
+        )))
+    }
+
     async fn sidebar_status(
         &self,
         session_id: &str,
@@ -1449,9 +1464,91 @@ impl InteractiveHost for WorkerInteractiveHost {
         .map_err(|error| error.to_string())
     }
 
+    async fn sessions(&self) -> Result<Vec<SessionSummary>, String> {
+        self.session_catalog(false).await
+    }
+
+    async fn session_catalog(&self, archived: bool) -> Result<Vec<SessionSummary>, String> {
+        let sessions = serde_json::from_value::<Vec<SessionSummary>>(
+            self.value(WorkerOperation::SessionCatalog {
+                archived,
+                limit: 100,
+            })
+            .await?,
+        )
+        .map_err(|error| error.to_string())?;
+        let children = self
+            .value(WorkerOperation::AgentList {
+                session_id: None,
+                status: None,
+                limit: 1_000,
+            })
+            .await
+            .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()));
+        Ok(root_session_catalogue(sessions, children))
+    }
+
+    async fn preview_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<InteractiveSessionBrowserMessage>, String> {
+        let summary = self
+            .value(WorkerOperation::SessionGet {
+                session_id: session_id.into(),
+            })
+            .await?;
+        if summary.is_null() {
+            return Err("The selected session was not found.".into());
+        }
+        serde_json::from_value::<SessionSummary>(summary).map_err(|error| error.to_string())?;
+        let mut collector = SessionPreviewCollector::new();
+        while collector.wants_older_page() {
+            let page = self
+                .value(WorkerOperation::SessionMessagesPage {
+                    session_id: session_id.into(),
+                    before_sequence: collector.before_sequence(),
+                    limit: SESSION_BROWSER_PAGE_LIMIT,
+                })
+                .await?;
+            collector.absorb(serde_json::from_value(page).map_err(|error| error.to_string())?);
+        }
+        Ok(collector.finish())
+    }
+
+    async fn set_session_archived(&self, session_id: &str, archived: bool) -> Result<(), String> {
+        let _operation = self.operations.enter(false).await?;
+        let value = self
+            .value(WorkerOperation::SessionSetArchived {
+                session_id: session_id.into(),
+                archived,
+            })
+            .await?;
+        let lifecycle: colossus_contracts::SessionLifecycle =
+            serde_json::from_value(value).map_err(|error| error.to_string())?;
+        if lifecycle.session_id != session_id || lifecycle.archived != archived {
+            return Err("The host returned an unexpected session archive state.".into());
+        }
+        Ok(())
+    }
+
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
         let fresh_session = request.session_id.is_none() && !request.resume_latest;
         let session: SessionSummary = if let Some(session_id) = request.session_id {
+            let lifecycle: Option<colossus_contracts::SessionLifecycle> = serde_json::from_value(
+                self.value(WorkerOperation::SessionLifecycle {
+                    session_id: session_id.clone(),
+                })
+                .await?,
+            )
+            .map_err(|error| error.to_string())?;
+            let lifecycle =
+                lifecycle.ok_or_else(|| "requested session was not found".to_owned())?;
+            if lifecycle.session_id != session_id {
+                return Err("The host returned another session's archive lifecycle.".into());
+            }
+            if lifecycle.archived {
+                return Err("This session is archived. Restore it from Sessions > Archived before opening it.".into());
+            }
             let value = self
                 .value(WorkerOperation::SessionGet { session_id })
                 .await?;
@@ -1508,10 +1605,12 @@ impl InteractiveHost for WorkerInteractiveHost {
         let status = self.value(WorkerOperation::Ping).await?;
         if self.approval_mode()?.is_none() {
             match status.get("approval_mode") {
-                Some(Value::String(value)) => self.set_approval_mode(
-                    ApprovalMode::from_worker_value(value)
-                        .ok_or_else(|| "worker returned an invalid approval mode".to_owned())?,
-                )?,
+                Some(Value::String(value)) => {
+                    self.approval_mode
+                        .initialize(ApprovalMode::from_worker_value(value).ok_or_else(|| {
+                            "worker returned an invalid approval mode".to_owned()
+                        })?)?
+                }
                 None | Some(Value::Null) => {}
                 Some(_) => return Err("worker returned an invalid approval mode".into()),
             }
@@ -1556,6 +1655,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         mode: SandboxBoundaryMode,
         events: mpsc::Sender<HostEvent>,
     ) -> Result<bool, String> {
+        let _operation = self.operations.enter(false).await?;
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct AcknowledgementResult {
@@ -1604,6 +1704,7 @@ impl InteractiveHost for WorkerInteractiveHost {
     }
 
     async fn attach_image(&self, path: &str) -> Result<ModelImageReference, String> {
+        let _operation = self.operations.enter(false).await?;
         self.client
             .call_interactive::<ModelImageReference>(
                 WorkerOperation::RunInteractive {
@@ -1623,6 +1724,7 @@ impl InteractiveHost for WorkerInteractiveHost {
     }
 
     async fn preview_image(&self, image: &ModelImageReference) -> Result<Vec<u8>, String> {
+        let _operation = self.operations.enter(false).await?;
         let encoded = self
             .client
             .call_interactive::<String>(
@@ -1653,6 +1755,10 @@ impl InteractiveHost for WorkerInteractiveHost {
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostCommandResult, String> {
+        let operation = self
+            .operations
+            .enter(matches!(command, RuntimeCommand::Permissions(Some(_))))
+            .await?;
         match command {
             RuntimeCommand::Shell { command } => {
                 let mut observer = WorkerChannelObserver {
@@ -1696,7 +1802,9 @@ impl InteractiveHost for WorkerInteractiveHost {
             RuntimeCommand::Permissions(mode) => {
                 let changed = mode.is_some();
                 if let Some(mode) = mode {
-                    self.set_approval_mode(mode.into())?;
+                    operation.apply_permission_change(&control, || {
+                        self.set_approval_mode(mode.into())
+                    })?;
                 }
                 let mode = self.approval_mode()?;
                 Ok(HostCommandResult {
@@ -1717,6 +1825,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostRunResult, String> {
+        let _operation = self.operations.enter(false).await?;
         let skills = self.value(WorkerOperation::PluginsInventory).await?;
         let skill_names = skills
             .as_array()
@@ -1796,6 +1905,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostPlanExecutionResult, String> {
+        let _operation = self.operations.enter(false).await?;
         let selected = approved_plan_at_revision(
             serde_json::from_value::<Option<PlanRecord>>(
                 self.value(WorkerOperation::PlanGet {
@@ -1909,6 +2019,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         entry: String,
         events: mpsc::Sender<HostEvent>,
     ) -> Result<(), String> {
+        let _presentation = self.operations.enter_presentation().await;
         let mut observer = WorkerChannelObserver {
             sender: events.clone(),
         };
@@ -1940,6 +2051,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         preferences: TerminalPreferences,
         events: mpsc::Sender<HostEvent>,
     ) -> Result<TerminalPreferences, String> {
+        let _presentation = self.operations.enter_presentation().await;
         let mut observer = WorkerChannelObserver {
             sender: events.clone(),
         };

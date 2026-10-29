@@ -43,8 +43,7 @@ async fn both_hosts_preserve_full_command_and_explicit_decisions() {
     for answer in ["Allow once", "Deny"] {
         let router = Arc::new(TuiPromptRouter::default());
         let (sender, mut events) = mpsc::channel(1);
-        router.install(Some(sender));
-        let provider = TuiApprovalProvider::new(router, ApprovalMode::Ask);
+        let provider = TuiApprovalProvider::new(Arc::clone(&router), ApprovalMode::Ask);
         let task = tokio::spawn(async move {
             let mut request = colossus_policy::effect_request(
                 colossus_policy::system_actor("test"),
@@ -61,8 +60,11 @@ async fn both_hosts_preserve_full_command_and_explicit_decisions() {
                 reason: "Explicit approval required".into(),
                 obligations: colossus_contracts::PolicyObligations::default(),
             };
-            provider
-                .request_approval(&request, "binding", &decision, Some(&context()))
+            router
+                .scope(
+                    sender,
+                    provider.request_approval(&request, "binding", &decision, Some(&context())),
+                )
                 .await
         });
         let HostEvent::Prompt(prompt) = events.recv().await.unwrap() else {

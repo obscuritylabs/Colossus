@@ -2212,7 +2212,13 @@ async fn queued_and_running_subagent_cancellation_is_published_immediately() {
             .subagent_event_sinks
             .lock()
             .expect("event sinks")
-            .insert(queued.parent_run_id.clone(), events);
+            .insert(
+                queued.parent_run_id.clone(),
+                crate::SubagentRunSink {
+                    events,
+                    interactions: colossus_ports::RunInteractionContext::default(),
+                },
+            );
 
         let cancelled = runtime
             .cancel_subagent(&queued.id)

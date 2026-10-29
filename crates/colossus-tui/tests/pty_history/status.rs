@@ -77,15 +77,27 @@ fn work_and_mcp_status_show_without_agents_and_success_changes_the_bubble() {
         wait_for_screen(&output, 32, 120, "atlas");
         let mut parser = vt100::Parser::new(32, 120, 0);
         parser.process(&output.lock().expect("output"));
-        let row = parser
-            .screen()
-            .rows(0, 120)
+        let screen = parser.screen();
+        let columns = screen.size().1;
+        let row = screen
+            .rows(0, columns)
             .position(|row| row.contains("atlas") && row.contains("used"))
             .expect("used server row") as u16;
-        let bubble = (94..120)
+        let sidebar_heading_row = screen
+            .rows(0, columns)
+            .position(|row| row.contains("Workspace sessions"))
+            .expect("workspace sidebar heading") as u16;
+        let sidebar_border = (0..columns)
+            .rev()
+            .find(|column| {
+                screen
+                    .cell(sidebar_heading_row, *column)
+                    .is_some_and(|cell| cell.contents() == "│")
+            })
+            .expect("rendered sidebar left border");
+        let bubble = (sidebar_border + 1..columns)
             .find_map(|column| {
-                parser
-                    .screen()
+                screen
                     .cell(row, column)
                     .filter(|cell| cell.contents() == "●")
             })

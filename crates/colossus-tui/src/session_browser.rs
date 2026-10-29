@@ -387,7 +387,7 @@ fn render_session_preview(
     }
 }
 
-fn preview_lines(
+pub(super) fn preview_lines(
     entry: &InteractiveSessionBrowserEntry,
     palette: &TerminalPalette,
     width: usize,
@@ -430,11 +430,11 @@ fn preview_lines(
     lines
 }
 
-fn list_column_widths(width: u16) -> (u16, u16) {
+pub(super) fn list_column_widths(width: u16) -> (u16, u16) {
     if width >= 48 { (13, 5) } else { (9, 4) }
 }
 
-fn compact_timestamp(value: &str) -> String {
+pub(super) fn compact_timestamp(value: &str) -> String {
     value
         .get(..16)
         .map(|timestamp| format!("{}Z", timestamp.replace('T', " ")))
@@ -469,7 +469,7 @@ fn clean_session_browser_text(value: &str) -> String {
         .join(" ")
 }
 
-fn relative_timestamp(value: &str) -> String {
+pub(super) fn relative_timestamp(value: &str) -> String {
     let Ok(timestamp) = OffsetDateTime::parse(value, &Rfc3339) else {
         return compact_timestamp(value);
     };

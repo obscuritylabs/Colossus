@@ -173,8 +173,29 @@ impl InteractiveRunBridge {
     }
 }
 
-tokio::task_local! {
-    pub(super) static ACTIVE_INTERACTIVE_RUN: InteractiveRunBridge;
+pub(super) struct InteractiveRunScope;
+
+pub(super) static ACTIVE_INTERACTIVE_RUN: InteractiveRunScope = InteractiveRunScope;
+
+impl InteractiveRunScope {
+    pub(super) fn scope<F: std::future::Future>(
+        &self,
+        bridge: InteractiveRunBridge,
+        future: F,
+    ) -> impl std::future::Future<Output = F::Output> {
+        colossus_ports::RunInteractionContext::capture()
+            .with(Arc::new(bridge))
+            .scope(future)
+    }
+
+    pub(super) fn try_with<T>(
+        &self,
+        read: impl FnOnce(&InteractiveRunBridge) -> T,
+    ) -> Result<T, ()> {
+        colossus_ports::RunInteractionContext::current::<InteractiveRunBridge>()
+            .map(|bridge| read(&bridge))
+            .ok_or(())
+    }
 }
 
 pub(super) struct WorkerInteractiveApproval {

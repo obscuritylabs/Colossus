@@ -122,6 +122,8 @@ pub struct Runtime {
     pub(super) integration_executor: Arc<IntegrationExecutor>,
     pub(super) integration_effect_executor: Arc<dyn EffectExecutor>,
     pub(super) sessions: Arc<dyn SessionRepository>,
+    pub(super) native_session_lifecycle:
+        Arc<crate::native_session_lifecycle::NativeSessionLifecycle>,
     pub(super) communication: Arc<colossus_communication::CommunicationService>,
     pub(super) context_executor: Arc<ContextEffectExecutor>,
     pub(super) presentation: Arc<dyn PresentationRepository>,
@@ -141,7 +143,7 @@ pub struct Runtime {
     pub(super) subagent_max_concurrent: usize,
     pub(super) subagent_notify: watch::Sender<u64>,
     pub(super) subagent_drain_lock: TokioMutex<()>,
-    pub(super) subagent_event_sinks: Arc<StdMutex<HashMap<String, mpsc::Sender<BufferedRunEvent>>>>,
+    pub(super) subagent_event_sinks: Arc<StdMutex<HashMap<String, SubagentRunSink>>>,
     pub(super) tools: Arc<dyn ToolRegistry>,
     pub(super) access: AccessResolution,
     pub(super) filesystem_executor: Arc<dyn EffectExecutor>,
@@ -1103,12 +1105,22 @@ impl Runtime {
             identity: workspace_identity.clone(),
             inner: scheduled_tool_executor,
         });
-        let run_lifecycle: Arc<dyn colossus_ports::AgentRunLifecycle> =
-            Arc::new(crate::run_lifecycle::RuntimeRunLifecycle::new(
+        let native_session_lifecycle = Arc::new(
+            crate::native_session_lifecycle::NativeSessionLifecycle::new(
+                Arc::clone(&sessions),
+                Arc::clone(&work),
+                Arc::clone(&journal),
+            )
+            .with_process_sessions(Arc::clone(&process_sessions)),
+        );
+        let run_lifecycle: Arc<dyn colossus_ports::AgentRunLifecycle> = Arc::new(
+            crate::run_lifecycle::RuntimeRunLifecycle::new(
                 Arc::clone(&process_sessions),
                 browser.clone(),
                 computer.clone(),
-            ));
+            )
+            .with_session_lifecycle(Arc::clone(&native_session_lifecycle)),
+        );
         let agent = Arc::new(
             AgentService::new(
                 Arc::clone(&journal),
@@ -1179,6 +1191,7 @@ impl Runtime {
             integration_executor,
             integration_effect_executor,
             sessions,
+            native_session_lifecycle,
             communication,
             context_executor,
             presentation,

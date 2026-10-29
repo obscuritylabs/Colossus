@@ -5,111 +5,50 @@ import { presentNotice, presentToolActivity } from "./activity-labels";
 
 function activity(
   toolName: string,
+  summary: string,
   state: ToolActivity["state"] = "completed",
-  summary = `tool execution ${state} at turn 1`,
 ): ToolActivity {
   return { callId: "call-1", toolName, state, summary };
 }
 
 describe("activity labels", () => {
-  it("identifies browser actions separately from terminal commands", () => {
-    for (const tool of [
-      "browser.snapshot",
-      "browser.back",
-      "browser.cdp",
-      "browser.close",
-    ]) {
-      expect(presentToolActivity(activity(tool)).kind).toBe("browser");
-    }
-    expect(presentToolActivity(activity("command.run")).kind).not.toBe(
-      "browser",
-    );
-  });
-  it("names filesystem work from released structured input", () => {
-    expect(
-      presentToolActivity(
-        activity("filesystem.write"),
-        '{"path":"notes/sample.txt","mode":"create"}',
-      ),
-    ).toEqual({ kind: "write", title: "Created sample.txt" });
-    expect(
-      presentToolActivity(
-        activity("filesystem.read"),
-        '{"path":"apps/desktop/src/WorkSidebar.tsx"}',
-      ).title,
-    ).toBe("Read WorkSidebar.tsx");
-    expect(
-      presentToolActivity(activity("repo.read_many"), '{"paths":["a","b"]}')
-        .title,
-    ).toBe("Read 2 files");
-    expect(
-      presentToolActivity(
-        activity("filesystem.list"),
-        '{"path":"apps/desktop"}',
-      ).title,
-    ).toBe("Listed files in desktop");
-    expect(
-      presentToolActivity(
-        activity("filesystem.search"),
-        '{"pattern":"WorkSidebar","path":"apps/desktop/src"}',
-      ).title,
-    ).toBe("Searched “WorkSidebar” in src");
+  it.each([
+    ["repo.map", "Mapped repository structure"],
+    ["filesystem.write", "Created sample.txt"],
+    ["shell.run", "Running git status --short"],
+    ["mcp.call", "Called GitLab · list_issues"],
+    ["extension.review", "Reviewed deployment readiness"],
+  ])("preserves the canonical summary for %s", (tool, summary) => {
+    expect(presentToolActivity(activity(tool, summary)).title).toBe(summary);
   });
 
-  it("names searches and shell commands without generic turn copy", () => {
+  it("retains namespace icon styling without generating another semantic label", () => {
     expect(
-      presentToolActivity(
-        activity("repo.search"),
-        '{"query":"View all|Load more"}',
-      ).title,
-    ).toBe("Searched “View all|Load more”");
+      presentToolActivity(activity("browser.snapshot", "Read the page")).kind,
+    ).toBe("browser");
     expect(
-      presentToolActivity(
-        activity("shell.run", "started"),
-        '{"command":"git status --short"}',
-      ).title,
-    ).toBe("Running git status --short");
+      presentToolActivity(activity("mcp.call", "Called GitLab")).kind,
+    ).toBe("mcp");
     expect(
-      presentToolActivity(
-        activity("shell.run"),
-        '{"argv":["cargo","test","-p","desktop"]}',
-      ).title,
-    ).toBe("Ran cargo test -p desktop");
-    expect(presentToolActivity(activity("repo.map")).title).toBe(
-      "Mapped repository structure",
-    );
-    expect(presentToolActivity(activity("web.search")).title).toBe(
-      "Searched the web",
-    );
-    expect(
-      presentToolActivity(activity("web.search"), '{"query":"Colossus"}').title,
-    ).toBe("Searched the web for “Colossus”");
+      presentToolActivity(activity("repo.map", "Mapped repository structure"))
+        .kind,
+    ).toBe("generic");
   });
 
-  it("names patch lifecycle actions from their target file", () => {
-    expect(
-      presentToolActivity(activity("patch.preview"), '{"path":"src/App.tsx"}')
-        .title,
-    ).toBe("Previewed changes to App.tsx");
-    expect(
-      presentToolActivity(activity("patch.apply"), '{"path":"src/App.tsx"}')
-        .title,
-    ).toBe("Updated App.tsx");
-    expect(
-      presentToolActivity(activity("patch.reverse"), '{"path":"src/App.tsx"}')
-        .title,
-    ).toBe("Reverted App.tsx");
-  });
-
-  it("preserves a useful released summary for unknown tools", () => {
+  it("uses generic identity for legacy placeholders and does not infer targets from input", () => {
     expect(
       presentToolActivity({
-        ...activity("extension.review"),
-        summary: "Reviewed deployment readiness",
+        ...activity("filesystem.read", "Reading workspace files", "started"),
+        input: '{"path":"do-not-derive-a-title.txt"}',
       }).title,
-    ).toBe("Reviewed deployment readiness");
-    expect(presentToolActivity(activity("extension.review")).title).toBe(
-      "Used extension review",
+    ).toBe("Reading workspace files");
+    expect(
+      presentToolActivity(
+        activity("repo.map", "tool execution completed at turn 1"),
+      ).title,
+    ).toBe("Tool activity · repo.map");
+    expect(presentToolActivity(activity("mcp.call", "")).title).toBe(
+      "Tool activity · mcp.call",
     );
   });
 

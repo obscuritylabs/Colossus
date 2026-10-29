@@ -3,6 +3,12 @@ use crate::prelude::*;
 use colossus_ports::AgentRunLifecycle;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+impl RuntimeComputerTools {
+    pub(crate) fn has_run_registration(&self, id: &str) -> bool {
+        self.runs.lock().map_or(true, |runs| runs.contains_key(id))
+    }
+}
+
 #[async_trait]
 impl AgentRunLifecycle for RuntimeComputerTools {
     fn tools_offered(&self, context: &ExecutionContext) -> Result<(), ToolError> {
