@@ -27,6 +27,12 @@ include breaking changes while the public API is still settling.
 
 - CLI sessions in one TUI workspace share saved suggestion settings. Delayed
   replies, theme changes and older settings snapshots preserve model opt-out.
+- Managed worktrees on Unix make new checkout directories private before ownership
+  admission, including directories containing tracked file links.
+
+### Security
+
+- Desktop requires zip 9.0.5, which fixes [GHSA-m665-v7pm-7grj](https://github.com/zip-rs/zip2/security/advisories/GHSA-m665-v7pm-7grj).
 
 <!-- colossus:release-notes base=v0.11.10 -->
 
@@ -63,6 +69,7 @@ include breaking changes while the public API is still settling.
 - **web:** disclose Fleet shell time limits ([536c3f7](https://github.com/obscuritylabs/Colossus/commit/536c3f7d018c0747c2d33d44b245773522d6a23e))
 - restore explicit terminal enrollment and patch build tools ([077bfad](https://github.com/obscuritylabs/Colossus/commit/077bfad5ad8a6473a1f520c04cea712e53ad7698))
 - **desktop:** keep capture consent responsive and confine companion actions ([70c9f5e](https://github.com/obscuritylabs/Colossus/commit/70c9f5e37d89d854a34e814ea7da6304df56b342))
+- **worktrees:** create private Unix checkouts ([2d154b5](https://github.com/obscuritylabs/Colossus/commit/2d154b562ee40d48e84bf1f62826b48b447a01f0))
 
 #### Security
 
@@ -70,6 +77,7 @@ include breaking changes while the public API is still settling.
 - **ui:** update Vitest and isolate grammar contract cases ([32df279](https://github.com/obscuritylabs/Colossus/commit/32df279a2a8e065c1542258581900e8d3dea76d7))
 - **deps:** update Tokio to patched 1.53.3 ([9749a76](https://github.com/obscuritylabs/Colossus/commit/9749a76b76d30923e4354a7509c11922660e01de))
 - **desktop:** patch libz-sys build environment leak ([aaf037d](https://github.com/obscuritylabs/Colossus/commit/aaf037dc08f27baccaa00daf07b13e74ae3a7492))
+- **deps:** update Desktop zip to 9.0.5 ([4856399](https://github.com/obscuritylabs/Colossus/commit/4856399d67ee7291dea7a80dcab15d77eae1db0b))
 
 #### Changed
 
@@ -83,6 +91,7 @@ include breaking changes while the public API is still settling.
 - refresh preview native acceptance notes ([4b94fca](https://github.com/obscuritylabs/Colossus/commit/4b94fca9953db748ff4c8acd14752c3750ec4dbb))
 - refresh preview notes after formatting checks ([0add39d](https://github.com/obscuritylabs/Colossus/commit/0add39dd3cd50fa7a2af3fcd5db7fc68ea9b846b))
 - refresh preview notes after security patch ([af08258](https://github.com/obscuritylabs/Colossus/commit/af082583aaa8188601a3484bd1fdcc49ef43ef58))
+- **release:** refresh preview notes after workspace integration ([620edaf](https://github.com/obscuritylabs/Colossus/commit/620edaf5444aea35e772ac43ee52fdeccbf32059))
 
 #### Maintenance
 
@@ -112,7 +121,7 @@ include breaking changes while the public API is still settling.
 - record native background input failure evidence ([80c8cd4](https://github.com/obscuritylabs/Colossus/commit/80c8cd4f2234b3d3ba2ee863e852ed24fd7413a2))
 - **desktop:** format app capture and worktree integration ([0d9411c](https://github.com/obscuritylabs/Colossus/commit/0d9411c076c09feedcac83d2320f8b0f735a6eb4))
 
-**Source:** [853977f](https://github.com/obscuritylabs/Colossus/commit/853977f9052d0641198e720993d3f6d8adc28e2d)
+**Source:** [2d154b5](https://github.com/obscuritylabs/Colossus/commit/2d154b562ee40d48e84bf1f62826b48b447a01f0)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.5](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.5)
 
