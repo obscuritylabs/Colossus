@@ -5,6 +5,7 @@ mod layout;
 mod model_picker;
 mod provider_recovery;
 mod shell;
+mod usage;
 
 #[test]
 fn lifecycle_observer_tracks_busy_decisions_and_session_changes() {
@@ -115,6 +116,7 @@ pub(super) fn snapshot() -> InteractiveSnapshot {
             role: "primary".into(),
             route: "echo@echo".into(),
             context: Some((1, 32_768)),
+            usage: None,
             message_count: 1,
             status: "ready".into(),
             approval_mode: "ask".into(),

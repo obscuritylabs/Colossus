@@ -20,5 +20,9 @@ use analysis::*;
 mod service;
 pub use service::*;
 
+mod run_usage;
+
+#[cfg(test)]
+mod run_usage_tests;
 #[cfg(test)]
 mod tests;

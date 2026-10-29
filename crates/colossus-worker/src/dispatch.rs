@@ -237,6 +237,9 @@ async fn dispatch_general(
         } => Ok(serde_json::to_value(
             runtime.restore_context(&session_id, &snapshot_id).await?,
         )?),
+        WorkerOperation::RunTokenUsage { session_id, run_id } => Ok(serde_json::to_value(
+            runtime.run_token_usage(&session_id, &run_id)?,
+        )?),
         WorkerOperation::TelemetryRuns { session_id, limit } => Ok(serde_json::to_value(
             runtime.telemetry_runs(session_id.as_deref(), limit.clamp(1, 1_000))?,
         )?),

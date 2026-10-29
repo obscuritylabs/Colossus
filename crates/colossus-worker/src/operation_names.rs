@@ -72,6 +72,7 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::ContextList { .. } => "context_list",
         WorkerOperation::ContextCompact { .. } => "context_compact",
         WorkerOperation::ContextRestore { .. } => "context_restore",
+        WorkerOperation::RunTokenUsage { .. } => "run_token_usage",
         WorkerOperation::TelemetryRuns { .. } => "telemetry_runs",
         WorkerOperation::TelemetryShow { .. } => "telemetry_show",
         WorkerOperation::TelemetryMetrics { .. } => "telemetry_metrics",

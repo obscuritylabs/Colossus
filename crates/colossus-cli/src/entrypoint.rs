@@ -5,14 +5,22 @@ struct DeferredRunResponse {
     value: Value,
     response: String,
     json_only: bool,
+    usage: Option<RunTokenUsage>,
 }
 
 impl DeferredRunResponse {
-    fn new(value: &impl serde::Serialize, response: &str) -> Result<Self, Box<dyn Error>> {
+    fn new(
+        runtime: &Runtime,
+        value: &impl serde::Serialize,
+        response: &str,
+    ) -> Result<Self, Box<dyn Error>> {
+        let value = serde_json::to_value(value)?;
+        let usage = embedded_run_usage_for_output(runtime, &value);
         Ok(Self {
-            value: serde_json::to_value(value)?,
+            value,
             response: response.into(),
             json_only: false,
+            usage,
         })
     }
 
@@ -21,6 +29,7 @@ impl DeferredRunResponse {
             value,
             response: String::new(),
             json_only: true,
+            usage: None,
         }
     }
 
@@ -28,7 +37,7 @@ impl DeferredRunResponse {
         if self.json_only {
             print_json(&self.value)
         } else {
-            print_run_response(&self.value, &self.response)
+            print_run_response(&self.value, &self.response, self.usage.as_ref())
         }
     }
 }
@@ -1236,7 +1245,7 @@ async fn runtime_command(
                     let approved = runtime
                         .get_plan(&plan_id)?
                         .ok_or_else(|| cli_error(format!("plan not found: {plan_id}")))?;
-                    let result = runtime
+                    let result = match runtime
                         .run_goal(
                             &role,
                             "",
@@ -1244,21 +1253,33 @@ async fn runtime_command(
                             goal_max_iterations,
                             Some(&plan_id),
                         )
-                        .await?;
+                        .await {
+                            Ok(result) => result,
+                            Err(error) => {
+                                print_embedded_observed_usage(&runtime, None, RunUsageScope::LastGoalIteration, StreamTarget::Stderr);
+                                return Err(error.into());
+                            }
+                        };
                     runtime.drain_subagents().await?;
                     let response = result
                         .iterations
                         .last()
                         .map(|iteration| iteration.output.as_str())
                         .unwrap_or(result.goal.summary.as_str());
-                    deferred_run_response = Some(DeferredRunResponse::new(&result, response)?);
+                    deferred_run_response = Some(DeferredRunResponse::new(&runtime, &result, response)?);
                 } else {
-                    let result = runtime
+                    let result = match runtime
                         .run_approved_plan(&role, &plan_id, max_turns)
-                        .await?;
+                        .await {
+                            Ok(result) => result,
+                            Err(error) => {
+                                print_embedded_observed_usage(&runtime, None, RunUsageScope::Run, StreamTarget::Stderr);
+                                return Err(error.into());
+                            }
+                        };
                     runtime.drain_subagents().await?;
                     deferred_run_response =
-                        Some(DeferredRunResponse::new(&result, &result.output)?);
+                        Some(DeferredRunResponse::new(&runtime, &result, &result.output)?);
                 }
                 return Ok(deferred_run_response);
             }
@@ -1272,8 +1293,9 @@ async fn runtime_command(
                 session
             };
             let control = RunControl::default();
-            let outcome = if stream {
+            let (outcome, usage_identity) = if stream {
                 let mut observer = TerminalStreamObserver::new(StreamTarget::Stderr);
+                let mut usage_observer = UsageTrackingObserver::new(&mut observer, session_id.as_deref());
                 let result = runtime
                     .run_with_mode_with_skills_stream_controlled_content(
                         if plan {
@@ -1289,15 +1311,17 @@ async fn runtime_command(
                         &skills,
                         &[],
                         false,
-                        &mut observer,
+                        &mut usage_observer,
                         &control,
                     )
                     .await;
+                let identity = usage_observer.into_identity();
                 observer.finish_line()?;
-                result?
+                (result, identity)
             } else {
                 let mut observer = SilentStreamObserver;
-                runtime
+                let mut usage_observer = UsageTrackingObserver::new(&mut observer, session_id.as_deref());
+                let result = runtime
                     .run_with_mode_with_skills_stream_controlled_content(
                         if plan {
                             AgentRunMode::Plan(PlanDraftTarget::Create)
@@ -1312,19 +1336,28 @@ async fn runtime_command(
                         &skills,
                         &[],
                         false,
-                        &mut observer,
+                        &mut usage_observer,
                         &control,
                     )
-                    .await?
+                    .await;
+                (result, usage_observer.into_identity())
+            };
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    print_embedded_observed_usage(&runtime, usage_identity.as_ref(), RunUsageScope::Run, StreamTarget::Stderr);
+                    return Err(error.into());
+                }
             };
             let result = match outcome {
                 AgentRunOutcome::Completed { result } => result,
                 AgentRunOutcome::Cancelled { .. } => {
+                    print_embedded_observed_usage(&runtime, usage_identity.as_ref(), RunUsageScope::Run, StreamTarget::Stderr);
                     return Err(cli_error("run was cancelled before completion").into());
                 }
             };
             runtime.drain_subagents().await?;
-            deferred_run_response = Some(DeferredRunResponse::new(&result, &result.output)?);
+            deferred_run_response = Some(DeferredRunResponse::new(&runtime, &result, &result.output)?);
         }
         Command::Echo { message } => {
             let result = runtime.echo(&message).await?;

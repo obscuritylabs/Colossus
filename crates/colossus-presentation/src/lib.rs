@@ -45,6 +45,7 @@ mod repository;
 mod semantic;
 mod terminal;
 mod themes;
+mod usage;
 
 pub use command_approval::{approval_risk_summary, command_approval_document};
 pub use document::{
@@ -59,6 +60,7 @@ pub use semantic::{
 };
 pub use terminal::{StyledDocumentRenderer, TerminalDocumentRenderer};
 pub use themes::{ThemeLibrary, ThemeLibraryStatus, ThemeScaffold, default_user_theme_directory};
+pub use usage::run_token_usage_document;
 
 use document::{human_field_name, json_block};
 use palette::TextStyle;

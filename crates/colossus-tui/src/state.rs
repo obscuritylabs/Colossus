@@ -385,6 +385,7 @@ pub struct TuiState {
     pub preferences: TerminalPreferences,
     /// Cached stable footer state.
     pub footer: FooterState,
+    pub(super) run_usage: RunUsageState,
     /// Effective non-durable security posture for persistent terminal chrome.
     pub security_posture: SecurityPostureReport,
     /// Process-local terminal behavior; never loaded from or saved to preferences.
@@ -477,6 +478,10 @@ impl TuiState {
         } else {
             None
         };
+        let run_usage =
+            RunUsageState::restored(&snapshot.session_id, snapshot.footer.usage.clone());
+        let mut footer = snapshot.footer;
+        footer.usage = run_usage.current().cloned();
         Self {
             session_id: snapshot.session_id,
             workspace: snapshot.workspace,
@@ -486,7 +491,8 @@ impl TuiState {
             has_more: snapshot.transcript.has_more,
             before_sequence: snapshot.transcript.before_sequence,
             preferences: snapshot.preferences,
-            footer: snapshot.footer,
+            footer,
+            run_usage,
             security_posture: snapshot.security_posture,
             mode: InteractiveMode::Execute,
             selected_plan: None,

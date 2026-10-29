@@ -32,6 +32,8 @@ pub struct FooterState {
     pub route: String,
     /// Current used and maximum provider context tokens.
     pub context: Option<(u64, u64)>,
+    /// Provider-reported counters for the latest direct run in this session.
+    pub usage: Option<RunTokenUsage>,
     /// Canonical visible message count.
     pub message_count: u64,
     /// Short readiness or terminal run status.
