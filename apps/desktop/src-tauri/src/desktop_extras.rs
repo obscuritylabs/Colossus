@@ -4,15 +4,13 @@ pub(crate) mod pet;
 use crate::{desktop_settings::SettingsStore, dto::CommandErrorDto};
 use colossus_home::ConfinedRoot;
 use serde::{Deserialize, Serialize};
-#[cfg(windows)]
-use std::sync::atomic::AtomicBool;
 use std::{
     collections::BTreeMap,
     io::{Read as _, Seek as _, Write as _},
     path::Path,
     sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -115,6 +113,7 @@ pub(crate) struct ExtrasState {
     capture_generation: AtomicU64,
     active_capture: Mutex<Option<String>>,
     revision: AtomicU64,
+    confirmation_pending: Arc<AtomicBool>,
     shortcut_error: Mutex<Option<String>>,
     status: Mutex<Option<PetStatus>>,
 }
@@ -255,39 +254,52 @@ pub(crate) fn desktop_features_context(
     reason = "Tauri injects owned handles and deserializes command values by value."
 )]
 #[tauri::command(rename_all = "camelCase")]
-pub(crate) fn save_desktop_features(
+pub(crate) async fn save_desktop_features(
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, ExtrasState>,
-    mut preferences: ExtrasPreferences,
+    preferences: ExtrasPreferences,
     expected_revision: u64,
 ) -> Result<ExtrasContext, CommandErrorDto> {
     main_window(&window)?;
     preferences.validate()?;
-    let mut current = state
-        .preferences
-        .lock()
-        .map_err(|_| error("Feature preferences are busy."))?;
-    if state.revision.load(Ordering::Acquire) != expected_revision {
-        return Err(error(
-            "Desktop preferences changed in another window. Reload them before saving.",
+    review_preferences(&state, &preferences, expected_revision, || {
+        confirm_appshots(app.clone(), &state)
+    })
+    .await?;
+    let (send, receive) = tokio::sync::oneshot::channel();
+    let owner = app.clone();
+    app.run_on_main_thread(move || {
+        let state = owner.state::<ExtrasState>();
+        let _ = send.send(commit_preferences(
+            &owner,
+            &state,
+            preferences,
+            expected_revision,
         ));
-    }
-    // The renderer can never nominate or move a native window by preference input.
+    })
+    .map_err(|_| error("Desktop feature settings could not reach the native window."))?;
+    receive
+        .await
+        .map_err(|_| error("Desktop feature settings could not finish. Reload settings."))?
+}
+
+// Shortcut registration dispatches synchronously to the UI thread. Serialize this
+// short commit there so it cannot wait on that thread while owning preferences.
+fn commit_preferences(
+    app: &AppHandle,
+    state: &ExtrasState,
+    mut preferences: ExtrasPreferences,
+    expected_revision: u64,
+) -> Result<ExtrasContext, CommandErrorDto> {
+    let mut current = preferences_at_revision(state, expected_revision)?;
+    // Native movement and Hide remain available while confirmation is open.
+    // Use their latest position; renderer input cannot move a native window.
     preferences.pet_x = current.pet_x;
     preferences.pet_y = current.pet_y;
-    if preferences.appshots_enabled
-        && (!current.appshots_enabled
-            || (!current.appshot_include_text && preferences.appshot_include_text))
-    {
-        use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons};
-        if !app.dialog().message("Enable App Shots? The shortcut captures the active app window and available visible text into a local preview. Nothing is attached or sent until you choose Attach and Send. Password-marked text fields are excluded.").title("Colossus App Shots").buttons(MessageDialogButtons::OkCancel).blocking_show() {
-            return Err(error("App Shots setup was cancelled."));
-        }
-    }
-    capture::register(&app, Some(&current), &preferences)?;
+    capture::register(app, Some(&current), &preferences)?;
     if let Err(failure) = save(&preferences) {
-        let _ = capture::register(&app, Some(&preferences), &current);
+        let _ = capture::register(app, Some(&preferences), &current);
         return Err(failure);
     }
     if current.appshots_enabled != preferences.appshots_enabled
@@ -300,20 +312,115 @@ pub(crate) fn save_desktop_features(
     }
     let revision = state.revision.fetch_add(1, Ordering::AcqRel) + 1;
     *current = preferences.clone();
-    *state
+    drop(current);
+    let context = committed_context(
+        state,
+        revision,
+        preferences.clone(),
+        pet::apply(app, &preferences),
+    )?;
+    // Readers see the committed preferences and their actual native apply status.
+    notify_preferences(app);
+    Ok(context)
+}
+
+fn committed_context(
+    state: &ExtrasState,
+    revision: u64,
+    preferences: ExtrasPreferences,
+    applied: Result<(), CommandErrorDto>,
+) -> Result<ExtrasContext, CommandErrorDto> {
+    let shortcut_error = applied.err().map(|_| {
+        "Settings were saved, but the companion could not update. Toggle Show mini hacker off and on to retry."
+            .to_owned()
+    });
+    state
         .shortcut_error
         .lock()
-        .map_err(|_| error("Shortcut status is unavailable."))? = None;
-    drop(current);
-    notify_preferences(&app);
-    pet::apply(&app, &preferences)?;
+        .map_err(|_| error("Shortcut status is unavailable."))?
+        .clone_from(&shortcut_error);
     Ok(ExtrasContext {
         revision,
         preferences,
         appshots_available: cfg!(windows),
-        shortcut_error: None,
+        shortcut_error,
     })
 }
+
+fn preferences_at_revision(
+    state: &ExtrasState,
+    expected_revision: u64,
+) -> Result<std::sync::MutexGuard<'_, ExtrasPreferences>, CommandErrorDto> {
+    let current = state
+        .preferences
+        .lock()
+        .map_err(|_| error("Feature preferences are busy."))?;
+    if state.revision.load(Ordering::Acquire) != expected_revision {
+        return Err(error(
+            "Desktop preferences changed in another window. Reload them before saving.",
+        ));
+    }
+    Ok(current)
+}
+
+async fn review_preferences<Confirmation, Response>(
+    state: &ExtrasState,
+    requested: &ExtrasPreferences,
+    expected_revision: u64,
+    confirm: Confirmation,
+) -> Result<(), CommandErrorDto>
+where
+    Confirmation: FnOnce() -> Response,
+    Response: std::future::Future<Output = Result<bool, CommandErrorDto>>,
+{
+    let needs_confirmation = {
+        let current = preferences_at_revision(state, expected_revision)?;
+        requested.appshots_enabled
+            && (!current.appshots_enabled
+                || (!current.appshot_include_text && requested.appshot_include_text))
+    };
+    // No preferences guard crosses the modal wait. A second revision check
+    // fences changes made by native callbacks while the dialog was open.
+    if needs_confirmation && !confirm().await? {
+        return Err(error("App Shots setup was cancelled."));
+    }
+    drop(preferences_at_revision(state, expected_revision)?);
+    Ok(())
+}
+
+struct ConfirmationGuard(Arc<AtomicBool>);
+impl ConfirmationGuard {
+    fn claim(state: &ExtrasState) -> Result<Self, CommandErrorDto> {
+        state
+            .confirmation_pending
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| error("An App Shots confirmation is already open."))?;
+        Ok(Self(Arc::clone(&state.confirmation_pending)))
+    }
+}
+impl Drop for ConfirmationGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+async fn confirm_appshots(app: AppHandle, state: &ExtrasState) -> Result<bool, CommandErrorDto> {
+    let guard = ConfirmationGuard::claim(state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // The worker retains this prompt slot even if its observer is dropped.
+        // It owns no preferences guard and never blocks the native UI thread.
+        use tauri_plugin_dialog::{DialogExt as _, MessageDialogButtons};
+        let _guard = guard;
+        app.dialog()
+            .message("Enable App Shots? The shortcut captures the active app window and available visible text into a local preview. Nothing is attached or sent until you choose Attach and Send. Password-marked text fields are excluded.")
+            .title("Colossus App Shots")
+            .buttons(MessageDialogButtons::OkCancel)
+            .blocking_show()
+    })
+    .await
+    .map_err(|_| error("The App Shots confirmation could not open."))
+}
+
 fn notify_preferences(app: &AppHandle) {
     use tauri::Emitter as _;
     let _ = app.emit_to("main", "desktop-features-changed", ());

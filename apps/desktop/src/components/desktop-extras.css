@@ -84,7 +84,10 @@
   background: transparent !important;
   overflow: hidden;
 }
-.pet-surface body { margin: 0; min-width: 0; }
+.pet-surface body {
+  margin: 0;
+  min-width: 0;
+}
 .developer-pet {
   box-sizing: border-box;
   max-width: 156px;
@@ -169,10 +172,30 @@
   outline: 2px solid var(--blue);
   outline-offset: 2px;
 }
+.developer-pet.pet-has-error {
+  height: 100vh;
+  grid-template-rows: var(--control-height-touch) minmax(0, 1fr) auto;
+}
+.developer-pet.pet-has-error .pet-character {
+  width: var(--control-height-touch);
+  height: var(--control-height-touch);
+}
 .pet-error {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  align-self: stretch;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: normal;
   font-size: var(--font-size-caption);
+  line-height: var(--line-height-tight);
   background: var(--surface);
   color: var(--red);
+}
+.pet-error:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
 }
 .pet-motion .pet-eyes {
   animation: pet-blink 7s infinite;
@@ -208,4 +231,7 @@
   }
 }
 
-.appshot-preview header > div { min-width:0; overflow-wrap:anywhere; }
+.appshot-preview header > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

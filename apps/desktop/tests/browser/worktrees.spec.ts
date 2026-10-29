@@ -82,6 +82,14 @@ test("actual Settings mount sends the selected workspace identity rather than it
     });
   });
   await page.goto("/?fixture=operations-studio");
+  await expect(
+    page.getByRole("region", { name: "Work conversation", exact: true }),
+  ).toBeVisible();
+  const navigation = page.getByRole("button", {
+    name: "Open work navigation",
+    exact: true,
+  });
+  if (await navigation.isVisible()) await navigation.click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Global", exact: true }).click();
   await page

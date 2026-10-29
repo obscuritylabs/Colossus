@@ -68,5 +68,5 @@ export const attachAppshot = (
 export const syncPetStatus = (status: PetStatus) =>
   invoke<void>("sync_pet_status", { status });
 export const getPetContext = () => invoke<PetContext>("pet_context");
-export const petAction = (action: "open" | "hide" | "save_position") =>
+export const petAction = (action: "open" | "hide" | "save_position" | "drag") =>
   invoke<void>("pet_action", { action });

@@ -37,11 +37,11 @@ test("companion authority excludes generic event observation and listener contro
   assert.deepEqual(companion.permissions, [
     "allow-pet-context",
     "allow-pet-action",
-    "core:window:allow-start-dragging",
   ]);
   for (const permission of [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
     "allow-appshot-preview",
     "allow-attach-appshot",
     "allow-sync-pet-status",

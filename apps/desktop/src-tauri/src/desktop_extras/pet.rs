@@ -101,6 +101,14 @@ pub(super) fn remember_position(app: &AppHandle, persist: bool) {
         }
     }
 }
+pub(super) fn require_pet_window_label(label: &str) -> Result<(), CommandErrorDto> {
+    if label == "developer-pet" {
+        Ok(())
+    } else {
+        Err(error("The companion is unavailable here."))
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PetContext {
@@ -117,9 +125,7 @@ pub(crate) fn pet_context(
     window: WebviewWindow,
     state: State<'_, ExtrasState>,
 ) -> Result<PetContext, CommandErrorDto> {
-    if window.label() != "developer-pet" {
-        return Err(error("The companion is unavailable here."));
-    }
+    require_pet_window_label(window.label())?;
     let p = state
         .preferences
         .lock()
@@ -179,10 +185,15 @@ pub(crate) fn pet_action(
     state: State<'_, ExtrasState>,
     action: String,
 ) -> Result<(), CommandErrorDto> {
-    if window.label() != "developer-pet" {
-        return Err(error("The companion is unavailable here."));
-    }
+    require_pet_window_label(window.label())?;
     match action.as_str() {
+        "drag" => {
+            // Only the injected, host-verified companion window can move.
+            // No renderer-supplied label or coordinates reach a core command.
+            window
+                .start_dragging()
+                .map_err(|_| error("The companion could not move."))?;
+        }
         "open" => {
             if let Some(main) = app.get_webview_window("main") {
                 main.show()

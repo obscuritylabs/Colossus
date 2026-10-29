@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { featureError, getPetContext, petAction } from "../desktop-extras";
 import type { PetContext, PetStatus } from "../desktop-extras";
 import "./desktop-extras.css";
@@ -53,6 +53,7 @@ export default function MiniHackerPet() {
   });
   const [error, setError] = useState("");
   const [contextError, setContextError] = useState("");
+  const actionEpoch = useRef(0);
   useEffect(() => {
     document.documentElement.classList.add("pet-surface");
     let live = true;
@@ -76,36 +77,61 @@ export default function MiniHackerPet() {
     void load();
     return () => {
       live = false;
+      actionEpoch.current += 1;
       clearTimeout(timer);
       document.documentElement.classList.remove("pet-surface");
     };
   }, []);
+  async function runAction(action: "drag" | "open" | "hide") {
+    const epoch = ++actionEpoch.current;
+    setError("");
+    try {
+      await petAction(action);
+    } catch (failure) {
+      if (actionEpoch.current === epoch) setError(featureError(failure));
+    }
+  }
+  async function savePosition() {
+    const epoch = actionEpoch.current;
+    try {
+      await petAction("save_position");
+    } catch (failure) {
+      if (actionEpoch.current === epoch)
+        setError((current) => current || featureError(failure));
+    }
+  }
   const visibleError = error || contextError;
   return (
     <main
-      className={`developer-pet pet-${context.status} pet-size-${context.size} ${context.motion ? "pet-motion" : ""}`}
+      className={`developer-pet pet-${context.status} pet-size-${context.size} ${context.motion ? "pet-motion" : ""} ${visibleError ? "pet-has-error" : ""}`}
       aria-label="Colossus developer companion"
     >
       <div
         className="pet-character"
-        data-tauri-drag-region
-        onPointerUp={() => void petAction("save_position").catch(() => {})}
+        onPointerDown={(event) => {
+          if (event.button !== 0 || !event.isPrimary) return;
+          event.preventDefault();
+          void runAction("drag");
+        }}
+        onPointerUp={() => void savePosition()}
       >
         <MiniHackerArt status={context.status} />
       </div>
-      <span className="pet-status" role="status">
-        {LABELS[context.status]}
-      </span>
+      {visibleError ? (
+        <span className="pet-error" role="alert" tabIndex={0}>
+          {visibleError}
+        </span>
+      ) : (
+        <span className="pet-status" role="status">
+          {LABELS[context.status]}
+        </span>
+      )}
       <div className="pet-controls">
         <button
           type="button"
           aria-label="Open Colossus"
           title="Open Colossus"
-          onClick={() =>
-            void petAction("open").catch((failure) =>
-              setError(featureError(failure)),
-            )
-          }
+          onClick={() => void runAction("open")}
         >
           Open
         </button>
@@ -113,20 +139,11 @@ export default function MiniHackerPet() {
           type="button"
           aria-label="Hide companion"
           title="Hide companion"
-          onClick={() =>
-            void petAction("hide").catch((failure) =>
-              setError(featureError(failure)),
-            )
-          }
+          onClick={() => void runAction("hide")}
         >
           Hide
         </button>
       </div>
-      {visibleError && (
-        <span className="pet-error" role="alert">
-          {visibleError}
-        </span>
-      )}
     </main>
   );
 }

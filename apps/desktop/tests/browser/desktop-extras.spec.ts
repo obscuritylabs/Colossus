@@ -259,6 +259,11 @@ test("mini hacker statuses, comfortable size, keyboard controls and reduced moti
     fixture.emit("pet-settings-changed", null);
   });
   await expect(pet).toHaveClass(/pet-size-large/);
+  const character = pet.locator(".pet-character");
+  await character.dispatchEvent("pointerdown", { button: 2, isPrimary: true });
+  await character.dispatchEvent("pointerdown", { button: 0, isPrimary: false });
+  await character.dispatchEvent("pointerdown", { button: 0, isPrimary: true });
+  await character.dispatchEvent("pointerup", { button: 0, isPrimary: true });
   await pet.getByRole("button", { name: "Open Colossus" }).focus();
   await page.keyboard.press("Enter");
   await pet.getByRole("button", { name: "Hide companion" }).focus();
@@ -274,7 +279,26 @@ test("mini hacker statuses, comfortable size, keyboard controls and reduced moti
       (call) => call.command === "pet_action",
     ),
   );
-  expect(calls.map((call) => call.args.action)).toEqual(["open", "hide"]);
+  expect(calls.map((call) => call.args.action)).toEqual([
+    "drag",
+    "save_position",
+    "open",
+    "hide",
+  ]);
+  expect(calls.find((call) => call.args.action === "drag")?.args).toEqual({
+    action: "drag",
+  });
+  expect(
+    await page.evaluate(() =>
+      (
+        window as unknown as {
+          desktopExtrasFixture: { calls: { command: string }[] };
+        }
+      ).desktopExtrasFixture.calls.some((call) =>
+        call.command.startsWith("plugin:window|"),
+      ),
+    ),
+  ).toBe(false);
   expect(
     await page.evaluate(
       () =>
@@ -723,3 +747,222 @@ for (const delayed of ["save", "read", "save-error"] as const) {
     ).toHaveCount(0);
   });
 }
+
+test("companion drag failures remain visible without generic window commands", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 156, height: 188 });
+  await page.goto("/?surface=developer-pet");
+  const pet = page.getByRole("main", { name: "Colossus developer companion" });
+  await expect(pet.getByRole("status")).toHaveText("Ready to build");
+  await page.evaluate(() => {
+    const api = (
+      window as unknown as {
+        __TAURI_INTERNALS__: {
+          invoke(
+            command: string,
+            args?: Record<string, unknown>,
+          ): Promise<unknown>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    const original = api.invoke.bind(api);
+    api.invoke = async (command, args) => {
+      if (command === "pet_action" && args?.action === "drag") {
+        await original(command, args);
+        throw { message: "The companion could not move." };
+      }
+      return original(command, args);
+    };
+  });
+  await pet
+    .locator(".pet-character")
+    .dispatchEvent("pointerdown", { button: 0, isPrimary: true });
+  await expect(pet.getByRole("alert")).toHaveText(
+    "The companion could not move.",
+  );
+  const calls = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          desktopExtrasFixture: {
+            calls: { command: string; args: Record<string, unknown> }[];
+          };
+        }
+      ).desktopExtrasFixture.calls,
+  );
+  expect(calls.filter((call) => call.command === "pet_action")).toEqual([
+    { command: "pet_action", args: { action: "drag" } },
+  ]);
+  expect(calls.some((call) => call.command.startsWith("plugin:window|"))).toBe(
+    false,
+  );
+});
+
+test("companion Large errors remain readable, retryable and keyboard accessible inside the native window", async ({
+  page,
+}, testInfo) => {
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "colossus.desktop.appearance.v1",
+      JSON.stringify({
+        colorTheme: "dark",
+        darkPalette: "hacker",
+        textSize: "large",
+      }),
+    ),
+  );
+  await page.setViewportSize({ width: 156, height: 188 });
+  await page.goto("/?surface=developer-pet");
+  const pet = page.getByRole("main", { name: "Colossus developer companion" });
+  await expect(pet.getByRole("status")).toHaveText("Ready to build");
+  await page.evaluate(() => {
+    const host = window as unknown as {
+      desktopExtrasFixture: { pet: { size: string } };
+      __TAURI_INTERNALS__: {
+        invoke(
+          command: string,
+          args?: Record<string, unknown>,
+        ): Promise<unknown>;
+      };
+      petErrorFixture: {
+        message: string | null;
+        delayNextDrag: boolean;
+        rejectDrag: ((error: unknown) => void) | null;
+      };
+    };
+    host.desktopExtrasFixture.pet.size = "large";
+    host.petErrorFixture = {
+      message: "The companion could not move.",
+      delayNextDrag: false,
+      rejectDrag: null,
+    };
+    const original = host.__TAURI_INTERNALS__.invoke.bind(
+      host.__TAURI_INTERNALS__,
+    );
+    host.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      const result = await original(command, args);
+      if (command === "pet_action" && args?.action === "drag") {
+        if (host.petErrorFixture.delayNextDrag) {
+          host.petErrorFixture.delayNextDrag = false;
+          return new Promise((_, reject) => {
+            host.petErrorFixture.rejectDrag = reject;
+          });
+        }
+        if (host.petErrorFixture.message)
+          throw { message: host.petErrorFixture.message };
+      }
+      return result;
+    };
+  });
+  await expect(pet).toHaveClass(/pet-size-large/);
+  const character = pet.locator(".pet-character");
+  const alert = pet.getByRole("alert");
+  const open = pet.getByRole("button", { name: "Open Colossus" });
+  const hide = pet.getByRole("button", { name: "Hide companion" });
+  await character.dispatchEvent("pointerdown", { button: 0, isPrimary: true });
+  await expect(alert).toHaveText("The companion could not move.");
+  await expect(pet.getByRole("status")).toHaveCount(0);
+  await character.dispatchEvent("pointerup", { button: 0, isPrimary: true });
+  await expect(alert).toHaveText("The companion could not move.");
+  for (const element of [pet, alert, open, hide]) {
+    const bounds = await element.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(156);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(188);
+  }
+  await testInfo.attach("pet-error-bounds", {
+    body: JSON.stringify({
+      alert: await alert.boundingBox(),
+      open: await open.boundingBox(),
+      hide: await hide.boundingBox(),
+      viewport: { width: 156, height: 188 },
+    }),
+    contentType: "application/json",
+  });
+  await page.screenshot({
+    path: testInfo.outputPath("pet-large-native-error-viewport.png"),
+  });
+  const longMessage = `${"Native window movement failed. ".repeat(8)}${"detail".repeat(20)} End of native diagnostic.`;
+  await page.evaluate((message) => {
+    (
+      window as unknown as { petErrorFixture: { message: string } }
+    ).petErrorFixture.message = message;
+  }, longMessage);
+  await character.dispatchEvent("pointerdown", { button: 0, isPrimary: true });
+  await expect(alert).toHaveText(longMessage);
+  expect(
+    await alert.evaluate((node) => node.scrollHeight > node.clientHeight),
+  ).toBe(true);
+  await alert.focus();
+  await expect(alert).toBeFocused();
+  await page.keyboard.press("End");
+  await expect
+    .poll(() => alert.evaluate((node) => node.scrollTop))
+    .toBeGreaterThan(0);
+  await page.screenshot({
+    path: testInfo.outputPath("pet-large-error-scroll-viewport.png"),
+  });
+  await page.keyboard.press("Tab");
+  await expect(open).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(hide).toBeFocused();
+  expect(
+    await page.evaluate(() => ({
+      width: document.documentElement.scrollWidth,
+      height: document.documentElement.scrollHeight,
+    })),
+  ).toEqual({ width: 156, height: 188 });
+  await page.evaluate(() => {
+    (
+      window as unknown as { petErrorFixture: { message: null } }
+    ).petErrorFixture.message = null;
+  });
+  await character.dispatchEvent("pointerdown", { button: 0, isPrimary: true });
+  await expect(alert).toHaveCount(0);
+  await expect(pet.getByRole("status")).toHaveText("Ready to build");
+  await page.evaluate(() => {
+    (
+      window as unknown as { petErrorFixture: { delayNextDrag: boolean } }
+    ).petErrorFixture.delayNextDrag = true;
+  });
+  await character.dispatchEvent("pointerdown", { button: 0, isPrimary: true });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { petErrorFixture: { rejectDrag: unknown } })
+            .petErrorFixture.rejectDrag !== null,
+      ),
+    )
+    .toBe(true);
+  await character.dispatchEvent("pointerdown", { button: 0, isPrimary: true });
+  await page.evaluate(() => {
+    (
+      window as unknown as {
+        petErrorFixture: { rejectDrag: (failure: unknown) => void };
+      }
+    ).petErrorFixture.rejectDrag({ message: "Retired drag failure" });
+  });
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(alert).toHaveCount(0);
+  await expect(pet.getByRole("status")).toHaveText("Ready to build");
+  await page.evaluate(() => {
+    (
+      window as unknown as { petErrorFixture: { message: string } }
+    ).petErrorFixture.message = "A retryable drag failure";
+  });
+  await character.dispatchEvent("pointerdown", { button: 0, isPrimary: true });
+  await expect(alert).toHaveText("A retryable drag failure");
+  await open.focus();
+  await page.keyboard.press("Enter");
+  await expect(alert).toHaveCount(0);
+  await expect(pet.getByRole("status")).toHaveText("Ready to build");
+});
