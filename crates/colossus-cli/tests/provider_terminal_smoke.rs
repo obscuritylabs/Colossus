@@ -2544,10 +2544,20 @@ data: [DONE]
             let terminal = terminal_support::Terminal::start(command);
             terminal.wait("Enter sends");
             terminal.resize(40, 140);
+            terminal.command("/goal Prove final iteration token accounting", "Run usage");
+            // Join visible transcript cells across wrapped rows, excluding the sidebar.
             let screen =
-                terminal.command("/goal Prove final iteration token accounting", "Run usage");
+                terminal.wait_until_visual_rows("visible final Goal completion", |_, rows| {
+                    rows.iter()
+                        .map(|row| {
+                            row.split_once('│')
+                                .map_or(row.as_str(), |(transcript, _)| transcript)
+                                .trim()
+                        })
+                        .collect::<String>()
+                        .contains("GOAL_USAGE_FINISHED")
+                });
             let case = format!("worker={with_worker} reported={final_reports_usage}:\n{screen}");
-            assert!(screen.contains("GOAL_USAGE_FINISHED"), "{case}");
             if final_reports_usage {
                 assert!(screen.contains("45 tokens"), "{case}");
                 assert!(
