@@ -86,13 +86,17 @@ mod windows {
         io::Write as _,
         os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
         ptr::{null, null_mut},
-        sync::OnceLock,
+        sync::{
+            OnceLock,
+            atomic::{AtomicU32, Ordering},
+        },
     };
     use windows_sys::Win32::{
         Foundation::{HWND, LPARAM, LRESULT, STILL_ACTIVE, WPARAM},
         Graphics::Gdi::{CreateSolidBrush, DeleteObject},
         System::{
             LibraryLoader::GetModuleHandleW,
+            SystemInformation::GetTickCount64,
             Threading::{
                 GetExitCodeProcess, GetProcessId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
             },
@@ -100,6 +104,7 @@ mod windows {
         UI::{Input::KeyboardAndMouse::SetFocus, WindowsAndMessaging::*},
     };
     static FOREGROUND_RECIPIENT: OnceLock<OwnedHandle> = OnceLock::new();
+    static LEFT_UP_COUNT: AtomicU32 = AtomicU32::new(0);
     const CLOSE_TIMER: usize = 0x434c_5343;
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(Some(0)).collect()
@@ -322,7 +327,22 @@ mod windows {
                     0
                 }
                 WM_LBUTTONUP => {
-                    SetWindowTextW(GetDlgItem(hwnd, 104), wide("Drag received").as_ptr());
+                    let status = GetDlgItem(hwnd, 104);
+                    let updated = SetWindowTextW(status, wide("Drag received").as_ptr()) != 0;
+                    let role = if !status.is_null() {
+                        "fixture"
+                    } else if FOREGROUND_RECIPIENT.get().is_some() {
+                        "cover"
+                    } else {
+                        "owned_modal"
+                    };
+                    let count = LEFT_UP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                    let x = (lparam as usize & 0xffff) as u16 as i16;
+                    let y = ((lparam as usize >> 16) & 0xffff) as u16 as i16;
+                    eprintln!(
+                        "COMPUTER_FIXTURE_LEFT_UP role={role} count={count} x={x} y={y} status_updated={updated} system_tick_ms={}",
+                        GetTickCount64()
+                    );
                     0
                 }
                 WM_CLOSE => {
