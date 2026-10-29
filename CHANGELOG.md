@@ -63,6 +63,7 @@ include breaking changes while the public API is still settling.
 - **deps:** update ctutils to patched 0.4.4 ([a7cb848](https://github.com/obscuritylabs/Colossus/commit/a7cb848067e68fc8f065b7de0afab10fe44b4036))
 - **ui:** update Vitest and isolate grammar contract cases ([32df279](https://github.com/obscuritylabs/Colossus/commit/32df279a2a8e065c1542258581900e8d3dea76d7))
 - **deps:** update Tokio to patched 1.53.3 ([9749a76](https://github.com/obscuritylabs/Colossus/commit/9749a76b76d30923e4354a7509c11922660e01de))
+- **desktop:** patch libz-sys build environment leak ([aaf037d](https://github.com/obscuritylabs/Colossus/commit/aaf037dc08f27baccaa00daf07b13e74ae3a7492))
 
 #### Changed
 
@@ -74,6 +75,7 @@ include breaking changes while the public API is still settling.
 - retain the dependency exception reference ([b415d61](https://github.com/obscuritylabs/Colossus/commit/b415d6176ad27924e9781f3bb113bb331a15a20d))
 - refresh preview notes after acceptance hardening ([26dd435](https://github.com/obscuritylabs/Colossus/commit/26dd43523cc1cf9c008afc703a1802f1e9a64fb2))
 - refresh preview native acceptance notes ([4b94fca](https://github.com/obscuritylabs/Colossus/commit/4b94fca9953db748ff4c8acd14752c3750ec4dbb))
+- refresh preview notes after formatting checks ([0add39d](https://github.com/obscuritylabs/Colossus/commit/0add39dd3cd50fa7a2af3fcd5db7fc68ea9b846b))
 
 #### Maintenance
 
@@ -103,7 +105,7 @@ include breaking changes while the public API is still settling.
 - record native background input failure evidence ([80c8cd4](https://github.com/obscuritylabs/Colossus/commit/80c8cd4f2234b3d3ba2ee863e852ed24fd7413a2))
 - **desktop:** format app capture and worktree integration ([0d9411c](https://github.com/obscuritylabs/Colossus/commit/0d9411c076c09feedcac83d2320f8b0f735a6eb4))
 
-**Source:** [0d9411c](https://github.com/obscuritylabs/Colossus/commit/0d9411c076c09feedcac83d2320f8b0f735a6eb4)
+**Source:** [aaf037d](https://github.com/obscuritylabs/Colossus/commit/aaf037dc08f27baccaa00daf07b13e74ae3a7492)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.5](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.5)
 
