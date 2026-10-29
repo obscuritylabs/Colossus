@@ -235,6 +235,7 @@ async fn acceptance(
         if require_cover {
             // Observation does not activate the target. Refreshing a background
             // snapshot must never turn it into authority to click through cover.
+            let foreground_diagnostic = FixtureForegroundDiagnostic::new(&title)?;
             for stage in [
                 "background_click_without_focus",
                 "background_click_after_fresh_snapshot",
@@ -265,6 +266,7 @@ async fn acceptance(
                     .find(|node| node.name == "Fixture action")
                     .ok_or("background native button missing from UIA")?;
                 evidence.set(stage);
+                let foreground_before = foreground_diagnostic.sample();
                 let denied = driver
                     .execute(
                         ComputerDriverRequest {
@@ -285,7 +287,40 @@ async fn acceptance(
                         &control,
                     )
                     .await;
+                let foreground_after = foreground_diagnostic.sample();
                 if denied != Err(ComputerDriverError::Stale) {
+                    let result = match &denied {
+                        Err(error) => serde_json::json!({"kind":"error","category":error}),
+                        Ok(reply) => serde_json::json!({
+                            "kind":"reply",
+                            "category":match reply {
+                                ComputerDriverReply::Windows(_) => "windows",
+                                ComputerDriverReply::Opened(_) => "opened",
+                                ComputerDriverReply::Status(_) => "status",
+                                ComputerDriverReply::Snapshot(_) => "snapshot",
+                                ComputerDriverReply::Screenshot(_) => "screenshot",
+                                ComputerDriverReply::Applied(_) => "applied",
+                                ComputerDriverReply::Closed => "closed",
+                            }
+                        }),
+                    };
+                    let record = serde_json::to_vec(&serde_json::json!({
+                        "schema_version":1,"passed":false,"stage":stage,
+                        "expected_error":"stale","actual_result":result,
+                        "observation_foreground":false,"observation_waiting_for_action":true,
+                        "foreground_before":foreground_before,"foreground_after":foreground_after,
+                        "input_attempts":1
+                    }))?;
+                    if record.len() > 1024 {
+                        return Err("background input diagnostic exceeded its bound".into());
+                    }
+                    eprintln!(
+                        "COMPUTER_BACKGROUND_INPUT stage={stage} result={result} before={foreground_before} after={foreground_after}"
+                    );
+                    colossus_windows_native::create_private_file(
+                        &evidence.output.join("background-input-diagnostic.json"),
+                        &record,
+                    )?;
                     return Err("background click did not fail as a known no-effect Stale".into());
                 }
             }
@@ -689,6 +724,68 @@ async fn wait_for_drag_postcondition(
         &diagnostic,
     )?;
     result
+}
+
+// Read-only diagnostic classification of the two nonce fixture handles. These
+// handles never admit a target or grant capture, focus, or input authority.
+#[cfg(windows)]
+struct FixtureForegroundDiagnostic {
+    fixture: (windows_sys::Win32::Foundation::HWND, u32, u32),
+    cover: (windows_sys::Win32::Foundation::HWND, u32, u32),
+}
+
+#[cfg(windows)]
+impl FixtureForegroundDiagnostic {
+    fn new(title: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
+        let wide = |value: &str| value.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+        let class = wide("ColossusDisposableComputerFixture");
+        let find = |title: &str| {
+            let title = wide(title);
+            let mut process = 0;
+            // SAFETY: exact synthetic class and nonce title only; read-only
+            // queries freeze handles and their process/thread identities.
+            let (window, thread) = unsafe {
+                let window = FindWindowW(class.as_ptr(), title.as_ptr());
+                (window, GetWindowThreadProcessId(window, &mut process))
+            };
+            if window.is_null() || process == 0 || thread == 0 {
+                return Err("owned foreground diagnostic window is unavailable");
+            }
+            Ok((window, process, thread))
+        };
+        Ok(Self {
+            fixture: find(title)?,
+            cover: find(&title.replace("fixture", "cover"))?,
+        })
+    }
+
+    fn sample(&self) -> &'static str {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, GetWindowThreadProcessId,
+        };
+        // SAFETY: read-only foreground handle comparison. Process/thread
+        // metadata is queried only for an exact frozen synthetic handle; no
+        // foreign title, process metadata, or raw handle is retained or logged.
+        unsafe {
+            let foreground = GetForegroundWindow();
+            if foreground.is_null() {
+                return "none";
+            }
+            for (category, (window, process, thread)) in
+                [("fixture", self.fixture), ("cover", self.cover)]
+            {
+                if foreground == window {
+                    let mut current_process = 0;
+                    let current_thread = GetWindowThreadProcessId(window, &mut current_process);
+                    if current_process == process && current_thread == thread {
+                        return category;
+                    }
+                }
+            }
+            "other"
+        }
+    }
 }
 
 #[cfg(windows)]
