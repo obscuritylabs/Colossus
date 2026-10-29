@@ -13,6 +13,8 @@ const RAW_INPUT_FLAGS: u64 = 0x0001 | 0x0002 | 0x0004;
 const CAPTURE_FLAGS: u64 = 0x0010 | 0x0008 | 0x0080;
 const QUICK_EDIT: u64 = 0x0040;
 const ENVIRONMENT: &str = "COLOSSUS_TUI_NATIVE_CONSOLE_PROBE";
+// Covers both five-second settling phases at 50ms plus the lifecycle checkpoints.
+const MAX_CHECKPOINTS: u32 = 256;
 pub(super) const ORIGINAL_SENTINEL: &str = "native-console-original-sentinel";
 
 pub(super) struct Probe {
@@ -63,7 +65,7 @@ impl Probe {
 
     pub fn observe(&self) -> Value {
         let id = self.next.get() + 1;
-        assert!(id <= 128, "bounded native checkpoints");
+        assert!(id <= MAX_CHECKPOINTS, "bounded native checkpoints");
         self.next.set(id);
         fs::write(self.directory.path().join("request"), id.to_string())
             .expect("native checkpoint request");
@@ -100,18 +102,53 @@ impl Probe {
     }
 
     pub fn checkpoint_main(&self) {
-        *self.main.borrow_mut() = Some(self.observe());
+        let initial = self.read("before.json");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut previous = None;
+        loop {
+            let snapshot = self.observe();
+            // These fixtures checkpoint an empty composer. Its input row follows
+            // the rendered hint; footer paint can temporarily leave the cursor below it.
+            let composer_row = snapshot["active"].as_array().and_then(|rows| {
+                rows.iter().position(|row| {
+                    row.as_str()
+                        .is_some_and(|row| row.contains("Message · Enter sends"))
+                })
+            });
+            if mode(&snapshot) == mode(&initial) & !RAW_INPUT_FLAGS
+                && snapshot["cursor"][0].as_u64() == composer_row.map(|row| (row + 1) as u64)
+                && snapshot["cursor"][1].as_u64() == Some(1)
+                && previous.as_ref() == Some(&snapshot)
+            {
+                *self.main.borrow_mut() = Some(snapshot);
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "native empty composer did not settle: {snapshot}"
+            );
+            previous = Some(snapshot);
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 
     pub fn main_screen(&self, notice: Option<&str>) {
         let initial = self.read("before.json");
+        let main = self.main.borrow();
+        let main = main.as_ref().expect("pre-overlay checkpoint");
+        let column = main["cursor"][1].as_u64().expect("baseline cursor column")
+            + u64::from(notice.is_none());
+        let expected_cursor = json!([main["cursor"][0], column]);
         let deadline = Instant::now() + Duration::from_secs(5);
-        // Mode restoration precedes the normal frame's repaint. Observe that
-        // completed native frame, not the temporarily cleared app viewport.
+        let mut previous = None;
+        // Cells and native mode can be restored before the final composer cursor.
+        // Require a fresh stable frame; permanent cursor/history errors still fail below.
         let snapshot = loop {
             let snapshot = self.observe();
             if mode(&snapshot) == mode(&initial) & !RAW_INPUT_FLAGS
                 && screen(&snapshot, "active").contains("Message · Enter sends")
+                && snapshot["cursor"] == expected_cursor
+                && previous.as_ref() == Some(&snapshot)
             {
                 break snapshot;
             }
@@ -119,10 +156,9 @@ impl Probe {
                 Instant::now() < deadline,
                 "native main frame was not restored: {snapshot}"
             );
+            previous = Some(snapshot);
             thread::sleep(Duration::from_millis(50));
         };
-        let main = self.main.borrow();
-        let main = main.as_ref().expect("pre-overlay checkpoint");
         let original = history_rows(main);
         let restored = history_rows(&snapshot);
         assert_eq!(
@@ -307,7 +343,7 @@ fn record(
         let request = fs::read_to_string(directory.join("request"))
             .ok()
             .and_then(|value| value.parse::<u32>().ok());
-        if let Some(id) = request.filter(|id| *id > previous && *id <= 128) {
+        if let Some(id) = request.filter(|id| *id > previous && *id <= MAX_CHECKPOINTS) {
             save(
                 directory,
                 &format!("response-{id}.json"),
