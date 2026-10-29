@@ -16,6 +16,7 @@ tokio::task_local! {
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum InstructionSourceKind {
+    DocumentationPolicy,
     Home,
     Workspace,
     Invocation,
@@ -25,6 +26,7 @@ enum InstructionSourceKind {
 impl InstructionSourceKind {
     const fn label(self) -> &'static str {
         match self {
+            Self::DocumentationPolicy => "documentation policy",
             Self::Home => "home AGENTS.md",
             Self::Workspace => "workspace AGENTS.md",
             Self::Invocation => "invocation instructions",
@@ -200,10 +202,11 @@ impl InstructionSnapshot {
         let mut agents_bytes = 0_usize;
         for source in &self.sources {
             let order = match source.kind {
-                InstructionSourceKind::Home => 0_u8,
-                InstructionSourceKind::Workspace => 1,
-                InstructionSourceKind::Invocation => 2,
-                InstructionSourceKind::RuntimeMode => 3,
+                InstructionSourceKind::DocumentationPolicy => 0_u8,
+                InstructionSourceKind::Home => 1,
+                InstructionSourceKind::Workspace => 2,
+                InstructionSourceKind::Invocation => 3,
+                InstructionSourceKind::RuntimeMode => 4,
             };
             if prior.is_some_and(|prior| order <= prior)
                 || source.sha256 != hex::encode(Sha256::digest(source.contents.as_bytes()))
@@ -256,7 +259,7 @@ impl InstructionSnapshot {
             .map(|(label, sha256)| json!({"source": label, "sha256": sha256}))
             .collect::<Vec<_>>();
         json!({
-            "load_order": ["home AGENTS.md", "workspace AGENTS.md", "invocation instructions", "runtime mode instructions"],
+            "load_order": ["documentation policy", "home AGENTS.md", "workspace AGENTS.md", "invocation instructions", "runtime mode instructions"],
             "snapshot_refresh": "top_level_run",
             "sources": sources,
         })
@@ -443,6 +446,20 @@ impl Runtime {
             self.automatic_agent_instructions,
         )?;
         captured.plugins = Some(self.plugin_catalog.capture()?);
+        if let Some(instruction) = captured.plugins.as_ref().and_then(|catalog| {
+            self.plugin_catalog
+                .configuration
+                .documentation
+                .instruction(&catalog.records)
+        }) {
+            captured.sources.insert(
+                0,
+                InstructionSourceSnapshot::new(
+                    InstructionSourceKind::DocumentationPolicy,
+                    instruction,
+                ),
+            );
+        }
         // The retained lease binds the workspace object. Revalidate after path-based
         // instruction reads so a rename/replacement race can never reach the provider.
         self._workspace_lease.identity().revalidate()?;
@@ -582,6 +599,8 @@ fn snapshot_id(
     digest.update(SNAPSHOT_HASH_DOMAIN);
     for source in sources {
         let kind = match source.kind {
+            // Preserve existing v2 source tags and identities for retained snapshots.
+            InstructionSourceKind::DocumentationPolicy => 4_u8,
             InstructionSourceKind::Home => 0_u8,
             InstructionSourceKind::Workspace => 1,
             InstructionSourceKind::Invocation => 2,

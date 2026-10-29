@@ -13,6 +13,9 @@ plugins:
   workspaceDiscovery: true
   include: []
   exclude: []
+  documentation:
+    autoActivate: true
+    skill: colossus/documentation
   trustProfiles:
     default:
       mode: required
@@ -57,6 +60,8 @@ workflows:
 | `plugins.workspaceDiscovery` | Discover `.agents` plugins and accepted workspace directories; defaults to true, and never grants source acceptance |
 | `plugins.include` | Optional exact allowlist applied to accepted local sources and the globally active set |
 | `plugins.exclude` | Exact denylist applied after include |
+| `plugins.documentation.autoActivate` | Add a conditional instruction to read the documentation skill for developer documentation tasks; defaults to true |
+| `plugins.documentation.skill` | Qualified `PLUGIN/SKILL` identifier; defaults to `colossus/documentation` |
 | `plugins.trustProfiles` | Reusable `required`, `optional`, or `disabled` Sigstore policy |
 | `plugins.registries` | Exact-origin OCI Distribution profiles |
 | `plugins.mcpServers` | Explicit workspace enablement and authority overlay keyed by `PLUGIN/SERVER` |
@@ -66,6 +71,29 @@ Custom `trustProfiles` entries are added alongside it; the built-in signing iden
 be redefined. When `registries` is omitted, the built-in `obscuritylabs` GHCR registry is
 available. An explicit `registries` map replaces that default, so `registries: {}` disables
 OCI registry profiles for the workspace.
+
+## Documentation policy
+
+`plugins.documentation` controls default developer documentation guidance. With
+`autoActivate: true`, an available skill receives a short conditional activation
+instruction. The agent reads the entry point for documentation writing or editing,
+then loads only relevant Markdown references. This does not eagerly select the skill,
+load its full reference material, install it, or make it available when plugins are
+disabled, excluded, or unaccepted. Explicit selection remains available when
+`autoActivate` is false.
+
+`skill` must be a qualified `PLUGIN/SKILL` identity. It uses the existing global and
+accepted workspace catalog, including workspace-local precedence for a matching
+plugin name. An unavailable identifier adds no activation instruction. The policy is
+captured in each run's immutable instruction snapshot and inherited by resumed work.
+User instructions and repository documentation requirements override the style guide.
+The policy and references grant no execution, filesystem-write, or network authority.
+All reference reads use the existing bounded, policy-mediated plugin resource reader.
+
+See [Write developer documentation](../../use/skills-plugins.md#write-developer-documentation)
+for explicit selection, local installation, global distribution, and maintenance.
+
+## Plugin scope and authority
 
 Global packages use `$COLOSSUS_HOME/plugins`. Accepted local sources, their immutable
 snapshots, and writable data use a separate store under the home partition for the selected
