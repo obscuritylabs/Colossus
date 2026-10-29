@@ -55,14 +55,29 @@ export function useAppshots(
             else void discardAppshot(value.captureId).catch(() => {});
           },
           (failure) => {
-            if (!closed && started.current === request && request.destination === current.current.destinationKey) setError(featureError(failure));
+            if (
+              !closed &&
+              started.current === request &&
+              request.destination === current.current.destinationKey
+            )
+              setError(featureError(failure));
           },
         );
       }),
-      listen<{captureId:string;message:string}>("appshot-error", (event) => {
-        const request=started.current;
-        if (!closed && request?.id===event.payload.captureId && request.destination===current.current.destinationKey) {setPreview(null); setError(event.payload.message.slice(0, 512));}
-      }),
+      listen<{ captureId: string; message: string }>(
+        "appshot-error",
+        (event) => {
+          const request = started.current;
+          if (
+            !closed &&
+            request?.id === event.payload.captureId &&
+            request.destination === current.current.destinationKey
+          ) {
+            setPreview(null);
+            setError(event.payload.message.slice(0, 512));
+          }
+        },
+      ),
     ];
     return () => {
       closed = true;
@@ -124,7 +139,10 @@ export function useAppshots(
         started.current = null;
       }
     } catch (failure) {
-      if (current.current.destinationKey === snapshot.destinationKey && started.current === request)
+      if (
+        current.current.destinationKey === snapshot.destinationKey &&
+        started.current === request
+      )
         setError(featureError(failure));
     } finally {
       setBusy(false);

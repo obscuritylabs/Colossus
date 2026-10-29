@@ -3,9 +3,7 @@
   "identifier": "main-chat",
   "description": "Only the main bundled WebView may use the narrow Colossus chat commands.",
   "local": true,
-  "webviews": [
-    "main"
-  ],
+  "webviews": ["main"],
   "permissions": [
     "allow-report-renderer-failure",
     "allow-sync-client-identity-appearance",

@@ -479,7 +479,8 @@ const INITIAL_DESKTOP: DesktopStatus = {
     agentInboxes: FIXTURE_MODE && FIXTURE_QUERY.get("inboxUnavailable") !== "1",
     updateAvailable: false,
     agentWorkflows: false,
-    attachments: FIXTURE_MODE && FIXTURE_QUERY.get("fixtureAttachments") === "1",
+    attachments:
+      FIXTURE_MODE && FIXTURE_QUERY.get("fixtureAttachments") === "1",
   },
 };
 

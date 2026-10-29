@@ -8125,7 +8125,11 @@ function DesktopSettings(
     return (
       <Suspense fallback={<p role="status">Loading worktrees…</p>}>
         <WorktreeSettings
-          workspaceId={desktop.selectedTargetId === desktop.selectedSpaceId ? desktop.workspace?.workspaceId ?? null : null}
+          workspaceId={
+            desktop.selectedTargetId === desktop.selectedSpaceId
+              ? (desktop.workspace?.workspaceId ?? null)
+              : null
+          }
           onOpened={(status) => props.onWorkspaceOpened?.(status)}
         />
       </Suspense>
