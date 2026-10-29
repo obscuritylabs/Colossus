@@ -849,27 +849,51 @@ impl WorkerInteractiveHost {
                     GoalRunOutcome::Cancelled { .. } => "cancelled",
                     GoalRunOutcome::Failed { .. } => "failed",
                 };
+                let footer = self
+                    .footer_with_usage(
+                        session_id,
+                        status,
+                        goal_outcome_usage_selection(&outcome, session_id),
+                    )
+                    .await?;
                 let result = HostCommandResult::document(document_from_json(
                     &serde_json::to_value(outcome).map_err(|error| error.to_string())?,
                     Some("Goal resume"),
                 ));
                 Ok(HostCommandResult {
-                    footer: Some(self.footer(session_id, status).await?),
+                    footer: Some(footer),
                     ..result
                 })
             }
             "goal" if !arguments.trim().is_empty() => {
-                self.document(
-                    WorkerOperation::GoalRun {
+                let outcome: colossus_contracts::GoalRunResult = serde_json::from_value(
+                    self.value(WorkerOperation::GoalRun {
                         role: "primary".into(),
                         objective: arguments.into(),
                         session_id: session_id.into(),
                         max_iterations: 5,
                         source_plan_id: None,
-                    },
-                    Some("Goal"),
+                    })
+                    .await?,
                 )
-                .await
+                .map_err(|error| error.to_string())?;
+                // Older workers can reject the optional usage query. Preserve
+                // the successful unary Goal result without retrying execution.
+                let footer = self
+                    .footer_with_usage(
+                        session_id,
+                        "ok",
+                        goal_result_usage_selection(&outcome, session_id),
+                    )
+                    .await
+                    .ok();
+                Ok(HostCommandResult {
+                    footer,
+                    ..HostCommandResult::document(document_from_json(
+                        &serde_json::to_value(outcome).map_err(|error| error.to_string())?,
+                        Some("Goal"),
+                    ))
+                })
             }
             "agents" => {
                 let operation = if arguments.trim() == "drain" {

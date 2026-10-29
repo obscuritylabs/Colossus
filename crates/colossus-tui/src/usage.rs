@@ -6,6 +6,7 @@ pub(super) struct RunUsageState {
     session_id: String,
     current: Option<RunTokenUsage>,
     accepting: bool,
+    fresh_run_scope: bool,
     root_run_id: Option<String>,
     root_terminal: bool,
     observed_run: bool,
@@ -34,6 +35,7 @@ impl RunUsageState {
             self.current = None;
         }
         self.accepting = true;
+        self.fresh_run_scope = reset;
         self.root_run_id = None;
         self.root_terminal = false;
         self.observed_run = false;
@@ -131,8 +133,28 @@ impl RunUsageState {
         }
     }
 
+    /// Only command completion may establish a unary run without live events.
+    /// Ordinary footer restoration remains passive and never creates a summary.
+    fn complete_command(&mut self, session_id: &str, report: Option<&RunTokenUsage>) {
+        if !self.accepting || !self.fresh_run_scope || self.observed_run {
+            return;
+        }
+        let Some(report) = report.filter(|report| {
+            self.session_id == session_id
+                && report.session_id == session_id
+                && !report.run_id.is_empty()
+        }) else {
+            return;
+        };
+        self.root_run_id = Some(report.run_id.clone());
+        self.root_terminal = true;
+        self.observed_run = true;
+        self.current = Some(report.clone());
+    }
+
     pub(super) fn finish(&mut self) -> Option<RunTokenUsage> {
         self.accepting = false;
+        self.fresh_run_scope = false;
         if !self.observed_run {
             return None;
         }
@@ -157,6 +179,12 @@ impl TuiState {
             .replace_canonical(&self.session_id, footer.usage.take());
         footer.usage = self.run_usage.current().cloned();
         self.footer = footer;
+    }
+
+    pub(super) fn replace_command_footer(&mut self, footer: FooterState) {
+        self.run_usage
+            .complete_command(&self.session_id, footer.usage.as_ref());
+        self.replace_footer(footer);
     }
 
     pub(super) fn finish_run_usage(&mut self) {

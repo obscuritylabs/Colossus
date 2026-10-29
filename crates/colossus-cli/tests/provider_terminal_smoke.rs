@@ -6,6 +6,10 @@ mod process_support;
 #[path = "support/plugin_provider.rs"]
 mod plugin_provider;
 
+#[path = "support/terminal.rs"]
+#[allow(dead_code)]
+mod terminal_support;
+
 use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{
@@ -2370,5 +2374,197 @@ data: [DONE]
             2,
             "usage lookup must not retry provider work"
         );
+    }
+}
+
+fn goal_usage_process(
+    binary: &Path,
+    config: &Path,
+    home: &process_support::IsolatedUserHome,
+) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .current_dir(config.parent().expect("goal usage workspace"))
+        .arg("--config")
+        .arg(config)
+        .env("HOME", home.path())
+        .env("COLOSSUS_HOME", home.colossus_home())
+        .env("COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY", JOURNAL_KEY)
+        .env("COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY", SIGNING_KEY);
+    #[cfg(windows)]
+    command
+        .env("USERPROFILE", home.path())
+        .env("LOCALAPPDATA", home.local_app_data())
+        .env("TEMP", home.temporary_directory())
+        .env("TMP", home.temporary_directory());
+    command
+}
+
+#[test]
+fn tui_goal_usage_reports_only_the_final_iteration_in_both_hosts() {
+    const FIRST: &str = r#"data: {"id":"goal-first","choices":[{"index":0,"delta":{"content":"First bounded step finished."},"finish_reason":"stop"}]}
+
+data: {"id":"goal-first","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":100,"total_tokens":1501}}
+
+data: [DONE]
+
+"#;
+    const COMPLETE: &str = r#"data: {"id":"goal-complete","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"goal-finish","type":"function","function":{"name":"goal_update","arguments":"{\"status\":\"complete\",\"summary\":\"GOAL_USAGE_FINISHED\",\"blocked_reason\":\"\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: {"id":"goal-complete","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":15}}
+
+data: [DONE]
+
+"#;
+    const COMPLETE_UNREPORTED: &str = r#"data: {"id":"goal-complete","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"goal-finish","type":"function","function":{"name":"goal_update","arguments":"{\"status\":\"complete\",\"summary\":\"GOAL_USAGE_FINISHED\",\"blocked_reason\":\"\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#;
+    const FINAL: &str = r#"data: {"id":"goal-final","choices":[{"index":0,"delta":{"content":"GOAL_USAGE_FINISHED"},"finish_reason":"stop"}]}
+
+data: {"id":"goal-final","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":3,"total_tokens":30}}
+
+data: [DONE]
+
+"#;
+    const FINAL_UNREPORTED: &str = r#"data: {"id":"goal-final","choices":[{"index":0,"delta":{"content":"GOAL_USAGE_FINISHED"},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+"#;
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    for with_worker in [false, true] {
+        for final_reports_usage in [true, false] {
+            let directory = tempdir().expect("goal usage workspace");
+            let home = process_support::isolated_user_home(directory.path());
+            let responses = if final_reports_usage {
+                vec![FIRST, COMPLETE, FINAL]
+            } else {
+                vec![FIRST, COMPLETE_UNREPORTED, FINAL_UNREPORTED]
+            };
+            let (origin, server) = sse_server(responses);
+            let config = write_failure_config(directory.path(), &origin, "goal.update");
+            let mut document: Value =
+                serde_json::from_slice(&fs::read(&config).expect("goal config"))
+                    .expect("config JSON");
+            document["access"]["actions"]["allow"] = json!([
+                "provider.openai.chat",
+                "goal.create",
+                "goal.update",
+                "goal.iteration.record",
+                "presentation.history.append",
+                "context.show",
+                "plugin.list"
+            ]);
+            fs::write(
+                &config,
+                serde_json::to_vec_pretty(&document).expect("goal config JSON"),
+            )
+            .expect("write goal config");
+            let mut worker = with_worker.then(|| {
+                let process = goal_usage_process(binary, &config, &home)
+                    .arg("worker")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("start goal usage worker");
+                let worker = ChildGuard(process);
+                let deadline = Instant::now() + Duration::from_secs(10);
+                loop {
+                    if goal_usage_process(binary, &config, &home)
+                        .args(["worker", "--status"])
+                        .output()
+                        .expect("goal worker status")
+                        .status
+                        .success()
+                    {
+                        break;
+                    }
+                    assert!(Instant::now() < deadline, "goal usage worker did not start");
+                    thread::sleep(Duration::from_millis(20));
+                }
+                worker
+            });
+            let mut command = portable_pty::CommandBuilder::new(binary);
+            command.cwd(directory.path());
+            command.arg("--config");
+            command.arg(&config);
+            command.args(["--alt-screen", "--approval-mode", "full-access"]);
+            if with_worker {
+                command.arg("--worker-required");
+            }
+            command.arg("tui");
+            command.env("HOME", home.path());
+            command.env("COLOSSUS_HOME", home.colossus_home());
+            command.env("COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY", JOURNAL_KEY);
+            command.env("COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY", SIGNING_KEY);
+            #[cfg(windows)]
+            {
+                command.env("USERPROFILE", home.path());
+                command.env("LOCALAPPDATA", home.local_app_data());
+                command.env("TEMP", home.temporary_directory());
+                command.env("TMP", home.temporary_directory());
+            }
+            let terminal = terminal_support::Terminal::start(command);
+            terminal.wait("Enter sends");
+            terminal.resize(40, 140);
+            let screen =
+                terminal.command("/goal Prove final iteration token accounting", "Run usage");
+            let case = format!("worker={with_worker} reported={final_reports_usage}:\n{screen}");
+            assert!(screen.contains("GOAL_USAGE_FINISHED"), "{case}");
+            if final_reports_usage {
+                assert!(screen.contains("45 tokens"), "{case}");
+                assert!(
+                    screen.contains("Input 30") && screen.contains("Output 5"),
+                    "{case}"
+                );
+            } else {
+                assert!(
+                    screen.contains("Token usage was not reported for this run."),
+                    "{case}"
+                );
+                assert!(screen.contains("tok—"), "{case}");
+                assert!(!screen.contains("0 tokens"), "{case}");
+            }
+            for stale in ["1,501 tokens", "1,546 tokens", "1.5k", "terminal-secret"] {
+                assert!(!screen.contains(stale), "{case}");
+            }
+            // Release the embedded journal writer before inspecting durable Goal state.
+            drop(terminal);
+            let goals = goal_usage_process(binary, &config, &home)
+                .args(["goals", "list"])
+                .output()
+                .expect("list completed goals");
+            assert!(
+                goals.status.success(),
+                "{}",
+                String::from_utf8_lossy(&goals.stderr)
+            );
+            let goals: Vec<Value> = serde_json::from_slice(&goals.stdout).expect("goals JSON");
+            assert_eq!(goals.len(), 1);
+            assert_eq!(goals[0]["status"], "complete");
+            assert_eq!(goals[0]["iterations_completed"], 2);
+            if let Some(worker) = worker.as_mut() {
+                assert!(
+                    goal_usage_process(binary, &config, &home)
+                        .args(["worker", "--shutdown"])
+                        .output()
+                        .expect("shutdown goal worker")
+                        .status
+                        .success()
+                );
+                wait_for_exit(&mut worker.0);
+            }
+            let requests = server.join().expect("goal usage provider");
+            assert_eq!(
+                requests.len(),
+                3,
+                "usage metadata must not repeat provider work"
+            );
+            assert!(requests[0].contains("Prove final iteration token accounting"));
+            assert!(requests[1].contains("Continue Goal Mode"));
+            assert!(requests[2].contains("goal-finish"));
+        }
     }
 }

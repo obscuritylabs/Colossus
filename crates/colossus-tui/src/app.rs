@@ -2198,7 +2198,7 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
         state.sticky_skills = sticky_skills;
     }
     if let Some(footer) = result.footer {
-        state.replace_footer(footer);
+        state.replace_command_footer(footer);
     }
     apply_plan_selection(state, result.plan_selection) && continue_queue
 }

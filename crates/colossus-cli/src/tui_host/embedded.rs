@@ -378,20 +378,39 @@ impl EmbeddedInteractiveHost {
                     GoalRunOutcome::Cancelled { .. } => "cancelled",
                     GoalRunOutcome::Failed { .. } => "failed",
                 };
+                let footer = self
+                    .footer_with_usage(
+                        session_id,
+                        status,
+                        goal_outcome_usage_selection(&outcome, session_id),
+                    )
+                    .await?;
                 let result = self.result(&outcome, Some("Goal resume"))?;
                 Ok(HostCommandResult {
-                    footer: Some(self.footer(session_id, status).await?),
+                    footer: Some(footer),
                     ..result
                 })
             }
-            "goal" if !arguments.is_empty() => self.result(
-                &self
+            "goal" if !arguments.is_empty() => {
+                let outcome = self
                     .runtime
                     .run_goal("primary", arguments, session_id, 5, None)
                     .await
-                    .map_err(|error| error.to_string())?,
-                Some("Goal"),
-            ),
+                    .map_err(|error| error.to_string())?;
+                // Optional display metadata cannot replace a known Goal result.
+                let footer = self
+                    .footer_with_usage(
+                        session_id,
+                        "ok",
+                        goal_result_usage_selection(&outcome, session_id),
+                    )
+                    .await
+                    .ok();
+                Ok(HostCommandResult {
+                    footer,
+                    ..self.result(&outcome, Some("Goal"))?
+                })
+            }
             "agents" => self.agents_command(arguments, session_id).await,
             "memories" => self.result(
                 &self

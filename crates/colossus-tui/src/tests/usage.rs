@@ -570,3 +570,92 @@ fn selected_plan_and_queue_cues_keep_priority_with_or_without_usage() {
         }
     }
 }
+
+#[test]
+fn unary_goal_completion_restores_exact_usage_and_emits_one_summary() {
+    for usage in [None, Some(counters())] {
+        let mut source = snapshot();
+        source.footer.usage = Some(report(
+            "previous",
+            Some(ProviderUsage {
+                total_tokens: 9_000,
+                ..counters()
+            }),
+        ));
+        let mut state = TuiState::from_snapshot(source);
+        state.operation = Some(OperationKind::Command);
+        state.begin_run_usage(true);
+        let canonical = report("goal-final-iteration", usage);
+        let footer = FooterState {
+            usage: Some(canonical.clone()),
+            ..state.footer.clone()
+        };
+        handle_host_event(
+            &mut state,
+            HostEvent::OperationFinished(Box::new(Ok(OperationResult::Command(
+                HostCommandResult {
+                    footer: Some(footer),
+                    ..HostCommandResult::document(PresentationDocument::new())
+                },
+            )))),
+        );
+        assert_eq!(state.footer.usage.as_ref(), Some(&canonical));
+        assert_eq!(usage_cards(&state), 1);
+        state.finish_run_usage();
+        assert_eq!(usage_cards(&state), 1);
+
+        state.begin_run_usage(false);
+        let footer = state.footer.clone();
+        handle_host_event(
+            &mut state,
+            HostEvent::OperationFinished(Box::new(Ok(OperationResult::Command(
+                HostCommandResult {
+                    footer: Some(footer),
+                    ..HostCommandResult::document(PresentationDocument::new())
+                },
+            )))),
+        );
+        assert_eq!(usage_cards(&state), 1, "read commands do not repeat usage");
+    }
+}
+
+#[test]
+fn generic_refresh_cannot_establish_a_unary_command_summary() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.begin_run_usage(true);
+    state.replace_footer(FooterState {
+        usage: Some(report("unrelated-refresh", Some(counters()))),
+        ..state.footer.clone()
+    });
+    state.finish_run_usage();
+    assert_eq!(usage_cards(&state), 0);
+}
+
+#[test]
+fn unary_command_completion_rejects_invalid_identity_and_preserves_live_scope() {
+    for (session_id, run_id) in [("other-session", "goal"), ("019f-test", "")] {
+        let mut state = TuiState::from_snapshot(snapshot());
+        state.begin_run_usage(true);
+        let mut wrong = report(run_id, Some(counters()));
+        wrong.session_id = session_id.into();
+        state.replace_command_footer(FooterState {
+            usage: Some(wrong),
+            ..state.footer.clone()
+        });
+        state.finish_run_usage();
+        assert!(state.footer.usage.is_none());
+        assert_eq!(usage_cards(&state), 0);
+    }
+
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.begin_run_usage(true);
+    handle_run_event(&mut state, phase("observed-run"));
+    handle_run_event(&mut state, usage_event("observed-run", counters()));
+    state.replace_command_footer(FooterState {
+        usage: Some(report("different-run", Some(counters()))),
+        ..state.footer.clone()
+    });
+    state.finish_run_usage();
+    assert_eq!(state.footer.usage.as_ref().unwrap().run_id, "observed-run");
+    assert_eq!(usage_cards(&state), 1);
+}
