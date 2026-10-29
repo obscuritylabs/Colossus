@@ -55,6 +55,7 @@ mod anthropic_recovery_tests;
 mod anthropic_tests;
 mod development_journal;
 mod memory_gateway;
+mod native_session_lifecycle;
 mod operations;
 mod plan_runs;
 #[cfg(test)]

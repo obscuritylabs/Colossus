@@ -120,6 +120,23 @@ fn run_end_stops_run_jobs_and_pending_background_jobs_but_preserves_running_back
 }
 
 #[test]
+fn native_session_lifecycle_accounts_for_background_and_unknown_process_work() {
+    let directory = tempfile::tempdir().expect("root");
+    let registry = registry(Arc::new(InMemoryEventJournal::default()), directory.path());
+    assert!(registry.active_session_owners().is_empty());
+    let background = add(
+        &registry,
+        ProcessLifetime::Workspace,
+        ProcessSessionStatus::Running,
+    );
+    assert_eq!(registry.active_session_owners()[0].session_id, "chat-1");
+    state(&background).summary.status = ProcessSessionStatus::OutcomeUnknown;
+    assert_eq!(registry.active_session_owners().len(), 1);
+    state(&background).summary.status = ProcessSessionStatus::Stopped;
+    assert!(registry.active_session_owners().is_empty());
+}
+
+#[test]
 fn later_turn_handles_are_bound_to_application_conversation_and_exact_agent_lineage() {
     let directory = tempfile::tempdir().expect("root");
     let registry = registry(Arc::new(InMemoryEventJournal::default()), directory.path());

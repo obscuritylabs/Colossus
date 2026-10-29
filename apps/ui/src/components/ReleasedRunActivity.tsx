@@ -2,7 +2,7 @@ import {
   ConversationActivity,
   type ConversationActivityTone,
 } from "./ConversationActivity.js";
-import { mcpCallTarget } from "../lib/mcp-call.js";
+import { toolActivityLabel } from "../lib/tool-activity.js";
 import {
   IconChevronDown,
   IconPlug,
@@ -228,10 +228,7 @@ export function ReleasedRunActivity({
           input = [...item.history]
             .reverse()
             .find((entry) => entry.activity.input)?.activity.input,
-          isMcpCall = activity.tool_name === "mcp.call",
-          mcpTarget = isMcpCall
-            ? (mcpCallTarget(input) ?? mcpCallTarget(activity.preview))
-            : null;
+          isMcpCall = activity.tool_name.startsWith("mcp.");
         return (
           <details
             className="shared-activity-item shared-activity-tool"
@@ -245,9 +242,7 @@ export function ReleasedRunActivity({
                 <IconTool size={16} aria-hidden="true" />
               )}
               <strong>
-                {mcpTarget
-                  ? `${activity.tool_name} · ${mcpTarget}`
-                  : activity.tool_name}
+                {toolActivityLabel(activity.summary, activity.tool_name)}
               </strong>
               <span className="shared-activity-meta">
                 {statusLabel(activity.state)}
@@ -260,6 +255,7 @@ export function ReleasedRunActivity({
               </time>
               <IconChevronDown size={15} aria-hidden="true" />
             </summary>
+            <p className="shared-activity-meta">{activity.tool_name}</p>
             <ol className="shared-activity-history">
               {item.history.map(({ activity, update }) => (
                 <li key={`${update.run_id}:${update.sequence}`}>

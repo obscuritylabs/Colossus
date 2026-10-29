@@ -16,6 +16,7 @@ crossterm.workspace = true
 image.workspace = true
 ratatui.workspace = true
 ratatui-image.workspace = true
+tachyonfx.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
@@ -27,6 +28,10 @@ colossus-tools.workspace = true
 portable-pty.workspace = true
 serde_json.workspace = true
 vt100.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
+colossus-windows-native.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -1,11 +1,15 @@
 use super::*;
 
 mod command_approval;
+mod event_mode;
 mod layout;
 mod model_picker;
 mod provider_recovery;
 mod shell;
+mod startup;
+mod tool_details;
 mod usage;
+mod workspace_prompts;
 
 #[test]
 fn lifecycle_observer_tracks_busy_decisions_and_session_changes() {
@@ -120,6 +124,7 @@ pub(super) fn snapshot() -> InteractiveSnapshot {
             message_count: 1,
             status: "ready".into(),
             approval_mode: "ask".into(),
+            approval_mode_revision: 0,
         },
         security_posture: Default::default(),
         pending_sandbox_boundary_acknowledgement: None,
@@ -2422,12 +2427,12 @@ fn historical_tool_results_are_correlated_with_assistant_calls() {
         (
             "filesystem.search",
             serde_json::json!({"query": "needle"}),
-            "filesystem.search",
+            "Search files",
         ),
         (
             "mcp.call",
             serde_json::json!({"server": "Splunk", "tool": "search"}),
-            "mcp.call · Splunk · search",
+            "Call MCP tool",
         ),
     ] {
         let mut source = snapshot();
@@ -2470,13 +2475,10 @@ fn historical_tool_results_are_correlated_with_assistant_calls() {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            rendered.contains(&format!("Completed {label}")),
+            rendered.contains(label) && rendered.contains("recorded"),
             "{rendered}"
         );
-        assert!(
-            rendered.contains(&format!("Requested {label}")),
-            "{rendered}"
-        );
+        assert!(!rendered.contains("requested"), "{rendered}");
     }
 }
 
@@ -2523,8 +2525,8 @@ fn historical_web_fetch_results_keep_compact_preview_semantics() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(compact.contains("Response preview"), "{compact}");
-    assert!(compact.contains("preview only"), "{compact}");
+    assert!(compact.contains("Fetch web content"), "{compact}");
+    assert!(!compact.contains("preview-start"), "{compact}");
     assert!(!compact.contains("FULL-BODY-TAIL"), "{compact}");
 
     let mut verbose_preferences = state.preferences.clone();
@@ -2603,7 +2605,7 @@ fn live_web_fetch_result_rebuilds_when_event_mode_changes() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(compact.contains("Response preview"), "{compact}");
+    assert!(compact.contains("Fetch web content"), "{compact}");
     assert!(!compact.contains("FULL-BODY-TAIL"), "{compact}");
 
     let mut preferences = state.preferences.clone();
@@ -2656,8 +2658,11 @@ fn page_boundary_tool_results_remain_bounded_before_their_call_is_loaded() {
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(compact.contains("Output preview"), "{compact}");
-    assert!(compact.contains("preview only"), "{compact}");
+    assert!(
+        compact.contains("Tool result") && compact.contains("recorded"),
+        "{compact}"
+    );
+    assert!(!compact.contains("preview-start"), "{compact}");
     assert!(!compact.contains("FULL-BODY-TAIL"), "{compact}");
 
     source.preferences.events_mode = EventDisplayMode::Verbose;
@@ -2840,7 +2845,7 @@ fn tool_boundary_releases_intermediate_commentary_and_tool_result_to_native_hist
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        completed_tool.contains("Completed filesystem.search"),
+        completed_tool.contains("Search files") && completed_tool.contains("completed"),
         "{completed_tool}"
     );
 

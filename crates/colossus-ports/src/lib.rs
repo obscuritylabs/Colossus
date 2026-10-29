@@ -11,11 +11,11 @@ use colossus_contracts::{
     PlanStatus, PluginInstallation, PolicyDecision, PreparedContext, ProjectionBatch,
     ProjectionWorkItem, ProviderEvent, ProviderResponseDiagnostic, ProviderTurn, ResearchClaim,
     ResearchRun, ResearchSource, RiskReviewFallbackNotice, RunEventEnvelope, SearchProfileSummary,
-    SearchRequest, SearchResponse, SearchRoute, SecureAnchor, SessionMessage, SessionMessageAppend,
-    SessionMessagePage, SessionSummary, SignedCheckpoint, SubagentJob, SubagentStatus, TaskRecord,
-    TaskStatus, TerminalPreferences, ToolCall, ToolResult, ToolSpec, UserPromptRequest,
-    UserPromptResponse, WorkflowDefinition, WorkflowRun, WorkflowSchedule, WorkflowSubscription,
-    WorkflowSubscriptionDelivery, WorkflowWebhook, WorkflowWebhookDelivery,
+    SearchRequest, SearchResponse, SearchRoute, SecureAnchor, SessionLifecycle, SessionMessage,
+    SessionMessageAppend, SessionMessagePage, SessionSummary, SignedCheckpoint, SubagentJob,
+    SubagentStatus, TaskRecord, TaskStatus, TerminalPreferences, ToolCall, ToolResult, ToolSpec,
+    UserPromptRequest, UserPromptResponse, WorkflowDefinition, WorkflowRun, WorkflowSchedule,
+    WorkflowSubscription, WorkflowSubscriptionDelivery, WorkflowWebhook, WorkflowWebhookDelivery,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -50,6 +50,8 @@ pub use context_error::*;
 
 mod run_provenance;
 pub use run_provenance::*;
+mod interaction_context;
+pub use interaction_context::RunInteractionContext;
 
 mod credentials;
 pub use credentials::*;

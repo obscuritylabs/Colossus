@@ -61,14 +61,14 @@ fn lifecycle_updates_are_retained_as_one_tree_row_per_agent() {
     update(&mut state, job("tests", SubagentStatus::Running));
     let rendered = draw(&mut state, 120, 24, ScreenMode::Alternate);
     assert!(rendered.contains("Agents · 1 active"), "{rendered}");
-    assert!(rendered.contains("├─ ● Inspect tes… working"), "{rendered}");
+    assert!(rendered.contains("├─ ● Inspect tests"), "{rendered}");
     assert!(rendered.contains("└─ ✓ Inspect code"), "{rendered}");
     assert!(rendered.contains("working"), "{rendered}");
     assert!(rendered.contains("done"), "{rendered}");
     let panel = state.agents.area.expect("visible panel");
     assert_eq!(panel.width, PANEL_WIDTH);
     assert_eq!(panel.right(), 120);
-    assert_eq!(state.transcript_width, 92);
+    assert_eq!(state.transcript_width, 84);
 }
 
 #[test]
@@ -155,7 +155,16 @@ fn narrow_terminal_hides_the_tree_and_restores_it_without_losing_the_draft() {
     state.composer.insert("keep this draft");
     update(&mut state, job("code", SubagentStatus::Running));
     for mode in [ScreenMode::Alternate, ScreenMode::Inline] {
-        for width in [120, 80, 40, 120] {
+        for (width, expected_panel_width) in [
+            (120, Some(36)),
+            (100, Some(36)),
+            (96, Some(32)),
+            (92, Some(28)),
+            (91, None),
+            (80, None),
+            (40, None),
+            (120, Some(36)),
+        ] {
             let height = if mode == ScreenMode::Inline {
                 desired_inline_viewport_height(&state, width, 24, 0)
             } else {
@@ -164,10 +173,16 @@ fn narrow_terminal_hides_the_tree_and_restores_it_without_losing_the_draft() {
             let rendered = draw(&mut state, width, height, mode);
             assert_eq!(
                 rendered.contains("Agents · 1 active"),
-                width >= 92,
+                expected_panel_width.is_some(),
                 "{width}: {rendered}"
             );
-            assert_eq!(state.agents.area.is_some(), width >= 92);
+            assert_eq!(
+                state.agents.area.map(|area| area.width),
+                expected_panel_width
+            );
+            if expected_panel_width.is_some() {
+                assert!(state.transcript_width >= usize::from(MIN_CHAT_WIDTH));
+            }
             assert!(rendered.contains("keep this draft"), "{width}: {rendered}");
             assert_eq!(state.draft(), "keep this draft");
         }

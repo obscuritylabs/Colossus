@@ -27,6 +27,7 @@ impl Runtime {
         command: &str,
         control: &RunControl,
     ) -> Result<Value, RuntimeError> {
+        self.native_session_lifecycle.during(session_id, Box::pin(async {
         if command.trim().is_empty() || command.contains('\0') || command.len() > MAX_COMMAND_BYTES
         {
             return Err(RuntimeError::Config(
@@ -79,6 +80,7 @@ impl Runtime {
             "timed_out": result["timed_out"].as_bool().unwrap_or(false),
             "truncated": output.truncated || result["output_truncated"].as_bool().unwrap_or(false),
         }))
+        })).await?
     }
 }
 

@@ -13,6 +13,7 @@ pub(crate) struct RuntimeRunLifecycle {
     processes: Arc<ProcessSessions>,
     browser: Option<Arc<RuntimeBrowserTools>>,
     computer: Option<Arc<RuntimeComputerTools>>,
+    sessions: Option<Arc<crate::native_session_lifecycle::NativeSessionLifecycle>>,
 }
 
 impl RuntimeRunLifecycle {
@@ -25,6 +26,32 @@ impl RuntimeRunLifecycle {
             processes,
             browser,
             computer,
+            sessions: None,
+        }
+    }
+
+    pub(crate) fn with_session_lifecycle(
+        mut self,
+        sessions: Arc<crate::native_session_lifecycle::NativeSessionLifecycle>,
+    ) -> Self {
+        self.sessions = Some(sessions);
+        self
+    }
+
+    fn release_session_after_cleanup(&self, run_id: &str) {
+        if self
+            .browser
+            .as_ref()
+            .is_some_and(|browser| browser.has_run_registration(run_id))
+            || self
+                .computer
+                .as_ref()
+                .is_some_and(|computer| computer.has_run_registration(run_id))
+        {
+            return;
+        }
+        if let Some(sessions) = &self.sessions {
+            sessions.finish_run(run_id);
         }
     }
 }
@@ -47,11 +74,23 @@ impl AgentRunLifecycle for RuntimeRunLifecycle {
         initiator: &Actor,
         control: RunControl,
     ) -> Result<(), ToolError> {
+        if let Some(sessions) = &self.sessions {
+            sessions.begin_run(context)?;
+        }
         self.processes
-            .begin_run(context, initiator, control.clone())?;
+            .begin_run(context, initiator, control.clone())
+            .inspect_err(|_| {
+                if let Some(sessions) = &self.sessions
+                    && let Some(id) = context.run_id.as_deref()
+                {
+                    sessions.finish_run(id);
+                }
+            })?;
+        let mut browser_registered = false;
         let result = (|| {
             if let Some(browser) = &self.browser {
                 browser.begin_run(context, initiator, control.clone())?;
+                browser_registered = true;
             }
             if let Some(computer) = &self.computer {
                 computer.begin_run(context, initiator, control)?;
@@ -61,7 +100,21 @@ impl AgentRunLifecycle for RuntimeRunLifecycle {
         if result.is_err()
             && let Some(id) = context.run_id.as_deref()
         {
-            self.cancel_run(id);
+            // These synchronous begin methods only register metadata. Roll back
+            // exactly our successful registrations; a rejected duplicate adapter
+            // may still belong to another owner and must never be cancelled here.
+            let browser_removed = !browser_registered
+                || self
+                    .browser
+                    .as_ref()
+                    .is_some_and(|browser| browser.rollback_run_registration(context));
+            let process_removed = self.processes.rollback_run_registration(context, initiator);
+            if browser_removed
+                && process_removed
+                && let Some(sessions) = &self.sessions
+            {
+                sessions.finish_run(id);
+            }
         }
         result
     }
@@ -86,6 +139,7 @@ impl AgentRunLifecycle for RuntimeRunLifecycle {
             browser.finish_run(run_id).await;
         }
         self.processes.finish_run(run_id).await;
+        self.release_session_after_cleanup(run_id);
     }
 
     async fn complete_run(&self, run_id: &str) {
@@ -98,5 +152,6 @@ impl AgentRunLifecycle for RuntimeRunLifecycle {
             computer.finish_run(run_id).await;
         }
         self.processes.finish_run(run_id).await;
+        self.release_session_after_cleanup(run_id);
     }
 }

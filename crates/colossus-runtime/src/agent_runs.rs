@@ -431,35 +431,42 @@ impl Runtime {
         explicit_skills: &[String],
         sticky_skills: &[String],
     ) -> Result<AgentRunResult, RuntimeError> {
-        let prepared = self.prepare_agent_instructions(instructions, "")?;
-        let composition = compose_plugins(
-            &prepared.plugins.records,
-            &prepared.base_text,
-            explicit_skills,
-            sticky_skills,
-            self.plugins_enabled,
-        )?;
-        let active = composition
-            .active_skills
-            .iter()
-            .map(|skill| skill.id.clone())
-            .collect::<Vec<_>>();
-        let instructions = prepared.complete_composed_base(&composition.instructions);
-        scope_run_snapshots(
-            prepared.snapshot,
-            prepared.plugins,
-            Box::pin(
-                self.run_with_subagent_scheduling(self.agent.run_in_session_with_skills(
-                    role,
-                    &instructions,
-                    prompt,
-                    max_turns.unwrap_or(self.agent_max_turns),
-                    session_id,
-                    &active,
-                )),
-            ),
-        )
-        .await
+        self.native_session_lifecycle
+            .during_optional(
+                session_id,
+                Box::pin(async {
+                    let prepared = self.prepare_agent_instructions(instructions, "")?;
+                    let composition = compose_plugins(
+                        &prepared.plugins.records,
+                        &prepared.base_text,
+                        explicit_skills,
+                        sticky_skills,
+                        self.plugins_enabled,
+                    )?;
+                    let active = composition
+                        .active_skills
+                        .iter()
+                        .map(|skill| skill.id.clone())
+                        .collect::<Vec<_>>();
+                    let instructions = prepared.complete_composed_base(&composition.instructions);
+                    scope_run_snapshots(
+                        prepared.snapshot,
+                        prepared.plugins,
+                        Box::pin(self.run_with_subagent_scheduling(
+                            self.agent.run_in_session_with_skills(
+                                role,
+                                &instructions,
+                                prompt,
+                                max_turns.unwrap_or(self.agent_max_turns),
+                                session_id,
+                                &active,
+                            ),
+                        )),
+                    )
+                    .await
+                }),
+            )
+            .await?
     }
 
     /// Execute a normal run and forward only policy-released provider events.
@@ -578,59 +585,70 @@ impl Runtime {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<AgentRunOutcome, RuntimeError> {
-        if let AgentRunMode::Plan(target) = &mode {
-            self.validate_plan_target(session_id, target)?;
-        }
-        let runtime_mode = match &mode {
-            AgentRunMode::Execute => String::new(),
-            AgentRunMode::Plan(target) => plan_mode_instructions(target),
-        };
-        let prepared = match &mode {
-            AgentRunMode::Execute => self.prepare_agent_instructions(instructions, &runtime_mode),
-            AgentRunMode::Plan(_) => {
-                self.prepare_plan_agent_instructions(instructions, &runtime_mode)
-            }
-        }?;
-        let composition = compose_plugins(
-            &prepared.plugins.records,
-            &prepared.base_text,
-            explicit_skills,
-            sticky_skills,
-            self.plugins_enabled,
-        )?;
-        let instructions = prepared.complete_composed_base(&composition.instructions);
-        let active = composition
-            .active_skills
-            .iter()
-            .map(|skill| skill.id.clone())
-            .collect::<Vec<_>>();
-        // This agent future is already a deep provider/tool state machine. Keep it behind
-        // one stable allocation before adding the instruction-snapshot task-local scope;
-        // embedding it in that additional generic wrapper can exceed Tokio's normal worker
-        // thread stack while polling interactive worker runs.
-        let (events, receiver) = mpsc::channel(64);
-        let mut buffered_observer = self.buffered_run_observer(events.clone());
-        let run = Box::pin(
-            self.agent
-                .run_in_session_with_mode_stream_controlled_content(
-                    mode,
-                    role,
-                    &instructions,
-                    prompt,
-                    max_turns.unwrap_or(self.agent_max_turns),
-                    session_id,
-                    &active,
-                    include_provider_response_diagnostics,
-                    &mut buffered_observer,
-                    control,
-                ),
-        );
-        scope_run_snapshots(
-            prepared.snapshot,
-            prepared.plugins,
-            self.forward_run_with_subagent_scheduling(run, events, receiver, observer, control),
-        )
-        .await
+        self.native_session_lifecycle
+            .during_optional(
+                session_id,
+                Box::pin(async {
+                    if let AgentRunMode::Plan(target) = &mode {
+                        self.validate_plan_target(session_id, target)?;
+                    }
+                    let runtime_mode = match &mode {
+                        AgentRunMode::Execute => String::new(),
+                        AgentRunMode::Plan(target) => plan_mode_instructions(target),
+                    };
+                    let prepared = match &mode {
+                        AgentRunMode::Execute => {
+                            self.prepare_agent_instructions(instructions, &runtime_mode)
+                        }
+                        AgentRunMode::Plan(_) => {
+                            self.prepare_plan_agent_instructions(instructions, &runtime_mode)
+                        }
+                    }?;
+                    let composition = compose_plugins(
+                        &prepared.plugins.records,
+                        &prepared.base_text,
+                        explicit_skills,
+                        sticky_skills,
+                        self.plugins_enabled,
+                    )?;
+                    let instructions = prepared.complete_composed_base(&composition.instructions);
+                    let active = composition
+                        .active_skills
+                        .iter()
+                        .map(|skill| skill.id.clone())
+                        .collect::<Vec<_>>();
+                    // This agent future is already a deep provider/tool state machine. Keep it behind
+                    // one stable allocation before adding the instruction-snapshot task-local scope;
+                    // embedding it in that additional generic wrapper can exceed Tokio's normal worker
+                    // thread stack while polling interactive worker runs.
+                    let (events, receiver) = mpsc::channel(64);
+                    let mut buffered_observer = self.buffered_run_observer(events.clone());
+                    let run = Box::pin(
+                        self.agent
+                            .run_in_session_with_mode_stream_controlled_content(
+                                mode,
+                                role,
+                                &instructions,
+                                prompt,
+                                max_turns.unwrap_or(self.agent_max_turns),
+                                session_id,
+                                &active,
+                                include_provider_response_diagnostics,
+                                &mut buffered_observer,
+                                control,
+                            ),
+                    );
+                    scope_run_snapshots(
+                        prepared.snapshot,
+                        prepared.plugins,
+                        self.forward_run_with_subagent_scheduling(
+                            run, events, receiver, observer, control,
+                        ),
+                    )
+                    .await
+                }),
+            )
+            .await?
     }
 
     /// Execute a trusted local run that captures bounded non-success provider evidence.
@@ -1074,9 +1092,31 @@ impl BufferedRunEvent {
 
 pub(super) struct BufferedRunObserver {
     sender: mpsc::Sender<BufferedRunEvent>,
-    sinks: Arc<StdMutex<HashMap<String, mpsc::Sender<BufferedRunEvent>>>>,
+    sinks: Arc<StdMutex<HashMap<String, SubagentRunSink>>>,
     run_id: Option<String>,
 }
+
+#[derive(Clone)]
+pub(super) struct SubagentRunSink {
+    pub(super) events: mpsc::Sender<BufferedRunEvent>,
+    pub(super) interactions: colossus_ports::RunInteractionContext,
+}
+
+pub(super) fn subagent_interaction_context(
+    sinks: &StdMutex<HashMap<String, SubagentRunSink>>,
+    parent_run_id: &str,
+) -> colossus_ports::RunInteractionContext {
+    sinks
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(parent_run_id)
+        .map(|sink| sink.interactions.clone())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+#[path = "interaction_scope_tests.rs"]
+mod interaction_scope_tests;
 
 #[async_trait]
 impl RunEventObserver for BufferedRunObserver {
@@ -1094,13 +1134,19 @@ impl RunEventObserver for BufferedRunObserver {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if sinks
                 .get(&event.run_id)
-                .is_some_and(|registered| !registered.same_channel(&self.sender))
+                .is_some_and(|registered| !registered.events.same_channel(&self.sender))
             {
                 return Err(ModelProviderError::Failed(
                     "runtime event stream duplicated an active run identity".into(),
                 ));
             }
-            sinks.insert(event.run_id.clone(), self.sender.clone());
+            sinks.insert(
+                event.run_id.clone(),
+                SubagentRunSink {
+                    events: self.sender.clone(),
+                    interactions: colossus_ports::RunInteractionContext::capture(),
+                },
+            );
             self.run_id = Some(event.run_id.clone());
         }
         // Tools can publish interactions directly through the public run writer. Flush
@@ -1129,7 +1175,7 @@ impl RunEventObserver for BufferedRunObserver {
 }
 
 struct RunEventRegistration {
-    sinks: Arc<StdMutex<HashMap<String, mpsc::Sender<BufferedRunEvent>>>>,
+    sinks: Arc<StdMutex<HashMap<String, SubagentRunSink>>>,
     sender: mpsc::Sender<BufferedRunEvent>,
 }
 
@@ -1138,7 +1184,7 @@ impl Drop for RunEventRegistration {
         self.sinks
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|_, registered| !registered.same_channel(&self.sender));
+            .retain(|_, registered| !registered.events.same_channel(&self.sender));
     }
 }
 

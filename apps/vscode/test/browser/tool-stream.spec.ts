@@ -70,12 +70,13 @@ async function open(page: Page, view: WorkView, palette = "editor") {
   await update(page, view, palette);
 }
 
-test("MCP headings identify the released server through lifecycle updates", async ({
+test("MCP headings use the canonical released summary through lifecycle updates", async ({
   page,
 }, testInfo) => {
   const mcpTool: ToolView = {
     ...tool,
     name: "mcp.call",
+    summary: "Calling Splunk · search",
     input: JSON.stringify({
       server: "Splunk",
       tool: "search",
@@ -84,16 +85,17 @@ test("MCP headings identify the released server through lifecycle updates", asyn
   };
   await open(page, { ...base, tools: [mcpTool] });
   const heading = page.locator(".tool-progress-heading");
-  await expect(heading).toContainText("mcp.call · Splunk · search");
+  await expect(heading).toContainText("Calling Splunk · search");
   await expect(heading).not.toContainText("payload-server");
   await expect(heading.locator(".icon-plug-connected")).toHaveCount(1);
   await heading.focus();
   for (const state of ["completed", "failed", "cancelled", "outcome unknown"]) {
+    const summary = `Released ${state} summary for Splunk · search`;
     await update(page, {
       ...base,
-      tools: [{ ...mcpTool, state }],
+      tools: [{ ...mcpTool, state, summary }],
     });
-    await expect(heading).toContainText("mcp.call · Splunk · search");
+    await expect(heading).toContainText(summary);
     await expect(heading).toBeFocused();
   }
   await page.screenshot({
@@ -102,9 +104,18 @@ test("MCP headings identify the released server through lifecycle updates", asyn
   });
   await update(page, {
     ...base,
-    tools: [{ ...mcpTool, input: '{"arguments":{"server":"payload-server"}}' }],
+    tools: [
+      {
+        ...mcpTool,
+        summary: "Preparing to call an MCP tool",
+        input: '{"arguments":{"server":"payload-server"}}',
+      },
+    ],
   });
-  await expect(page.locator(".tool-progress-name")).toHaveText("mcp.call");
+  await expect(page.locator(".tool-progress-name")).toHaveText(
+    "Preparing to call an MCP tool",
+  );
+  await expect(heading).not.toContainText("payload-server");
   const { input: _input, ...restored } = mcpTool;
   await update(page, {
     ...base,
@@ -112,6 +123,7 @@ test("MCP headings identify the released server through lifecycle updates", asyn
       {
         ...restored,
         state: "completed",
+        summary: "Called GitLab · list_issues",
         preview: JSON.stringify({
           server: "GitLab",
           tool: "list_issues",
@@ -120,7 +132,44 @@ test("MCP headings identify the released server through lifecycle updates", asyn
       },
     ],
   });
-  await expect(heading).toContainText("mcp.call · GitLab · list_issues");
+  await expect(heading).toContainText("Called GitLab · list_issues");
+});
+
+test("repository rows share the canonical label and show legacy identity without inferring details", async ({
+  page,
+}) => {
+  await open(page, {
+    ...base,
+    tools: [
+      {
+        ...tool,
+        name: "repo.map",
+        summary: "Mapped repository structure",
+        state: "completed",
+      },
+    ],
+  });
+  await expect(page.locator(".tool-progress-name")).toHaveText(
+    "Mapped repository structure",
+  );
+  await expect(page.locator(".tool-progress-description")).toHaveCount(0);
+  await page.locator(".tool-progress-heading").click();
+  await expect(
+    page.locator(".tool-progress-body").getByText("repo.map", { exact: true }),
+  ).toBeVisible();
+  await update(page, {
+    ...base,
+    tools: [
+      {
+        ...tool,
+        name: "repo.map",
+        summary: "tool execution started at turn 1",
+      },
+    ],
+  });
+  await expect(page.locator(".tool-progress-name")).toHaveText(
+    "Tool activity · repo.map",
+  );
 });
 
 test("tool progress updates in place, preserves expansion/focus, and stays between each prompt and response", async ({

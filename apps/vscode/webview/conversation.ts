@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { ConversationEntry } from "@colossus/ui/conversation";
-import { mcpCallTarget } from "@colossus/ui/lib/mcp-call";
+import { toolActivityLabel } from "@colossus/ui/lib/tool-activity";
 
 function runId(message: MessageView) {
   return (
@@ -65,7 +65,6 @@ class ToolRow {
   private symbol = icon("terminal-2");
   private name = node("span", "", "tool-progress-name");
   private state = node("span", "", "tool-progress-state");
-  private description = node("span", "", "tool-progress-description");
   private body = node("div", "", "tool-progress-body");
   private signature = "";
   constructor() {
@@ -74,7 +73,6 @@ class ToolRow {
       this.name,
       this.state,
       node("span", "", "tool-chevron"),
-      this.description,
     );
     this.element.append(this.heading, this.body);
   }
@@ -83,18 +81,9 @@ class ToolRow {
     if (signature === this.signature) return;
     this.signature = signature;
     this.element.dataset.state = tool.state;
-    const mcpTarget =
-      tool.name === "mcp.call"
-        ? (mcpCallTarget(tool.input) ?? mcpCallTarget(tool.preview))
-        : null;
-    this.name.textContent = mcpTarget
-      ? `${tool.name} · ${mcpTarget}`
-      : tool.name;
+    this.name.textContent = toolActivityLabel(tool.summary, tool.name);
     this.symbol.className = `icon icon-${toolIcon(tool.name)}`;
     this.state.textContent = stateLabel(tool.state);
-    this.description.textContent = tool.summary;
-    this.description.hidden =
-      !tool.summary || ["completed", "cancelled"].includes(tool.state);
     const history = node("ol", "", "tool-lifecycle");
     for (const step of tool.history ?? [
       { state: tool.state, summary: tool.summary, at: tool.updatedAt ?? "" },
@@ -119,7 +108,7 @@ class ToolRow {
       }
       history.append(entry);
     }
-    const content = [history];
+    const content = [node("p", tool.name, "muted"), history];
     for (const [label, text] of [
       ["Released input", tool.input],
       ["Released output", tool.preview],

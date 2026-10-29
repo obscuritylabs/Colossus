@@ -2,7 +2,7 @@ use super::*;
 
 /// Journal-backed canonical session repository.
 pub struct EventSourcedSessionRepository {
-    journal: Arc<dyn EventJournal>,
+    pub(super) journal: Arc<dyn EventJournal>,
 }
 
 impl EventSourcedSessionRepository {
@@ -136,24 +136,25 @@ impl SessionRepository for EventSourcedSessionRepository {
     }
 
     fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, StoreError> {
-        let limit = limit.clamp(1, LIST_LIMIT_MAX);
-        let sessions = collect_stream_ids(self.journal.as_ref(), "session:")?
-            .into_iter()
-            .map(|stream_id| {
-                stream_id
-                    .strip_prefix("session:")
-                    .map(str::to_owned)
-                    .ok_or_else(|| {
-                        StoreError::Verification(format!(
-                            "indexed stream {stream_id} is not a session stream"
-                        ))
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .filter_map(|id| self.get_session(&id).transpose())
-            .collect::<Result<Vec<_>, _>>()?;
-        ordering::recent_sessions(sessions, limit)
+        self.list_catalog(false, limit)
+    }
+
+    fn list_archived_sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, StoreError> {
+        self.list_catalog(true, limit)
+    }
+
+    fn session_lifecycle(&self, id: &str) -> Result<Option<SessionLifecycle>, StoreError> {
+        self.read_lifecycle(id)
+    }
+
+    fn set_session_archived(
+        &self,
+        id: &str,
+        archived: bool,
+        expected_revision: u64,
+        actor: Actor,
+    ) -> Result<SessionLifecycle, StoreError> {
+        self.write_lifecycle(id, archived, expected_revision, actor)
     }
 
     fn append_messages(

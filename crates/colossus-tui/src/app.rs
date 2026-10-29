@@ -17,6 +17,16 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     } = options;
     let snapshot = host.bootstrap(bootstrap).await.map_err(TuiError::Host)?;
     let mut state = TuiState::from_snapshot(snapshot);
+    if state.welcome_visible
+        && crate::startup::enabled(
+            screen_mode,
+            &state.preferences,
+            std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()),
+            std::env::var("COLOSSUS_TUI_ANIMATIONS").ok().as_deref(),
+        )
+    {
+        state.startup_animation = Some(crate::startup::StartupAnimation::new());
+    }
     state.dictation.port = dictation;
     state.completions.extend([
         "/dictate".into(),
@@ -30,7 +40,8 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     }
     let picker = preview_picker(screen_mode);
     state.preview_cache.set_picker(picker);
-    let (event_tx, mut event_rx) = mpsc::channel::<HostEvent>(256);
+    let (mut state, mut event_rx) = crate::workspace::Workspace::new(state);
+    let event_tx = state.sender();
     if let Some(provider) = background_notice {
         let notices = event_tx.clone();
         tokio::spawn(async move {
@@ -43,12 +54,17 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     schedule_visible_previews(&mut state, Arc::clone(&host), event_tx.clone());
     let mut terminal = OwnedTerminal::new(screen_mode)?;
     let mut agent_refresh = crate::agents::AgentRefresh::default();
+    let mut last_terminal_size = crossterm::terminal::size().ok();
 
     loop {
-        terminal.draw(&mut state)?;
+        state.process_action(Arc::clone(&host));
         while let Ok(host_event) = event_rx.try_recv() {
-            handle_host_event(&mut state, host_event);
+            state.receive(host_event, Arc::clone(&host));
         }
+        let event_tx = state.sender();
+        state.refresh_catalog(Arc::clone(&host));
+        state.sync_rows();
+        terminal.draw(&mut state)?;
         agent_refresh.schedule(&state, Arc::clone(&host), event_tx.clone());
         crate::dictation::tick(&mut state, event_tx.clone());
         if let Some(line) = crate::dictation::take_send(&mut state) {
@@ -62,30 +78,17 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             event_tx.clone(),
             screen_mode,
         );
-        if !state.is_busy() && state.overlay.is_none() {
-            if let Some(command) = state.pending_setting_command.take() {
-                start_line(
-                    &mut state,
-                    command.into(),
-                    Arc::clone(&host),
-                    event_tx.clone(),
-                );
-            } else if let Some(command) = state.pending_plan_command.take() {
-                handle_plan_command(&mut state, command, Arc::clone(&host), event_tx.clone());
-            } else if let Some(request) = state.pending_plan_execution.take() {
-                start_plan_execution(&mut state, request, Arc::clone(&host), event_tx.clone());
-            } else if !state.queue_paused
-                && let Some(line) = state.queue.pop_front()
-            {
-                start_line(&mut state, line, Arc::clone(&host), event_tx.clone());
-            }
-        }
+        state.drain_queues(Arc::clone(&host));
         if state.should_exit {
             break;
         }
         observe_lifecycle(&state, lifecycle.as_deref());
         if event::poll(Duration::from_millis(33))? {
-            match event::read()? {
+            let input = event::read()?;
+            if crate::startup::interrupts(&input, &mut last_terminal_size) {
+                state.startup_animation = None;
+            }
+            match input {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     handle_key(
                         &mut state,
@@ -108,8 +111,10 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
                     }
                 }
                 Event::Paste(text)
-                    if !state.dictation.active
-                        || (state.dictation.paused && !state.dictation.pending) =>
+                    if !state.workspace_center
+                        && !state.workspace_archiving
+                        && (!state.dictation.active
+                            || (state.dictation.paused && !state.dictation.pending)) =>
                 {
                     state.selecting_text = false;
                     state.text_selection.clear();
@@ -124,9 +129,43 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             observe_lifecycle(&state, lifecycle.as_deref());
         }
     }
-    crate::dictation::cancel(&mut state);
+    state.cancel_all();
+    let shutdown = Instant::now();
+    while state.any_busy() && shutdown.elapsed() < Duration::from_secs(5) {
+        if let Ok(Some(event)) =
+            tokio::time::timeout(Duration::from_millis(50), event_rx.recv()).await
+        {
+            state.receive(event, Arc::clone(&host));
+            state.cancel_all();
+        }
+    }
     terminal.finish()?;
     Ok(())
+}
+
+pub(super) fn advance_session(
+    state: &mut TuiState,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+) {
+    if state.workspace_archiving {
+        return;
+    }
+    show_queued_prompt(state);
+    if state.is_busy() || state.overlay.is_some() {
+        return;
+    }
+    if let Some(command) = state.pending_setting_command.take() {
+        start_line(state, command.into(), host, event_tx);
+    } else if let Some(command) = state.pending_plan_command.take() {
+        handle_plan_command(state, command, host, event_tx);
+    } else if let Some(request) = state.pending_plan_execution.take() {
+        start_plan_execution(state, request, host, event_tx);
+    } else if !state.queue_paused
+        && let Some(line) = state.queue.pop_front()
+    {
+        start_line(state, line, host, event_tx);
+    }
 }
 
 pub(super) fn observe_lifecycle(
@@ -383,6 +422,15 @@ fn native_history_limit_entry() -> TranscriptEntry {
 
 /// Apply one captured mouse event and report whether an older transcript page is needed.
 pub(super) fn handle_mouse(state: &mut TuiState, mouse: MouseEvent) -> bool {
+    if !state.selecting_text && crate::workspace_view::handle_mouse(state, mouse) {
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            state.text_selection.clear();
+        }
+        return false;
+    }
+    if crate::tool_details::mouse(state, mouse) {
+        return false;
+    }
     if !state.selecting_text && state.text_selection.handle_mouse(mouse) {
         return false;
     }
@@ -440,6 +488,12 @@ fn handle_key(
     event_tx: mpsc::Sender<HostEvent>,
     screen_mode: ScreenMode,
 ) {
+    if crate::workspace::key(state, key) {
+        return;
+    }
+    if state.workspace_archiving {
+        return;
+    }
     if handle_text_selection_key(state, key) {
         return;
     }
@@ -452,6 +506,10 @@ fn handle_key(
     }
     if state.overlay.is_some() {
         handle_overlay_key(state, key);
+        return;
+    }
+    if key.code == KeyCode::F(3) {
+        state.toggle_event_details();
         return;
     }
     if state.agents.handle_key(key) {
@@ -598,6 +656,10 @@ pub(super) fn handle_composer_enter(state: &mut TuiState, key: KeyEvent) -> Opti
 }
 
 pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
+    if matches!(state.overlay, Some(Overlay::ToolDetails(_))) {
+        crate::tool_details::key(state, key);
+        return;
+    }
     if matches!(state.overlay.as_ref(), Some(Overlay::Prompt {request, ..}) if request.kind == InteractivePromptKind::ModelSelection)
     {
         handle_model_picker_key(state, key);
@@ -848,7 +910,7 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
             }
             _ => {}
         },
-        Overlay::SessionBrowser(_) | Overlay::ThemePicker(_) => {}
+        Overlay::ToolDetails(_) | Overlay::SessionBrowser(_) | Overlay::ThemePicker(_) => {}
     }
 }
 
@@ -1088,6 +1150,7 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
                     .map(|entry| entry.preferences.clone());
             }
             Overlay::Prompt { .. }
+            | Overlay::ToolDetails(_)
             | Overlay::SessionBrowser(_)
             | Overlay::ThemePicker(_)
             | Overlay::SettingsPicker(_)
@@ -1111,6 +1174,12 @@ pub(super) fn submit_line(
 ) {
     let line = crate::contract::normalized_interactive_input(&line).to_owned();
     if line.is_empty() {
+        return;
+    }
+    if state.workspace_archiving {
+        return;
+    }
+    if crate::workspace::command(state, &line) {
         return;
     }
     if crate::dictation::command(state, &line, event_tx.clone()) {
@@ -1642,6 +1711,14 @@ pub(super) fn handle_local_command(
 }
 
 pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
+    if matches!(
+        &event,
+        HostEvent::Prompt(_) | HostEvent::SessionBrowser(_) | HostEvent::ThemePicker(_)
+    ) && matches!(state.overlay, Some(Overlay::ToolDetails(_)))
+    {
+        state.overlay = None;
+        state.text_selection.clear();
+    }
     match event {
         HostEvent::Sidebar {
             session_id,
@@ -1684,19 +1761,19 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             });
         }
         HostEvent::Prompt(request) => {
+            // Read-only inspection must never postpone an authority decision.
+            if matches!(state.overlay, Some(Overlay::ToolDetails(_))) {
+                state.overlay = None;
+                state.text_selection.clear();
+            }
             if state.overlay.is_some() {
-                let _ = request.response.send(PromptResponse::Cancelled);
+                if state.pending_prompts.len() < MAX_QUEUED_TURNS {
+                    state.pending_prompts.push_back(request);
+                } else {
+                    let _ = request.response.send(PromptResponse::Cancelled);
+                }
             } else {
-                let selected = request
-                    .initial_choice
-                    .filter(|index| *index < request.choices.len());
-                state.overlay = Some(Overlay::Prompt {
-                    request,
-                    input: String::new(),
-                    selected,
-                    approval_section: ApprovalSection::Summary,
-                    document_scroll: 0,
-                });
+                show_prompt(state, request);
             }
         }
         HostEvent::SessionBrowser(request) => {
@@ -1721,6 +1798,10 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             state.append_entry(error_entry(&format!("History was not persisted: {error}")))
         }
         HostEvent::OlderPage(result) => {
+            if matches!(state.overlay, Some(Overlay::ToolDetails(_))) {
+                state.overlay = None;
+            }
+            state.tool_click = None;
             state.loading_older = false;
             match result {
                 Ok(page) => {
@@ -1758,6 +1839,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             }
         }
         HostEvent::OperationFinished(result) => {
+            state.cancel_pending_prompts();
             state.sidebar.finish_calls();
             if matches!(
                 state.overlay,
@@ -1971,6 +2053,27 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
     }
 }
 
+fn show_prompt(state: &mut TuiState, request: InteractivePrompt) {
+    let selected = request
+        .initial_choice
+        .filter(|index| *index < request.choices.len());
+    state.overlay = Some(Overlay::Prompt {
+        request,
+        input: String::new(),
+        selected,
+        approval_section: ApprovalSection::Summary,
+        document_scroll: 0,
+    });
+}
+
+pub(super) fn show_queued_prompt(state: &mut TuiState) {
+    if state.overlay.is_none()
+        && let Some(request) = state.pending_prompts.pop_front()
+    {
+        show_prompt(state, request);
+    }
+}
+
 fn offer_plan_review(state: &mut TuiState) {
     if state.mode != InteractiveMode::Plan || state.overlay.is_some() {
         return;
@@ -2104,7 +2207,11 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
         RunEvent::ToolCompleted { result, .. } => {
             finalize_intermediate_assistant_output(state);
             (
-                TranscriptKind::Tool,
+                if result.exit_code == 0 {
+                    TranscriptKind::Tool
+                } else {
+                    TranscriptKind::Error
+                },
                 state.active_calls.remove(&result.call_id),
             )
         }
@@ -2125,9 +2232,17 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
         RunEvent::Provider { .. } => return,
         RunEvent::Phase { .. } | RunEvent::ToolStarted { .. } => return,
     };
-    let source = TranscriptRenderSource::RunEvent {
-        event: Box::new(event),
-        call,
+    let source = TranscriptRenderSource::live(event, call);
+    let kind = if matches!(
+        source.phase(),
+        Some(
+            colossus_presentation::ToolActivityPhase::Failed
+                | colossus_presentation::ToolActivityPhase::OutcomeUnknown
+        )
+    ) {
+        TranscriptKind::Error
+    } else {
+        kind
     };
     if let Some(document) = source.render(&state.preferences) {
         state.append_entry_with_source(

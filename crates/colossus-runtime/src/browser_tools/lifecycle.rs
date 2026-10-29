@@ -4,6 +4,30 @@ use colossus_contracts::BrowserActor;
 use colossus_ports::AgentRunLifecycle;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+impl RuntimeBrowserTools {
+    pub(crate) fn has_run_registration(&self, id: &str) -> bool {
+        self.runs.lock().map_or(true, |runs| runs.contains_key(id))
+    }
+
+    /// Registration rollback is only valid before model/tool dispatch has begun.
+    pub(crate) fn rollback_run_registration(&self, context: &ExecutionContext) -> bool {
+        let Some(id) = context.run_id.as_deref() else {
+            return false;
+        };
+        let Ok(mut runs) = self.runs.lock() else {
+            return false;
+        };
+        if runs
+            .get(id)
+            .is_some_and(|run| run.context == *context && run.sessions.is_empty())
+        {
+            runs.remove(id);
+            return true;
+        }
+        false
+    }
+}
+
 #[async_trait]
 impl AgentRunLifecycle for RuntimeBrowserTools {
     async fn complete_run(&self, run_id: &str) {

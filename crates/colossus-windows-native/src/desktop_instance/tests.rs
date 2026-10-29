@@ -81,11 +81,13 @@ fn private_startup_ownership_serializes_threads_and_releases_on_owner_thread() {
             .unwrap()
     );
     drop(guard);
-    assert!(
-        thread::spawn(move || { DesktopLaunchGuard::acquire_with_timeout(&id, 10).is_ok() })
-            .join()
-            .unwrap()
-    );
+    thread::spawn(move || {
+        // Success includes native mutex creation and security validation; use the
+        // public startup budget rather than the short contention-probe deadline.
+        let _guard = DesktopLaunchGuard::acquire(&id).expect("released startup ownership");
+    })
+    .join()
+    .unwrap();
 }
 
 #[test]

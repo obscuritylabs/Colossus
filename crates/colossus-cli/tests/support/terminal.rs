@@ -156,14 +156,17 @@ impl Terminal {
         self.resize_frame(rows, cols);
         // A truncated old frame can still contain every plugin name. Require
         // the closing border at the new chat width before sending more input.
-        // A wide viewport reserves 28 columns when the status rail is present.
+        // A wide viewport reserves 28..=36 columns for the adaptive status rail.
         self.wait_until_visual_rows("resized composer border", |_, rows| {
             rows.iter().any(|line| {
                 (line.starts_with("┌ Message") || line.starts_with("┌ Execute"))
                     && ((line.ends_with('┐') && line.chars().count() == usize::from(cols))
                         || (cols >= 92
-                            && line.chars().nth(usize::from(cols - 29)) == Some('┐')
-                            && line.chars().nth(usize::from(cols - 28)) == Some('│')))
+                            && (28..=36).any(|rail| {
+                                let boundary = usize::from(cols - rail);
+                                line.chars().nth(boundary - 1) == Some('┐')
+                                    && line.chars().nth(boundary) == Some('│')
+                            })))
             })
         });
     }

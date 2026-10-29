@@ -151,6 +151,35 @@ impl Runtime {
         self.sessions.list_sessions(limit).map_err(Into::into)
     }
 
+    /// List archived native sessions, preserving their original history and ordering.
+    pub fn list_archived_sessions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<SessionSummary>, RuntimeError> {
+        self.sessions
+            .list_archived_sessions(limit)
+            .map_err(Into::into)
+    }
+
+    /// Read canonical native archive metadata for one exact session.
+    pub fn session_lifecycle(
+        &self,
+        id: &str,
+    ) -> Result<Option<colossus_contracts::SessionLifecycle>, RuntimeError> {
+        self.sessions.session_lifecycle(id).map_err(Into::into)
+    }
+
+    /// Archive or restore an idle native session without deleting conversation or work.
+    pub fn set_session_archived(
+        &self,
+        id: &str,
+        archived: bool,
+    ) -> Result<colossus_contracts::SessionLifecycle, RuntimeError> {
+        self.native_session_lifecycle
+            .set_archived(id, archived, terminal_actor())
+            .map_err(Into::into)
+    }
+
     /// Resolve the most recently updated session.
     pub fn latest_session(&self) -> Result<SessionSummary, RuntimeError> {
         self.sessions

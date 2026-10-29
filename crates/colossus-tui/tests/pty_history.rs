@@ -27,11 +27,18 @@ use tokio::sync::{mpsc, oneshot};
 
 #[path = "pty_history/agents.rs"]
 mod agents;
+#[cfg(windows)]
+#[path = "pty_history/native_console.rs"]
+mod native_console;
 #[path = "pty_history/selection.rs"]
 #[cfg(unix)] // This fixture injects SGR mouse input; Windows uses console input records.
 mod selection;
 #[path = "pty_history/status.rs"]
 mod status;
+#[path = "pty_history/tool_activity.rs"]
+mod tool_activity;
+#[path = "pty_history/workspace.rs"]
+mod workspace;
 
 // ConPTY decodes this Win32-input-mode record into a real Ctrl+J key event.
 // A bare LF is translated into Enter before crossterm's Windows backend reads it.
@@ -39,6 +46,13 @@ mod status;
 const WINDOWS_CTRL_J: &[u8] = b"\x1b[74;36;10;1;8;1_\x1b[74;36;10;0;8;1_";
 
 const MULTILINE_DRAFT: &str = "# Heading\n\n  - **nested**\nunicode 👩‍💻 界 e\u{301}";
+
+struct FixtureChildGuard(Box<dyn portable_pty::ChildKiller + Send + Sync>);
+impl Drop for FixtureChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+    }
+}
 
 struct FixtureHost;
 
@@ -140,7 +154,8 @@ impl InteractiveHost for FixtureHost {
         .collect())
     }
 
-    async fn bootstrap(&self, _request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
+    async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
+        let session_id = request.session_id.unwrap_or_else(|| "019f-pty".into());
         let inline = std::env::var("COLOSSUS_TUI_MODE").as_deref() == Ok("inline");
         let empty = std::env::var_os("COLOSSUS_TUI_EMPTY").is_some();
         let first_sequence = if inline { 2 } else { 1 };
@@ -154,7 +169,7 @@ impl InteractiveHost for FixtureHost {
         } else {
             (first_sequence..=last_sequence)
                 .map(|sequence| SessionMessage {
-                    session_id: "019f-pty".into(),
+                    session_id: session_id.clone(),
                     run_id: "run-pty".into(),
                     sequence,
                     message: ModelMessage {
@@ -171,7 +186,7 @@ impl InteractiveHost for FixtureHost {
         let history_navigation_fixture =
             std::env::var_os("COLOSSUS_TUI_HISTORY_NAVIGATION_FIXTURE").is_some();
         Ok(InteractiveSnapshot {
-            session_id: "019f-pty".into(),
+            session_id,
             fresh_session: empty,
             workspace: "/workspace/Colossus".into(),
             sandbox_profile: "workspace-development".into(),
@@ -205,6 +220,7 @@ impl InteractiveHost for FixtureHost {
                 message_count: u64::from(!empty) * 5,
                 status: "ready".into(),
                 approval_mode: "ask".into(),
+                approval_mode_revision: 0,
             },
             pending_sandbox_boundary_acknowledgement: None,
             security_posture: if std::env::var_os("COLOSSUS_TUI_SECURITY_WARNINGS").is_some() {
@@ -357,7 +373,10 @@ impl InteractiveHost for FixtureHost {
         if std::env::var_os("COLOSSUS_TUI_STREAM_FIXTURE").is_none() {
             return Err("fixture does not run model turns".into());
         }
-        let output = if std::env::var_os("COLOSSUS_TUI_DICTATION_FIXTURE").is_some() {
+        let tool_fixture = std::env::var_os("COLOSSUS_TUI_TOOL_ACTIVITY_FIXTURE").is_some();
+        let output = if tool_fixture {
+            "Repository review complete. Open an event to inspect its details.".into()
+        } else if std::env::var_os("COLOSSUS_TUI_DICTATION_FIXTURE").is_some() {
             format!("Dictation accepted: {}", request.prompt)
         } else {
             (1..=30)
@@ -368,13 +387,17 @@ impl InteractiveHost for FixtureHost {
         let status_fixture = std::env::var_os("COLOSSUS_TUI_STATUS_FIXTURE").is_some();
         let call = ToolCall {
             call_id: "call-scrollback".into(),
-            name: if status_fixture {
+            name: if tool_fixture {
+                "repo.map"
+            } else if status_fixture {
                 "mcp.call"
             } else {
                 "filesystem.search"
             }
             .into(),
-            arguments: if status_fixture {
+            arguments: if tool_fixture {
+                serde_json::json!({"path":"."})
+            } else if status_fixture {
                 serde_json::json!({"server":"atlas", "tool":"search", "arguments":{}})
             } else {
                 serde_json::json!({"query": "Runtime"})
@@ -420,7 +443,10 @@ impl InteractiveHost for FixtureHost {
                         images: Vec::new(),
                         call_id: call.call_id,
                         name: call.name,
-                        output: serde_json::json!({"matches": ["runtime.rs"]}).to_string(),
+                        output: if tool_fixture {
+                            serde_json::json!({"root":".","file_count":200,"truncated":true,
+                                "files":(0..200).map(|i| format!("src/module_{i}.rs")).collect::<Vec<_>>()}).to_string()
+                        } else { serde_json::json!({"matches": ["runtime.rs"]}).to_string() },
                         exit_code: 0,
                     },
                     duration_seconds: 0.2,
@@ -429,6 +455,9 @@ impl InteractiveHost for FixtureHost {
             }))
             .await
             .map_err(|_| "stream receiver closed")?;
+        if tool_fixture {
+            tool_activity::emit_large_read(&events, &request.session_id).await?;
+        }
         events
             .send(HostEvent::Run(RunEventEnvelope {
                 schema_version: 1,
@@ -481,6 +510,7 @@ impl InteractiveHost for FixtureHost {
                 message_count: 7,
                 status: "ready".into(),
                 approval_mode: "ask".into(),
+                approval_mode_revision: 0,
             },
             plan_selection: PlanSelectionUpdate::Unchanged,
         })
@@ -565,7 +595,7 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
     let pair = pty_system
         .openpty(PtySize {
             rows: 32,
-            cols: 120,
+            cols: 148,
             pixel_width: 0,
             pixel_height: 0,
         })
@@ -605,26 +635,26 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
     writer.flush().expect("flush cursor-position answer");
 
     let welcome_ready =
-        screen_contains_within(&output, 32, 120, "⚠ Security: 2", Duration::from_secs(10));
-    let welcome = screen_contents(&output, 32, 120);
+        screen_contains_within(&output, 32, 148, "⚠ Security: 2", Duration::from_secs(10));
+    let welcome = screen_contents(&output, 32, 148);
 
     writer.write_all(b"go\r").expect("submit first turn");
     writer.flush().expect("flush first turn");
     let output_ready = screen_contains_within(
         &output,
         32,
-        120,
+        148,
         "stream-final-row-30",
         Duration::from_secs(10),
     );
     let composer_ready = screen_contains_within(
         &output,
         32,
-        120,
+        148,
         "Message · Enter sends",
         Duration::from_secs(10),
     );
-    let after_turn = screen_contents(&output, 32, 120);
+    let after_turn = screen_contents(&output, 32, 148);
 
     writer.write_all(&[3, 3]).expect("exit");
     writer.flush().expect("flush exit");
@@ -667,7 +697,7 @@ fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
         scrollback_contains(
             &output,
             32,
-            120,
+            148,
             "Journal payloads are stored as plaintext canonical JSON."
         ),
         "the detailed security posture must remain available in native history"
@@ -714,6 +744,8 @@ fn fixture_process() {
         println!("prior-shell-row");
         std::io::stdout().flush().expect("flush startup sentinel");
     }
+    #[cfg(windows)]
+    let _native_recorder = native_console::Recorder::start();
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
     let screen_mode = if std::env::var("COLOSSUS_TUI_MODE").as_deref() == Ok("inline") {
         ScreenMode::Inline
@@ -756,10 +788,13 @@ fn text_selection_freezes_stream_redraw_and_restores_captured_input() {
     command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
     command.env("COLOSSUS_TUI_STREAM_FIXTURE", "1");
     command.env("COLOSSUS_TUI_SELECTION_FIXTURE", "1");
+    #[cfg(windows)]
+    let native = native_console::Probe::new(&mut command);
     let mut child = pair
         .slave
         .spawn_command(command)
         .expect("spawn selection fixture");
+    let _child_cleanup = FixtureChildGuard(child.clone_killer());
     drop(pair.slave);
     let mut reader = pair.master.try_clone_reader().expect("selection reader");
     let output = Arc::new(Mutex::new(Vec::<u8>::new()));
@@ -780,6 +815,8 @@ fn text_selection_freezes_stream_redraw_and_restores_captured_input() {
     #[cfg(windows)]
     answer_cursor_position_query(&output, &mut writer);
     wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    #[cfg(windows)]
+    native.alternate("Message · Enter sends");
     writer
         .write_all(b"inspect\r")
         .expect("submit streaming turn");
@@ -790,9 +827,12 @@ fn text_selection_freezes_stream_redraw_and_restores_captured_input() {
         .expect("F6 selects native text");
     writer.flush().expect("flush F6");
     wait_for_screen(&output, 24, 80, "Select text");
+    #[cfg(unix)]
     wait_for_mouse_capture_count(&output, false, 1);
-    // ConPTY can project DisableMouseCapture before the frozen frame's footer
-    // and cursor paint. Wait for the complete frame, then allow only complete
+    #[cfg(windows)]
+    native.released();
+    // ConPTY can finish projecting the frozen frame after the native input-mode
+    // change. Wait for the complete frame, then allow only complete
     // cursor commands to settle before the strict no-output interval.
     #[cfg(windows)]
     let frozen = wait_for_quiescent_output(&output);
@@ -818,7 +858,10 @@ fn text_selection_freezes_stream_redraw_and_restores_captured_input() {
         .expect("Escape returns to live output");
     writer.flush().expect("flush Escape");
     wait_for_screen(&output, 24, 80, "stream-final-row-30");
+    #[cfg(unix)]
     wait_for_mouse_capture_count(&output, true, 2);
+    #[cfg(windows)]
+    native.captured();
     writer.write_all(&[3, 3]).expect("ordinary Ctrl+C exits");
     writer.flush().expect("flush exit");
     let status = child.wait().expect("selection fixture status");
@@ -826,6 +869,8 @@ fn text_selection_freezes_stream_redraw_and_restores_captured_input() {
     drop(pair.master);
     reader_thread.join().expect("selection reader thread");
     assert!(status.success());
+    #[cfg(windows)]
+    native.restored(true);
 }
 
 #[test]
@@ -852,7 +897,10 @@ fn multiline_turn_and_keyboard_restoration(newline: &[u8]) {
     command.arg("--nocapture");
     command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
     command.env("COLOSSUS_TUI_STREAM_FIXTURE", "1");
+    #[cfg(windows)]
+    let native = native_console::Probe::new(&mut command);
     let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    let _child_cleanup = FixtureChildGuard(child.clone_killer());
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().expect("PTY reader");
@@ -874,6 +922,8 @@ fn multiline_turn_and_keyboard_restoration(newline: &[u8]) {
     #[cfg(windows)]
     answer_cursor_position_query(&output, &mut writer);
     wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    #[cfg(windows)]
+    native.alternate("Message · Enter sends");
     #[cfg(unix)]
     wait_for_raw(&output, b"\x1b[>1u");
 
@@ -904,28 +954,33 @@ fn multiline_turn_and_keyboard_restoration(newline: &[u8]) {
     drop(pair.master);
     reader_thread.join().expect("reader thread");
     assert!(status.success());
-    let raw = output.lock().expect("output");
-    let offset = |sequence: &[u8]| {
-        raw.windows(sequence.len())
-            .position(|window| window == sequence)
-            .expect("terminal control sequence")
-    };
-    let enter_screen = offset(b"\x1b[?1049h");
-    let leave_screen = offset(b"\x1b[?1049l");
-    assert!(
-        enter_screen < leave_screen,
-        "alternate screen was not restored"
-    );
+    #[cfg(windows)]
+    native.restored(true);
     #[cfg(unix)]
     {
+        let raw = output.lock().expect("output");
+        let offset = |sequence: &[u8]| {
+            raw.windows(sequence.len())
+                .position(|window| window == sequence)
+                .expect("terminal control sequence")
+        };
+        let enter_screen = offset(b"\x1b[?1049h");
+        let leave_screen = offset(b"\x1b[?1049l");
         assert!(
-            enter_screen < offset(b"\x1b[>1u"),
-            "keyboard enhancement must be enabled on the alternate screen"
+            enter_screen < leave_screen,
+            "alternate screen was not restored"
         );
-        assert!(
-            offset(b"\x1b[<1u") < leave_screen,
-            "keyboard enhancement must be removed before leaving the alternate screen"
-        );
+        #[cfg(unix)]
+        {
+            assert!(
+                enter_screen < offset(b"\x1b[>1u"),
+                "keyboard enhancement must be enabled on the alternate screen"
+            );
+            assert!(
+                offset(b"\x1b[<1u") < leave_screen,
+                "keyboard enhancement must be removed before leaving the alternate screen"
+            );
+        }
     }
 }
 
@@ -994,8 +1049,12 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
         .expect("composer row");
     assert_eq!(
         composer_row,
-        latest_row + 1,
-        "newest output should end directly above the composer: {rows:?}"
+        latest_row + 2,
+        "newest output should have one blank line above the composer: {rows:?}"
+    );
+    assert!(
+        rows[latest_row + 1].trim().is_empty(),
+        "the composer separator should be blank: {rows:?}"
     );
     #[cfg(unix)]
     {
@@ -1378,13 +1437,13 @@ fn completed_streaming_output_moves_immediately_into_native_scrollback() {
         "commentary preceding a tool call should be present in native terminal scrollback"
     );
     assert!(
-        scrollback_contains(&output, 24, 80, "Completed filesystem.search"),
+        scrollback_contains(&output, 24, 80, "Search files"),
         "completed tool activity should be present in native terminal scrollback"
     );
     let history = native_history_rows(&output, 24, 80, "Message · Enter sends");
     let completed_tool_row = history
         .iter()
-        .position(|row| row.contains("Completed filesystem.search"))
+        .position(|row| row.contains("Search files"))
         .expect("completed tool row");
     let final_output_row = history
         .iter()
@@ -1664,7 +1723,10 @@ fn inline_session_browser_uses_a_transient_screen_without_polluting_history() {
     command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
     command.env("COLOSSUS_TUI_MODE", "inline");
     command.env("COLOSSUS_TUI_LONG_HISTORY", "1");
+    #[cfg(windows)]
+    let native = native_console::Probe::new(&mut command);
     let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    let _child_cleanup = FixtureChildGuard(child.clone_killer());
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().expect("PTY reader");
@@ -1691,7 +1753,16 @@ fn inline_session_browser_uses_a_transient_screen_without_polluting_history() {
     wait_for_screen(&output, 24, 80, "Message · Enter sends");
     thread::sleep(Duration::from_millis(150));
 
+    #[cfg(windows)]
+    native.checkpoint_main();
     let history_before = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    #[cfg(windows)]
+    assert!(
+        history_before
+            .join("\n")
+            .contains(native_console::ORIGINAL_SENTINEL),
+        "original shell sentinel missing before transient screen"
+    );
     let history_before_text = history_before.join("\n");
     for sequence in 1..=30 {
         let row = format!("durable-row-{sequence:02}");
@@ -1701,35 +1772,50 @@ fn inline_session_browser_uses_a_transient_screen_without_polluting_history() {
             "{row} was not present exactly once before opening the browser: {history_before_text}"
         );
     }
+    #[cfg(unix)]
     let browser_output_offset = output.lock().expect("output").len();
     writer
-        .write_all(b"/resume\r")
+        .write_all(b"/resume 20\r")
         .expect("open session browser");
     writer.flush().expect("flush session browser command");
     wait_for_screen(&output, 24, 80, "Resume session");
     wait_for_screen(&output, 24, 80, "Resume target session");
+    #[cfg(windows)]
+    native.alternate("Resume target session");
     writer.write_all(&[27]).expect("dismiss session browser");
     writer.flush().expect("flush session browser dismissal");
     wait_for_screen(&output, 24, 80, "resume cancelled");
+    #[cfg(windows)]
+    native.main_screen(Some("resume cancelled"));
     thread::sleep(Duration::from_millis(150));
 
-    let bytes = output.lock().expect("output").clone();
-    let browser_output = &bytes[browser_output_offset..];
-    assert!(
-        browser_output
-            .windows(b"\x1b[?1049h".len())
-            .any(|window| window == b"\x1b[?1049h"),
-        "session browser did not enter its transient screen"
-    );
-    assert!(
-        browser_output
-            .windows(b"\x1b[?1049l".len())
-            .any(|window| window == b"\x1b[?1049l"),
-        "session browser did not restore the main screen"
-    );
-    drop(bytes);
+    #[cfg(unix)]
+    {
+        let bytes = output.lock().expect("output").clone();
+        let browser_output = &bytes[browser_output_offset..];
+        assert!(
+            browser_output
+                .windows(b"\x1b[?1049h".len())
+                .any(|window| window == b"\x1b[?1049h"),
+            "session browser did not enter its transient screen"
+        );
+        assert!(
+            browser_output
+                .windows(b"\x1b[?1049l".len())
+                .any(|window| window == b"\x1b[?1049l"),
+            "session browser did not restore the main screen"
+        );
+        drop(bytes);
+    }
 
     let history_after = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    #[cfg(windows)]
+    assert!(
+        history_after
+            .join("\n")
+            .contains(native_console::ORIGINAL_SENTINEL),
+        "original shell sentinel missing after transient screen"
+    );
     let history_after_text = history_after.join("\n");
     for transient in [
         "Resume session",
@@ -1754,6 +1840,8 @@ fn inline_session_browser_uses_a_transient_screen_without_polluting_history() {
     writer.flush().expect("flush exit");
     let status = child.wait().expect("fixture status");
     assert!(status.success());
+    #[cfg(windows)]
+    native.restored(false);
     drop(writer);
     drop(pair.master);
     reader_thread.join().expect("reader thread");
@@ -1777,7 +1865,10 @@ fn inline_theme_picker_uses_a_transient_screen_without_polluting_history() {
     command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
     command.env("COLOSSUS_TUI_MODE", "inline");
     command.env("COLOSSUS_TUI_LONG_HISTORY", "1");
+    #[cfg(windows)]
+    let native = native_console::Probe::new(&mut command);
     let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    let _child_cleanup = FixtureChildGuard(child.clone_killer());
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().expect("PTY reader");
@@ -1804,7 +1895,16 @@ fn inline_theme_picker_uses_a_transient_screen_without_polluting_history() {
     wait_for_screen(&output, 24, 80, "Message · Enter sends");
     thread::sleep(Duration::from_millis(150));
 
+    #[cfg(windows)]
+    native.checkpoint_main();
     let history_before = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    #[cfg(windows)]
+    assert!(
+        history_before
+            .join("\n")
+            .contains(native_console::ORIGINAL_SENTINEL),
+        "original shell sentinel missing before transient screen"
+    );
     let history_before_text = history_before.join("\n");
     for sequence in 1..=30 {
         let row = format!("durable-row-{sequence:02}");
@@ -1814,6 +1914,7 @@ fn inline_theme_picker_uses_a_transient_screen_without_polluting_history() {
             "{row} was not present exactly once before opening the theme picker: {history_before_text}"
         );
     }
+    #[cfg(unix)]
     let picker_output_offset = output.lock().expect("output").len();
     writer.write_all(b"/theme\r").expect("open theme picker");
     writer.flush().expect("flush theme picker command");
@@ -1821,28 +1922,43 @@ fn inline_theme_picker_uses_a_transient_screen_without_polluting_history() {
     writer.write_all(b"\x1b[B").expect("preview hacker theme");
     writer.flush().expect("flush hacker theme preview");
     wait_for_screen(&output, 24, 80, "hacker preview");
+    #[cfg(windows)]
+    native.alternate("hacker preview");
     writer.write_all(&[27]).expect("dismiss theme picker");
     writer.flush().expect("flush theme picker dismissal");
     wait_for_screen(&output, 24, 80, "theme cancelled");
+    #[cfg(windows)]
+    native.main_screen(Some("theme cancelled"));
     thread::sleep(Duration::from_millis(150));
 
-    let bytes = output.lock().expect("output").clone();
-    let picker_output = &bytes[picker_output_offset..];
-    assert!(
-        picker_output
-            .windows(b"\x1b[?1049h".len())
-            .any(|window| window == b"\x1b[?1049h"),
-        "theme picker did not enter its transient screen"
-    );
-    assert!(
-        picker_output
-            .windows(b"\x1b[?1049l".len())
-            .any(|window| window == b"\x1b[?1049l"),
-        "theme picker did not restore the main screen"
-    );
-    drop(bytes);
+    #[cfg(unix)]
+    {
+        let bytes = output.lock().expect("output").clone();
+        let picker_output = &bytes[picker_output_offset..];
+        assert!(
+            picker_output
+                .windows(b"\x1b[?1049h".len())
+                .any(|window| window == b"\x1b[?1049h"),
+            "theme picker did not enter its transient screen; projected modes: {:?}",
+            terminal_mode_sequences(picker_output)
+        );
+        assert!(
+            picker_output
+                .windows(b"\x1b[?1049l".len())
+                .any(|window| window == b"\x1b[?1049l"),
+            "theme picker did not restore the main screen"
+        );
+        drop(bytes);
+    }
 
     let history_after = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    #[cfg(windows)]
+    assert!(
+        history_after
+            .join("\n")
+            .contains(native_console::ORIGINAL_SENTINEL),
+        "original shell sentinel missing after transient screen"
+    );
     let history_after_text = history_after.join("\n");
     for transient in ["Choose theme", "default preview", "hacker preview"] {
         assert!(
@@ -1863,6 +1979,8 @@ fn inline_theme_picker_uses_a_transient_screen_without_polluting_history() {
     writer.flush().expect("flush exit");
     let status = child.wait().expect("fixture status");
     assert!(status.success());
+    #[cfg(windows)]
+    native.restored(false);
     drop(writer);
     drop(pair.master);
     reader_thread.join().expect("reader thread");
@@ -1886,7 +2004,10 @@ fn inline_completion_restores_a_full_main_screen_without_changing_history() {
     command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
     command.env("COLOSSUS_TUI_MODE", "inline");
     command.env("COLOSSUS_TUI_LONG_HISTORY", "1");
+    #[cfg(windows)]
+    let native = native_console::Probe::new(&mut command);
     let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    let _child_cleanup = FixtureChildGuard(child.clone_killer());
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().expect("PTY reader");
@@ -1913,7 +2034,16 @@ fn inline_completion_restores_a_full_main_screen_without_changing_history() {
     wait_for_screen(&output, 24, 80, "Message · Enter sends");
     thread::sleep(Duration::from_millis(150));
 
+    #[cfg(windows)]
+    native.checkpoint_main();
     let history_before = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    #[cfg(windows)]
+    assert!(
+        history_before
+            .join("\n")
+            .contains(native_console::ORIGINAL_SENTINEL),
+        "original shell sentinel missing before transient screen"
+    );
     let history_before_text = history_before.join("\n");
     for sequence in 1..=30 {
         let row = format!("durable-row-{sequence:02}");
@@ -1927,34 +2057,50 @@ fn inline_completion_restores_a_full_main_screen_without_changing_history() {
         );
     }
 
+    #[cfg(unix)]
     let completion_output_offset = output.lock().expect("output").len();
     writer.write_all(b"/").expect("open completion");
     writer.flush().expect("flush completion open");
     wait_for_screen(&output, 24, 80, "Commands");
+    #[cfg(windows)]
+    native.alternate("Commands");
     writer.write_all(&[27]).expect("dismiss completion");
     writer.flush().expect("flush completion dismissal");
     wait_for_screen(&output, 24, 80, "Message · Enter sends");
+    #[cfg(windows)]
+    native.main_screen(None);
     thread::sleep(Duration::from_millis(150));
 
     let history_after = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    #[cfg(windows)]
+    assert!(
+        history_after
+            .join("\n")
+            .contains(native_console::ORIGINAL_SENTINEL),
+        "original shell sentinel missing after transient screen"
+    );
     assert_eq!(
         history_after, history_before,
         "transient completion changed the restored main-screen history"
     );
-    let completion_output = output.lock().expect("output").clone();
-    let completion_output = &completion_output[completion_output_offset..];
-    assert!(
-        completion_output
-            .windows(b"\x1b[?1049h".len())
-            .any(|window| window == b"\x1b[?1049h"),
-        "completion did not enter its transient screen"
-    );
-    assert!(
-        completion_output
-            .windows(b"\x1b[?1049l".len())
-            .any(|window| window == b"\x1b[?1049l"),
-        "completion did not restore the main screen"
-    );
+    #[cfg(unix)]
+    {
+        let completion_output = output.lock().expect("output").clone();
+        let completion_output = &completion_output[completion_output_offset..];
+        assert!(
+            completion_output
+                .windows(b"\x1b[?1049h".len())
+                .any(|window| window == b"\x1b[?1049h"),
+            "completion did not enter its transient screen; projected modes: {:?}",
+            terminal_mode_sequences(completion_output)
+        );
+        assert!(
+            completion_output
+                .windows(b"\x1b[?1049l".len())
+                .any(|window| window == b"\x1b[?1049l"),
+            "completion did not restore the main screen"
+        );
+    }
 
     writer.write_all(&[3]).expect("clear completion draft");
     writer.flush().expect("flush completion draft clear");
@@ -1962,6 +2108,8 @@ fn inline_completion_restores_a_full_main_screen_without_changing_history() {
     writer.flush().expect("flush exit");
     let status = child.wait().expect("fixture status");
     assert!(status.success());
+    #[cfg(windows)]
+    native.restored(false);
     drop(writer);
     drop(pair.master);
     reader_thread.join().expect("reader thread");
@@ -1983,7 +2131,10 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
     command.arg("fixture_process");
     command.arg("--nocapture");
     command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    #[cfg(windows)]
+    let native = native_console::Probe::new(&mut command);
     let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    let _child_cleanup = FixtureChildGuard(child.clone_killer());
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().expect("PTY reader");
@@ -2006,6 +2157,8 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
     #[cfg(windows)]
     answer_cursor_position_query(&output, &mut writer);
     wait_for_screen(&output, 24, 80, "durable-row-01");
+    #[cfg(windows)]
+    native.alternate("durable-row-01");
     writer.write_all(b"/to\t").expect("type completion");
     writer.flush().expect("flush completion");
     wait_for_screen(&output, 24, 80, "/tools");
@@ -2044,29 +2197,41 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
 
     writer.write_all(&[3]).expect("Ctrl-C clear draft");
     writer.flush().expect("flush draft clear");
-    thread::sleep(Duration::from_millis(50));
-    assert!(
-        !screen_contents(&output, 30, 100).contains("typing-preserves-history"),
-        "first Ctrl-C should clear the draft"
-    );
+    let clear_deadline = Instant::now() + Duration::from_secs(10);
+    while screen_contents(&output, 30, 100).contains("typing-preserves-history") {
+        assert!(
+            Instant::now() < clear_deadline,
+            "first Ctrl-C should clear the draft"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
     writer.write_all(&[3]).expect("second Ctrl-C exit");
     writer.flush().expect("flush exit");
     let status = child.wait().expect("fixture status");
     assert!(status.success());
+    #[cfg(windows)]
+    // Resizing the PTY also resizes the retained original buffer.
+    native.restored(false);
+    #[cfg(windows)]
+    native.original_sentinel_preserved();
     drop(writer);
     drop(pair.master);
     reader_thread.join().expect("reader thread");
-    let raw = output.lock().expect("output");
-    assert!(
-        raw_contains(raw.as_slice(), b"\x1b[?1000h")
-            || raw_contains(raw.as_slice(), b"\x1b[?1003;1006h"),
-        "alternate-screen mouse capture was not enabled"
-    );
-    assert!(
-        raw_contains(raw.as_slice(), b"\x1b[?1000l")
-            || raw_contains(raw.as_slice(), b"\x1b[?1003;1006l"),
-        "alternate-screen mouse capture was not restored"
-    );
+    #[cfg(unix)]
+    {
+        let raw = output.lock().expect("output");
+        assert!(
+            raw_contains(raw.as_slice(), b"\x1b[?1000h")
+                || raw_contains(raw.as_slice(), b"\x1b[?1003;1006h"),
+            "alternate-screen mouse capture was not enabled; projected modes: {:?}",
+            terminal_mode_sequences(raw.as_slice())
+        );
+        assert!(
+            raw_contains(raw.as_slice(), b"\x1b[?1000l")
+                || raw_contains(raw.as_slice(), b"\x1b[?1003;1006l"),
+            "alternate-screen mouse capture was not restored"
+        );
+    }
 }
 
 #[test]
@@ -2134,6 +2299,7 @@ fn wait_for_raw(output: &Arc<Mutex<Vec<u8>>>, needle: &[u8]) {
     wait_for_raw_count(output, needle, 1);
 }
 
+#[cfg(unix)]
 fn wait_for_mouse_capture_count(output: &Arc<Mutex<Vec<u8>>>, enabled: bool, expected: usize) {
     // ConPTY projects native console-mode changes into a combined sequence;
     // POSIX emulators receive Crossterm's individual mode commands.
@@ -2164,6 +2330,26 @@ fn wait_for_mouse_capture_count(output: &Arc<Mutex<Vec<u8>>>, enabled: bool, exp
 
 fn raw_contains(raw: &[u8], needle: &[u8]) -> bool {
     raw.windows(needle.len()).any(|window| window == needle)
+}
+
+#[cfg(unix)]
+fn terminal_mode_sequences(raw: &[u8]) -> std::collections::BTreeSet<String> {
+    raw.windows(2)
+        .enumerate()
+        .filter(|(_, prefix)| *prefix == b"\x1b[")
+        .filter_map(|(start, _)| {
+            let tail = &raw[start + 2..];
+            let end = tail
+                .iter()
+                .take(64)
+                .position(|byte| (0x40..=0x7e).contains(byte))?;
+            matches!(tail[end], b'h' | b'l').then(|| {
+                String::from_utf8_lossy(&raw[start..start + end + 3])
+                    .escape_debug()
+                    .to_string()
+            })
+        })
+        .collect()
 }
 
 #[cfg(windows)]
@@ -2212,11 +2398,6 @@ fn wait_for_quiescent_output(output: &Arc<Mutex<Vec<u8>>>) -> Vec<u8> {
 
 #[cfg(windows)]
 fn conpty_frozen_frame_boundary(raw: &[u8]) -> Option<usize> {
-    let disabled = b"\x1b[?1003;1006l";
-    let disabled_end = raw
-        .windows(disabled.len())
-        .position(|bytes| bytes == disabled)?
-        + disabled.len();
     let mut parser = vt100::Parser::new(24, 80, 0);
     for (index, byte) in raw.iter().enumerate() {
         parser.process(std::slice::from_ref(byte));
@@ -2231,10 +2412,10 @@ fn conpty_frozen_frame_boundary(raw: &[u8]) -> Option<usize> {
                 .contents()
                 .contains("Select text · F6/Esc return · drag + Copy · view frozen; run continues")
         {
-            // Consume the expected mode change too when ConPTY paints first.
-            // Both boundaries end in complete commands, even if a later read
-            // has captured only part of the next cursor command.
-            return Some(end.max(disabled_end));
+            // Native GetConsoleMode already proved release. Start the strict
+            // no-redraw interval at this complete frozen frame, independently
+            // of whether ConPTY projects mode changes into escape bytes.
+            return Some(end);
         }
     }
     None

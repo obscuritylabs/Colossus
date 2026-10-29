@@ -15,30 +15,53 @@ commands when you need an exact ID or machine-readable history.
 For a new conversation, the agent sets a short title based on the opening request
 when `session.set_title` is available. It keeps that title as the conversation
 continues, even if the work changes direction. Ask the agent to rename the session
-if you want a different title. The TUI session browser and Desktop use the saved
+if you want a different title. The TUI Sessions browser and Desktop use the saved
 title; an unavailable or disabled title tool leaves the opening-request fallback.
 
-## List sessions in the terminal UI
+## Work with several sessions in the terminal UI
 
-Enter `/sessions` to see your 20 most recently updated sessions. The list shows each
-session's ID, message count, and creation and update times. This example wraps the
-metadata onto separate lines for readability:
+Press F2 or enter `/sessions` to open the **Sessions** browser on **Open** for the
+selected workspace. `/resume` opens **History** in the same browser. Tab and
+Shift-Tab move between Open, History, and Archived; `/` searches the current list.
 
-```text
-◆ Sessions
-  • Item 1
-    Id: 0195b640-8a41-7b35-948d-3d58b39e783a · Message count: 0
-    Updated at: 2026-09-30T14:24:05Z
-    Created at: 2026-09-30T14:24:05Z
-  • Item 2
-    Id: 0195b63e-bb32-76d1-a9e0-93b5f70f241c · Message count: 18
-    Updated at: 2026-09-30T13:11:59Z
-    Created at: 2026-09-30T13:10:38Z
-```
+The left pane shows session titles, status, update times, and message counts.
+Highlight a row with Up/Down or a mouse click to preview recent messages and work
+on the right. PageUp/PageDown scrolls the preview. Enter opens the selected
+unarchived conversation. Press `n` to create another session, `r` to refresh, or
+Esc to return. On compact terminals, the browser keeps the list visible.
 
-Copy an `Id` to resume a specific conversation with `/resume SESSION_ID`. A message
-count of `0` means the session has no messages yet. To browse by title and preview
-messages before choosing, use `/resume` without an ID.
+On wider terminals, workspace sessions stay pinned at the bottom of the right
+sidebar. In the default full-screen view, click a row once to switch conversations.
+If F6 terminal-native text selection is enabled, press F6 or Esc to return first.
+The sidebar grows from 28 to 36 columns when there is room while preserving at
+least 64 columns for the conversation. Alt-N starts a new session, and
+Alt-Left/Alt-Right switches between sessions without opening the command center.
+
+Sessions can work concurrently. Switching keeps each open session's draft,
+future-turn queue, Plan Mode selection, and model settings. Output stays with its
+conversation, and a decision indicator calls attention to a session needing input.
+In the Sessions browser, `s` stops the highlighted running or waiting session while the others
+continue.
+
+The terminal retains up to eight open sessions and lists up to 100 saved sessions
+in its catalogue. Working and decision indicators describe retained sessions in
+this terminal. Other saved conversations show **ready**; that label does not report
+whether they are running in another terminal or Desktop.
+
+## Archive and restore a conversation
+
+Open Sessions, highlight an idle conversation, and press `a` to archive it. Stop
+running or waiting work first, and resolve unsent drafts or queued turns before
+archiving an open session. Archiving the current session switches to another open
+conversation or starts an empty one when needed.
+
+Archived sessions leave Open and History but retain their messages, plans, tasks,
+and other durable work. The archive state survives restarting Colossus. In
+**Archived**, select a conversation to preview it and press `u` to restore it to
+History; Enter can then open it. Restoration does not restart previous work.
+
+Archive and restore apply to the selected runtime's saved state. Choose the same
+workspace and configuration to find these conversations later.
 
 ## Resume in the terminal UI
 
@@ -49,27 +72,10 @@ can also reopen the most recently updated session directly:
 colossus tui --resume
 ```
 
-The `/resume` browser fills the screen with searchable sessions on the left and a
-view of the selected conversation on the right. It marks the session you are in as `CURRENT`.
-This abbreviated example shows the labels and controls; your titles, messages, and
-timestamps will differ:
-
-```text
-Resume session · 2 sessions       │ View
-                                 │
-/ Search sessions                │ Release review
-                                 │ ID: 0195b640 · 8 messages
-  Session           Updated Msgs │ Updated: 2 min ago
-› Release review    2m ago      8 │ Recent conversation
-  CURRENT Repo task 10m ago     4 │ USER       Review the release notes
-                                 │ ASSISTANT  Here is the summary...
-
-↑/↓ Select   / Search   PgUp/Dn View   Enter Resume   Esc Cancel
-```
-
-Press `/` to search, Up/Down to choose, PageUp/PageDown to scroll the preview, and
-Enter to resume. To switch to a known session without browsing, enter
-`/resume SESSION_ID`. `/session show` displays the active session.
+To switch to a known session without browsing, enter `/resume SESSION_ID`.
+Navigation takes effect immediately even while the current session is running;
+that session continues in the background. `/session show` displays the active
+session.
 
 ## Start a clean conversation
 
@@ -82,6 +88,11 @@ colossus sessions new "Release review"
 ```
 
 Copy its `id` from the output and attach with `colossus tui --session SESSION_ID`.
+
+Closing the TUI requests cancellation of its attached runs. Durable conversations
+remain available to resume later; exiting does not leave these runs automatically
+working in the background. Drafts, queued turns, and process-local Plan and model
+selections are retained only while that TUI process stays open.
 
 ## Find or continue a session from the CLI
 

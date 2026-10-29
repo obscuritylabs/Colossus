@@ -83,8 +83,8 @@ const MAX_PLAN_EXECUTION_DOCK_ROWS: u16 = 11;
 const MIN_PLAN_EXECUTION_DOCK_ROWS: u16 = 11;
 /// Number of transcript lines moved by one terminal mouse-wheel event.
 const MOUSE_SCROLL_LINES: usize = 3;
-/// Smallest inline viewport: the composer and status footer, with no reserved transcript gap.
-const MINIMUM_INLINE_VIEWPORT_HEIGHT: u16 = 4;
+/// Smallest inline viewport: composer, status footer, and one transcript separator.
+const MINIMUM_INLINE_VIEWPORT_HEIGHT: u16 = 5;
 /// Maximum older durable pages eagerly restored into native terminal scrollback.
 const MAX_NATIVE_HISTORY_PAGES: usize = 10;
 /// Maximum durable messages restored into native scrollback, including the bootstrap page.
@@ -113,13 +113,18 @@ mod provider_recovery;
 mod render;
 mod selection;
 mod session_browser;
+mod session_manager;
 mod settings_picker;
 mod sidebar;
+mod startup;
 mod state;
 mod terminal;
 mod theme_picker;
+mod tool_details;
 mod transcript;
 mod usage;
+mod workspace;
+mod workspace_view;
 
 pub use app::run_tui;
 pub use contract::{

@@ -6,7 +6,11 @@ const MARK_HEIGHT: u16 = 10;
 
 /// The encoded brand mark uses ordinary terminal cells and only fills blank space.
 pub(super) fn render_welcome_mark(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
-    if !state.welcome_visible || area.width < 96 || area.height < 18 {
+    if !state.welcome_visible
+        || state.startup_animation.is_some()
+        || area.width < 96
+        || area.height < 18
+    {
         return;
     }
     let palette = TerminalPalette::for_preferences(&state.preferences);

@@ -19,18 +19,25 @@ impl Runtime {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<GoalRunOutcome, RuntimeError> {
-        let goal = self
-            .work
-            .get_goal(goal_id)?
-            .ok_or_else(|| StoreError::NotFound(format!("goal {goal_id}")))?;
-        validate_goal_resume_selection(&goal, expected_session_id)?;
-        let mode = goal_mode_instructions(&goal);
-        let prepared = self.prepare_agent_instructions("", &mode)?;
-        Ok(self
-            .run_existing_goal_stream_controlled(
-                role, goal, prepared, None, None, None, observer, control,
+        self.native_session_lifecycle
+            .during(
+                expected_session_id,
+                Box::pin(async {
+                    let goal = self
+                        .work
+                        .get_goal(goal_id)?
+                        .ok_or_else(|| StoreError::NotFound(format!("goal {goal_id}")))?;
+                    validate_goal_resume_selection(&goal, expected_session_id)?;
+                    let mode = goal_mode_instructions(&goal);
+                    let prepared = self.prepare_agent_instructions("", &mode)?;
+                    Ok(self
+                        .run_existing_goal_stream_controlled(
+                            role, goal, prepared, None, None, None, observer, control,
+                        )
+                        .await)
+                }),
             )
-            .await)
+            .await?
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -229,55 +236,62 @@ impl Runtime {
         observer: &mut dyn RunEventObserver,
         control: &RunControl,
     ) -> Result<GoalRunOutcome, RuntimeError> {
-        if !(1..=50).contains(&max_iterations) {
-            return Err(RuntimeError::Config(
-                "goal iterations must be in 1..=50".into(),
-            ));
-        }
-        let captured = self.capture_agent_instructions(instructions)?;
-        // Validate the immutable skill selection before creating durable Goal state.
-        let base = captured.clone().finalize("")?;
-        let composition = compose_plugins(
-            &base.plugins.records,
-            &base.base_text,
-            explicit_skills,
-            &[],
-            self.plugins_enabled,
-        )?;
-        let goal = WorkService::new(Arc::clone(&self.work), Arc::clone(&self.sessions))
-            .create_goal(
+        self.native_session_lifecycle
+            .during(
                 session_id,
-                objective,
-                max_iterations,
-                None,
-                initiator.clone(),
-            )?;
-        let prepared = captured.finalize(&goal_mode_instructions(&goal))?;
-        let active = composition
-            .active_skills
-            .iter()
-            .map(|skill| skill.id.clone())
-            .collect::<Vec<_>>();
-        let mut prepared = prepared;
-        prepared.text = prepared.complete_composed_base(&composition.instructions);
-        let authority = GoalRunAuthority {
-            max_turns: max_turns.unwrap_or(self.agent_max_turns),
-            active_skills: &active,
-            allowed_tools,
-            initiator,
-        };
-        Ok(self
-            .run_existing_goal_stream_controlled(
-                role,
-                goal,
-                prepared,
-                end_user_id,
-                remote_trace_context,
-                Some(&authority),
-                observer,
-                control,
+                Box::pin(async {
+                    if !(1..=50).contains(&max_iterations) {
+                        return Err(RuntimeError::Config(
+                            "goal iterations must be in 1..=50".into(),
+                        ));
+                    }
+                    let captured = self.capture_agent_instructions(instructions)?;
+                    // Validate the immutable skill selection before creating durable Goal state.
+                    let base = captured.clone().finalize("")?;
+                    let composition = compose_plugins(
+                        &base.plugins.records,
+                        &base.base_text,
+                        explicit_skills,
+                        &[],
+                        self.plugins_enabled,
+                    )?;
+                    let goal = WorkService::new(Arc::clone(&self.work), Arc::clone(&self.sessions))
+                        .create_goal(
+                            session_id,
+                            objective,
+                            max_iterations,
+                            None,
+                            initiator.clone(),
+                        )?;
+                    let prepared = captured.finalize(&goal_mode_instructions(&goal))?;
+                    let active = composition
+                        .active_skills
+                        .iter()
+                        .map(|skill| skill.id.clone())
+                        .collect::<Vec<_>>();
+                    let mut prepared = prepared;
+                    prepared.text = prepared.complete_composed_base(&composition.instructions);
+                    let authority = GoalRunAuthority {
+                        max_turns: max_turns.unwrap_or(self.agent_max_turns),
+                        active_skills: &active,
+                        allowed_tools,
+                        initiator,
+                    };
+                    Ok(self
+                        .run_existing_goal_stream_controlled(
+                            role,
+                            goal,
+                            prepared,
+                            end_user_id,
+                            remote_trace_context,
+                            Some(&authority),
+                            observer,
+                            control,
+                        )
+                        .await)
+                }),
             )
-            .await)
+            .await?
     }
 
     /// Run bounded autonomous iterations using the normal agent, session, policy, and tools.
@@ -289,6 +303,7 @@ impl Runtime {
         max_iterations: u16,
         source_plan_id: Option<&str>,
     ) -> Result<GoalRunResult, RuntimeError> {
+        self.native_session_lifecycle.during(session_id, Box::pin(async {
         if !(1..=50).contains(&max_iterations) {
             return Err(RuntimeError::Config(
                 "goal iterations must be in 1..=50".into(),
@@ -382,5 +397,6 @@ impl Runtime {
             iterations,
             elapsed_seconds: started.elapsed().as_secs_f64(),
         })
+        })).await?
     }
 }

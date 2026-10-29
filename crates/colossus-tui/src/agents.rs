@@ -1,8 +1,18 @@
 use super::*;
 
-pub(super) const PANEL_WIDTH: u16 = 28;
+pub(super) const PANEL_WIDTH: u16 = 36;
 pub(super) const MIN_CHAT_WIDTH: u16 = 64;
+const MIN_PANEL_WIDTH: u16 = 28;
 const MAX_AGENTS: usize = 100;
+
+pub(super) fn panel_width(terminal_width: u16) -> u16 {
+    let available = terminal_width.saturating_sub(MIN_CHAT_WIDTH);
+    if available < MIN_PANEL_WIDTH {
+        0
+    } else {
+        available.min(PANEL_WIDTH)
+    }
+}
 
 /// Retain display metadata only; released child results stay in the transcript.
 struct AgentNode {
@@ -95,8 +105,8 @@ impl AgentTree {
     }
 
     pub(super) fn width(&self, width: u16) -> u16 {
-        if !self.nodes.is_empty() && width >= MIN_CHAT_WIDTH + PANEL_WIDTH {
-            PANEL_WIDTH
+        if !self.nodes.is_empty() {
+            panel_width(width)
         } else {
             0
         }
@@ -245,6 +255,15 @@ impl AgentRefresh {
 }
 
 pub(super) fn render_agent_tree(frame: &mut Frame<'_>, state: &mut TuiState, area: Rect) {
+    let sessions_height = crate::workspace_view::sessions_height(state, area.height);
+    let sections =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(sessions_height)]).split(area);
+    state.agents.area = Some(sections[0]);
+    render_current_agents(frame, state, sections[0]);
+    crate::workspace_view::render_sessions(frame, state, sections[1]);
+}
+
+fn render_current_agents(frame: &mut Frame<'_>, state: &mut TuiState, area: Rect) {
     let palette = TerminalPalette::for_preferences(&state.preferences);
     let muted = ratatui_style(palette.meta_style());
     let block = Block::default().borders(Borders::LEFT).border_style(muted);

@@ -523,6 +523,18 @@ fn unsettled_error(
     )
 }
 
+/// Durable native session visibility, independent of conversation messages.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionLifecycle {
+    /// Stable canonical session identifier.
+    pub session_id: String,
+    /// Whether normal native session lists omit this session.
+    pub archived: bool,
+    /// Monotonic canonical lifecycle stream version; zero before its first change.
+    pub revision: u64,
+}
+
 /// Durable reconstructed local session summary.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
