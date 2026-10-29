@@ -23,6 +23,11 @@ include breaking changes while the public API is still settling.
 - Desktop has an optional developer companion with quiet status, size, motion and
   placement settings. App Shots and the companion start disabled.
 
+### Fixed
+
+- CLI sessions in one TUI workspace share saved suggestion settings. Delayed
+  replies, theme changes and older settings snapshots preserve model opt-out.
+
 <!-- colossus:release-notes base=v0.11.10 -->
 
 ### Merged changes
@@ -41,6 +46,7 @@ include breaking changes while the public API is still settling.
 - **onboarding:** include Hosted locally and simplify CLI enrollment ([#350](https://github.com/obscuritylabs/Colossus/pull/350))
 - **cli:** display per-run token usage ([#352](https://github.com/obscuritylabs/Colossus/pull/352))
 - **desktop:** add App Shots, worktrees and companion workflows ([ab64304](https://github.com/obscuritylabs/Colossus/commit/ab64304f7a03aabf600b5744ed4089402fb5d271))
+- **tui:** add workspace command center and compact tool activity ([#353](https://github.com/obscuritylabs/Colossus/pull/353))
 
 #### Fixed
 
@@ -76,6 +82,7 @@ include breaking changes while the public API is still settling.
 - refresh preview notes after acceptance hardening ([26dd435](https://github.com/obscuritylabs/Colossus/commit/26dd43523cc1cf9c008afc703a1802f1e9a64fb2))
 - refresh preview native acceptance notes ([4b94fca](https://github.com/obscuritylabs/Colossus/commit/4b94fca9953db748ff4c8acd14752c3750ec4dbb))
 - refresh preview notes after formatting checks ([0add39d](https://github.com/obscuritylabs/Colossus/commit/0add39dd3cd50fa7a2af3fcd5db7fc68ea9b846b))
+- refresh preview notes after security patch ([af08258](https://github.com/obscuritylabs/Colossus/commit/af082583aaa8188601a3484bd1fdcc49ef43ef58))
 
 #### Maintenance
 
@@ -105,7 +112,7 @@ include breaking changes while the public API is still settling.
 - record native background input failure evidence ([80c8cd4](https://github.com/obscuritylabs/Colossus/commit/80c8cd4f2234b3d3ba2ee863e852ed24fd7413a2))
 - **desktop:** format app capture and worktree integration ([0d9411c](https://github.com/obscuritylabs/Colossus/commit/0d9411c076c09feedcac83d2320f8b0f735a6eb4))
 
-**Source:** [aaf037d](https://github.com/obscuritylabs/Colossus/commit/aaf037dc08f27baccaa00daf07b13e74ae3a7492)
+**Source:** [853977f](https://github.com/obscuritylabs/Colossus/commit/853977f9052d0641198e720993d3f6d8adc28e2d)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.5](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.5)
 
