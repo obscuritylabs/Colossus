@@ -214,7 +214,7 @@ mod tests {
     use super::*;
     use std::{
         fs,
-        os::unix::fs::{PermissionsExt as _, symlink},
+        os::unix::fs::{DirBuilderExt as _, PermissionsExt as _, symlink},
         path::PathBuf,
     };
 
@@ -222,8 +222,10 @@ mod tests {
 
     fn fixture() -> (tempfile::TempDir, ConfinedRoot, PathBuf) {
         let temp = tempfile::tempdir().unwrap();
-        let parent = ConfinedRoot::bind(temp.path()).unwrap();
-        let path = temp.path().join(LEAF);
+        let private = temp.path().join("private");
+        fs::DirBuilder::new().mode(0o700).create(&private).unwrap();
+        let parent = ConfinedRoot::bind(&private).unwrap();
+        let path = private.join(LEAF);
         fs::create_dir(&path).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         (temp, parent, path)
