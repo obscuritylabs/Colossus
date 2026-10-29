@@ -94,8 +94,10 @@ include breaking changes while the public API is still settling.
 - **release:** finalize preview.4 validation history ([58ba1d0](https://github.com/obscuritylabs/Colossus/commit/58ba1d0247e412ab6d9d425e020a678480fce246))
 - **release:** include enrollment and dependency fixes in preview notes ([d9c5f60](https://github.com/obscuritylabs/Colossus/commit/d9c5f60e1114fbce7ce4955bf3bfd94a0c890203))
 - **release:** prepare v0.11.11-preview.5 notes ([01ae1c3](https://github.com/obscuritylabs/Colossus/commit/01ae1c382ddd03f26e9781369490cefc8456d2d5))
+- **release:** refresh preview.5 validated feature notes ([a433310](https://github.com/obscuritylabs/Colossus/commit/a4333102ba7a9dcb13738a42761621ff37b8bd6b))
+- **computer:** bind App Shot acceptance to reviewed fixture images ([d7c88a2](https://github.com/obscuritylabs/Colossus/commit/d7c88a28fdad2aa28521e93d030ac9e4176303fb))
 
-**Source:** [70c9f5e](https://github.com/obscuritylabs/Colossus/commit/70c9f5e37d89d854a34e814ea7da6304df56b342)
+**Source:** [d7c88a2](https://github.com/obscuritylabs/Colossus/commit/d7c88a28fdad2aa28521e93d030ac9e4176303fb)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.5](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.5)
 
