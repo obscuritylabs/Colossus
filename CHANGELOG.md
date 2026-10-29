@@ -92,6 +92,7 @@ include breaking changes while the public API is still settling.
 - refresh preview notes after formatting checks ([0add39d](https://github.com/obscuritylabs/Colossus/commit/0add39dd3cd50fa7a2af3fcd5db7fc68ea9b846b))
 - refresh preview notes after security patch ([af08258](https://github.com/obscuritylabs/Colossus/commit/af082583aaa8188601a3484bd1fdcc49ef43ef58))
 - **release:** refresh preview notes after workspace integration ([620edaf](https://github.com/obscuritylabs/Colossus/commit/620edaf5444aea35e772ac43ee52fdeccbf32059))
+- **release:** record Unix worktree and zip fixes ([7c3bcbc](https://github.com/obscuritylabs/Colossus/commit/7c3bcbc1c87bde15477fea3b20a5b5394a336a1d))
 
 #### Maintenance
 
@@ -120,8 +121,9 @@ include breaking changes while the public API is still settling.
 - harden desktop capability and native drag acceptance ([debd120](https://github.com/obscuritylabs/Colossus/commit/debd120c09456b2887fd8217aef3994e732f5e3f))
 - record native background input failure evidence ([80c8cd4](https://github.com/obscuritylabs/Colossus/commit/80c8cd4f2234b3d3ba2ee863e852ed24fd7413a2))
 - **desktop:** format app capture and worktree integration ([0d9411c](https://github.com/obscuritylabs/Colossus/commit/0d9411c076c09feedcac83d2320f8b0f735a6eb4))
+- **worktrees:** create private Unix fixtures ([9aa8366](https://github.com/obscuritylabs/Colossus/commit/9aa8366ac806a2339e9e00f9d7629d763b85e2af))
 
-**Source:** [2d154b5](https://github.com/obscuritylabs/Colossus/commit/2d154b562ee40d48e84bf1f62826b48b447a01f0)
+**Source:** [9aa8366](https://github.com/obscuritylabs/Colossus/commit/9aa8366ac806a2339e9e00f9d7629d763b85e2af)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.5](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.5)
 
