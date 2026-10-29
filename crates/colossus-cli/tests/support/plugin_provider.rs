@@ -60,15 +60,17 @@ fn worker_plugin_inputs_are_progressive_and_lifecycle_changes_affect_only_new_ru
         operation.env("COLOSSUS_HOME", home.colossus_home());
         operation
     };
+    // Retain all isolated process environment directories until worker shutdown.
+    let mut worker_command = invoke();
     let mut worker = ChildGuard(
-        invoke()
+        worker_command
             .arg("worker")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .expect("worker"),
     );
-    wait_for_worker(binary, &config);
+    wait_for_worker(binary, &config, &mut worker.0);
     let inventory = success(
         invoke()
             .args(["plugins", "list"])
@@ -108,7 +110,8 @@ fn worker_plugin_inputs_are_progressive_and_lifecycle_changes_affect_only_new_ru
             .output()
             .expect("selected run"),
     );
-    let active = invoke()
+    let mut active_command = invoke();
+    let active = active_command
         .args(["run", "read after disable", "--skill", SELECTED])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
