@@ -96,8 +96,10 @@ include breaking changes while the public API is still settling.
 - **release:** prepare v0.11.11-preview.5 notes ([01ae1c3](https://github.com/obscuritylabs/Colossus/commit/01ae1c382ddd03f26e9781369490cefc8456d2d5))
 - **release:** refresh preview.5 validated feature notes ([a433310](https://github.com/obscuritylabs/Colossus/commit/a4333102ba7a9dcb13738a42761621ff37b8bd6b))
 - **computer:** bind App Shot acceptance to reviewed fixture images ([d7c88a2](https://github.com/obscuritylabs/Colossus/commit/d7c88a28fdad2aa28521e93d030ac9e4176303fb))
+- **release:** record native fixture admission validation ([0aa3e6a](https://github.com/obscuritylabs/Colossus/commit/0aa3e6ad8911aabe2204d77265f23212d5d113ae))
+- harden desktop capability and native drag acceptance ([debd120](https://github.com/obscuritylabs/Colossus/commit/debd120c09456b2887fd8217aef3994e732f5e3f))
 
-**Source:** [d7c88a2](https://github.com/obscuritylabs/Colossus/commit/d7c88a28fdad2aa28521e93d030ac9e4176303fb)
+**Source:** [debd120](https://github.com/obscuritylabs/Colossus/commit/debd120c09456b2887fd8217aef3994e732f5e3f)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.5](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.5)
 
