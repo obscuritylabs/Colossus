@@ -35,10 +35,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mut title = None;
     let mut output = None;
+    let mut fixture_image = None;
+    let mut fixture_sha256 = None;
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--fixture-title" => title = args.next(),
             "--output" => output = args.next(),
+            "--fixture-image" => fixture_image = args.next(),
+            "--fixture-image-sha256" => fixture_sha256 = args.next(),
             _ => return Err("unknown acceptance argument".into()),
         }
     }
@@ -53,14 +57,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if !output.is_absolute() || !output.is_dir() {
         return Err("existing private absolute output directory required".into());
     }
+    let fixture_image = PathBuf::from(fixture_image.ok_or("reviewed fixture image required")?);
+    if !fixture_image.is_absolute() {
+        return Err("absolute reviewed fixture image required".into());
+    }
+    let fixture_image = colossus_windows_native::BoundPath::open_immutable_file(&fixture_image)?;
+    let fixture_sha256 = fixture_sha256.ok_or("reviewed fixture image SHA-256 required")?;
     let wait_until = Instant::now() + Duration::from_secs(45);
-    let ticket = loop {
-        // Metadata admission precedes all pixel/text reads. A personal window
-        // in the foreground is never captured by this acceptance driver.
+    let (ticket, admitted) = loop {
+        // The title narrows metadata discovery only. Exact immutable image,
+        // digest and frozen process/window admission precede every pixel read.
         if let Ok(ticket) = colossus_native_computer::prepare_foreground_appshot()
             && ticket.window_title() == title
         {
-            break ticket;
+            let admitted = ticket
+                .admit_test_fixture(&fixture_image, &fixture_sha256)
+                .map_err(|_| "foreground target is not the reviewed synthetic fixture")?;
+            break (ticket, admitted);
         }
         if Instant::now() >= wait_until {
             return Err("synthetic fixture was not foreground".into());
@@ -69,7 +82,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     let started = Instant::now();
     let capture = ticket
-        .capture(true)
+        .capture_test_fixture(true, &admitted)
         .map_err(|_| "foreground capture or acknowledged helper cleanup failed")?;
     if capture.window_title != title || capture.png.len() > 6 * 1024 * 1024 {
         return Err("capture bounds differ".into());
@@ -92,7 +105,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err("foreground changed before image-only capture".into());
     }
     let image_only = image_only
-        .capture(false)
+        .capture_test_fixture(false, &admitted)
         .map_err(|_| "image-only capture failed")?;
     if image_only.text.is_some() {
         return Err("disabled accessibility read returned text".into());
@@ -100,7 +113,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let receipt = serde_json::json!({
         "schema_version":1,"passed":true,"fixture_title":title,"png_sha256":format!("{:x}", Sha256::digest(&capture.png)),
         "width":capture.width,"height":capture.height,"png_bytes":capture.png.len(),"text_bytes":text.len(),
-        "text_present":true,"image_only_text_absent":true,"job_zero_before_each_release":true,"elapsed_ms":started.elapsed().as_millis()
+        "text_present":true,"image_only_text_absent":true,"job_zero_before_each_release":true,"elapsed_ms":started.elapsed().as_millis(),
+        "fixture_image_sha256":fixture_sha256,"fixture_image_admitted_before_read":true,"same_admitted_window_for_image_only":true
     });
     colossus_windows_native::create_private_file(
         &output.join("appshot-acceptance.json"),

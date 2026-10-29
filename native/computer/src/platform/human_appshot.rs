@@ -43,6 +43,9 @@ const MAX_PNG: u32 = 6 * 1024 * 1024;
 const MAX_PIXELS: u32 = 16 * 1024 * 1024;
 const MAX_TEXT: usize = 32 * 1024;
 
+#[cfg(feature = "native-test-driver")]
+pub(crate) mod fixture;
+
 #[derive(Clone, Copy, Serialize, Deserialize)]
 enum ReadKind {
     Image,
@@ -214,6 +217,18 @@ fn verify_parent(parent: &NativeProcessIdentity) -> Result<(), Error> {
     }
     // SAFETY: successful OpenProcess transfers this handle into RAII custody.
     let process = unsafe { OwnedHandle::from_raw_handle(raw.cast()) };
+    let parent_image = process_image(&process)?;
+    let current = std::env::current_exe().map_err(|_| Error::Denied)?;
+    let current_image = colossus_windows_native::BoundPath::open_immutable_file(&current)
+        .map_err(|_| Error::Denied)?;
+    if parent_image.identity() != current_image.identity() || identity::process(actual)? != *parent
+    {
+        return Err(Error::Denied);
+    }
+    Ok(())
+}
+
+fn process_image(process: &OwnedHandle) -> Result<colossus_windows_native::BoundPath, Error> {
     let mut path = vec![0u16; 32768];
     let mut length = path.len() as u32;
     // SAFETY: retained query handle and bounded, writable UTF-16 output.
@@ -228,19 +243,10 @@ fn verify_parent(parent: &NativeProcessIdentity) -> Result<(), Error> {
     {
         return Err(Error::Denied);
     }
-    let parent_path = std::path::PathBuf::from(
+    let image_path = std::path::PathBuf::from(
         String::from_utf16(&path[..length as usize]).map_err(|_| Error::Denied)?,
     );
-    let parent_image = colossus_windows_native::BoundPath::open_immutable_file(&parent_path)
-        .map_err(|_| Error::Denied)?;
-    let current = std::env::current_exe().map_err(|_| Error::Denied)?;
-    let current_image = colossus_windows_native::BoundPath::open_immutable_file(&current)
-        .map_err(|_| Error::Denied)?;
-    if parent_image.identity() != current_image.identity() || identity::process(actual)? != *parent
-    {
-        return Err(Error::Denied);
-    }
-    Ok(())
+    colossus_windows_native::BoundPath::open_immutable_file(&image_path).map_err(|_| Error::Denied)
 }
 
 pub(crate) fn entry() -> Result<(), Error> {

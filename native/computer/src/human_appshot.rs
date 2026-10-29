@@ -12,6 +12,16 @@ pub struct ForegroundAppshot {
     pub(crate) title: String,
 }
 
+/// Opaque identity of a reviewed synthetic target, available only to native tests.
+/// The retained process and immutable image prevent title/PID/path substitution.
+#[cfg(all(windows, feature = "native-test-driver"))]
+pub struct FixtureAppshotIdentity {
+    pub(crate) window: crate::platform::identity::Window,
+    pub(crate) process: std::os::windows::io::OwnedHandle,
+    pub(crate) image: std::fs::File,
+    pub(crate) image_identity: colossus_windows_native::FileIdentity,
+}
+
 /// Bounded pixels and available visible control labels from the same window.
 pub struct HumanAppshot {
     /// PNG encoded by target-only Windows Graphics Capture.
@@ -49,6 +59,28 @@ impl ForegroundAppshot {
             let _ = include_text;
             Err(ComputerDriverError::Unavailable)
         }
+    }
+
+    /// Admit only the reviewed immutable fixture image before any native read.
+    /// This metadata-only test seam is absent from shipping Desktop builds.
+    #[cfg(all(windows, feature = "native-test-driver"))]
+    pub fn admit_test_fixture(
+        &self,
+        image: &colossus_windows_native::BoundPath,
+        expected_sha256: &str,
+    ) -> Result<FixtureAppshotIdentity, ComputerDriverError> {
+        crate::platform::human_appshot::fixture::admit(self, image, expected_sha256)
+    }
+
+    /// Test-only capture of the exact already admitted synthetic window/process.
+    /// Image identity and frozen native geometry are rechecked before each read.
+    #[cfg(all(windows, feature = "native-test-driver"))]
+    pub fn capture_test_fixture(
+        self,
+        include_text: bool,
+        admitted: &FixtureAppshotIdentity,
+    ) -> Result<HumanAppshot, ComputerDriverError> {
+        crate::platform::human_appshot::fixture::capture(self, include_text, admitted)
     }
 
     /// Human-readable title for a native confirmation dialog.

@@ -30,6 +30,8 @@ mod trusted;
 mod wire;
 
 pub use driver::NativeComputerDriver;
+#[cfg(all(windows, feature = "native-test-driver"))]
+pub use human_appshot::FixtureAppshotIdentity;
 pub use human_appshot::{
     ForegroundAppshot, HumanAppshot, prepare_foreground_appshot, run_appshot_worker_if_requested,
 };
