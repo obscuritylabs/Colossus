@@ -21,5 +21,8 @@ uuid.workspace = true
 [lints]
 workspace = true
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["fs"] }
+
 [target.'cfg(windows)'.dependencies]
 colossus-windows-native.workspace = true

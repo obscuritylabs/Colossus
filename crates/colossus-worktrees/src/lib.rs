@@ -6,6 +6,8 @@
 
 mod error;
 mod filesystem;
+#[cfg(unix)]
+mod fresh_checkout;
 mod lease;
 mod model;
 mod repository;

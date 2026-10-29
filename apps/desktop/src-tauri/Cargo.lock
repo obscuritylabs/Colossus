@@ -1458,6 +1458,7 @@ dependencies = [
  "fs4",
  "git2",
  "hex",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.10.9",

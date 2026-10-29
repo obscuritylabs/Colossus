@@ -63,6 +63,7 @@ fn tracked_internal_file_links_support_colossus_and_nested_checkouts() {
             ("AGENTS.md", b"owned instructions\n", 0o100_644),
             ("CLAUDE.md", b"AGENTS.md", 0o120_000),
             ("nested/CLAUDE.md", b"../AGENTS.md", 0o120_000),
+            ("nested/deeper/CLAUDE.md", b"../../AGENTS.md", 0o120_000),
         ],
         false,
     );
@@ -83,6 +84,18 @@ fn tracked_internal_file_links_support_colossus_and_nested_checkouts() {
     }
     #[cfg(unix)]
     {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(entry.state, WorktreeState::Active);
+        for relative in ["", "nested", "nested/deeper"] {
+            assert_eq!(
+                fs::metadata(entry.path.join(relative))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700,
+            );
+        }
         assert!(
             fs::symlink_metadata(entry.path.join("CLAUDE.md"))
                 .unwrap()

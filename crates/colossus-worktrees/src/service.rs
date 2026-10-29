@@ -201,6 +201,8 @@ impl WorktreeManager {
             worktree
                 .validate()
                 .map_err(|_| WorktreeError::uncertain())?;
+            #[cfg(unix)]
+            crate::fresh_checkout::make_private(&self._trees, &entry.id)?;
             let _private =
                 ConfinedRoot::bind(&entry.path).map_err(|_| WorktreeError::uncertain())?;
             let target = Binding::discover(&entry.path)?;
