@@ -56,6 +56,7 @@ include breaking changes while the public API is still settling.
 - **terminal:** finish readers when native shells exit ([f3389e1](https://github.com/obscuritylabs/Colossus/commit/f3389e1d9904bdcca865b4c2debb22107d9a65f9))
 - **web:** disclose Fleet shell time limits ([536c3f7](https://github.com/obscuritylabs/Colossus/commit/536c3f7d018c0747c2d33d44b245773522d6a23e))
 - restore explicit terminal enrollment and patch build tools ([077bfad](https://github.com/obscuritylabs/Colossus/commit/077bfad5ad8a6473a1f520c04cea712e53ad7698))
+- **desktop:** keep capture consent responsive and confine companion actions ([70c9f5e](https://github.com/obscuritylabs/Colossus/commit/70c9f5e37d89d854a34e814ea7da6304df56b342))
 
 #### Security
 
@@ -92,8 +93,9 @@ include breaking changes while the public API is still settling.
 - **windows:** group native fixtures under one private root ([32dcf2e](https://github.com/obscuritylabs/Colossus/commit/32dcf2ed8ff69bfb1a60df510af25971f667c46e))
 - **release:** finalize preview.4 validation history ([58ba1d0](https://github.com/obscuritylabs/Colossus/commit/58ba1d0247e412ab6d9d425e020a678480fce246))
 - **release:** include enrollment and dependency fixes in preview notes ([d9c5f60](https://github.com/obscuritylabs/Colossus/commit/d9c5f60e1114fbce7ce4955bf3bfd94a0c890203))
+- **release:** prepare v0.11.11-preview.5 notes ([01ae1c3](https://github.com/obscuritylabs/Colossus/commit/01ae1c382ddd03f26e9781369490cefc8456d2d5))
 
-**Source:** [ab64304](https://github.com/obscuritylabs/Colossus/commit/ab64304f7a03aabf600b5744ed4089402fb5d271)
+**Source:** [70c9f5e](https://github.com/obscuritylabs/Colossus/commit/70c9f5e37d89d854a34e814ea7da6304df56b342)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.5](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.5)
 
