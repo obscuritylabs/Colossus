@@ -56,6 +56,64 @@ fn usage_cards(state: &TuiState) -> usize {
 }
 
 #[test]
+fn usage_stays_in_the_sidebar_across_resizes_and_screen_modes() {
+    for mode in [ScreenMode::Alternate, ScreenMode::Inline] {
+        let mut source = snapshot();
+        source.footer.usage = Some(report("restored", Some(counters())));
+        let mut state = TuiState::from_snapshot(source);
+        state.composer.insert("keep my draft");
+        for width in [120, 80, 92, 120] {
+            let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+            terminal
+                .draw(|frame| render(frame, &mut state, 0, mode))
+                .unwrap();
+            let chat_width = width - state.sidebar_width(width);
+            let cells = |left: u16, right: u16| {
+                (0..30)
+                    .map(|y| {
+                        (left..right)
+                            .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let chat = cells(0, chat_width);
+            let sidebar = cells(chat_width, width);
+            assert!(!chat.contains("Run usage"), "{chat}");
+            assert!(chat.contains("1.2k"), "compact fallback: {chat}");
+            if width >= 92 {
+                for expected in ["Run usage", "1,250 tokens", "Input 1,000", "Output 250"] {
+                    assert!(sidebar.contains(expected), "{width}: {sidebar}");
+                }
+            } else {
+                assert!(sidebar.trim().is_empty());
+            }
+            assert_eq!(state.draft(), "keep my draft");
+            assert_eq!(usage_cards(&state), 0);
+        }
+    }
+}
+
+#[test]
+fn sidebar_keeps_optional_details_and_rejects_other_session_usage() {
+    let mut source = snapshot();
+    source.footer.usage = Some(report("restored", Some(counters())));
+    let mut state = TuiState::from_snapshot(source);
+    let rendered = state
+        .usage_sidebar_lines(33)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(rendered.contains("cached input 600"), "{rendered}");
+    assert!(rendered.contains("reasoning output 100"), "{rendered}");
+    state.footer.usage.as_mut().unwrap().session_id = "other-session".into();
+    assert!(state.usage_sidebar_lines(33).is_empty());
+    assert_eq!(state.sidebar_width(120), 0);
+}
+
+#[test]
 fn reducer_counts_equal_reports_separately_without_mixing_children_or_sessions() {
     let mut state = RunUsageState::restored("019f-test", None);
     state.begin("019f-test", true);
@@ -149,9 +207,13 @@ fn wrong_same_session_canonical_run_cannot_replace_observed_direct_run() {
         "019f-test",
         Some(report("goal-iteration-two", Some(counters()))),
     );
-    let finished = state.finish().expect("observed direct run");
+    state.finish();
+    let finished = state.current().expect("observed direct run");
     assert_eq!(finished.run_id, "goal-iteration-one");
-    assert_eq!(finished.usage.expect("reported").total_tokens, 1_250);
+    assert_eq!(
+        finished.usage.as_ref().expect("reported").total_tokens,
+        1_250
+    );
     state.replace_canonical("019f-test", Some(report("idle-latest", Some(counters()))));
     assert_eq!(state.current().expect("idle refresh").run_id, "idle-latest");
 }
@@ -217,8 +279,9 @@ fn failure_retains_usage_with_events_off_and_transcript_changes() {
                 .total_tokens,
             1_250
         );
-        assert_eq!(usage_cards(&state), 1);
-        let rendered = transcript_lines(&state, 100)
+        assert_eq!(usage_cards(&state), 0);
+        let rendered = state
+            .usage_sidebar_lines(33)
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
@@ -228,14 +291,14 @@ fn failure_retains_usage_with_events_off_and_transcript_changes() {
             "{rendered}"
         );
         state.set_preferences(TerminalPreferences::default());
-        assert_eq!(usage_cards(&state), 1);
+        assert_eq!(usage_cards(&state), 0);
         state.finish_run_usage();
-        assert_eq!(usage_cards(&state), 1);
+        assert_eq!(usage_cards(&state), 0);
     }
 }
 
 #[test]
-fn completed_and_cancelled_turns_show_one_canonical_run_summary() {
+fn completed_and_cancelled_turns_retain_canonical_usage_without_transcript_cards() {
     for cancelled in [false, true] {
         let mut state = TuiState::from_snapshot(snapshot());
         state.operation = Some(OperationKind::Run);
@@ -282,7 +345,7 @@ fn completed_and_cancelled_turns_show_one_canonical_run_summary() {
                 plan_selection: PlanSelectionUpdate::Unchanged,
             })))),
         );
-        assert_eq!(usage_cards(&state), 1);
+        assert_eq!(usage_cards(&state), 0);
         let total = state.footer.usage.as_ref().expect("canonical usage");
         assert_eq!(total.reports, 1);
         assert_eq!(total.usage.as_ref().expect("reported").total_tokens, 1_250);
@@ -299,8 +362,8 @@ fn completed_and_cancelled_turns_show_one_canonical_run_summary() {
         );
         assert_eq!(
             usage_cards(&state),
-            1,
-            "a read-only command does not repeat the response summary"
+            0,
+            "a read-only command does not add usage to the conversation"
         );
     }
 }
@@ -395,10 +458,8 @@ fn research_and_goal_execution_clear_prior_usage_but_read_commands_preserve_it()
         state.current().is_none(),
         "nonstream research must not show a previous provider run"
     );
-    assert!(
-        state.finish().is_none(),
-        "no direct run events means no invented usage report"
-    );
+    state.finish();
+    assert!(state.current().is_none(), "no invented usage report");
 }
 
 #[test]
@@ -572,7 +633,7 @@ fn selected_plan_and_queue_cues_keep_priority_with_or_without_usage() {
 }
 
 #[test]
-fn unary_goal_completion_restores_exact_usage_and_emits_one_summary() {
+fn unary_goal_completion_restores_exact_usage_without_transcript_cards() {
     for usage in [None, Some(counters())] {
         let mut source = snapshot();
         source.footer.usage = Some(report(
@@ -600,9 +661,9 @@ fn unary_goal_completion_restores_exact_usage_and_emits_one_summary() {
             )))),
         );
         assert_eq!(state.footer.usage.as_ref(), Some(&canonical));
-        assert_eq!(usage_cards(&state), 1);
+        assert_eq!(usage_cards(&state), 0);
         state.finish_run_usage();
-        assert_eq!(usage_cards(&state), 1);
+        assert_eq!(usage_cards(&state), 0);
 
         state.begin_run_usage(false);
         let footer = state.footer.clone();
@@ -615,7 +676,7 @@ fn unary_goal_completion_restores_exact_usage_and_emits_one_summary() {
                 },
             )))),
         );
-        assert_eq!(usage_cards(&state), 1, "read commands do not repeat usage");
+        assert_eq!(usage_cards(&state), 0, "read commands do not append usage");
     }
 }
 
@@ -657,5 +718,5 @@ fn unary_command_completion_rejects_invalid_identity_and_preserves_live_scope() 
     });
     state.finish_run_usage();
     assert_eq!(state.footer.usage.as_ref().unwrap().run_id, "observed-run");
-    assert_eq!(usage_cards(&state), 1);
+    assert_eq!(usage_cards(&state), 0);
 }

@@ -303,8 +303,13 @@ fn render_current_agents(frame: &mut Frame<'_>, state: &mut TuiState, area: Rect
     } else {
         "ready"
     };
-    let mut lines = state.sidebar.lines(width, palette);
-    let details = lines.split_off(lines.len().min(3));
+    let mut lines = state.usage_sidebar_lines(width);
+    if !lines.is_empty() {
+        lines.push(Line::default());
+    }
+    let mut status = state.sidebar.lines(width, palette);
+    let details = status.split_off(status.len().min(3));
+    lines.extend(status);
     lines.extend([
         Line::from(Span::styled(heading, muted.add_modifier(Modifier::BOLD))),
         agent_line(
