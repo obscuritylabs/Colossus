@@ -49,6 +49,10 @@ The documentation-guidance row was additionally reviewed against
 [`8e3d39b8`](https://github.com/obscuritylabs/Colossus/commit/8e3d39b8d69f6429ef7263a03685cd549800261a).
 Coverage is semantic: public Draft continuation and terminal approval/execution are
 different workflows with explicit revision binding.
+The suggestion, worktree, App Shot, browser sign-in and companion rows were
+reviewed for [PR #354](https://github.com/obscuritylabs/Colossus/pull/354) at
+[`738f311a`](https://github.com/obscuritylabs/Colossus/commit/738f311a30cf8428696c873eb177b6a64d984af6).
+Their pending native checks remain separate from implementation and historical tests.
 
 | Capability | Public API / SDK | CLI / TUI | Desktop | VS Code | Web |
 | --- | --- | --- | --- | --- | --- |
@@ -60,7 +64,7 @@ different workflows with explicit revision binding.
 | Managed local Git worktrees | Intentional difference: local Rust service owns filesystem custody; no remote worktree RPC is introduced | Supported: create/list/settings/archive/remove commands; open starts the ordinary TUI in the verified checkout | Supported: local Worktrees settings, create/open and guarded lifecycle | Missing: no human worktree controls | Intentional difference: no browser-host filesystem checkout management; remote provisioning would need a separate owned API |
 | Windows App Shots to a chat draft | Intentional difference: capture authority stays with the local Desktop host; attachment transport does not grant capture authority | Intentional difference: no human shortcut/preview workflow; agent computer tools are separate | Partial: Windows capture, preview, text choice and explicit draft attachment implemented; installed signed shortcut-to-draft acceptance pending | Intentional difference: Windows Desktop-first feature; no extension capture workflow | Intentional difference: no native external-window capture shortcut or cookie/profile sharing |
 | Human browser sign-in controls | Intentional difference: human native profiles and sign-ins belong to the Desktop host; existing agent browser contracts do not expose their cookies | Intentional difference: agent browser operations do not establish a human profile/settings workflow | Partial: Windows User-Agent, encrypted opt-in sign-in persistence, reset and redacted diagnostics implemented; final rebuilt-byte/platform acceptance pending | Intentional difference: no corresponding human native-profile host | Intentional difference: ordinary browser cookies remain owned by the user's browser; no Desktop profile sharing |
-| Developer companion | Intentional difference: floating window and preferences are local Desktop presentation | Intentional difference: no floating native companion window | Partial: status/preferences and scoped native actions implemented; Windows border repair and final native verification pending | Intentional difference: not an extension feature | Intentional difference: browser page does not own an OS floating companion |
+| Developer companion | Intentional difference: floating window and preferences are local Desktop presentation | Intentional difference: no floating native companion window | Partial: status/preferences and scoped native actions implemented; Windows border fix implemented; native visual verification pending | Intentional difference: not an extension feature | Intentional difference: browser page does not own an OS floating companion |
 
 Evidence and owned follow-ups:
 
