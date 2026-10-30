@@ -2112,6 +2112,69 @@ mod tests {
     }
 
     #[test]
+    fn managed_documentation_policy_overrides_reach_canonical_runtime_with_validation() {
+        let instance = tempfile::tempdir().expect("instance");
+        let instance_id = Uuid::now_v7();
+        let mut managed = test_managed_runtime();
+        let config = managed_runtime_config(&managed, instance_id, instance.path(), None, false)
+            .expect("default documentation policy");
+        assert!(config.plugins.documentation.auto_activate);
+        assert_eq!(config.plugins.documentation.skill, "colossus/documentation");
+
+        managed.field_overrides = vec![
+            ManagedFieldOverride {
+                field_id: "plugins.documentation.autoActivate".into(),
+                value: serde_json::json!(false),
+            },
+            ManagedFieldOverride {
+                field_id: "plugins.documentation.skill".into(),
+                value: serde_json::json!("team/documentation"),
+            },
+        ];
+        let config = managed_runtime_config(&managed, instance_id, instance.path(), None, false)
+            .expect("custom documentation policy");
+        assert!(!config.plugins.documentation.auto_activate);
+        assert_eq!(config.plugins.documentation.skill, "team/documentation");
+
+        for (field_id, value) in [
+            (
+                "plugins.documentation.autoActivate",
+                serde_json::json!("false"),
+            ),
+            ("plugins.documentation.skill", serde_json::json!(false)),
+            ("plugins.documentation.skill", serde_json::Value::Null),
+            (
+                "plugins.documentation.skill",
+                serde_json::json!("documentation"),
+            ),
+            ("plugins.documentation.skill", serde_json::json!("team/")),
+            (
+                "plugins.documentation.skill",
+                serde_json::json!("team/docs/extra"),
+            ),
+            (
+                "plugins.documentation.skill",
+                serde_json::json!("team/docs\nInjected"),
+            ),
+            (
+                "plugins.documentation",
+                serde_json::json!({"autoActivate": false, "skill": "team/documentation"}),
+            ),
+        ] {
+            managed.field_overrides = vec![ManagedFieldOverride {
+                field_id: field_id.into(),
+                value,
+            }];
+            assert_eq!(
+                managed_runtime_config(&managed, instance_id, instance.path(), None, false)
+                    .expect_err("invalid documentation policy override"),
+                FailureCode::InvalidConfiguration,
+                "{field_id}"
+            );
+        }
+    }
+
+    #[test]
     fn managed_field_overrides_reach_runtime_without_crossing_locked_boundaries() {
         let instance = tempfile::tempdir().expect("instance");
         let mut managed = test_managed_runtime();

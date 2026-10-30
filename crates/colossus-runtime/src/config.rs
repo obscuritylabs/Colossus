@@ -4,6 +4,8 @@ mod browser;
 pub use browser::BrowserConfig;
 mod computer;
 pub use computer::ComputerConfig;
+mod documentation;
+pub use documentation::DocumentationConfig;
 
 /// Strict fresh Rust runtime configuration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -306,6 +308,8 @@ pub struct PluginsConfig {
     pub include: Vec<String>,
     /// Exact denylist applied after `include`.
     pub exclude: Vec<String>,
+    /// Conditional developer-documentation guidance; never adds runtime authority.
+    pub documentation: DocumentationConfig,
     /// Reusable supply-chain trust policies.
     #[serde(deserialize_with = "deserialize_plugin_trust_profiles")]
     pub trust_profiles: BTreeMap<String, PluginTrustProfile>,
@@ -322,6 +326,7 @@ impl Default for PluginsConfig {
             workspace_discovery: true,
             include: Vec::new(),
             exclude: Vec::new(),
+            documentation: DocumentationConfig::default(),
             trust_profiles: default_plugin_trust_profiles(),
             registries: default_plugin_registries(),
             mcp_servers: BTreeMap::new(),
@@ -1610,6 +1615,16 @@ fn validate_plugins_config(config: &PluginsConfig) -> Result<(), RuntimeError> {
     fn unique_names(values: &[String]) -> bool {
         values.iter().all(|value| valid_name(value))
             && values.iter().collect::<BTreeSet<_>>().len() == values.len()
+    }
+    if !config
+        .documentation
+        .skill
+        .split_once('/')
+        .is_some_and(|(plugin, skill)| valid_name(plugin) && valid_name(skill))
+    {
+        return Err(RuntimeError::Config(
+            "plugins.documentation.skill must be a qualified <plugin>/<skill> identity".into(),
+        ));
     }
     if !unique_names(&config.include) || !unique_names(&config.exclude) {
         return Err(RuntimeError::Config(

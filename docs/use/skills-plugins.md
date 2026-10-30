@@ -11,7 +11,8 @@ icon: lucide/puzzle
 A **skill** gives Colossus instructions for a particular kind of work. A **plugin**
 packages skills and may also include resources or MCP server declarations. The CLI
 includes the `colossus` plugin with `coding`, `plugin-authoring`, `schedule-task`, and
-`security-review` skills.
+`security-review` skills. It also includes `documentation`, a curated adaptation of
+the Google Developer Documentation Style Guide.
 
 When a verified browser is enabled, the bundled plugin also provides
 `colossus/browser`. In Desktop, type `@browser` and choose **Browser** to insert
@@ -75,6 +76,56 @@ Use `@colossus/schedule-task` to create or control recurring tasks through the s
 
 Use `/plugin show colossus/coding` to read the skill instructions. A plugin can offer
 several skills; selecting its name in plugin inventory does not select them all.
+
+## Write developer documentation
+
+When automatic documentation guidance is enabled (the default), Colossus instructs
+agents to read `colossus/documentation` for documentation writing and editing tasks.
+The short instruction applies to READMEs, API documentation, tutorials, and how-to
+guides. The agent chooses relevant topic references through the read-only plugin
+reader; the full guide is not added to every prompt. Unrelated tasks receive only
+skill metadata and the conditional instruction, without the guide's reference text.
+
+To choose the skill explicitly:
+
+```text
+@colossus/documentation Update the installation guide for the new release.
+```
+
+The bundled copy is managed with the executable and is available to workspaces using
+its explicit Colossus home. It needs no separate download. Disable automatic use while
+keeping explicit selection available with `plugins.documentation.autoActivate: false`.
+Choose another accepted or installed qualified skill with `plugins.documentation.skill`.
+See the [configuration reference](../reference/configuration/extensions.md#documentation-policy)
+for fields and availability rules.
+
+For a team-specific copy, put a skills-only plugin under
+`.agents/plugins/team-writing/`, following [Agent Plugins](../extend/plugins.md).
+Copy the documentation skill directory from the Colossus distribution or source,
+including its `LICENSE.txt` and `references/` directory, into
+`skills/documentation/`. Use a distinct plugin name such as `team-writing` in its
+`plugin.json`; the bundled `colossus` name is reserved. Then accept the workspace source:
+
+```bash
+colossus plugins add .agents/plugins/team-writing
+```
+
+Set `plugins.documentation.skill: team-writing/documentation` for that workspace.
+Acceptance is local to the workspace; it does not install a global package. For reuse
+across workspaces, distribute this same skills-only plugin through the normal
+[signed package workflow](../extend/plugins.md#add-a-signed-package). Installed packages
+are shared within the selected Colossus home. An accepted local source with the same
+plugin name takes precedence only in that workspace. Neither installation nor reading
+these references enables execution, workspace writes, or network access.
+
+User instructions and repository documentation requirements take precedence over the
+style recommendations. The references are a condensed adaptation attributed to Google
+and licensed under CC BY 4.0, with source links, change notices, and the license included.
+They contain no upstream code samples. Maintainers review upstream changes deliberately;
+there are no runtime downloads or automatic reference updates. See the skill's
+`references/sources.md` for the reviewed sources, date, and maintenance procedure.
+Update Colossus for bundled revisions, or use the normal plugin lifecycle for a separate
+copy. Active runs keep their captured policy and reference snapshots.
 
 ## Review a repository's security
 

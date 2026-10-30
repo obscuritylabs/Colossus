@@ -34,6 +34,8 @@ mod development_sandbox;
 pub use development_credentials::validate_development_credential_boundary;
 mod diagnostics;
 mod direct_effects;
+#[cfg(test)]
+mod documentation_policy_tests;
 mod error;
 mod extensions;
 mod gateway_tool_dispatch;
@@ -126,7 +128,7 @@ pub use colossus_observability::{
 pub use composition::Runtime;
 pub use config::{
     AgentConfig, AuditConfig, AuditExporterConfig, BrowserConfig, BundlesConfig, ComputerConfig,
-    KeyConfig, MemoryConfig, ModelProfileConfig, ModelsConfig, NetworkConfig,
+    DocumentationConfig, KeyConfig, MemoryConfig, ModelProfileConfig, ModelsConfig, NetworkConfig,
     PluginMcpServerConfig, PluginsConfig, PolicyConfig, ProviderProfileConfig, ProvidersConfig,
     ResearchConfig, RuntimeConfig, SandboxConfig, SearchConfig, SearchProfileConfig,
     StorageAdapter, StorageConfig, StorageLocation, SubagentConfig, WorkflowLibraryConfig,
