@@ -1665,6 +1665,7 @@ fn inline_completion_chrome_never_enters_native_scrollback() {
         resize_output_offset,
         (12, 40),
         "Commands",
+        "Message · Enter sends",
     );
     let resized_history_text = resized_history.join("\n");
     for transient in ["Commands", "Message · Enter sends", "fixture@local"] {
@@ -2178,6 +2179,7 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
     assert!(before_resize.contains("durable-row-01"), "{before_resize}");
     assert!(before_resize.contains("durable-row-05"), "{before_resize}");
 
+    let resize_output_offset = output.lock().expect("output").len();
     pair.master
         .resize(PtySize {
             rows: 30,
@@ -2186,8 +2188,44 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
             pixel_height: 0,
         })
         .expect("resize");
-    thread::sleep(Duration::from_millis(150));
-    let after_resize = screen_contents(&output, 30, 100);
+    let resized_frame = || {
+        let bytes = output.lock().expect("output").clone();
+        let mut parser = resized_parser(&bytes, (24, 80), resize_output_offset, (30, 100));
+        parser.screen_mut().set_scrollback(0);
+        parser
+    };
+    let resize_deadline = Instant::now() + Duration::from_secs(10);
+    let after_resize = loop {
+        let frame = resized_frame();
+        let screen = frame.screen().contents();
+        // The old-width frame already has the durable markers. Require the
+        // new-width composer too, including the adaptive status-rail boundary.
+        let composer_resized = frame.screen().rows(0, 100).any(|row| {
+            row.starts_with("┌ Message")
+                && (row.chars().nth(99) == Some('┐')
+                    || (28..=36).any(|rail| {
+                        let boundary = 100 - rail;
+                        row.chars().nth(boundary - 1) == Some('┐')
+                            && row.chars().nth(boundary) == Some('│')
+                    }))
+        });
+        if composer_resized
+            && [
+                "durable-row-01",
+                "durable-row-05",
+                "typing-preserves-history",
+            ]
+            .iter()
+            .all(|marker| screen.contains(marker))
+        {
+            break screen;
+        }
+        assert!(
+            Instant::now() < resize_deadline,
+            "resized frame did not preserve transcript and draft together:\n{screen}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    };
     assert!(after_resize.contains("durable-row-01"), "{after_resize}");
     assert!(after_resize.contains("durable-row-05"), "{after_resize}");
     assert!(
@@ -2198,7 +2236,11 @@ fn typing_tab_completion_and_resize_never_erase_visible_transcript_rows() {
     writer.write_all(&[3]).expect("Ctrl-C clear draft");
     writer.flush().expect("flush draft clear");
     let clear_deadline = Instant::now() + Duration::from_secs(10);
-    while screen_contents(&output, 30, 100).contains("typing-preserves-history") {
+    while resized_frame()
+        .screen()
+        .contents()
+        .contains("typing-preserves-history")
+    {
         assert!(
             Instant::now() < clear_deadline,
             "first Ctrl-C should clear the draft"
@@ -2690,9 +2732,33 @@ fn resized_native_history_rows(
     resize_output_offset: usize,
     resized: (u16, u16),
     live_marker: &str,
+    ready_marker: &str,
 ) -> Vec<String> {
-    let bytes = output.lock().expect("output").clone();
-    let mut parser = resized_parser(&bytes, initial, resize_output_offset, resized);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (mut parser, visible, live_viewport) = loop {
+        let bytes = output.lock().expect("output").clone();
+        let mut parser = resized_parser(&bytes, initial, resize_output_offset, resized);
+        parser.screen_mut().set_scrollback(0);
+        let visible = parser.screen().rows(0, resized.1).collect::<Vec<_>>();
+        if let Some(live_viewport) = visible.iter().rposition(|row| row.contains(live_marker))
+            && visible.iter().any(|row| row.contains(ready_marker))
+        {
+            // The preceding waits can observe different repaint stages. Bind
+            // viewport readiness and the asserted history to this one snapshot.
+            break (parser, visible, live_viewport);
+        }
+        if Instant::now() >= deadline {
+            let tail = String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(4_096)..])
+                .escape_debug()
+                .to_string();
+            panic!(
+                "resized live viewport never contained {live_marker:?} and {ready_marker:?} \
+                 together:\n{}\nraw tail: {tail}",
+                visible.join("\n")
+            );
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
     parser.screen_mut().set_scrollback(usize::MAX);
     let scrollback_len = parser.screen().scrollback();
     let mut history = (1..=scrollback_len)
@@ -2702,12 +2768,6 @@ fn resized_native_history_rows(
             parser.screen().rows(0, resized.1).next()
         })
         .collect::<Vec<_>>();
-    parser.screen_mut().set_scrollback(0);
-    let visible = parser.screen().rows(0, resized.1).collect::<Vec<_>>();
-    let live_viewport = visible
-        .iter()
-        .rposition(|row| row.contains(live_marker))
-        .expect("resized live viewport marker");
     history.extend_from_slice(&visible[..live_viewport]);
     history
 }
