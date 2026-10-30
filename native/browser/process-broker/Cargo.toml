@@ -24,7 +24,7 @@ rustix = { version = "1.1.4", features = ["event", "fs"] }
 resolver = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-colossus-darwin-process = { version = "=0.11.11-preview.4", path = "../../../crates/colossus-darwin-process" }
+colossus-darwin-process = { version = "=0.11.11-preview.5", path = "../../../crates/colossus-darwin-process" }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 libc = "0.2.186"
