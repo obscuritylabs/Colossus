@@ -30,6 +30,11 @@ test("companion authority excludes generic event observation and listener contro
   const companion = JSON.parse(
     read("apps/desktop/src-tauri/capabilities/developer-pet.json"),
   );
+  const enabled = json("apps/desktop/src-tauri/tauri.conf.json").app.security.capabilities;
+  assert.ok(
+    enabled.includes(companion.identifier),
+    "the companion capability must be enabled so its native commands survive pruning",
+  );
   assert.equal(companion.local, true);
   assert.equal(companion.remote, undefined);
   assert.equal(companion.windows, undefined);
@@ -232,6 +237,7 @@ test("development Tauri configuration uses prepared native executables", () => {
     "terminal-pty",
     "command-approval",
     "client-identity-review",
+    "developer-pet",
   ]);
   assert.deepEqual(config.plugins.updater, {
     endpoints: [],
@@ -818,6 +824,15 @@ test("native capabilities use generated commands and exact main-controller event
     .filter((name) => name.endsWith(".json"))
     .sort()
     .map((name) => json(`${capabilityDirectory}/${name}`));
+  const enabledCapabilities = new Set(
+    json("apps/desktop/src-tauri/tauri.conf.json").app.security.capabilities,
+  );
+  for (const identifier of enabledCapabilities) {
+    assert.ok(
+      capabilities.some((capability) => capability.identifier === identifier),
+      `enabled capability ${identifier} must have a native definition`,
+    );
+  }
   const coreEventPermissions = [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
@@ -847,7 +862,9 @@ test("native capabilities use generated commands and exact main-controller event
       }
       assert.match(permission, /^allow-[a-z0-9-]+$/u);
       const command = permission.slice("allow-".length).replaceAll("-", "_");
-      allowedCommands.add(command);
+      if (enabledCapabilities.has(capability.identifier)) {
+        allowedCommands.add(command);
+      }
       assert.ok(
         commands.has(command),
         `${capability.identifier} permission ${permission} is missing ${command} from build.rs COMMANDS`,
@@ -855,16 +872,17 @@ test("native capabilities use generated commands and exact main-controller event
     }
   }
 
-  const rendererApi = read("apps/desktop/src/api.ts");
   const rendererCommands = new Set(
-    [
-      ...rendererApi.matchAll(/\bcall(?:<[^>]+>)?\(\s*"(?<command>[^"]+)"/gu),
-    ].map((match) => match.groups.command),
+    ["apps/desktop/src/api.ts", "apps/desktop/src/desktop-extras.ts"].flatMap(
+      (path) =>
+        [...read(path).matchAll(/\b(?:call|invoke)(?:<[^>]+>)?\(\s*"(?<command>[^"]+)"/gu)]
+          .map((match) => match.groups.command),
+    ),
   );
   for (const command of rendererCommands) {
     assert.ok(
       allowedCommands.has(command),
-      `renderer command ${command} must be allowed by a native capability`,
+      `renderer command ${command} must be allowed by an enabled native capability`,
     );
   }
 });
