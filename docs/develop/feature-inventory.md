@@ -33,6 +33,14 @@ the owning crates and tests.
 | Fleet human terminals | `colossus-terminal`, API/SDK/gRPC, connector/Control Plane, `apps/web` | [Enable a web shell](../cloud/connect-runtimes.md#enable-a-web-shell), [ADR 0011](adr/0011-fleet-human-terminals.md) | Native PTY input, ownership and replay tests; authenticated two-replica Fleet transport and web terminal acceptance |
 | Releases and updates | `colossus-update`, CLI installers, release workflows | [Core release operations](releasing.md), [Upgrade and compatibility](../get-started/upgrade-compatibility.md) | Release-contract, clean-install, signature, channel, and platform jobs |
 
+Release OCI distribution supports the full version tag and `-windows`, `-linux`,
+and `-mac` subsets through the release publisher and ORAS. CLI/TUI binaries,
+VS Code packages and published Desktop packages follow their platform; shared
+API/SDK assets remain in every subset, and web/Control Plane Linux bundles follow
+Linux. Client installation and runtime behavior are unchanged. Evidence is in
+`scripts/ci/release-oci.test.mjs` and the publisher's digest-pinned pull verification;
+registry publication remains a hosted release operation.
+
 ## Interface coverage
 
 The [client owners and daily coordinator](agent-maintenance.md) maintain material

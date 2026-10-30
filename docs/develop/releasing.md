@@ -480,13 +480,24 @@ downloads. The package is linked to this repository using the standard source an
 See [GitHub's Container Registry administration guide](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
 for package visibility and repository access controls.
 
-Each image has exactly the requested `vX.Y.Z` or `vX.Y.Z-preview.N` tag. The workflow
+The full bundle keeps the requested `vX.Y.Z` or `vX.Y.Z-preview.N` tag.
+Three additional tags append `-windows`, `-linux`, or `-mac`, for example
+`v0.10.10-preview.12-windows`. Each contains both published architectures for
+that OS, including CLI, Desktop (where published), VSIX, platform metadata and
+checksum sidecars. Linux also includes the Control Plane bundles. Assets without
+an OS marker, such as SDK packages and their checksums, are shared across all
+three. Filenames containing Windows/win32, Linux, or Darwin/macOS/mac markers
+select their respective OS. Every bundle has its own inventory and digest.
+The publisher validates the complete release before selecting each subset;
+checksum references to omitted assets fail validation rather than being rewritten.
+
+The workflow The workflow
 never moves `latest`, a stable/preview alias, or an existing conflicting version tag.
 An identical rerun verifies and reuses the existing digest. Repository writers must
 retain this single-publisher workflow and must not independently overwrite its tags;
 registry tags themselves are mutable, so air-gap records should use the manifest digest.
 
-There is no base image, operating system, executable entrypoint, or platform selection.
+There is no base image, operating system, or executable entrypoint.
 This is an ORAS artifact, not a runnable Docker `FROM scratch` root filesystem:
 
 - OCI image manifest v1.1, artifact type `application/vnd.colossus.release.v1`;

@@ -82,11 +82,16 @@ jobs:
       ((github.event_name == 'release' && github.event.release.draft == false) ||
        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [all, windows, linux, mac]
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
     env:
+      RELEASE_PLATFORM: ${{ matrix.platform }}
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
       - name: Check out the publisher, never execute downloaded release assets
@@ -108,7 +113,7 @@ jobs:
         run: |
           release_output="$RUNNER_TEMP/colossus-release-image"
           printf 'RELEASE_OUTPUT=%s\n' "$release_output" >> "$GITHUB_ENV"
-          node scripts/ci/release-oci.mjs prepare "$RELEASE_TAG" "$release_output"
+          node scripts/ci/release-oci.mjs prepare "$RELEASE_TAG" "$release_output" "$RELEASE_PLATFORM"
       - name: Authenticate to the selected OL registry
         id: registry
         env:
@@ -141,7 +146,11 @@ jobs:
             printf '%s' "$GHCR_TOKEN" | oras login ghcr.io \
               --registry-config "$auth_file" --username "$GHCR_USERNAME" --password-stdin
           fi
-          printf 'destination=%s/obscuritylabs/colossus-release:%s\n' "$registry" "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          distribution_tag="$RELEASE_TAG"
+          if [[ "$RELEASE_PLATFORM" != all ]]; then
+            distribution_tag="$RELEASE_TAG-$RELEASE_PLATFORM"
+          fi
+          printf 'destination=%s/obscuritylabs/colossus-release:%s\n' "$registry" "$distribution_tag" >> "$GITHUB_OUTPUT"
       - name: Publish exact tag, then pull by digest and verify all bytes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -150,7 +159,7 @@ jobs:
       - name: Retain credential-free publication evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: colossus-release-image-${{ env.RELEASE_TAG }}
+          name: colossus-release-image-${{ env.RELEASE_TAG }}-${{ matrix.platform }}
           path: |
             ${{ env.RELEASE_OUTPUT }}/publication.json
             ${{ env.RELEASE_OUTPUT }}/digest.txt

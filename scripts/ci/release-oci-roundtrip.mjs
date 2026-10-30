@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { artifactType, buildLayout, oras, validateRelease, verifyPulled } from "./release-oci.mjs";
+import { artifactType, buildLayout, oras, selectPlatform, validateRelease, verifyPulled } from "./release-oci.mjs";
 
 const root = await mkdtemp(join(tmpdir(), "colossus-release-oci-roundtrip-"));
 const tag = "v1.2.3-preview.4";
@@ -34,6 +34,19 @@ try {
     assert.deepEqual(await readFile(join(pulled, "assets/binary.zip")), bytes);
   }
   assert.equal(digests[0], digests[1], "Identical release payloads must produce identical OCI identities");
+  for (const platform of ["windows", "linux", "mac"]) {
+    const name = `binary-${platform}.zip`;
+    const selected = selectPlatform({ ...inventory, assets: [{ ...inventory.assets[0], name }] }, platform);
+    const payload = join(root, platform);
+    await mkdir(join(payload, "assets"), { recursive: true });
+    await writeFile(join(payload, "assets", name), bytes);
+    const layout = join(root, `${platform}-layout`);
+    const digest = await buildLayout(payload, layout, selected);
+    const pulled = join(root, `${platform}-pull`);
+    await mkdir(pulled);
+    oras(["pull", "--oci-layout", `${layout}@${digest}`, "--output", pulled]);
+    await verifyPulled(pulled, selected);
+  }
   console.log(`PASS: real ORAS offline round trip, binary fidelity, and deterministic digest ${digests[0]}`);
 } finally {
   await rm(root, { recursive: true, force: true });
