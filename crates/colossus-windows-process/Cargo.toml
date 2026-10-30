@@ -37,4 +37,5 @@ all = { level = "deny", priority = -1 }
 missing_safety_doc = "deny"
 
 [target.'cfg(windows)'.dev-dependencies]
+getrandom.workspace = true
 tempfile.workspace = true

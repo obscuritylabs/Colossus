@@ -2513,6 +2513,7 @@ dependencies = [
 name = "colossus-windows-native"
 version = "0.11.11-preview.5"
 dependencies = [
+ "getrandom 0.4.3",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2524,6 +2525,7 @@ name = "colossus-windows-process"
 version = "0.11.11-preview.5"
 dependencies = [
  "colossus-windows-native",
+ "getrandom 0.4.3",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
