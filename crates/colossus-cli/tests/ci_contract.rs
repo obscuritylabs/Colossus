@@ -133,7 +133,7 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
             "macos-desktop-bundle",
             &premerge,
             "Restore main Desktop bundle build cache",
-            "macos-desktop-bundle",
+            "macos-desktop-bundle-recipe-v2",
             "apps/desktop/src-tauri -> target",
             "macos-14",
         ),
@@ -142,7 +142,7 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
             "desktop_macos_build",
             &release,
             "Restore main Desktop bundle build cache",
-            "macos-desktop-bundle",
+            "macos-desktop-bundle-recipe-v2",
             "apps/desktop/src-tauri -> target",
             "macos-14",
         ),
@@ -168,12 +168,14 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
         );
         for inputs in [warm_inputs, consumer_inputs] {
             assert_eq!(field(inputs, "shared-key").as_str(), Some(shared_key));
-            let recipe = if shared_key == "macos-desktop-bundle" {
-                "recipe-v2"
+            if shared_key == "macos-desktop-bundle-recipe-v2" {
+                assert!(
+                    !inputs.contains_key("key"),
+                    "rust-cache ignores key when shared-key is set; version the shared namespace"
+                );
             } else {
-                "recipe-v1"
-            };
-            assert_eq!(field(inputs, "key").as_str(), Some(recipe));
+                assert_eq!(field(inputs, "key").as_str(), Some("recipe-v1"));
+            }
             assert_eq!(field(inputs, "workspaces").as_str(), Some(workspace));
             assert_eq!(field(inputs, "cache-targets").as_bool(), Some(true));
         }

@@ -664,8 +664,8 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: apps/desktop/src-tauri -> target
-          shared-key: macos-desktop-bundle
-          key: recipe-v2
+          # rust-cache ignores key when shared-key is set; version the shared namespace.
+          shared-key: macos-desktop-bundle-recipe-v2
           cache-targets: true
           save-if: false
 
