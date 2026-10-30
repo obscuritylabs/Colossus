@@ -32,6 +32,53 @@ the owning crates and tests.
 | Fleet human terminals | `colossus-terminal`, API/SDK/gRPC, connector/Control Plane, `apps/web` | [Enable a web shell](../cloud/connect-runtimes.md#enable-a-web-shell), [ADR 0011](adr/0011-fleet-human-terminals.md) | Native PTY input, ownership and replay tests; authenticated two-replica Fleet transport and web terminal acceptance |
 | Releases and updates | `colossus-update`, CLI installers, release workflows | [Core release operations](releasing.md), [Upgrade and compatibility](../get-started/upgrade-compatibility.md) | Release-contract, clean-install, signature, channel, and platform jobs |
 
+## Interface coverage
+
+The [client owners and daily coordinator](agent-maintenance.md) maintain material
+coverage differences here. These records were reviewed against
+[`ad338c4f`](https://github.com/obscuritylabs/Colossus/commit/ad338c4f8a94eed27f5ab735a433612747e9b56f)
+and describe checked-in behavior and existing test evidence, not a fresh execution
+of those tests or acceptance on every platform. Recheck the implementation and
+active follow-ups before assigning a fix.
+Coverage is semantic: public Draft continuation and terminal approval/execution are
+different workflows with explicit revision binding.
+
+| Capability | Public API / SDK | CLI / TUI | Desktop | VS Code | Web |
+| --- | --- | --- | --- | --- | --- |
+| Standalone Goal creation | Supported; bounded iterations and caller tool ceiling | Supported; CLI and full-screen TUI `/goal` creation/completion acceptance in embedded and worker hosts | Supported; composer and native request validation evidence | Missing; composer exposes Plan, Execute, and Research | Supported on connected runtimes; capability and budget-bound composer |
+| Revision-bound Plan workflow | Supported; source-run-bound Draft continuation | Supported; revision-bound refinement, approval, and execution | Supported; exact-revision Plan continuation | Partial; canonical Plan inspection exists, continuation controls missing | Supported; source-run and revision-bound continuation |
+| Human managed-shell discovery, read, and Stop | Supported; scoped process-session requests | Unverified; dedicated human controls not evidenced by agent-tool tests | Supported; active-shell inspection and Stop | Missing; process-supervision controls unimplemented | Unverified; Fleet human terminals are a distinct workflow |
+
+Evidence and owned follow-ups:
+
+- **Goal:** [public API tests](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-api-runtime/src/service_tests/standalone_goal.rs),
+  [CLI tests](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-cli/tests/agent_smoke.rs),
+  [TUI full-screen acceptance](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-cli/tests/provider_terminal_smoke.rs),
+  [Desktop composer tests](https://github.com/obscuritylabs/Colossus/blob/main/apps/desktop/src/components/WorkComposer.test.ts),
+  and [Web composer tests](https://github.com/obscuritylabs/Colossus/blob/main/apps/web/src/RunComposer.test.tsx).
+  `vscode_owner`: expose bounded standalone Goal creation through the existing public
+  contract and verify cancellation and capability availability.
+- **Plans:** [public API conformance](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-api-runtime/src/service_tests.rs),
+  [terminal workflow tests](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-cli/tests/interactive_plan_smoke.rs),
+  [Desktop browser acceptance](https://github.com/obscuritylabs/Colossus/blob/main/apps/desktop/tests/browser/plan-workflow.spec.ts),
+  and [Web continuation tests](https://github.com/obscuritylabs/Colossus/blob/main/apps/web/src/ThreadDetail.test.tsx).
+  `vscode_owner`: add continuation against the exact visible source run and Plan
+  revision, including stale-revision rejection and uncertain-outcome handling.
+- **Shells:** [public API conformance](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-api-runtime/src/service_tests/process_sessions.rs)
+  and [Desktop browser acceptance](https://github.com/obscuritylabs/Colossus/blob/main/apps/desktop/tests/browser/active-shells.spec.ts).
+  `vscode_owner`: add scoped inspection/read/Stop through the public SDK.
+  `cli_owner`: determine the intended human workflow and either supply operator
+  controls with acceptance evidence or document a reason for the difference.
+  `maintenance_coordinator`: assess the Web process-session workflow separately
+  from Fleet human terminals and assign any applicable gap to its canonical owner.
+
+The [extension's documented limitations](https://github.com/obscuritylabs/Colossus/blob/main/apps/vscode/README.md#work-in-the-editor)
+also include memory, workflows, plugins, and session topology. They need individual
+public-API and client-coverage assessment; this seed inventory is not exhaustive.
+`maintenance_coordinator` owns triage and deduplication against existing issues/PRs before
+implementation. Named role follow-ups above are repository assignments, not claims
+that external tickets have been opened.
+
 Colossus is alpha software. Configuration, protocols, and supported deployment surfaces
 may change before a stable release. Compatibility retained for deployed Rust state or
 protocols is documented at its owner; the frozen Python 0.5 runtime remains only on the

@@ -1,0 +1,57 @@
+# Agent-read policy, not a Codex configuration schema or scheduler.
+# Resolve state_directory and publish_lock against the primary checkout root,
+# never a worker worktree; every run shares the same research ledger and lock.
+repository = "obscuritylabs/Colossus"
+issue_template = ".github/ISSUE_TEMPLATE/competitive-feature.md"
+state_directory = ".local/agent-maintenance/research"
+publish_lock = ".local/agent-maintenance/research/publish.lock"
+exclusive_publisher = true
+issue_marker_prefix = "colossus-feature-research:"
+max_new_issues_per_run = 1
+max_new_issues_per_rolling_7_days = 3
+max_products_per_run = 2
+max_successful_runs_between_product_reviews = 7
+
+surfaces = ["CLI", "TUI", "VS Code", "Desktop", "public API/SDK", "web where applicable"]
+themes = [
+  "Developer workflows and interaction quality",
+  "Parallel work, worktrees, session continuity and recovery",
+  "Code review, testing and feedback loops",
+  "Repository context, search and memory",
+  "Automation, integrations and extensibility",
+  "Human control, approvals, safety and observability",
+]
+
+qualification = [
+  "Concrete user problem and useful outcome",
+  "Current primary-source evidence with shipped/preview status",
+  "Verified Colossus gap at named revisions and affected surfaces",
+  "No equivalent open/closed issue, active PR or recent implementation",
+  "Fit with explicit authority and service boundaries",
+  "Testable acceptance, scope, alternatives and explicit unknowns",
+  "Independent review before issue creation",
+]
+
+[[products]]
+name = "Codex"
+sources = ["https://learn.chatgpt.com/docs/", "https://learn.chatgpt.com/docs/changelog"]
+
+[[products]]
+name = "Claude Code"
+sources = ["https://code.claude.com/docs/en/overview", "https://github.com/anthropics/claude-code/releases"]
+
+[[products]]
+name = "Cursor"
+sources = ["https://cursor.com/changelog", "https://cursor.com/docs"]
+
+[[products]]
+name = "Cline"
+sources = ["https://docs.cline.bot/", "https://github.com/cline/cline/releases"]
+
+[[products]]
+name = "Aider"
+sources = ["https://aider.chat/docs/", "https://aider.chat/HISTORY.html"]
+
+[[products]]
+name = "OpenHands"
+sources = ["https://docs.openhands.dev/", "https://github.com/OpenHands/OpenHands/releases"]
