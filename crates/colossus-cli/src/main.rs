@@ -104,6 +104,8 @@ mod worker_dispatch;
 mod worker_shell;
 mod workflow_args;
 mod workflow_commands;
+mod worktree_args;
+mod worktree_commands;
 
 use artifact_args::*;
 use artifact_commands::*;

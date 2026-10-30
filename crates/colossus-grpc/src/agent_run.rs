@@ -154,6 +154,39 @@ impl AgentRunServiceAdapter {
 
 #[tonic::async_trait]
 impl AgentRunService for AgentRunServiceAdapter {
+    async fn predict_next_prompt(
+        &self,
+        request: Request<colossus_api_proto::v1alpha1::PredictNextPromptRequest>,
+    ) -> Result<Response<colossus_api_proto::v1alpha1::PredictNextPromptResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let span = public_rpc_span(&request, &caller, "PredictNextPrompt");
+        let result = async {
+            let input = request.into_inner();
+            validate_identifier(&caller, "source_run_id", &input.source_run_id)?;
+            let prediction = self
+                .api
+                .predict_next_prompt(
+                    &caller,
+                    colossus_api::PredictNextPromptRequest {
+                        source_run_id: input.source_run_id,
+                    },
+                )
+                .await
+                .map_err(api_status)?;
+            let prediction_json = serde_json::to_vec(&prediction)
+                .map_err(|_| Status::internal("prediction unavailable"))?;
+            if prediction_json.len() > 4096 {
+                return Err(Status::internal("prediction exceeds its bound"));
+            }
+            Ok(Response::new(
+                colossus_api_proto::v1alpha1::PredictNextPromptResponse { prediction_json },
+            ))
+        }
+        .instrument(span.clone())
+        .await;
+        record_rpc_result(&span, &result);
+        result
+    }
     async fn get_runtime_policy_posture(
         &self,
         request: Request<colossus_api_proto::v1alpha1::GetRuntimePolicyPostureRequest>,

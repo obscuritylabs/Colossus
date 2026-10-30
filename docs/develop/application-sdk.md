@@ -609,6 +609,46 @@ optional UI until the server advertises it. In particular, the SDK refuses to en
 `plan_action` unless the target advertises `plans.continue`; this prevents an older
 protobuf server from ignoring the unknown field and treating it as an ordinary run.
 
+### Editable next-prompt predictions
+
+`composer.prediction.v1` advertises optional `AgentRunService.PredictNextPrompt`.
+It is enabled only when the runtime implements prediction and the authenticated
+application has both `runs:read` and `runs:execute`. The Rust SDK exposes
+`Colossus::predict_next_prompt(PredictNextPromptRequest { source_run_id })`;
+its high-level and gRPC transports return an unavailable prediction without sending
+this RPC to an older server that does not advertise the capability.
+
+The source must be a directly caller-owned completed run, using an allowed role.
+Shared read visibility grants no prediction authority. The request contains only
+the source ID: the runtime loads bounded canonical user/assistant prose, excluding
+tools, images, system instructions, and private agent messages. It uses the source
+model with no tools, memory, retrieval or provider continuation and a 12-second
+provider deadline. It requests at most 96 output tokens when the adapter supports
+that parameter. Codex subscription routes and Chat Completions profiles configured
+to omit output limits send no token ceiling, so reported usage can exceed 96 tokens.
+The returned suggestion is still limited to 240 characters. The adapter selects its
+supported transport, including collected SSE for Codex. The gateway settles and
+audits the effect even when an editor stops observing it.
+
+The response is strict `NextPromptPrediction` JSON with `source_run_id`, optional
+`text`, and optional `usage`. Generated TypeScript, Python and Go bindings carry
+this envelope in `PredictNextPromptResponse.prediction_json`. Text is at most 240
+characters and is an editable draft proposal. Accepting it must never submit a run.
+Hosts fence it to the current source and preserve existing drafts. Missing usage
+means unknown; keep reported auxiliary tokens separate from source-run totals.
+
+A durable claim is written before each source's first provider attempt and a separate
+receipt afterward. Reconnects or cancelled observers never purchase the request
+again. Concurrent observers wait up to 16 seconds for that existing receipt; they
+never start another provider call. An observer can still receive no result when an
+attempt remains unknown. Cloud can reconcile a later validated receipt over an
+empty receipt, preserving paid usage without another request. Stale sources,
+pending/unknown attempts, rejected output and provider failures can return no text.
+Hosts can retain Local next-step extraction as a fallback;
+prediction availability must never block an ordinary conversation turn.
+
+### Model selection
+
 `agent_runs.model_selection` advertises optional `model_profile` and `reasoning_effort`
 on `CreateRunRequest`. Absent fields keep configured role/model defaults. The Rust SDK
 rejects explicit preferences when the target lacks this capability; Desktop exposes
@@ -830,7 +870,7 @@ justification separately as agent-provided. Missing command context means a hist
 or non-command interaction, not a reason to synthesize task intent. Full-details views
 must not silently truncate accepted commands. Command context participates in immutable
 challenge validation and durable replay. Public protobuf field 8 is additive; removed
-fields 1 and 7 remain reserved. Private worker protocol 23 requires matching clients
+fields 1 and 7 remain reserved. Private worker protocol 27 requires matching clients
 and a worker restart; configuration stays schema version 3.
 The server revalidates responses against the private request and applies current scope
 checks to cancellation and response operations.

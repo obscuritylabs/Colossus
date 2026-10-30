@@ -5,6 +5,8 @@ use colossus_contracts::SessionMessage;
 mod command_approval_tests;
 #[path = "concurrency_tests.rs"]
 mod concurrency_tests;
+#[path = "preferences_concurrency_tests.rs"]
+mod preferences_concurrency_tests;
 
 #[test]
 fn tui_display_status_commands_report_current_values_without_changing_preferences() {

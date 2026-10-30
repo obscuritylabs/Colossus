@@ -57,3 +57,13 @@ export {
   boundedConversationQuote,
   MAX_CONVERSATION_QUOTE_BYTES,
 } from "./conversation/selection-quote.js";
+export {
+  NextPromptSuggestion,
+  useNextPrompt,
+} from "./components/NextPromptSuggestion.js";
+export { localNextPrompt, normalizeNextPrompt } from "./lib/next-prompt.js";
+export type {
+  NextPromptMode,
+  NextPromptSource,
+  NextPromptPrediction,
+} from "./lib/next-prompt.js";

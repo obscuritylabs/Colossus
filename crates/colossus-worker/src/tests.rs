@@ -1903,34 +1903,36 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 26);
+    assert_eq!(PROTOCOL_VERSION, 27);
     let key = [13_u8; 32];
-    let mut frame =
-        signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);
-    frame.version = PROTOCOL_VERSION - 1;
-    let mut sequence = 0;
-    assert!(matches!(
-        validate_client_frame(&key, "request", "connection", &mut sequence, &frame),
-        Err(WorkerError::Protocol(message)) if message.contains("version")
-    ));
+    for incompatible_version in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
+        let mut frame =
+            signed_client_frame(&key, "request", "connection", 1, ClientFrameContent::Cancel);
+        frame.version = incompatible_version;
+        let mut sequence = 0;
+        assert!(matches!(
+            validate_client_frame(&key, "request", "connection", &mut sequence, &frame),
+            Err(WorkerError::Protocol(message)) if message.contains("version")
+        ));
 
-    let (mut client, mut server) = tokio::io::duplex(1024);
-    let writer = tokio::spawn(async move {
-        write_message(
-            &mut client,
-            &ClientHello {
-                version: PROTOCOL_VERSION - 1,
-                challenge: "a".repeat(64),
-            },
-            1024,
-        )
-        .await
-    });
-    assert!(matches!(
-        server_handshake(&mut server, &key).await,
-        Err(WorkerError::Protocol(message)) if message.contains("restart the worker")
-    ));
-    writer.await.expect("hello writer").expect("hello");
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let writer = tokio::spawn(async move {
+            write_message(
+                &mut client,
+                &ClientHello {
+                    version: incompatible_version,
+                    challenge: "a".repeat(64),
+                },
+                1024,
+            )
+            .await
+        });
+        assert!(matches!(
+            server_handshake(&mut server, &key).await,
+            Err(WorkerError::Protocol(message)) if message.contains("restart the worker")
+        ));
+        writer.await.expect("hello writer").expect("hello");
+    }
 }
 
 #[tokio::test]

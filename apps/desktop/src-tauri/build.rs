@@ -11,6 +11,21 @@ const SIDECAR_FILE_STEM: &str = "colossus-sidecar";
 const CLI_FILE_STEM: &str = "colossus";
 
 const COMMANDS: &[&str] = &[
+    "desktop_features_context",
+    "save_desktop_features",
+    "appshot_preview",
+    "discard_appshot",
+    "attach_appshot",
+    "sync_pet_status",
+    "pet_context",
+    "pet_action",
+    "predict_next_prompt",
+    "browser_preferences",
+    "get_workspace_worktrees",
+    "workspace_worktree_action",
+    "get_worktree_preferences",
+    "save_worktree_preferences",
+    "choose_worktree_directory",
     "report_renderer_failure",
     "dictation_status",
     "get_dictation_settings",

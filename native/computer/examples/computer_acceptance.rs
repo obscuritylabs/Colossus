@@ -235,6 +235,7 @@ async fn acceptance(
         if require_cover {
             // Observation does not activate the target. Refreshing a background
             // snapshot must never turn it into authority to click through cover.
+            let foreground_diagnostic = FixtureForegroundDiagnostic::new(&title)?;
             for stage in [
                 "background_click_without_focus",
                 "background_click_after_fresh_snapshot",
@@ -265,6 +266,7 @@ async fn acceptance(
                     .find(|node| node.name == "Fixture action")
                     .ok_or("background native button missing from UIA")?;
                 evidence.set(stage);
+                let foreground_before = foreground_diagnostic.sample();
                 let denied = driver
                     .execute(
                         ComputerDriverRequest {
@@ -285,7 +287,40 @@ async fn acceptance(
                         &control,
                     )
                     .await;
+                let foreground_after = foreground_diagnostic.sample();
                 if denied != Err(ComputerDriverError::Stale) {
+                    let result = match &denied {
+                        Err(error) => serde_json::json!({"kind":"error","category":error}),
+                        Ok(reply) => serde_json::json!({
+                            "kind":"reply",
+                            "category":match reply {
+                                ComputerDriverReply::Windows(_) => "windows",
+                                ComputerDriverReply::Opened(_) => "opened",
+                                ComputerDriverReply::Status(_) => "status",
+                                ComputerDriverReply::Snapshot(_) => "snapshot",
+                                ComputerDriverReply::Screenshot(_) => "screenshot",
+                                ComputerDriverReply::Applied(_) => "applied",
+                                ComputerDriverReply::Closed => "closed",
+                            }
+                        }),
+                    };
+                    let record = serde_json::to_vec(&serde_json::json!({
+                        "schema_version":1,"passed":false,"stage":stage,
+                        "expected_error":"stale","actual_result":result,
+                        "observation_foreground":false,"observation_waiting_for_action":true,
+                        "foreground_before":foreground_before,"foreground_after":foreground_after,
+                        "input_attempts":1
+                    }))?;
+                    if record.len() > 1024 {
+                        return Err("background input diagnostic exceeded its bound".into());
+                    }
+                    eprintln!(
+                        "COMPUTER_BACKGROUND_INPUT stage={stage} result={result} before={foreground_before} after={foreground_after}"
+                    );
+                    colossus_windows_native::create_private_file(
+                        &evidence.output.join("background-input-diagnostic.json"),
+                        &record,
+                    )?;
                     return Err("background click did not fail as a known no-effect Stale".into());
                 }
             }
@@ -455,16 +490,9 @@ async fn acceptance(
                 steps: 16
             }
         });
-        let ComputerDriverReply::Snapshot(observation) = dispatch!(ComputerCommand::Snapshot {
-            session_id: session.session_id.clone(),
-            control_generation: session.control_generation,
-            max_nodes: 512
-        }) else {
-            return Err("missing drag result".into());
-        };
-        if !observation.nodes.iter().any(|n| n.name == "Drag received") {
-            return Err("balanced native drag did not reach fixture".into());
-        }
+        let observation =
+            wait_for_drag_postcondition(&driver, &binding, &session, &control, &title, evidence)
+                .await?;
         let modal = observation
             .nodes
             .iter()
@@ -605,6 +633,203 @@ async fn acceptance(
     )?;
     println!("PASS native helper acknowledged cleanup; synthetic user apps remain running");
     Ok(())
+}
+
+#[cfg(windows)]
+async fn wait_for_drag_postcondition(
+    driver: &colossus_native_computer::NativeComputerDriver,
+    binding: &colossus_contracts::ComputerBinding,
+    session: &colossus_contracts::ComputerSessionSummary,
+    control: &colossus_ports::RunControl,
+    title: &str,
+    evidence: &Evidence,
+) -> Result<colossus_contracts::ComputerObservation, Box<dyn std::error::Error>> {
+    use colossus_ports::{
+        ComputerCommand, ComputerDriver as _, ComputerDriverReply, ComputerDriverRequest,
+    };
+    use std::time::{Duration, Instant};
+    // Balanced insertion is not a foreign WndProc acknowledgement. Observe the
+    // one already-sent gesture; never focus, resume or send it again.
+    let started = Instant::now();
+    let mut attempts = 0;
+    let mut first = None;
+    let mut last = None;
+    let mut immediate_matched = false;
+    let mut final_matched = false;
+    let result: Result<_, Box<dyn std::error::Error>> = loop {
+        attempts += 1;
+        evidence.set("drag_postcondition_snapshot");
+        let reply = driver
+            .execute(
+                ComputerDriverRequest {
+                    binding: binding.clone(),
+                    command: ComputerCommand::Snapshot {
+                        session_id: session.session_id.clone(),
+                        control_generation: session.control_generation,
+                        max_nodes: 512,
+                    },
+                },
+                control,
+            )
+            .await;
+        let observation = match reply {
+            Ok(ComputerDriverReply::Snapshot(observation)) => observation,
+            Ok(_) => break Err("missing drag result".into()),
+            Err(error) => break Err(error.into()),
+        };
+        let same_target = observation.session_id == session.session_id
+            && observation.control_generation == session.control_generation
+            && observation.window_id == session.window_id
+            && observation.windows.iter().any(|window| {
+                window.window_id == session.window_id && window.title == title && window.foreground
+            });
+        let matched = observation
+            .nodes
+            .iter()
+            .any(|node| node.name == "Drag received");
+        let mut sample = drag_observation_sample(&observation, title, started.elapsed(), matched);
+        sample["same_target"] = serde_json::json!(same_target);
+        if first.is_none() {
+            first = Some(sample.clone());
+            immediate_matched = matched;
+        }
+        last = Some(sample);
+        final_matched = matched;
+        if !same_target {
+            break Err("drag postcondition target or control generation changed".into());
+        }
+        if matched {
+            break Ok(observation);
+        }
+        if attempts >= 8 || started.elapsed() >= Duration::from_secs(3) {
+            break Err("balanced native drag did not reach fixture".into());
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    };
+    evidence.set("drag_postcondition");
+    let diagnostic = serde_json::to_vec(&serde_json::json!({
+        "schema_version":1,"passed":result.is_ok(),"attempts":attempts,
+        "elapsed_ms":started.elapsed().as_millis(),"immediate_matched":immediate_matched,
+        "final_matched":final_matched,"first_observation":first,"last_observation":last,
+        "input_attempts":1,"maximum_observations":8,"observation_budget_ms":3000,
+        "expected_session_id":session.session_id,"expected_generation":session.control_generation,
+        "expected_root_window_id":session.window_id,
+        "error":result.as_ref().err().map(|_| "drag_postcondition_not_established")
+    }))?;
+    if diagnostic.len() > 64 * 1024 {
+        return Err("drag diagnostic exceeded its bound".into());
+    }
+    colossus_windows_native::create_private_file(
+        &evidence.output.join("drag-postcondition.json"),
+        &diagnostic,
+    )?;
+    result
+}
+
+// Read-only diagnostic classification of the two nonce fixture handles. These
+// handles never admit a target or grant capture, focus, or input authority.
+#[cfg(windows)]
+struct FixtureForegroundDiagnostic {
+    fixture: (windows_sys::Win32::Foundation::HWND, u32, u32),
+    cover: (windows_sys::Win32::Foundation::HWND, u32, u32),
+}
+
+#[cfg(windows)]
+impl FixtureForegroundDiagnostic {
+    fn new(title: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
+        let wide = |value: &str| value.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+        let class = wide("ColossusDisposableComputerFixture");
+        let find = |title: &str| {
+            let title = wide(title);
+            let mut process = 0;
+            // SAFETY: exact synthetic class and nonce title only; read-only
+            // queries freeze handles and their process/thread identities.
+            let (window, thread) = unsafe {
+                let window = FindWindowW(class.as_ptr(), title.as_ptr());
+                (window, GetWindowThreadProcessId(window, &mut process))
+            };
+            if window.is_null() || process == 0 || thread == 0 {
+                return Err("owned foreground diagnostic window is unavailable");
+            }
+            Ok((window, process, thread))
+        };
+        Ok(Self {
+            fixture: find(title)?,
+            cover: find(&title.replace("fixture", "cover"))?,
+        })
+    }
+
+    fn sample(&self) -> &'static str {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, GetWindowThreadProcessId,
+        };
+        // SAFETY: read-only foreground handle comparison. Process/thread
+        // metadata is queried only for an exact frozen synthetic handle; no
+        // foreign title, process metadata, or raw handle is retained or logged.
+        unsafe {
+            let foreground = GetForegroundWindow();
+            if foreground.is_null() {
+                return "none";
+            }
+            for (category, (window, process, thread)) in
+                [("fixture", self.fixture), ("cover", self.cover)]
+            {
+                if foreground == window {
+                    let mut current_process = 0;
+                    let current_thread = GetWindowThreadProcessId(window, &mut current_process);
+                    if current_process == process && current_thread == thread {
+                        return category;
+                    }
+                }
+            }
+            "other"
+        }
+    }
+}
+
+#[cfg(windows)]
+fn drag_observation_sample(
+    observation: &colossus_contracts::ComputerObservation,
+    title: &str,
+    elapsed: std::time::Duration,
+    matched: bool,
+) -> serde_json::Value {
+    use sha2::{Digest as _, Sha256};
+    let labels = [
+        "",
+        "Fixture input",
+        "Fixture action",
+        "Open owned modal",
+        "Waiting for action",
+        "Clicked",
+        "Typed Colossus 😀 native input",
+        "Drag received",
+    ];
+    let nodes = observation
+        .nodes
+        .iter()
+        .take(16)
+        .map(|node| {
+            let synthetic = node.name == title || labels.contains(&node.name.as_str());
+            serde_json::json!({
+                "name":synthetic.then_some(&node.name),"name_bytes":node.name.len(),
+                "name_sha256":format!("{:x}",Sha256::digest(node.name.as_bytes())),
+                "role":synthetic.then_some(&node.role),"bounds":node.bounds,
+                "focused":node.focused,"is_password":node.is_password
+            })
+        })
+        .collect::<Vec<_>>();
+    // SAFETY: read-only shared monotonic system tick for correlating owned
+    // fixture diagnostics; no window, input or process operation is performed.
+    let tick = unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() };
+    serde_json::json!({
+        "elapsed_ms":elapsed.as_millis(),"system_tick_ms":tick,"matched":matched,
+        "session_id":observation.session_id,"generation":observation.control_generation,
+        "window_id":observation.window_id,"width":observation.width,"height":observation.height,
+        "scale_milli":observation.scale_milli,"node_count":observation.nodes.len(),"nodes":nodes,
+        "foreground":observation.windows.iter().find(|window| window.window_id == observation.window_id).map(|window| window.foreground)
+    })
 }
 
 #[cfg(windows)]

@@ -1,0 +1,237 @@
+.desktop-features .desktop-preference-select {
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
+}
+@media (max-width: 700px) {
+  .desktop-features .desktop-preference-select {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.desktop-feature-shortcut {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 16px;
+  align-items: end;
+}
+.desktop-feature-shortcut label {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+}
+.desktop-feature-shortcut small,
+.desktop-features small {
+  color: var(--muted);
+}
+.appshot-preview {
+  width: min(850px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  background: var(--surface);
+  padding: 0;
+}
+.appshot-preview::backdrop {
+  background: var(--surface-overlay);
+}
+.appshot-preview header,
+.appshot-preview footer {
+  padding: 16px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.appshot-preview header {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+.appshot-preview h3,
+.appshot-preview p {
+  margin: 0;
+}
+.appshot-preview p {
+  color: var(--muted);
+}
+.appshot-preview-body {
+  padding: 16px;
+  max-height: 62vh;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+}
+.appshot-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 44vh;
+  object-fit: contain;
+  margin: auto;
+}
+.appshot-preview pre {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 25vh;
+  overflow: auto;
+}
+.appshot-preview footer {
+  border-top: 1px solid var(--border);
+}
+.pet-surface,
+.pet-surface body,
+.pet-surface #root {
+  background: transparent !important;
+  overflow: hidden;
+}
+.pet-surface body {
+  margin: 0;
+  min-width: 0;
+}
+.developer-pet {
+  box-sizing: border-box;
+  max-width: 156px;
+  display: grid;
+  justify-items: center;
+  width: 100%;
+  gap: 2px;
+  padding: 4px;
+  color: var(--text);
+  user-select: none;
+}
+.pet-character {
+  width: 104px;
+  height: 91px;
+  cursor: grab;
+}
+.pet-size-large .pet-character {
+  width: 128px;
+  height: 110px;
+}
+.hacker-art {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.pet-hood {
+  fill: var(--surface-raised);
+  stroke: var(--green);
+  stroke-width: 3;
+}
+.pet-face {
+  fill: var(--surface);
+}
+.pet-eyes,
+.pet-mouth,
+.pet-hands,
+.pet-prompt {
+  fill: var(--green);
+}
+.pet-laptop {
+  fill: var(--surface-raised);
+  stroke: var(--border-strong, var(--border));
+  stroke-width: 2;
+}
+.pet-screen {
+  fill: var(--surface);
+}
+.pet-status-icon {
+  fill: var(--green);
+}
+.pet-attention .pet-status-icon {
+  fill: var(--amber);
+}
+.pet-status {
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-tight);
+  color: var(--text);
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pet-controls {
+  display: flex;
+  gap: 4px;
+}
+.pet-controls button {
+  font: inherit;
+  font-size: var(--font-size-caption);
+  color: var(--text);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  padding: 2px 5px;
+}
+.pet-controls button:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+.developer-pet.pet-has-error {
+  height: 100vh;
+  grid-template-rows: var(--control-height-touch) minmax(0, 1fr) auto;
+}
+.developer-pet.pet-has-error .pet-character {
+  width: var(--control-height-touch);
+  height: var(--control-height-touch);
+}
+.pet-error {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  align-self: stretch;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-tight);
+  background: var(--surface);
+  color: var(--red);
+}
+.pet-error:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+.pet-motion .pet-eyes {
+  animation: pet-blink 7s infinite;
+  transform-origin: center;
+}
+.pet-motion.pet-working .pet-prompt {
+  animation: pet-pulse 1s steps(2) infinite;
+}
+@keyframes pet-blink {
+  0%,
+  92%,
+  96%,
+  100% {
+    transform: scaleY(1);
+  }
+  94% {
+    transform: scaleY(0.1);
+  }
+}
+@keyframes pet-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .developer-pet * {
+    animation: none !important;
+  }
+}
+@media (max-width: 500px) {
+  .desktop-feature-shortcut {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.appshot-preview header > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

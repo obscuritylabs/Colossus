@@ -344,7 +344,7 @@ fn terminal_help_document(preferences: &TerminalPreferences) -> PresentationDocu
         ],
         [
             "Appearance",
-            "/theme · /stream · /events · /reasoning · /transcript · /multiline",
+            "/theme · /stream · /events · /reasoning · /transcript · /multiline · /suggestions",
             "Tune the terminal experience",
         ],
         [

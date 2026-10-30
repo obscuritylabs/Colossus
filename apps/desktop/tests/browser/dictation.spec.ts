@@ -3,6 +3,17 @@ import AxeBuilder from "@axe-core/playwright";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
+    const callbacks = new Map<number, (value: unknown) => void>();
+    const listeners = new Map<string, number[]>();
+    let nextCallbackId = 1;
+    const unregisterListener = (event: string, eventId: number) => {
+      const remaining = (listeners.get(event) ?? []).filter(
+        (id) => id !== eventId,
+      );
+      if (remaining.length) listeners.set(event, remaining);
+      else listeners.delete(event);
+      callbacks.delete(eventId);
+    };
     const fixture = {
       events: [] as unknown[],
       calls: [] as string[],
@@ -61,11 +72,51 @@ test.beforeEach(async ({ page }) => {
     });
     Object.assign(window, {
       dictationFixture: fixture,
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener },
       __TAURI_INTERNALS__: {
+        transformCallback(callback: (value: unknown) => void, once = false) {
+          const id = nextCallbackId++;
+          callbacks.set(id, (value) => {
+            if (once) callbacks.delete(id);
+            callback(value);
+          });
+          return id;
+        },
+        unregisterCallback(id: number) {
+          callbacks.delete(id);
+        },
         invoke: async (
           command: string,
-          args: { request?: Record<string, unknown>; modelId?: string },
+          args: {
+            request?: Record<string, unknown>;
+            modelId?: string;
+            event?: string;
+            handler?: number;
+            eventId?: number;
+          } = {},
         ) => {
+          if (command === "plugin:event|listen") {
+            if (
+              typeof args.event !== "string" ||
+              typeof args.handler !== "number" ||
+              !callbacks.has(args.handler)
+            )
+              throw new Error("Invalid native fixture event registration");
+            listeners.set(args.event, [
+              ...(listeners.get(args.event) ?? []),
+              args.handler,
+            ]);
+            return args.handler;
+          }
+          if (command === "plugin:event|unlisten") {
+            if (
+              typeof args.event !== "string" ||
+              typeof args.eventId !== "number"
+            )
+              throw new Error("Invalid native fixture event cleanup");
+            unregisterListener(args.event, args.eventId);
+            return;
+          }
           fixture.calls.push(
             command + (args?.request ? `:${args.request.action}` : ""),
           );

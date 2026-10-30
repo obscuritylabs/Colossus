@@ -13,13 +13,6 @@ use super::{
     inspection::{SNAPSHOT_BUDGET, collect_pages},
     registry::{DRAINING_MESSAGE, MAX_TABS, Registry, Tab},
 };
-#[cfg(not(any(
-    feature = "macos-contained-browser-diagnostic",
-    any(
-        feature = "windows-browser-development",
-        feature = "windows-browser-functional-preview"
-    )
-)))]
 use crate::desktop_settings::SettingsStore;
 use crate::dto::CommandErrorDto;
 
@@ -374,7 +367,11 @@ impl BrowserManager {
                         page.url.clear();
                     }
                 }
+                let observed_url = page.url.clone();
                 tab.dto.page = page;
+                if let Some(diagnostics) = state.diagnostics.get_mut(&id) {
+                    diagnostics.set_origin(&observed_url);
+                }
             }
         }
         Ok(self.lock()?.snapshot())
@@ -491,7 +488,14 @@ impl BrowserManager {
     }
 
     fn reset_navigation(&self, id: &str, url: Option<&str>) -> Result<(), CommandErrorDto> {
-        if let Some(tab) = self.lock()?.tabs.iter_mut().find(|t| t.dto.id == id) {
+        let mut state = self.lock()?;
+        if let Some(diagnostics) = state.diagnostics.get_mut(id) {
+            diagnostics.reset();
+            if let Some(url) = url {
+                diagnostics.set_origin(url);
+            }
+        }
+        if let Some(tab) = state.tabs.iter_mut().find(|t| t.dto.id == id) {
             tab.dto.error = None;
             tab.dto.notice = None;
             tab.dto.popup_url = None;
@@ -501,6 +505,70 @@ impl BrowserManager {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn load_human_preferences(&self, scope: &str) -> Result<(), CommandErrorDto> {
+        if !self.lock()?.human_preferences.contains_key(scope) {
+            let preferences = super::profile::ProfileStore::open(scope)?.read()?;
+            self.lock()?
+                .human_preferences
+                .insert(scope.to_owned(), preferences);
+        }
+        Ok(())
+    }
+
+    pub(super) fn human_profile(
+        &self,
+        scope: &str,
+        persistent: bool,
+    ) -> Result<(std::path::PathBuf, Option<Webview>), CommandErrorDto> {
+        let mut state = self.lock()?;
+        if state.draining || state.tabs.len() >= MAX_TABS {
+            return Err(error("The browser cannot open another tab."));
+        }
+        let directory = if persistent {
+            if !state.human_profiles.contains_key(scope) {
+                if state.human_profiles.len() >= super::profile::MAX_HUMAN_PROFILES {
+                    return Err(error(
+                        "Thirty-two saved browser profiles are active. Restart Colossus before opening another workspace's saved profile.",
+                    ));
+                }
+                let lease = super::profile::ProfileStore::open(scope)?.lease()?;
+                state.human_profiles.insert(scope.to_owned(), lease);
+            }
+            state
+                .human_profiles
+                .get(scope)
+                .ok_or_else(|| error("The saved browser profile is unavailable."))?
+                .directory()?
+        } else {
+            if !state.profiles.contains_key(scope) {
+                let store = SettingsStore::open_application()?;
+                let directory = tempfile::Builder::new()
+                    .prefix("human-browser-session-")
+                    .tempdir_in(store.application_root())
+                    .map_err(|_| {
+                        error("The temporary human browser profile could not be created.")
+                    })?;
+                state.profiles.insert(scope.to_owned(), directory);
+            }
+            state
+                .profiles
+                .get(scope)
+                .ok_or_else(|| error("The temporary browser profile is unavailable."))?
+                .path()
+                .to_owned()
+        };
+        state
+            .sessions
+            .entry(scope.to_owned())
+            .or_insert_with(|| format!("human-browser-session-{}", uuid::Uuid::new_v4()));
+        let source = state
+            .tabs
+            .iter()
+            .filter(|tab| tab.scope == scope)
+            .find_map(|tab| tab.view.system_view().cloned());
+        Ok((directory, source))
     }
 
     fn profile(
@@ -649,7 +717,18 @@ impl BrowserManager {
         if let Some(url) = &url {
             policy.authorize(url).map_err(engine_error)?;
         }
-        let (directory, source) = self.profile(scope)?;
+        self.load_human_preferences(scope)?;
+        let human = self
+            .lock()?
+            .human_preferences
+            .get(scope)
+            .cloned()
+            .unwrap_or_default();
+        let (directory, source) = if cfg!(windows) && human.system_mode() {
+            self.human_profile(scope, human.remember_sign_ins)?
+        } else {
+            self.profile(scope)?
+        };
         let id = format!("browser-{}", uuid::Uuid::new_v4());
         let sink = self.event_sink(&id);
         let generation = self.lock()?.generation;
@@ -663,6 +742,7 @@ impl BrowserManager {
                 initial_url: url.clone(),
                 directory,
                 source,
+                human: human.clone(),
                 policy: policy.clone(),
                 sink,
             },
@@ -673,69 +753,92 @@ impl BrowserManager {
             .conversation_id()
             .map(str::to_owned)
             .or(conversation_id);
-        {
-            let mut state = self.lock()?;
-            let session_id = view
-                .contained_session_id()
-                .map(str::to_owned)
-                .or_else(|| matches!(view, BrowserView::Empty).then(String::new))
-                .or_else(|| state.sessions.get(scope).cloned())
-                .ok_or_else(|| error("The browser session identity is unavailable."))?;
-            state.selected.insert(scope.to_owned(), id.clone());
-            state.tabs.push(Tab {
-                scope: scope.to_owned(),
-                view: view.clone(),
-                #[cfg(any(
-                    feature = "windows-browser-development",
-                    feature = "windows-browser-functional-preview"
-                ))]
-                pending_completed_view: None,
-                #[cfg(any(
-                    feature = "windows-browser-development",
-                    feature = "windows-browser-functional-preview"
-                ))]
-                close_requested: false,
-                agent_run_id: None,
-                policy,
-                heartbeat: None,
-                presentation_epoch: Arc::new(AtomicU64::new(0)),
-                dto: BrowserTabDto {
-                    id: id.clone(),
-                    session_id,
-                    conversation_id,
-                    control: if view.human_control_available() {
-                        "human"
-                    } else {
-                        "agent"
-                    },
-                    completed_snapshot: false,
-                    page: PageState {
-                        url: url.as_ref().map(ToString::to_string).unwrap_or_default(),
-                        title: "New tab".into(),
-                        loading: url.is_some(),
-                        ..PageState::default()
-                    },
-                    error: None,
-                    notice: None,
-                    popup_url: None,
+        self.register_created_tab(
+            scope,
+            &view,
+            policy,
+            BrowserTabDto {
+                id: id.clone(),
+                session_id: String::new(),
+                conversation_id,
+                control: if view.human_control_available() {
+                    "human"
+                } else {
+                    "agent"
                 },
-            });
-        }
+                completed_snapshot: false,
+                page: PageState {
+                    url: url.as_ref().map(ToString::to_string).unwrap_or_default(),
+                    title: "New tab".into(),
+                    loading: url.is_some(),
+                    ..PageState::default()
+                },
+                error: None,
+                notice: None,
+                popup_url: None,
+            },
+            &human,
+        )?;
         // The managed sidecar already opened the exact initial address before
         // returning the RemoteSurface. Sending a second human navigation here
         // could race the authenticated presentation's first frame.
-        #[cfg(not(any(
-            feature = "macos-contained-browser-diagnostic",
-            any(
+        if (view.system_view().is_some()
+            || !cfg!(any(
+                feature = "macos-contained-browser-diagnostic",
                 feature = "windows-browser-development",
                 feature = "windows-browser-functional-preview"
-            )
-        )))]
-        if let Some(url) = url
+            )))
+            && let Some(url) = url
             && view.navigate(url).is_err()
         {
             self.lock()?.event(&id, BrowserEvent::Failed);
         }
+        Ok(())
+    }
+
+    fn register_created_tab(
+        &self,
+        scope: &str,
+        view: &BrowserView,
+        policy: NavigationPolicy,
+        mut dto: BrowserTabDto,
+        human: &super::profile::HumanBrowserPreferences,
+    ) -> Result<(), CommandErrorDto> {
+        let mut state = self.lock()?;
+        dto.session_id = view
+            .contained_session_id()
+            .map(str::to_owned)
+            .or_else(|| matches!(view, BrowserView::Empty).then(String::new))
+            .or_else(|| state.sessions.get(scope).cloned())
+            .ok_or_else(|| error("The browser session identity is unavailable."))?;
+        state.selected.insert(scope.to_owned(), dto.id.clone());
+        let mut diagnostics = super::diagnostics::BrowserDiagnostics {
+            persistent: human.remember_sign_ins && view.system_view().is_some(),
+            custom_user_agent: !human.user_agent.is_empty() && view.system_view().is_some(),
+            system_engine: view.system_view().is_some(),
+            ..Default::default()
+        };
+        diagnostics.set_origin(&dto.page.url);
+        state.diagnostics.insert(dto.id.clone(), diagnostics);
+        state.tabs.push(Tab {
+            scope: scope.to_owned(),
+            view: view.clone(),
+            #[cfg(any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            ))]
+            pending_completed_view: None,
+            #[cfg(any(
+                feature = "windows-browser-development",
+                feature = "windows-browser-functional-preview"
+            ))]
+            close_requested: false,
+            agent_run_id: None,
+            policy,
+            heartbeat: None,
+            presentation_epoch: Arc::new(AtomicU64::new(0)),
+            dto,
+        });
         Ok(())
     }
 
@@ -983,6 +1086,7 @@ impl BrowserManager {
         }
         let mut state = self.lock()?;
         state.tabs.retain(|t| t.dto.id != id);
+        state.diagnostics.remove(id);
         if state
             .selected
             .get(scope)

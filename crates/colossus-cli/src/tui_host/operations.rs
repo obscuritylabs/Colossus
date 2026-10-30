@@ -1,10 +1,11 @@
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use tokio::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Rejects permission changes during foreground work while draining presentation writes.
 #[derive(Default)]
 pub(super) struct HostOperationGate {
     foreground: RwLock<()>,
     presentation: RwLock<()>,
+    preferences_edit: Mutex<()>,
 }
 
 pub(super) enum HostOperationGuard<'a> {
@@ -40,6 +41,12 @@ impl HostOperationGate {
                 _guard: self.foreground.read().await,
             })
         }
+    }
+
+    /// Serialize only the short preference read-modify-save section.
+    /// Interactive pickers must finish before acquiring this guard.
+    pub(super) async fn edit_preferences(&self) -> MutexGuard<'_, ()> {
+        self.preferences_edit.lock().await
     }
 
     pub(super) async fn enter_presentation(&self) -> RwLockReadGuard<'_, ()> {

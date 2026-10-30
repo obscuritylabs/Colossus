@@ -1,5 +1,6 @@
 use super::*;
 mod manager_tests;
+mod preferences_tests;
 mod usage_tests;
 
 struct NoWorkHost;

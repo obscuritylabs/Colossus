@@ -1390,6 +1390,16 @@ impl ArtifactClient for SwitchingArtifactClient {
 
 #[async_trait]
 impl AgentRunClient for SwitchingAgentRunClient {
+    async fn predict_next_prompt(
+        &self,
+        request: crate::PredictNextPromptRequest,
+    ) -> ApiResult<crate::NextPromptPrediction> {
+        self.current()
+            .await?
+            .primary
+            .predict_next_prompt(request)
+            .await
+    }
     async fn submit_agent_task_message(
         &self,
         request: crate::SubmitAgentTaskMessageRequest,

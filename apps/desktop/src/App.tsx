@@ -91,6 +91,14 @@ import { ReleaseChannelBanner } from "./components/ReleaseChannelBanner";
 import type { WorkspaceSurface } from "./components/ProductRail";
 import { WorkComposer } from "./components/WorkComposer";
 import { useDictation } from "./use-dictation";
+import { invoke } from "@tauri-apps/api/core";
+import { useNextPrompt } from "@colossus/ui/conversation";
+import type { NextPromptPrediction } from "@colossus/ui/conversation";
+import "@colossus/ui/styles/next-prompt.css";
+import { useDesktopPreferences } from "./DesktopPreferencesProvider";
+import { useAppshots } from "./useAppshots";
+import { AppshotPreview } from "./components/AppshotPreview";
+import { syncPetStatus } from "./desktop-extras";
 import type { ComposerDraft } from "./composer-paste";
 import {
   composerDraft,
@@ -471,7 +479,8 @@ const INITIAL_DESKTOP: DesktopStatus = {
     agentInboxes: FIXTURE_MODE && FIXTURE_QUERY.get("inboxUnavailable") !== "1",
     updateAvailable: false,
     agentWorkflows: false,
-    attachments: false,
+    attachments:
+      FIXTURE_MODE && FIXTURE_QUERY.get("fixtureAttachments") === "1",
   },
 };
 
@@ -1147,6 +1156,8 @@ export default function App() {
     desktop.capabilities.pluginSkillSelection === true,
     prompt.trimStart().startsWith("@") || pluginSelections.length > 0,
   );
+  const { nextPromptMode } = useDesktopPreferences();
+  const [blankDraftEpoch, setBlankDraftEpoch] = useState(0);
   const [attachments, setAttachments] = useState<ArtifactReference[]>([]);
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [artifactPreviews, setArtifactPreviews] = useState<
@@ -2407,6 +2418,7 @@ export default function App() {
     if (submitInFlight.current) {
       return;
     }
+    setBlankDraftEpoch((epoch) => epoch + 1);
     setWorkNavigationOpen(false);
     setBrowserConversation(null);
     setConversationSkills((current) => ({
@@ -5248,6 +5260,96 @@ export default function App() {
   const activeView =
     chat.activeRunId === null ? undefined : chat.views.get(chat.activeRunId);
   const activeRun = activeView?.run;
+  const appshots = useAppshots(
+    JSON.stringify([
+      desktop.selectedTargetId,
+      targetRoutes.current?.captureGeneration(),
+      chat.activeRunId,
+      blankDraftEpoch,
+      surface,
+    ]),
+    desktop.selectedTargetId,
+    (parts) =>
+      setAttachments((current) => [
+        ...current,
+        ...parts.filter(
+          (part) =>
+            !current.some(
+              (existing) => existing.artifactId === part.artifactId,
+            ),
+        ),
+      ]),
+  );
+  const petStatus =
+    (activeView?.pendingInteractions.length ?? 0) > 0
+      ? "attention"
+      : activeRun && !isTerminalStatus(activeRun.status)
+        ? "working"
+        : activeRun?.status === "completed"
+          ? "complete"
+          : "idle";
+  useEffect(() => {
+    if ("__TAURI_INTERNALS__" in window)
+      void syncPetStatus(petStatus).catch(() => {});
+  }, [petStatus]);
+  const completedOutput =
+    activeRun?.status === "completed" && activeRun.terminal?.type === "result"
+      ? activeRun.terminal.result.output
+      : null;
+  const predictionSource =
+    completedOutput === null || activeRun === undefined
+      ? null
+      : {
+          key: JSON.stringify([
+            desktop.selectedTargetId,
+            targetRoutes.current?.captureGeneration(),
+            activeRun.runId,
+          ]),
+          output: completedOutput,
+        };
+  const loadPrediction = useCallback(
+    async (signal: AbortSignal): Promise<NextPromptPrediction | null> => {
+      const route = targetRoutes.current?.capture();
+      if (
+        FIXTURE_MODE ||
+        !route ||
+        !activeRun ||
+        signal.aborted ||
+        !("__TAURI_INTERNALS__" in window)
+      )
+        return null;
+      const value = await invoke<NextPromptPrediction>("predict_next_prompt", {
+        targetId: route.targetId,
+        sourceRunId: activeRun.runId,
+      });
+      return !signal.aborted && targetRoutes.current?.isCurrent(route)
+        ? value
+        : null;
+    },
+    [activeRun?.runId, desktop.selectedTargetId],
+  );
+  const nextPrompt = useNextPrompt({
+    source: predictionSource,
+    mode: nextPromptMode,
+    draft: prompt,
+    busy:
+      submitting ||
+      connecting ||
+      planRevision !== null ||
+      attachments.length > 0,
+    load: loadPrediction,
+  });
+  function acceptNextPrompt() {
+    if (
+      nextPrompt.text &&
+      draftRef.current.display === "" &&
+      !submitInFlight.current
+    ) {
+      setPrompt(nextPrompt.text);
+      nextPrompt.dismiss();
+      requestAnimationFrame(() => composerRef.current?.focus());
+    }
+  }
   const activeForkOrigin = threadForkDrafts.find(
     (draft) =>
       draft.spaceId === desktop.selectedSpaceId &&
@@ -5623,6 +5725,10 @@ export default function App() {
 
   const composer = (contextActions: ReactNode) => (
     <WorkComposer
+      nextPrompt={nextPrompt.text}
+      predictionTokens={nextPrompt.auxiliaryTokens}
+      onAcceptNextPrompt={acceptNextPrompt}
+      onDismissNextPrompt={nextPrompt.dismiss}
       dictation={dictation ?? undefined}
       onOpenDictationSettings={() => {
         setSettingsStartTab("dictation");
@@ -5830,6 +5936,29 @@ export default function App() {
         boundary={desktop.executionBoundary}
       />
       <ToastRegion toasts={toasts} onDismiss={dismissToast} />
+      {appshots.preview !== null && (
+        <AppshotPreview
+          key={appshots.preview.captureId}
+          capture={appshots.preview}
+          busy={appshots.busy}
+          canAttach={
+            canCompose &&
+            desktop.capabilities.attachments &&
+            mode !== "goal" &&
+            !attachmentBusy &&
+            attachments.length <= 14 &&
+            !submitting
+          }
+          error={appshots.error}
+          onAttach={(includeText) => void appshots.attach(includeText)}
+          onDiscard={appshots.discard}
+        />
+      )}
+      {appshots.error && appshots.preview === null && (
+        <p role="alert" className="appshot-error">
+          {appshots.error}
+        </p>
+      )}
       {!onboardingActive && workNavigationOpen ? (
         <button
           className="workspace-drawer-backdrop work-navigation-backdrop"
@@ -6274,6 +6403,11 @@ export default function App() {
               void handleRemoveExternalTarget(targetId)
             }
             onChooseWorkspace={() => void handleChooseWorkspace()}
+            onWorkspaceOpened={(status) => {
+              void acceptDesktopStatus(status, true)
+                .then(() => setSurface("work"))
+                .catch((error) => setActionError(commandError(error)));
+            }}
             onConfigureManaged={() => setShowOnboarding(true)}
             onRestartManaged={() => void handleRestartManaged()}
             onSetTerminalEnabled={(enabled) =>

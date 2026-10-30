@@ -172,6 +172,9 @@ pub(crate) async fn connect_colossus(
     let mut settings = store.load()?;
     cleanup_pending_provider_credentials(&state, &store, &mut settings).await?;
     let selected = state.selected_target_id().await;
+    state
+        .worktree_selection
+        .retain_selected_target(&settings, selected.as_deref())?;
     let target_id = target_id
         .or(selected)
         .or_else(|| {
@@ -498,6 +501,30 @@ async fn create_space_from_picker(
     let Some(workspace) = pick_workspace_from_dialog(app)? else {
         return Ok(None);
     };
+    open_workspace_selection(app, state, workspace)
+        .await
+        .map(Some)
+}
+
+/// Called only with a path independently verified by the managed-worktree service.
+pub(crate) async fn open_worktree_workspace(
+    app: &AppHandle,
+    state: &AppState,
+    path: &std::path::Path,
+) -> Result<DesktopStatusDto, CommandErrorDto> {
+    let workspace = validate_workspace(path)?;
+    open_workspace_selection(app, state, workspace)
+        .await
+        .map(|(_, status)| status)
+}
+
+async fn open_workspace_selection(
+    app: &AppHandle,
+    state: &AppState,
+    workspace: WorkspaceSetting,
+) -> Result<(WorkspaceSummaryDto, DesktopStatusDto), CommandErrorDto> {
+    let _worktree_usage =
+        crate::workspace_worktrees::workspace_guard(&revalidate_workspace(&workspace)?)?;
     let _guard = connect_guard(state)?;
     let store = settings_store()?;
     let mut settings = store.load()?;
@@ -539,7 +566,7 @@ async fn create_space_from_picker(
     state.select_target(Some(space_id.clone())).await;
     state.activate_managed_terminal_for(&space_id).await;
     let status = desktop_status_from(state, &settings).await?;
-    Ok(Some((WorkspaceSummaryDto::from(&workspace), status)))
+    Ok((WorkspaceSummaryDto::from(&workspace), status))
 }
 
 fn pick_workspace_from_dialog(
@@ -992,6 +1019,14 @@ pub(crate) async fn select_space(
     let mut settings = store.load()?;
     let previous_settings = settings.clone();
     settings.activate_space(&space_id)?;
+    let _worktree_usage = settings
+        .workspace
+        .as_ref()
+        .map(|workspace| {
+            revalidate_workspace(workspace)
+                .and_then(|path| crate::workspace_worktrees::workspace_guard(&path))
+        })
+        .transpose()?;
     store.save(&settings)?;
     state.select_target(None).await;
     if settings.managed_configured()
@@ -2772,6 +2807,9 @@ async fn desktop_status_from(
     settings: &DesktopSettings,
 ) -> Result<DesktopStatusDto, CommandErrorDto> {
     let selected = state.selected_target_id().await;
+    state
+        .worktree_selection
+        .retain_selected_target(settings, selected.as_deref())?;
     let selected_space_id = settings.selected_space_id.clone();
     let (selected_managed_id, managed_connected, managed_health) =
         selected_managed_health(state, settings, selected.as_deref()).await;

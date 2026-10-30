@@ -74,6 +74,8 @@ mod plugin_registry_tests;
 mod prelude;
 mod presentation_work_effects;
 mod process_sessions;
+mod prompt_predictions;
+pub use prompt_predictions::RuntimePromptPrediction;
 mod provider_continuation;
 #[cfg(test)]
 mod provider_continuation_tests;

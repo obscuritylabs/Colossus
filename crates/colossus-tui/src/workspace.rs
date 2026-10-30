@@ -7,6 +7,7 @@ use super::*;
 use crate::workspace_view::{WorkspaceAction, WorkspaceSessionRow, WorkspaceSessionStatus};
 use std::ops::{Deref, DerefMut};
 mod manager;
+mod preferences;
 
 const MAX_OPEN_SESSIONS: usize = 8;
 const MAX_CATALOG_SESSIONS: usize = 100;
@@ -18,6 +19,10 @@ pub(super) enum WorkspaceEvent {
         event: Box<HostEvent>,
     },
     Opened(Box<Result<InteractiveSnapshot, String>>),
+    Preferences {
+        generation: u64,
+        result: Box<Result<TerminalPreferences, String>>,
+    },
     Catalog {
         generation: u64,
         archived: bool,
@@ -67,6 +72,7 @@ pub(super) struct Workspace {
     archive_target: Option<String>,
     approval_mode: String,
     approval_mode_revision: u64,
+    shared_preferences: preferences::SharedPreferences,
     epoch: u64,
 }
 
@@ -84,11 +90,15 @@ impl DerefMut for Workspace {
 }
 
 impl Workspace {
-    pub(super) fn new(active: TuiState) -> (Self, mpsc::Receiver<WorkspaceEvent>) {
+    pub(super) fn new(mut active: TuiState) -> (Self, mpsc::Receiver<WorkspaceEvent>) {
+        active
+            .next_prompt
+            .resume_model(active.preferences.next_prompt_mode);
         let (events, receiver) = mpsc::channel(256);
         let id = active.session_id.clone();
         let approval_mode = active.footer.approval_mode.clone();
         let approval_mode_revision = active.footer.approval_mode_revision;
+        let shared_preferences = preferences::SharedPreferences::new(active.preferences.clone());
         let mut workspace = Self {
             active,
             background: BTreeMap::new(),
@@ -110,6 +120,7 @@ impl Workspace {
             archive_target: None,
             approval_mode,
             approval_mode_revision,
+            shared_preferences,
             epoch: 1,
         };
         workspace.add_channel(id);
@@ -213,6 +224,17 @@ impl Workspace {
                         },
                         _ => None,
                     };
+                    // Returned profiles can arrive out of canonical commit order.
+                    // Re-read through this same host instead of adopting a completion snapshot.
+                    let preferences_changed = match &mut event {
+                        HostEvent::OperationFinished(result) => match result.as_mut() {
+                            Ok(OperationResult::Command(result)) => {
+                                result.preferences.take().is_some()
+                            }
+                            _ => false,
+                        },
+                        _ => false,
+                    };
                     let approval_mode = match &event {
                         HostEvent::OperationFinished(result) => match result.as_ref() {
                             Ok(OperationResult::Command(result)) => result.footer.as_ref(),
@@ -231,6 +253,9 @@ impl Workspace {
                         // One unread indicator persists until this conversation
                         // is viewed; streaming token counts are not message counts.
                         self.unread.entry(id).or_insert(1);
+                    }
+                    if preferences_changed {
+                        self.refresh_preferences(Arc::clone(&host));
                     }
                     if let Some(id) = selection {
                         self.open(Some(id), host);
@@ -254,6 +279,7 @@ impl Workspace {
                             }
                         } else if self.channels.len() < MAX_OPEN_SESSIONS {
                             let mut next = TuiState::from_snapshot(snapshot);
+                            self.inherit_preferences(&mut next);
                             next.footer.approval_mode.clone_from(&self.approval_mode);
                             next.footer.approval_mode_revision = self.approval_mode_revision;
                             next.dictation.port = self.active.dictation.port.clone();
@@ -274,6 +300,9 @@ impl Workspace {
                         .active
                         .append_entry(error_entry(&format!("Could not open session: {error}"))),
                 }
+            }
+            WorkspaceEvent::Preferences { generation, result } => {
+                self.receive_preferences(generation, *result, host);
             }
             WorkspaceEvent::Catalog {
                 generation,

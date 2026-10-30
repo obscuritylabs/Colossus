@@ -21,6 +21,8 @@ mod identity;
 pub use human_terminal::*;
 mod plugins;
 mod posture;
+mod prompt_predictions;
+pub use prompt_predictions::*;
 mod process_sessions;
 mod repository;
 mod runs;

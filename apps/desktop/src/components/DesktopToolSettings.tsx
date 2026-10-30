@@ -4,6 +4,7 @@ import { IconGitBranch, IconWorld, IconTerminal2 } from "@tabler/icons-react";
 import { useDesktopPreferences } from "../DesktopPreferencesProvider";
 import { validBrowserNewTabUrl } from "../desktop-preferences";
 import { DropdownSelect } from "./DropdownSelect";
+import { BrowserPreferences } from "./browser/BrowserPreferences";
 
 export function GitSettings() {
   const { gitAutoRefresh, gitDefaultView, updatePreferences } =
@@ -151,9 +152,11 @@ export function BrowserSettings({ children }: { children?: React.ReactNode }) {
           </p>
         ) : null}
         <p className="desktop-preference-note">
-          Browser sessions are temporary. Browsing history is not restored.
+          Agent browser sessions are temporary. Human browsing can optionally
+          remember sign-ins below.
         </p>
       </form>
+      <BrowserPreferences />
     </section>
   );
 }

@@ -30,7 +30,8 @@
         "main-chat",
         "terminal-pty",
         "command-approval",
-        "client-identity-review"
+        "client-identity-review",
+        "developer-pet"
       ],
       "freezePrototype": true,
       "csp": "default-src 'self' customprotocol: asset:; script-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; media-src 'none'; form-action 'none'",

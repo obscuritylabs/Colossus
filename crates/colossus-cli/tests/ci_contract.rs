@@ -124,27 +124,27 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
             "macos-desktop-acceptance",
             &premerge,
             "Restore main Desktop acceptance build cache",
-            "macos-desktop-acceptance",
+            "macos-15-desktop-acceptance-v1",
             "apps/desktop/src-tauri -> target",
-            "macos-14",
+            "macos-15",
         ),
         (
             "macos-desktop-bundle",
             "macos-desktop-bundle",
             &premerge,
             "Restore main Desktop bundle build cache",
-            "macos-desktop-bundle-recipe-v2",
+            "macos-15-desktop-bundle-recipe-v3",
             "apps/desktop/src-tauri -> target",
-            "macos-14",
+            "macos-15",
         ),
         (
             "macos-desktop-bundle",
             "desktop_macos_build",
             &release,
             "Restore main Desktop bundle build cache",
-            "macos-desktop-bundle-recipe-v2",
+            "macos-15-desktop-bundle-recipe-v3",
             "apps/desktop/src-tauri -> target",
-            "macos-14",
+            "macos-15",
         ),
     ] {
         let warm_job = job(jobs(&warm), warm_job);
@@ -153,7 +153,7 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
         assert_eq!(field(consumer_job, "runs-on").as_str(), Some(runner));
         let warm_cache_name = if runner == "ubuntu-latest" {
             "Save Linux PR dependency build cache"
-        } else if shared_key == "macos-desktop-acceptance" {
+        } else if shared_key == "macos-15-desktop-acceptance-v1" {
             "Save macOS Desktop acceptance build cache"
         } else {
             "Save macOS Desktop bundle build cache"
@@ -168,7 +168,7 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
         );
         for inputs in [warm_inputs, consumer_inputs] {
             assert_eq!(field(inputs, "shared-key").as_str(), Some(shared_key));
-            if shared_key == "macos-desktop-bundle-recipe-v2" {
+            if shared_key == "macos-15-desktop-bundle-recipe-v3" {
                 assert!(
                     !inputs.contains_key("key"),
                     "rust-cache ignores key when shared-key is set; version the shared namespace"
@@ -180,7 +180,7 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
             assert_eq!(field(inputs, "cache-targets").as_bool(), Some(true));
         }
         assert_eq!(field(consumer_inputs, "save-if").as_bool(), Some(false));
-        if runner == "macos-14" {
+        if runner == "macos-15" {
             for cache_job in [warm_job, consumer_job] {
                 assert!(
                     !mapping(field(cache_job, "env"), "macOS cache environment")
@@ -660,7 +660,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     let jobs = jobs(&workflow);
     assert_eq!(
         field(job(jobs, "linux-rust-integration"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("ubuntu-24.04")
     );
     assert_eq!(
         field(
@@ -675,11 +675,11 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "macos-native"), "runs-on").as_str(),
-        Some("macos-14")
+        Some("macos-15")
     );
     assert_eq!(
         field(job(jobs, "macos-desktop-acceptance"), "runs-on").as_str(),
-        Some("macos-14")
+        Some("macos-15")
     );
     assert_eq!(
         field(job(jobs, "macos-desktop-acceptance"), "timeout-minutes").as_u64(),
@@ -688,7 +688,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "macos-desktop-bundle"), "runs-on").as_str(),
-        Some("macos-14")
+        Some("macos-15")
     );
     assert_eq!(
         field(job(jobs, "macos-desktop-bundle"), "timeout-minutes").as_u64(),
@@ -706,11 +706,11 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "windows-desktop"), "runs-on").as_str(),
-        Some("windows-latest-l")
+        Some("windows-2025")
     );
     assert_eq!(
         field(job(jobs, "windows-desktop"), "timeout-minutes").as_u64(),
-        Some(90),
+        Some(120),
         "Windows Desktop acceptance must allow cold native builds and browser acceptance"
     );
     assert_eq!(
@@ -749,7 +749,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "test:managed",
         "build-native.mjs",
         "package.mjs",
-        "macos-14",
+        "macos-15",
         "windows-latest",
         "vscode-sdk-bindings",
         "sdk/typescript/src/gen",
@@ -881,7 +881,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     }
     assert_eq!(
         field(job(jobs, "live-security"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("ubuntu-24.04")
     );
     let podman_readiness = field(
         named_step(
@@ -947,8 +947,42 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
     let release_jobs = jobs(&workflow);
     assert_eq!(
         field(job(release_jobs, "validate"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("ubuntu-24.04")
     );
+    assert_eq!(
+        field(job(release_jobs, "desktop_windows_signed"), "runs-on").as_str(),
+        Some("windows-2025")
+    );
+    assert_eq!(
+        field(job(release_jobs, "desktop_windows_preview"), "runs-on").as_str(),
+        Some("windows-latest-l")
+    );
+    for (job_name, target, runner) in [
+        ("artifacts", "x86_64-unknown-linux-musl", "ubuntu-24.04"),
+        ("artifacts", "x86_64-pc-windows-msvc", "windows-2025"),
+        ("control_plane", "x86_64-unknown-linux-gnu", "ubuntu-24.04"),
+    ] {
+        let strategy = mapping(
+            field(job(release_jobs, job_name), "strategy"),
+            "release strategy",
+        );
+        let matrix = mapping(field(strategy, "matrix"), "release matrix");
+        let entries = field(matrix, "include")
+            .as_array()
+            .expect("release matrix entries");
+        let matching = entries
+            .iter()
+            .filter(|entry| entry.get("target").and_then(serde_json::Value::as_str) == Some(target))
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "{job_name} must have one {target} entry");
+        assert_eq!(
+            matching[0]
+                .get("runner")
+                .and_then(serde_json::Value::as_str),
+            Some(runner),
+            "{job_name} {target} runner"
+        );
+    }
     let desktop_build = job(release_jobs, "desktop_macos_build");
     let desktop = job(release_jobs, "desktop_macos");
     let sdk = job(release_jobs, "sdk_release");
@@ -958,13 +992,13 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         field(sdk, "if").as_str(),
         Some("needs.validate.outputs.target_channel == 'stable'")
     );
-    assert_eq!(field(desktop_build, "runs-on").as_str(), Some("macos-14"));
+    assert_eq!(field(desktop_build, "runs-on").as_str(), Some("macos-15"));
     assert_eq!(field(desktop_build, "needs").as_str(), Some("validate"));
     assert_eq!(
         field(desktop_build, "if").as_str(),
         Some("needs.validate.outputs.target_channel != 'stable'")
     );
-    assert_eq!(field(desktop, "runs-on").as_str(), Some("macos-14"));
+    assert_eq!(field(desktop, "runs-on").as_str(), Some("macos-15"));
     assert_eq!(
         field(desktop, "if").as_str(),
         Some("needs.validate.outputs.target_channel != 'stable'")
@@ -1045,9 +1079,7 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         "Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip",
         "colossus-desktop-validation-only-adhoc-aarch64-apple-darwin",
         "Upload non-runnable ADHOC validation archive and checksum",
-        "- runner: ubuntu-latest-m\n            target: x86_64-unknown-linux-musl",
         "shasum -a 256",
-        "runs-on: windows-latest-l",
         "./scripts/package-desktop-windows.ps1",
         "codeSigning = \"unsigned_validation_only\"",
         "smartScreenWarningExpected = $true",

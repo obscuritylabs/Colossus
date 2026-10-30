@@ -8,9 +8,10 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 26 adds canonical session archive/restore and archived session discovery.
+/// Version 27 combines canonical session archive/restore and archived discovery
+/// with opt-in next-prompt generation and strict suggestion-mode preferences.
 /// Both sides reject mismatches during the handshake and require a worker restart.
-pub const PROTOCOL_VERSION: u16 = 26;
+pub const PROTOCOL_VERSION: u16 = 27;
 pub(crate) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum serialized authenticated response frame accepted by worker clients.
 ///

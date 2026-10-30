@@ -68,7 +68,7 @@ jobs:
     name: Complete Linux Rust and AppArmor acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -130,7 +130,7 @@ jobs:
     name: Representative macOS native sandbox
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -221,7 +221,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14, windows-latest]
+        os: [ubuntu-latest, macos-15, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -252,7 +252,7 @@ jobs:
     name: Representative macOS Desktop acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     env:
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
@@ -281,7 +281,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: apps/desktop/src-tauri -> target
-          shared-key: macos-desktop-acceptance
+          shared-key: macos-15-desktop-acceptance-v1
           key: recipe-v1
           cache-targets: true
           save-if: false
@@ -341,7 +341,7 @@ jobs:
     name: Representative macOS Desktop bundle
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 75
     env:
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
@@ -369,7 +369,7 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
           # rust-cache ignores key when shared-key is set; version the shared namespace.
-          shared-key: macos-desktop-bundle-recipe-v2
+          shared-key: macos-15-desktop-bundle-recipe-v3
           cache-targets: true
           save-if: false
       - name: Build validation-only ADHOC macOS bundle structure
@@ -544,8 +544,8 @@ jobs:
     name: Representative Windows Desktop acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: windows-latest-l
-    timeout-minutes: 90
+    runs-on: windows-2025
+    timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_TARGET_DIR: ${{ github.workspace }}\apps\desktop\src-tauri\target
@@ -875,7 +875,7 @@ jobs:
     name: OCI and OPA security acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - name: Check out repository
@@ -1049,7 +1049,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-latest]
+        os: [macos-15, windows-latest]
     env:
       CARGO_INCREMENTAL: "0"
     steps:

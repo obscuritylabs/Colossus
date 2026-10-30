@@ -73,6 +73,7 @@ mod conversation_runs;
 mod desktop_commands;
 mod desktop_credentials;
 mod desktop_dto;
+mod desktop_extras;
 mod desktop_instance;
 mod desktop_settings;
 mod diagnostics;
@@ -85,6 +86,7 @@ mod managed_diagnostics;
 mod managed_runtime;
 mod mcp_health;
 mod native_browser_authentication;
+mod next_prompt;
 #[cfg(windows)]
 mod outlook_companion;
 mod plugin_adapter;
@@ -111,6 +113,7 @@ mod updates;
 mod workspace_files;
 mod workspace_git;
 mod workspace_search;
+mod workspace_worktrees;
 
 /// Run the opt-in native browser acceptance harness.
 #[cfg(feature = "browser-test-bridge")]
@@ -209,6 +212,10 @@ pub fn run() {
     if let Some(code) = uninstall::run_if_requested() {
         std::process::exit(code);
     }
+    #[cfg(windows)]
+    if let Some(code) = colossus_native_computer::run_appshot_worker_if_requested() {
+        std::process::exit(i32::from(code != std::process::ExitCode::SUCCESS));
+    }
     // Non-browser workers never create CEF/AppKit. Browser helpers have their
     // own sandbox entry; install CEF before Tauri or late-loaded UI plugins.
     let browser_cache = browser::bootstrap::initialize();
@@ -232,7 +239,9 @@ pub fn run() {
     };
     let application = tauri::Builder::default();
     #[cfg(windows)]
-    let application = application.plugin(desktop_instance::plugin());
+    let application = application
+        .plugin(desktop_instance::plugin())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build());
     let application = application
         .register_uri_scheme_protocol(
             client_identity_review::protocol::SCHEME,
@@ -248,6 +257,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build());
     let application = application
         .manage(state::AppState::default())
+        .manage(desktop_extras::ExtrasState::default())
+        .manage(workspace_worktrees::WorkspaceWorktreeState::default())
         .manage(dictation::DictationState::default())
         .manage(terminal_commands::pane::TerminalPaneState::default())
         .manage(status_bar::StatusBarState::default())
@@ -258,6 +269,7 @@ pub fn run() {
         .manage(workspace_search::SearchState::default())
         .setup(|app| {
             status_bar::setup(app)?;
+            desktop_extras::install(app.handle())?;
             browser::start_watchdog(app.handle().clone());
             #[cfg(all(
                 windows,
@@ -286,6 +298,7 @@ pub fn run() {
             {
                 use tauri::Manager as _;
                 view.state::<dictation::DictationState>().cancel();
+                desktop_extras::controller_loading(view.app_handle());
                 client_identity_review::controller_loading(view.app_handle());
                 view.state::<state::AppState>().browser.controller_loading();
                 terminal_commands::pane::hide(view.app_handle(), true);
@@ -301,11 +314,27 @@ pub fn run() {
                 use tauri::Manager as _;
                 window.state::<dictation::DictationState>().cancel();
             }
+            desktop_extras::handle_window_event(window, event);
             browser::handle_window_event(window, event);
             client_identity_review::handle_window_event(window, event);
             status_bar::handle_window_event(window, event);
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_extras::desktop_features_context,
+            desktop_extras::save_desktop_features,
+            desktop_extras::capture::appshot_preview,
+            desktop_extras::capture::discard_appshot,
+            desktop_extras::capture::attach_appshot,
+            desktop_extras::pet::sync_pet_status,
+            desktop_extras::pet::pet_context,
+            desktop_extras::pet::pet_action,
+            next_prompt::predict_next_prompt,
+            browser::preferences::browser_preferences,
+            workspace_worktrees::get_workspace_worktrees,
+            workspace_worktrees::workspace_worktree_action,
+            workspace_worktrees::get_worktree_preferences,
+            workspace_worktrees::save_worktree_preferences,
+            workspace_worktrees::choose_worktree_directory,
             logging::report_renderer_failure,
             client_identity_review::sync_client_identity_appearance,
             client_identity_review::client_identity_review_context,

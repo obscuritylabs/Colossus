@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "developer-pet",
+  "description": "The companion can read only its status and preferences, move its own window and reveal or hide Colossus.",
+  "local": true,
+  "webviews": ["developer-pet"],
+  "permissions": ["allow-pet-context", "allow-pet-action"]
+}

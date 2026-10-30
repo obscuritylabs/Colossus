@@ -156,6 +156,21 @@
     "allow-notify-background",
     "allow-list-shell-sessions",
     "allow-read-shell-session",
-    "allow-stop-shell-session"
+    "allow-stop-shell-session",
+    "allow-desktop-features-context",
+    "allow-save-desktop-features",
+    "allow-appshot-preview",
+    "allow-discard-appshot",
+    "allow-attach-appshot",
+    "allow-sync-pet-status",
+    "allow-predict-next-prompt",
+    "allow-browser-preferences",
+    "allow-get-workspace-worktrees",
+    "allow-workspace-worktree-action",
+    "allow-get-worktree-preferences",
+    "allow-save-worktree-preferences",
+    "allow-choose-worktree-directory",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
   ]
 }

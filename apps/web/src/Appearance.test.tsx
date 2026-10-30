@@ -23,6 +23,7 @@ it("validates native color input before persisting browser preferences", async (
             darkPalette: "colossus",
             textSize: "comfortable",
             sendShortcut: "enter",
+            nextPromptMode: "local",
             palettes: parseThemePalettes(DEFAULT_THEME_PALETTES),
           }}
           onChange={onChange}
@@ -96,7 +97,7 @@ it("restores Black without overwriting saved custom colors", async () => {
     expect(document.documentElement.style.getPropertyValue("--main")).toBe("");
     expect(
       JSON.parse(localStorage.getItem("colossus.web.appearance.v1")!),
-    ).toEqual(saved);
+    ).toEqual({ ...saved, nextPromptMode: "local" });
     expect(container.textContent).toContain("Black uses preset colors");
     await act(() => {
       container

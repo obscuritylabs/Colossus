@@ -189,6 +189,7 @@ impl GrpcBackend {
             closed: closed.clone(),
             plugin_selection: std::sync::atomic::AtomicBool::new(false),
             model_selection: std::sync::atomic::AtomicBool::new(false),
+            prompt_prediction: std::sync::atomic::AtomicBool::new(false),
         });
         let (capabilities, model_profiles) = verify_server_identity(
             agent_runs.as_ref(),
@@ -203,6 +204,10 @@ impl GrpcBackend {
         );
         agent_runs.model_selection.store(
             capabilities.contains("agent_runs.model_selection"),
+            std::sync::atomic::Ordering::Release,
+        );
+        agent_runs.prompt_prediction.store(
+            capabilities.contains(crate::NEXT_PROMPT_CAPABILITY),
             std::sync::atomic::Ordering::Release,
         );
         Ok(Self {
@@ -305,6 +310,7 @@ struct GrpcAgentRunClient {
     closed: watch::Sender<bool>,
     plugin_selection: std::sync::atomic::AtomicBool,
     model_selection: std::sync::atomic::AtomicBool,
+    prompt_prediction: std::sync::atomic::AtomicBool,
 }
 
 struct GrpcArtifactClient {
@@ -575,6 +581,45 @@ fn cancel_watch_on_close(
 
 #[async_trait]
 impl AgentRunClient for GrpcAgentRunClient {
+    async fn predict_next_prompt(
+        &self,
+        request: crate::PredictNextPromptRequest,
+    ) -> ApiResult<crate::NextPromptPrediction> {
+        if !self
+            .prompt_prediction
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Ok(crate::NextPromptPrediction::unavailable(
+                request.source_run_id,
+            ));
+        }
+        validate_identifier(&request.source_run_id)?;
+        let source_run_id = request.source_run_id.clone();
+        let request = self
+            .request(proto::PredictNextPromptRequest {
+                source_run_id: request.source_run_id,
+            })
+            .await?;
+        let response = self
+            .client()
+            .predict_next_prompt(request)
+            .await
+            .map_err(api_error_from_status)?
+            .into_inner();
+        if response.prediction_json.len() > 4096 {
+            return Err(protocol_error());
+        }
+        let result: crate::NextPromptPrediction =
+            serde_json::from_slice(&response.prediction_json).map_err(|_| protocol_error())?;
+        if result.source_run_id != source_run_id
+            || result.text.as_ref().is_some_and(|text| {
+                text.chars().count() > 240 || text.chars().any(char::is_control)
+            })
+        {
+            return Err(protocol_error());
+        }
+        Ok(result)
+    }
     async fn submit_agent_task_message(
         &self,
         request: crate::SubmitAgentTaskMessageRequest,

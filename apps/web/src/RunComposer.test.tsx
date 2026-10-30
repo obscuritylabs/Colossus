@@ -4,6 +4,27 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { RunComposer, type RunRequest } from "./RunComposer";
 import type { FleetNode } from "./api";
+import { NextPromptModeContext } from "./Appearance";
+
+it("keeps Model mode local until the connected runtime advertises prediction", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  Object.defineProperty(document, "fonts", {configurable:true,value:new EventTarget()});
+  vi.stubGlobal("fetch", vi.fn(async () => reply([])));
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const load = vi.fn(async () => null);
+  const render = async (target: FleetNode) => act(async () => root.render(
+    <NextPromptModeContext value="model"><RunComposer nodes={[target]} nodeId={target.node.node_id} busy={false} label="Message" action="Send" onSubmit={async () => true} nextPromptSource={{key:"source",output:"I can review the deployment."}} loadPromptPrediction={load} /></NextPromptModeContext>,
+  ));
+  const unsupported = node("unsupported");
+  await render(unsupported);
+  expect(load).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("Review the deployment");
+  await render({...unsupported,presence:{...unsupported.presence!,ready:true,capabilities:["composer.prediction.v1"]}});
+  expect(load).toHaveBeenCalledTimes(1);
+  await act(async () => root.unmount());
+  vi.unstubAllGlobals();
+});
 
 const node = (id: string): FleetNode => ({
   node: {

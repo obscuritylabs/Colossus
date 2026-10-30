@@ -1663,6 +1663,20 @@ pub trait RunExecutor: Send + Sync {
 /// Public run application service implemented by embedded and remote backends.
 #[async_trait]
 pub trait AgentRunApi: Send + Sync {
+    /// Advertise auxiliary predictions only when composition implements them.
+    fn supports_next_prompt_prediction(&self) -> bool {
+        false
+    }
+    /// Explicit opt-in auxiliary prediction; never starts or mutates a conversation run.
+    async fn predict_next_prompt(
+        &self,
+        _caller: &CallerContext,
+        request: crate::PredictNextPromptRequest,
+    ) -> ApiResult<crate::NextPromptPrediction> {
+        Ok(crate::NextPromptPrediction::unavailable(
+            request.source_run_id,
+        ))
+    }
     /// Optional shared communication application service. Absence is an explicit capability.
     fn communication(&self) -> Option<std::sync::Arc<dyn crate::AgentCommunicationApi>> {
         None

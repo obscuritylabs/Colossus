@@ -7,7 +7,8 @@ use colossus_contracts::{
     ThemeColor, ThemeSpinner, ThemeTextStyle, ToolCall, ToolResult, WorkStateSnapshot,
 };
 pub use colossus_contracts::{
-    EventDisplayMode, StreamDisplayMode, TerminalPreferences, ThemeName, TranscriptDensity,
+    EventDisplayMode, NextPromptMode, StreamDisplayMode, TerminalPreferences, ThemeName,
+    TranscriptDensity,
 };
 use colossus_ports::{EventJournal, PresentationRepository, StoreError};
 use directories::BaseDirs;
@@ -39,6 +40,7 @@ const MAX_THEME_FILE_BYTES: u64 = 64 * 1024;
 mod command_approval;
 mod document;
 mod markdown;
+mod next_prompt;
 mod palette;
 mod repository;
 mod semantic;
@@ -52,6 +54,7 @@ pub use document::{
     PresentationBlock, PresentationDocument, PresentationError, PresentationTable,
     PresentationTone, StyledLine, StyledSpan, document_from_json,
 };
+pub use next_prompt::{local_next_prompt, normalize_prompt};
 pub use palette::{RgbColor, TerminalPalette};
 pub use repository::EventSourcedPresentationRepository;
 pub use semantic::{

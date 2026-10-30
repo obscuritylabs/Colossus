@@ -8,11 +8,12 @@ import {
 } from "react";
 import { Button, ComposerModeSwitch, DropdownSelect } from "@colossus/ui";
 import { Badge } from "@colossus/ui/components/ui/badge";
-import { ConversationComposer } from "@colossus/ui/conversation";
+import { ConversationComposer, NextPromptSuggestion, useNextPrompt, type NextPromptSource, type NextPromptPrediction } from "@colossus/ui/conversation";
 import { type FleetNode } from "./api";
 import { HostedAttachments, type HostedAttachment } from "./HostedAttachments";
 import { workspaceName } from "./workspace-navigation";
-import { SendShortcutContext } from "./Appearance";
+import { NextPromptModeContext, SendShortcutContext } from "./Appearance";
+import "@colossus/ui/styles/next-prompt.css";
 import {
   ResearchControls,
   RESEARCH_SOURCE_OPTIONS,
@@ -93,6 +94,8 @@ export function RunComposer({
   stopDisabled = false,
   hostedProject,
   conversationBranch = false,
+  nextPromptSource,
+  loadPromptPrediction,
 }: {
   nodes: FleetNode[];
   nodeId: string;
@@ -116,6 +119,8 @@ export function RunComposer({
   stopDisabled?: boolean;
   hostedProject?: string | undefined;
   conversationBranch?: boolean;
+  nextPromptSource?: NextPromptSource | null | undefined;
+  loadPromptPrediction?: ((signal: AbortSignal) => Promise<NextPromptPrediction | null>) | undefined;
 }) {
   const modeGroup = useId();
   const [attachments, setAttachments] = useState<HostedAttachment[]>([]);
@@ -168,6 +173,11 @@ export function RunComposer({
   const [selectionRevision, setSelectionRevision] = useState(0);
   const target = nodes.find((item) => item.node.node_id === nodeId);
   const shortcut = useContext(SendShortcutContext);
+  const predictionMode = useContext(NextPromptModeContext);
+  const nextPrompt = useNextPrompt({ source: nextPromptSource, mode: predictionMode, draft, busy: busy || running || disabled || uploading || Boolean(planContinuation) || attachments.length > 0, load: target?.presence?.ready && target.presence.capabilities.includes("composer.prediction.v1") ? loadPromptPrediction : undefined });
+  const acceptNextPrompt = () => {
+    if (!draft && nextPrompt.text && !busy && !running && !disabled) { updateDraft(nextPrompt.text); input.current?.focus(); }
+  };
   const posture = target?.node.policy;
   const capabilities = useRunModeCapabilities(target, disabled);
   const [modelChoice, setModelChoice] = useState<{
@@ -356,6 +366,10 @@ export function RunComposer({
       stopping={stopping}
       stopDisabled={stopDisabled}
       shortcut={shortcut}
+      textareaProps={{ onKeyDown: event => {
+        if (event.key === "Tab" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && nextPrompt.text) { event.preventDefault(); acceptNextPrompt(); }
+        else if (event.key === "Escape" && nextPrompt.text) { event.preventDefault(); nextPrompt.dismiss(); }
+      } }}
       context={
         <>
           {planContinuation ? (
@@ -629,7 +643,7 @@ export function RunComposer({
                   ? "Research requires an available runtime and at least one authorized evidence source."
                   : target && !target.presence?.ready && !target.node.revoked
                     ? "This agent is offline. Accepted messages remain queued until it reconnects."
-                    : undefined
+                    : nextPrompt.text || nextPrompt.auxiliaryTokens != null ? <NextPromptSuggestion text={nextPrompt.text} onAccept={acceptNextPrompt} onDismiss={nextPrompt.dismiss} auxiliaryTokens={nextPrompt.auxiliaryTokens} /> : undefined
       }
     />
   );

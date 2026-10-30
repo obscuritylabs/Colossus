@@ -97,6 +97,36 @@ impl EmbeddedInteractiveHost {
         arguments: &str,
         events: &mpsc::Sender<HostEvent>,
     ) -> Result<Option<HostCommandResult>, String> {
+        if !matches!(
+            name,
+            "theme"
+                | "stream"
+                | "events"
+                | "reasoning"
+                | "suggestions"
+                | "multiline"
+                | "transcript"
+                | "trace"
+        ) {
+            return Ok(None);
+        }
+        // Human theme selection must not block an opt-out in another session.
+        // Its preview snapshot is never the profile written after selection.
+        let selected_theme = if name == "theme" && arguments.trim().is_empty() {
+            let preferences = self
+                .runtime
+                .presentation_preferences()
+                .map_err(|error| error.to_string())?;
+            let Some(selected) = browse_themes(events, &self.themes, &preferences).await? else {
+                return Ok(Some(HostCommandResult::document(
+                    PresentationDocument::new(),
+                )));
+            };
+            Some(selected)
+        } else {
+            None
+        };
+        let _edit = self.operations.edit_preferences().await;
         let mut preferences = self
             .runtime
             .presentation_preferences()
@@ -107,15 +137,9 @@ impl EmbeddedInteractiveHost {
         let changed = match name {
             "theme" => {
                 let argument = arguments.trim();
-                if argument.is_empty() {
-                    let selected = browse_themes(events, &self.themes, &preferences).await?;
-                    let Some(selected) = selected else {
-                        return Ok(Some(HostCommandResult::document(
-                            PresentationDocument::new(),
-                        )));
-                    };
+                if let Some(selected) = selected_theme.as_deref() {
                     self.themes
-                        .select(&selected, &mut preferences)
+                        .select(selected, &mut preferences)
                         .map_err(|error| error.to_string())?;
                     true
                 } else if argument == "list" {
@@ -170,6 +194,15 @@ impl EmbeddedInteractiveHost {
             }
             "reasoning" => {
                 preferences.show_reasoning = parse_toggle(arguments, preferences.show_reasoning)?;
+                true
+            }
+            "suggestions" => {
+                preferences.next_prompt_mode = match arguments.trim() {
+                    "off" => colossus_contracts::NextPromptMode::Off,
+                    "on" | "local" => colossus_contracts::NextPromptMode::Local,
+                    "model" => colossus_contracts::NextPromptMode::Model,
+                    _ => return Err("/suggestions expects off, local, or model".into()),
+                };
                 true
             }
             "multiline" => {
@@ -1182,6 +1215,41 @@ impl EmbeddedInteractiveHost {
 
 #[async_trait]
 impl InteractiveHost for EmbeddedInteractiveHost {
+    async fn predict_next_prompt(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        role: &str,
+        model_profile: &str,
+    ) -> Result<(Option<String>, Option<u64>), String> {
+        self.runtime
+            .predict_next_prompt(
+                session_id,
+                run_id,
+                role,
+                model_profile,
+                colossus_contracts::Actor {
+                    actor_type: ActorType::User,
+                    id: "cli".into(),
+                },
+            )
+            .await
+            .map(|prediction| {
+                (
+                    prediction.text,
+                    prediction.usage.map(|usage| usage.total_tokens),
+                )
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    async fn presentation_preferences(&self) -> Result<TerminalPreferences, String> {
+        let _presentation = self.operations.enter_presentation().await;
+        self.runtime
+            .presentation_preferences()
+            .map_err(|error| error.to_string())
+    }
+
     async fn session_work_status(
         &self,
         session_id: &str,
@@ -1667,6 +1735,14 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         events: mpsc::Sender<HostEvent>,
     ) -> Result<TerminalPreferences, String> {
         let _presentation = self.operations.enter_presentation().await;
+        let _edit = self.operations.edit_preferences().await;
+        let current = self
+            .runtime
+            .presentation_preferences()
+            .map_err(|error| error.to_string())?;
+        let mut preferences = preferences;
+        super::common::preserve_model_opt_out(&mut preferences, &current);
+
         self.router
             .scope(
                 events,

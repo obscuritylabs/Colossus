@@ -1,6 +1,12 @@
-import type { BrowserApi, BrowserSnapshot, BrowserTab } from "../browser-api";
+import type {
+  BrowserApi,
+  BrowserSnapshot,
+  BrowserTab,
+  HumanBrowserPreferences,
+} from "../browser-api";
 
 const sessions = new Map<string, BrowserSnapshot>();
+const preferences = new Map<string, HumanBrowserPreferences>();
 let nextId = 0;
 let latestViewport: Parameters<BrowserApi["viewport"]>[0] | null = null;
 
@@ -90,6 +96,29 @@ export function browserFixture(scope: string): BrowserApi {
     context: async () => copy(),
     viewport: async (request) => {
       latestViewport = structuredClone(request);
+    },
+    preferences: async (generation, action) => {
+      if (generation !== state.generation)
+        throw {
+          message: "The selected workspace changed. Reopen browser settings.",
+        };
+      if (action.type === "save")
+        preferences.set(scope, structuredClone(action.preferences));
+      if (action.type === "reset") preferences.delete(scope);
+      if (action.type !== "status") {
+        state.tabs = [];
+        state.selectedTabId = null;
+        state.generation += 1;
+      }
+      return {
+        available: true,
+        generation: state.generation,
+        preferences: structuredClone(
+          preferences.get(scope) ?? { rememberSignIns: false, userAgent: "" },
+        ),
+        message:
+          "Synthetic Windows profile fixture. Saved human sign-ins are separate from agent Chromium sessions.",
+      };
     },
     certificates: async () => ({
       scope: "unsupported",

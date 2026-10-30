@@ -47,6 +47,7 @@ mod image_views;
 mod plan_interaction;
 mod process_sessions;
 mod project_telemetry;
+mod prompt_predictions;
 mod schedule_approval;
 mod sharing;
 mod standalone_goal;

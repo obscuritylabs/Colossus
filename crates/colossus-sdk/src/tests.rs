@@ -26,6 +26,12 @@ struct UnusedAgentRuns;
 
 #[async_trait]
 impl AgentRunClient for UnusedAgentRuns {
+    async fn predict_next_prompt(
+        &self,
+        _request: PredictNextPromptRequest,
+    ) -> ApiResult<NextPromptPrediction> {
+        unreachable!("unsupported prediction must not reach the transport")
+    }
     async fn create_run(&self, _request: CreateRunRequest) -> ApiResult<CreateRunResponse> {
         unreachable!("run service is not exercised by lifecycle tests")
     }
@@ -90,6 +96,21 @@ fn secret_debug_output_is_redacted() {
     let debug = format!("{secret:?}");
     assert_eq!(debug, "Secret([REDACTED])");
     assert!(!debug.contains("credential-value-never-log"));
+}
+
+#[tokio::test]
+async fn unsupported_prediction_uses_no_transport_or_provider_request() {
+    let client = Colossus::from_backend(TestBackend::new(BackendKind::Daemon));
+    let result = client
+        .predict_next_prompt(PredictNextPromptRequest {
+            source_run_id: "old-server-source".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        result,
+        NextPromptPrediction::unavailable("old-server-source".into())
+    );
 }
 
 #[tokio::test]

@@ -19,6 +19,7 @@ import {
 } from "@tabler/icons-react";
 import type { BrowserController } from "./useBrowser";
 import { BrowserCertificates } from "./BrowserCertificates";
+import { BrowserConnectionDetails } from "./BrowserConnectionDetails";
 import { useDesktopPreferences } from "../../DesktopPreferencesProvider";
 import "./browser.css";
 
@@ -68,6 +69,8 @@ export function BrowserPane({
   const active = snapshot.tabs.find((tab) => tab.id === snapshot.selectedTabId);
   const [address, setAddress] = useState(active?.url ?? "");
   const [showCertificates, setShowCertificates] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  const details = active ? snapshot.diagnostics?.[active.id] : undefined;
   const addressRef = useRef<HTMLInputElement>(null);
   const selectedTabRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -407,6 +410,13 @@ export function BrowserPane({
         className={`browser-viewport${agentControlling ? " is-agent-controlled" : ""}`}
       >
         <div className="browser-page" ref={viewportRef} aria-label="Web page">
+          {showDetails ? (
+            <BrowserConnectionDetails
+              details={details}
+              engineKind={snapshot.engine?.kind}
+              onClose={() => setShowDetails(false)}
+            />
+          ) : null}
           {showCertificates ? (
             <BrowserCertificates
               controller={controller}
@@ -494,7 +504,8 @@ export function BrowserPane({
             </>
           ) : (
             <>
-              {engineLabel} · {controlLabel} · Temporary session
+              {engineLabel} · {controlLabel} ·{" "}
+              {details?.persistent ? "Saved sign-ins" : "Temporary session"}
             </>
           )}
         </span>
@@ -532,17 +543,31 @@ export function BrowserPane({
         <button
           type="button"
           disabled={!ready}
-          onClick={() => setShowCertificates((visible) => !visible)}
+          onClick={() => {
+            setShowDetails(false);
+            setShowCertificates((visible) => !visible);
+          }}
           aria-expanded={showCertificates}
         >
           Certificates
         </button>
         <button
           type="button"
+          disabled={!active}
+          aria-expanded={showDetails}
+          onClick={() => {
+            setShowCertificates(false);
+            setShowDetails((visible) => !visible);
+          }}
+        >
+          Connection details
+        </button>
+        <button
+          type="button"
           disabled={snapshot.tabs.length === 0 || busy}
           onClick={() => void command({ type: "clear" })}
         >
-          Clear session
+          Close all tabs
         </button>
       </footer>
     </section>

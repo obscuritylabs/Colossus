@@ -33,6 +33,50 @@ mod titles;
 #[path = "tests/user_inventory.rs"]
 mod user_inventory;
 
+fn prediction_reply(source: &str, text: Option<&str>, usage: Option<TokenUsage>) -> CloudReply {
+    CloudReply::NextPromptPrediction {
+        prediction: NextPromptPrediction {
+            source_run_id: source.into(),
+            text: text.map(str::to_owned),
+            usage: usage
+                .map(|usage| serde_json::from_value(serde_json::to_value(usage).unwrap()).unwrap()),
+        },
+    }
+}
+
+async fn prediction_command(
+    repo: &CloudRepository,
+    caller: &CloudCaller,
+    node: &CloudNode,
+    key: &str,
+) -> (CloudTask, PendingCommand) {
+    let mut input = request();
+    input.idempotency_key = IdempotencyKey::new(key).unwrap();
+    let task = repo
+        .create_task(caller, &node.node_id, input)
+        .await
+        .unwrap();
+    let mut source = snapshot();
+    source.run.run_id = format!("run-{key}");
+    source.run.session_id = format!("session-{key}");
+    source.run.status = RunStatus::Completed;
+    repo.record_receipt(
+        node,
+        &task.task_id,
+        &task.task_id,
+        CloudReply::Run {
+            run: Box::new(source),
+        },
+    )
+    .await
+    .unwrap();
+    let command = repo
+        .predict_next_prompt(caller, &task.task_id)
+        .await
+        .unwrap();
+    (task, command)
+}
+
 fn caller(project: &str, permissions: &[CloudPermission]) -> CloudCaller {
     CloudCaller::new(
         "alice".into(),
@@ -97,6 +141,222 @@ pub(crate) fn request() -> CreateRunRequest {
         max_turns: 4,
         idempotency_key: IdempotencyKey::new("once").unwrap(),
     }
+}
+
+#[tokio::test]
+async fn prediction_receipt_upgrades_only_an_empty_placeholder_after_full_validation() {
+    let (repo, caller, node) = fixture().await;
+    let now = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp()).unwrap();
+    let store = repo.storage();
+    let lease = store
+        .claim_lease(
+            &node.project_id,
+            &node.node_id,
+            "prediction-owner",
+            now,
+            120,
+        )
+        .await
+        .unwrap();
+    store
+        .publish_lease_capabilities(
+            &lease,
+            vec![colossus_sdk::NEXT_PROMPT_CAPABILITY.into()],
+            now,
+        )
+        .await
+        .unwrap();
+    let fenced = repo.with_lease(lease.clone());
+    let usage = TokenUsage {
+        input_tokens: 18,
+        output_tokens: 7,
+        total_tokens: 25,
+        cached_input_tokens: Some(3),
+        reasoning_tokens: Some(4),
+    };
+    for (index, text, has_usage) in [
+        (0, Some("Review the cookie restore path"), true),
+        (1, None, true),
+        (2, Some("Review the signed browser path"), false),
+    ] {
+        let (task, command) =
+            prediction_command(&repo, &caller, &node, &format!("prediction-{index}")).await;
+        let task_before = repo.get_task(&caller, &task.task_id).await.unwrap();
+        let source = format!("run-prediction-{index}");
+        let empty = prediction_reply(&source, None, None);
+        fenced
+            .record_receipt(&node, &command.command_id, &task.task_id, empty.clone())
+            .await
+            .unwrap();
+        let placeholder = repo
+            .get_command(&caller, &task.task_id, &command.command_id)
+            .await
+            .unwrap();
+        assert_eq!(placeholder.reply, Some(empty.clone()));
+        let mut malformed = vec![
+            prediction_reply("unrelated-source", Some("Review it"), Some(usage.clone())),
+            prediction_reply(&source, Some(""), None),
+            prediction_reply(&source, Some("   "), None),
+            prediction_reply(&source, Some("bad\nline"), None),
+            prediction_reply(&source, Some("\u{202e}hidden"), None),
+            prediction_reply(&source, Some(" !whoami"), None),
+            prediction_reply(&source, Some("/reset"), None),
+            prediction_reply(&source, Some("`command`"), None),
+            prediction_reply(&source, Some(&"x".repeat(241)), None),
+            CloudReply::Run {
+                run: Box::new(snapshot()),
+            },
+        ];
+        for invalid_usage in [
+            TokenUsage {
+                total_tokens: 24,
+                ..usage.clone()
+            },
+            TokenUsage {
+                input_tokens: u64::MAX,
+                output_tokens: 1,
+                total_tokens: u64::MAX,
+                cached_input_tokens: None,
+                reasoning_tokens: None,
+            },
+            TokenUsage {
+                cached_input_tokens: Some(19),
+                ..usage.clone()
+            },
+            TokenUsage {
+                reasoning_tokens: Some(8),
+                ..usage.clone()
+            },
+        ] {
+            malformed.push(prediction_reply(&source, None, Some(invalid_usage)));
+        }
+        for incoming in &malformed {
+            assert_eq!(
+                fenced
+                    .record_receipt(&node, &command.command_id, &task.task_id, incoming.clone())
+                    .await,
+                Err(CloudError::InvalidArgument)
+            );
+        }
+        assert_eq!(
+            repo.get_command(&caller, &task.task_id, &command.command_id)
+                .await
+                .unwrap(),
+            placeholder
+        );
+        assert_eq!(
+            fenced
+                .record_receipt(&node, &command.command_id, "unrelated-task", empty.clone())
+                .await,
+            Err(CloudError::PermissionDenied)
+        );
+        let mut foreign = node.clone();
+        foreign.certificate_sha256 = "b".repeat(64);
+        assert!(
+            fenced
+                .record_receipt(&foreign, &command.command_id, &task.task_id, empty.clone())
+                .await
+                .is_err()
+        );
+        fenced
+            .record_receipt(&node, &command.command_id, &task.task_id, empty.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.get_command(&caller, &task.task_id, &command.command_id)
+                .await
+                .unwrap(),
+            placeholder
+        );
+        let informative = prediction_reply(&source, text, has_usage.then(|| usage.clone()));
+        fenced
+            .record_receipt(
+                &node,
+                &command.command_id,
+                &task.task_id,
+                informative.clone(),
+            )
+            .await
+            .unwrap();
+        let retained = repo
+            .get_command(&caller, &task.task_id, &command.command_id)
+            .await
+            .unwrap();
+        assert_eq!(retained.reply, Some(informative.clone()));
+        assert_eq!(retained.revision, placeholder.revision + 1);
+        for incoming in [
+            empty,
+            informative,
+            prediction_reply(&source, Some("A later different suggestion"), None),
+        ] {
+            fenced
+                .record_receipt(&node, &command.command_id, &task.task_id, incoming)
+                .await
+                .unwrap();
+            assert_eq!(
+                repo.get_command(&caller, &task.task_id, &command.command_id)
+                    .await
+                    .unwrap(),
+                retained
+            );
+        }
+        // Informative replay fast paths must still reject malformed text/usage.
+        for incoming in malformed {
+            assert_eq!(
+                fenced
+                    .record_receipt(&node, &command.command_id, &task.task_id, incoming)
+                    .await,
+                Err(CloudError::InvalidArgument)
+            );
+        }
+        assert_eq!(
+            repo.get_command(&caller, &task.task_id, &command.command_id)
+                .await
+                .unwrap(),
+            retained
+        );
+        assert_eq!(
+            repo.get_task(&caller, &task.task_id).await.unwrap(),
+            task_before
+        );
+    }
+    let (task, command) = prediction_command(&repo, &caller, &node, "prediction-stale").await;
+    let task_before = repo.get_task(&caller, &task.task_id).await.unwrap();
+    let empty = prediction_reply("run-prediction-stale", None, None);
+    fenced
+        .record_receipt(&node, &command.command_id, &task.task_id, empty.clone())
+        .await
+        .unwrap();
+    let placeholder = repo
+        .get_command(&caller, &task.task_id, &command.command_id)
+        .await
+        .unwrap();
+    store.release_lease(&lease).await.unwrap();
+    store
+        .claim_lease(&node.project_id, &node.node_id, "new-owner", now, 120)
+        .await
+        .unwrap();
+    for incoming in [
+        empty,
+        prediction_reply("run-prediction-stale", None, Some(usage)),
+    ] {
+        assert_eq!(
+            fenced
+                .record_receipt(&node, &command.command_id, &task.task_id, incoming)
+                .await,
+            Err(CloudError::Conflict)
+        );
+    }
+    assert_eq!(
+        repo.get_command(&caller, &task.task_id, &command.command_id)
+            .await
+            .unwrap(),
+        placeholder
+    );
+    assert_eq!(
+        repo.get_task(&caller, &task.task_id).await.unwrap(),
+        task_before
+    );
 }
 
 #[tokio::test]

@@ -3,6 +3,7 @@ import { webLink } from "./components/browser/BrowserLink";
 export const DESKTOP_PREFERENCES_KEY = "colossus.desktop.tools.v1";
 
 export interface DesktopPreferences {
+  nextPromptMode: "off" | "local" | "model";
   gitAutoRefresh: boolean;
   gitDefaultView: "changes" | "history";
   browserNewTabUrl: string;
@@ -10,6 +11,7 @@ export interface DesktopPreferences {
 }
 
 export const DEFAULT_DESKTOP_PREFERENCES: DesktopPreferences = {
+  nextPromptMode: "local",
   gitAutoRefresh: true,
   gitDefaultView: "changes",
   browserNewTabUrl: "",
@@ -28,6 +30,10 @@ export function parseDesktopPreferences(
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
     return {
+      nextPromptMode:
+        value.nextPromptMode === "off" || value.nextPromptMode === "model"
+          ? value.nextPromptMode
+          : "local",
       gitAutoRefresh: value.gitAutoRefresh !== false,
       gitDefaultView:
         value.gitDefaultView === "history" ? "history" : "changes",

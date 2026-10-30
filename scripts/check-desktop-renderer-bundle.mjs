@@ -30,7 +30,11 @@ const maximumJavaScriptChunkBytes = 700_000;
 // Mermaid diagram types add 2.35 MB after pruning unused diagram/layout engines.
 // These renderers and grammars load on demand. Reserve 2.4 MB while preserving
 // the 700 KB per-chunk bound and production fixture exclusions.
-const maximumRendererBytes = 6_638_000;
+// App Shot previews, prompt suggestions, worktree settings, browser sign-in
+// controls and the optional companion add 44.1 KB with unchanged npm locks.
+// Existing headroom absorbs 38.2 KB; reserve 10 KB more, leaving 4.1 KB in the
+// measured build. Keep the per-chunk limit and production fixture exclusions.
+const maximumRendererBytes = 6_648_000;
 const forbiddenFixtureStrings = [
   "Offline dictation preview",
   "fixture-run-desktop-release",

@@ -121,6 +121,20 @@ pub(super) fn handle_presentation_command(
             }
         }
         "/events" => println!("events={}", preferences.events_mode.as_str()),
+        "/suggestions" => println!(
+            "suggestions={} (model predictions use additional provider tokens)",
+            preferences.next_prompt_mode.as_str()
+        ),
+        command if command.starts_with("/suggestions ") => {
+            preferences.next_prompt_mode = match command.trim_start_matches("/suggestions ").trim()
+            {
+                "off" => colossus_contracts::NextPromptMode::Off,
+                "on" | "local" => colossus_contracts::NextPromptMode::Local,
+                "model" => colossus_contracts::NextPromptMode::Model,
+                _ => return Err("/suggestions expects off, local, or model".into()),
+            };
+            changed = true;
+        }
         "/events compact" => {
             preferences.events_mode = EventDisplayMode::Compact;
             changed = true;

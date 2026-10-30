@@ -187,6 +187,23 @@ impl Colossus {
         self.backend.agent_runs().get_run(request).await
     }
 
+    /// Request one auxiliary prediction; it never creates a conversation turn.
+    pub async fn predict_next_prompt(
+        &self,
+        request: crate::PredictNextPromptRequest,
+    ) -> ApiResult<crate::NextPromptPrediction> {
+        if !self
+            .backend
+            .capabilities()
+            .contains(crate::NEXT_PROMPT_CAPABILITY)
+        {
+            return Ok(crate::NextPromptPrediction::unavailable(
+                request.source_run_id,
+            ));
+        }
+        self.backend.agent_runs().predict_next_prompt(request).await
+    }
+
     /// List runs with stable pagination.
     pub async fn list_runs(&self, request: ListRunsRequest) -> ApiResult<ListRunsResponse> {
         self.backend.agent_runs().list_runs(request).await

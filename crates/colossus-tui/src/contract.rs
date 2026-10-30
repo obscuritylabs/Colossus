@@ -780,6 +780,17 @@ pub struct InteractivePrompt {
 
 /// Typed background event consumed by the sole terminal owner.
 pub enum HostEvent {
+    /// Optional auxiliary text, fenced to its completed source generation.
+    NextPrompt {
+        /// Selected canonical session when generation began.
+        session_id: String,
+        /// Editor-local completed-source generation fence.
+        generation: u64,
+        /// Bounded optional editable prompt; never a submitted command.
+        text: Option<String>,
+        /// Separate provider-reported auxiliary usage, when available.
+        auxiliary_tokens: Option<u64>,
+    },
     /// Metadata-only status refresh, fenced to the requested session selection.
     Sidebar {
         /// Exact selected session when the read began.
@@ -867,6 +878,20 @@ pub enum OperationResult {
 /// Embedded and worker-backed application boundary consumed by the TUI.
 #[async_trait]
 pub trait InteractiveHost: Send + Sync {
+    /// Explicit opt-in auxiliary model request; never appends a conversation turn.
+    async fn predict_next_prompt(
+        &self,
+        _session_id: &str,
+        _run_id: &str,
+        _role: &str,
+        _model_profile: &str,
+    ) -> Result<(Option<String>, Option<u64>), String> {
+        Ok((None, None))
+    }
+    /// Read the current canonical terminal presentation profile without opening a session.
+    async fn presentation_preferences(&self) -> Result<TerminalPreferences, String> {
+        Err("Canonical terminal preferences are unavailable in this host.".into())
+    }
     /// Resolve session, transcript, preferences, history, completions, and footer.
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String>;
 
@@ -971,7 +996,9 @@ pub trait InteractiveHost: Send + Sync {
         events: mpsc::Sender<HostEvent>,
     ) -> Result<(), String>;
 
-    /// Persist one exact terminal preference snapshot.
+    /// Persist a terminal preference snapshot and return the committed preferences.
+    /// Hosts preserve a fresh canonical Model opt-out: an older UI snapshot cannot
+    /// enable paid predictions. Use the explicit suggestions command to opt in.
     async fn save_preferences(
         &self,
         session_id: &str,

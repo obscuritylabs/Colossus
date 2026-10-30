@@ -487,6 +487,17 @@ pub enum WorkerOperation {
         /// Maximum records, clamped to 100.
         limit: usize,
     },
+    /// Opt-in auxiliary next-prompt generation over the exact canonical tail.
+    PredictNextPrompt {
+        /// Exact selected session.
+        session_id: String,
+        /// Most recent completed run.
+        source_run_id: String,
+        /// Existing logical route.
+        role: String,
+        /// Existing configured source model.
+        model_profile: String,
+    },
     /// Resolve the newest session.
     SessionLatest,
     /// Refresh bounded actionable work for one session.

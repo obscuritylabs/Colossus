@@ -187,6 +187,12 @@ fn composer_hint(
         return truncate_width_with_ellipsis(" Draft preserved · respond above ", width);
     }
     let mut hints = Vec::new();
+    if state.suggested_next_prompt().is_some() && !state.composer.completion_hidden {
+        hints.push("Tab inserts suggestion · Esc dismisses".to_owned());
+    }
+    if let Some(tokens) = state.next_prompt.auxiliary_tokens {
+        hints.push(format!("Prediction {tokens} tokens"));
+    }
     if state.dictation.port.is_some() {
         hints.push("F4 dictation".to_owned());
     }

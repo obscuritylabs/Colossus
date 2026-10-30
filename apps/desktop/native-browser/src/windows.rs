@@ -2,11 +2,13 @@
 
 use tauri::webview::PlatformWebview;
 use webview2_com::{
-    CoTaskMemPWSTR,
+    ClearBrowsingDataCompletedHandler, ClientCertificateRequestedEventHandler, CoTaskMemPWSTR,
     Microsoft::Web::WebView2::Win32::{
-        COREWEBVIEW2_PERMISSION_STATE_DENY, COREWEBVIEW2_WEB_ERROR_STATUS,
-        COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
-        ICoreWebView2, ICoreWebView2_13, ICoreWebView2Controller4, ICoreWebView2Environment,
+        COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_PROFILE, COREWEBVIEW2_PERMISSION_STATE_DENY,
+        COREWEBVIEW2_WEB_ERROR_STATUS, COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED,
+        COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, ICoreWebView2, ICoreWebView2_5, ICoreWebView2_13,
+        ICoreWebView2Controller4, ICoreWebView2Environment,
+        ICoreWebView2NavigationCompletedEventArgs2, ICoreWebView2Profile2, ICoreWebView2Settings2,
         ICoreWebView2Settings3, ICoreWebView2Settings4,
     },
     NavigationCompletedEventHandler, NavigationStartingEventHandler,
@@ -93,24 +95,62 @@ pub(crate) fn harden(
     // SAFETY: Tauri dispatches this closure to the controller's apartment thread.
     // COM interfaces and callback arguments remain owned for each call; callbacks
     // retain only policy, event sinks, and reference-counted native handles.
-    unsafe { configure(native, policy, sink) }.map_err(|_| BrowserError::Unavailable)
+    unsafe { configure(native, policy, sink, false, "") }.map_err(|_| BrowserError::Unavailable)
+}
+
+pub(crate) fn harden_human_profile(
+    native: &PlatformWebview,
+    policy: NavigationPolicy,
+    sink: EventSink,
+    persistent: bool,
+    user_agent: &str,
+) -> Result<(), BrowserError> {
+    // SAFETY: Called only from Tauri's owning-apartment dispatch. The caller
+    // derives the profile and mode from trusted native workspace preferences.
+    unsafe { configure(native, policy, sink, persistent, user_agent) }
+        .map_err(|_| BrowserError::Unavailable)
 }
 
 unsafe fn configure(
     native: &PlatformWebview,
     policy: NavigationPolicy,
     sink: EventSink,
+    persistent: bool,
+    user_agent: &str,
 ) -> windows::core::Result<()> {
-    let view = unsafe { configure_settings(native)? };
+    let view = unsafe { configure_settings(native, persistent, user_agent)? };
+    let latest = unsafe { register_navigation_policy(&view, &policy, &sink)? };
+    unsafe {
+        register_navigation_completion(&view, &sink, latest)?;
+        register_security_observers(&view, sink)?;
+        restrict_resources(&view, native.environment(), policy)
+    }
+}
+
+unsafe fn register_navigation_policy(
+    view: &ICoreWebView2,
+    policy: &NavigationPolicy,
+    sink: &EventSink,
+) -> windows::core::Result<std::sync::Arc<std::sync::atomic::AtomicU64>> {
     let mut token = 0;
+    let latest_navigation = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let navigation_epoch = latest_navigation.clone();
     let navigation_policy = policy.clone();
     let navigation_sink = sink.clone();
     unsafe {
         view.add_NavigationStarting(
             &NavigationStartingEventHandler::create(Box::new(move |_, args| {
                 if let Some(args) = args {
+                    let mut navigation_id = 0;
+                    args.NavigationId(&raw mut navigation_id)?;
+                    navigation_epoch.store(navigation_id, std::sync::atomic::Ordering::Release);
                     let url = read_string(|value| args.Uri(value))?;
                     if navigation_policy.allows(&url) {
+                        let mut redirected = BOOL::default();
+                        args.IsRedirected(&raw mut redirected)?;
+                        if redirected.as_bool() {
+                            navigation_sink(BrowserEvent::Redirected);
+                        }
                         navigation_sink(BrowserEvent::Loading(true));
                     } else {
                         args.SetCancel(true)?;
@@ -136,26 +176,75 @@ unsafe fn configure(
             &raw mut token,
         )?;
     }
+    Ok(latest_navigation)
+}
+
+unsafe fn register_navigation_completion(
+    view: &ICoreWebView2,
+    sink: &EventSink,
+    latest_navigation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) -> windows::core::Result<()> {
+    let mut token = 0;
     let completed_sink = sink.clone();
     unsafe {
         view.add_NavigationCompleted(
             &NavigationCompletedEventHandler::create(Box::new(move |_, args| {
-                completed_sink(BrowserEvent::Loading(false));
                 if let Some(args) = args {
+                    let mut navigation_id = 0;
+                    args.NavigationId(&raw mut navigation_id)?;
+                    if latest_navigation.load(std::sync::atomic::Ordering::Acquire) != navigation_id
+                    {
+                        return Ok(());
+                    }
+                    completed_sink(BrowserEvent::Loading(false));
                     let mut success = BOOL::default();
                     let mut status = COREWEBVIEW2_WEB_ERROR_STATUS::default();
                     args.IsSuccess(&raw mut success)?;
                     args.WebErrorStatus(&raw mut status)?;
+                    let mut http_status = 0;
+                    args.cast::<ICoreWebView2NavigationCompletedEventArgs2>()?
+                        .HttpStatusCode(&raw mut http_status)?;
+                    if let Ok(http_status) = u16::try_from(http_status)
+                        && (100..=599).contains(&http_status)
+                    {
+                        completed_sink(BrowserEvent::HttpStatus(http_status));
+                    }
                     if !success.as_bool()
                         && status != COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED
                     {
+                        completed_sink(BrowserEvent::NavigationFailure(status.0));
                         completed_sink(BrowserEvent::Failed);
+                        // WebView2's documented certificate error categories.
+                        if (1..=5).contains(&status.0) {
+                            completed_sink(BrowserEvent::TlsFailed);
+                        }
                     }
                 }
                 Ok(())
             })),
             &raw mut token,
         )?;
+    }
+    Ok(())
+}
+
+unsafe fn register_security_observers(
+    view: &ICoreWebView2,
+    sink: EventSink,
+) -> windows::core::Result<()> {
+    let mut token = 0;
+    let identity_sink = sink.clone();
+    unsafe {
+        view.cast::<ICoreWebView2_5>()?
+            .add_ClientCertificateRequested(
+                &ClientCertificateRequestedEventHandler::create(Box::new(move |_, _| {
+                    // Observe only. Leave Handled and Cancel at their native defaults
+                    // so WebView2 shows the operating-system certificate chooser.
+                    identity_sink(BrowserEvent::AuthenticationRequired);
+                    Ok(())
+                })),
+                &raw mut token,
+            )?;
     }
     let permission_sink = sink.clone();
     unsafe {
@@ -179,7 +268,7 @@ unsafe fn configure(
             &raw mut token,
         )?;
     }
-    unsafe { restrict_resources(&view, native.environment(), policy) }
+    Ok(())
 }
 
 unsafe fn restrict_resources(
@@ -217,7 +306,11 @@ unsafe fn restrict_resources(
     Ok(())
 }
 
-unsafe fn configure_settings(native: &PlatformWebview) -> windows::core::Result<ICoreWebView2> {
+unsafe fn configure_settings(
+    native: &PlatformWebview,
+    persistent: bool,
+    user_agent: &str,
+) -> windows::core::Result<ICoreWebView2> {
     let controller = native.controller();
     let view = unsafe { controller.CoreWebView2()? };
     let mut private = BOOL::default();
@@ -226,12 +319,23 @@ unsafe fn configure_settings(native: &PlatformWebview) -> windows::core::Result<
             .Profile()?
             .IsInPrivateModeEnabled(&raw mut private)?;
     }
-    if !private.as_bool() {
+    if private.as_bool() == persistent {
         return Err(windows::core::Error::from_hresult(windows::core::HRESULT(
             0x8000_4005_u32.cast_signed(),
         )));
     }
     let settings = unsafe { view.Settings()? };
+    if !user_agent.is_empty() {
+        // Verify the real native value before permitting external navigation.
+        let actual = unsafe {
+            read_string(|out| settings.cast::<ICoreWebView2Settings2>()?.UserAgent(out))?
+        };
+        if actual != user_agent {
+            return Err(windows::core::Error::from_hresult(windows::core::HRESULT(
+                0x8000_4005_u32.cast_signed(),
+            )));
+        }
+    }
     unsafe {
         settings.SetAreHostObjectsAllowed(false)?;
         settings.SetIsWebMessageEnabled(false)?;
@@ -252,6 +356,45 @@ unsafe fn configure_settings(native: &PlatformWebview) -> windows::core::Result<
             .SetAllowExternalDrop(false)?;
     }
     Ok(view)
+}
+
+pub(crate) async fn clear_site_data(view: &tauri::Webview) -> Result<(), BrowserError> {
+    let (send, receive) = tokio::sync::oneshot::channel();
+    view.with_webview(move |native| {
+        let sender = std::sync::Arc::new(std::sync::Mutex::new(Some(send)));
+        let completion = sender.clone();
+        // SAFETY: Native profile and callback are used on their owning apartment.
+        // ALL_PROFILE is a fixed mask; no renderer-provided cookie data crosses IPC.
+        let result = unsafe {
+            native.controller().CoreWebView2().and_then(|view| {
+                view.cast::<ICoreWebView2_13>()?
+                    .Profile()?
+                    .cast::<ICoreWebView2Profile2>()?
+                    .ClearBrowsingData(
+                        COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_PROFILE,
+                        &ClearBrowsingDataCompletedHandler::create(Box::new(move |result| {
+                            if let Ok(mut sender) = completion.lock()
+                                && let Some(sender) = sender.take()
+                            {
+                                let _ = sender.send(result.map_err(|_| BrowserError::Unavailable));
+                            }
+                            Ok(())
+                        })),
+                    )
+            })
+        };
+        if result.is_err()
+            && let Ok(mut sender) = sender.lock()
+            && let Some(sender) = sender.take()
+        {
+            let _ = sender.send(Err(BrowserError::Unavailable));
+        }
+    })
+    .map_err(|_| BrowserError::Closed)?;
+    tokio::time::timeout(std::time::Duration::from_secs(30), receive)
+        .await
+        .map_err(|_| BrowserError::TimedOut)?
+        .map_err(|_| BrowserError::Closed)?
 }
 
 fn read_string(

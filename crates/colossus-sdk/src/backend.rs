@@ -34,6 +34,15 @@ pub enum BackendKind {
 /// context before exposing this interface.
 #[async_trait]
 pub trait AgentRunClient: Send + Sync {
+    /// Explicit auxiliary prediction for one exact owned completed run.
+    async fn predict_next_prompt(
+        &self,
+        request: crate::PredictNextPromptRequest,
+    ) -> ApiResult<crate::NextPromptPrediction> {
+        Ok(crate::NextPromptPrediction::unavailable(
+            request.source_run_id,
+        ))
+    }
     /// Optional globally idempotent peer text task admission.
     async fn submit_agent_task_message(
         &self,
@@ -279,6 +288,12 @@ impl fmt::Debug for ContextBoundAgentRunClient {
 #[async_trait]
 #[cfg(feature = "embedded")]
 impl AgentRunClient for ContextBoundAgentRunClient {
+    async fn predict_next_prompt(
+        &self,
+        request: crate::PredictNextPromptRequest,
+    ) -> ApiResult<crate::NextPromptPrediction> {
+        self.api.predict_next_prompt(&self.caller, request).await
+    }
     async fn submit_agent_task_message(
         &self,
         request: crate::SubmitAgentTaskMessageRequest,

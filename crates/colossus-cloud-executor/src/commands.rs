@@ -5,6 +5,10 @@ use colossus_sdk::{AgentRunClient, CancelRunRequest, GetRunRequest};
 /// Execute one operation. Admission, authority, effects and recovery stay in the SDK/runtime.
 pub async fn execute(runs: &dyn AgentRunClient, command: Command) -> CloudReply {
     let result = match command {
+        Command::PredictNextPrompt { source_run_id } => runs
+            .predict_next_prompt(colossus_sdk::PredictNextPromptRequest { source_run_id })
+            .await
+            .map(|prediction| CloudReply::NextPromptPrediction { prediction }),
         Command::InspectInboxes {
             root_run_id,
             participant_id,

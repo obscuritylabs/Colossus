@@ -386,6 +386,7 @@ impl Workspace {
                         snapshot.footer.approval_mode_revision,
                     );
                     let mut next = TuiState::from_snapshot(snapshot);
+                    self.inherit_preferences(&mut next);
                     next.footer.approval_mode.clone_from(&self.approval_mode);
                     next.footer.approval_mode_revision = self.approval_mode_revision;
                     next.dictation.port = self.active.dictation.port.clone();

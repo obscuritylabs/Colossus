@@ -89,6 +89,7 @@ use colossus_contracts::{
     ThemeTextStyle, ToolCall, ToolResult, TranscriptDensity,
 };
 use ratatui::{Terminal, backend::TestBackend};
+mod next_prompt;
 
 pub(super) fn snapshot() -> InteractiveSnapshot {
     InteractiveSnapshot {

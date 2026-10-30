@@ -38,18 +38,59 @@ Under **Settings → Global → Terminal**, choose whether opening the Terminal 
 
 ## Browser
 
-Where the Desktop build offers it, **Browser** opens websites and local previews beside your conversation. Its temporary session is separate from your usual browser and ends when its last tab closes or Desktop exits. Open downloads, file-upload flows, and sites requiring device permissions in your system browser. Browser availability varies by platform and release; Windows builds expose the native browser, while macOS browsing is still preview-only.
+**Browser** opens websites and local previews beside your conversation. Browsing is
+temporary by default and separate from your usual browser. Availability depends on
+the platform and release. Downloads, file uploads and device permissions remain
+unavailable; use **Open in system browser** for flows that need them.
 
-Under **Settings → Global → Browser**, set a new-tab page with a full HTTP or HTTPS address. The default is an empty tab. This preference does not restore tabs or browsing history.
+Under **Settings → Global → Browser**, set an optional HTTP or HTTPS new-tab address.
+The default is an empty tab. Tabs are not restored when Desktop restarts.
 
-When a Windows website requests a client certificate, Desktop automatically uses a
-single matching eligible identity. If several match, choose one in the certificate
-panel inside the Desktop window, or select **Cancel** to send none. The panel shows
-the requesting site, certificate names and SHA-256 fingerprints. Expired or invalid
-certificates are excluded. Windows keeps the private key; the site determines whether
-login succeeds. The choice may be reused for that exact site until the temporary browser
-session ends. Browser identities use Windows certificate storage; the PEM identity in
-Desktop's network settings configures provider and HTTP calls separately.
+### Remember a website sign-in on Windows
+
+Open **Workspace browser profile** on that settings page and enable **Remember
+sign-ins**, then save. This explicitly selects Windows WebView2 for human browsing
+in the selected workspace. Its site data and unexpired persistent cookies survive
+normal app restarts; websites still control sign-in expiry and session cookies.
+Each workspace has a separate private profile. Agent Chromium sessions remain
+temporary and do not receive this profile or its cookies; saved human tabs cannot
+be handed to an agent.
+
+**User-Agent** accepts a custom native browser value of up to 512 printable ASCII
+characters. Leave it blank for the engine default. Setting a custom value also
+selects WebView2; sign-ins remain temporary unless **Remember sign-ins** is enabled.
+Saving these settings closes this workspace's human browser tabs. Password saving
+and autofill remain disabled. Windows protects saved cookie encryption keys; other
+site data stays inside the private app profile.
+
+**Close all tabs** closes the current tabs. To remove saved sign-ins, choose
+**Clear browsing data…** in Browser settings and confirm. It removes that
+workspace's browser cookies, site data, cache, history and permissions.
+**Reset browser profile…** also returns Remember sign-ins and User-Agent to their
+defaults. These actions do not clear another workspace's profile.
+
+### Diagnose sign-in failures
+
+Open **Connection details** in the Browser footer. It shows the current origin,
+engine, temporary or saved profile, default or custom User-Agent, and observed
+certificate information. WebView2 also reports the main-page HTTP status, redirect
+count and native navigation error. Other engines explicitly identify fields they
+do not report. The panel excludes URL paths, query values, cookies, authorization
+headers and private keys.
+
+HTTP 401 or 403 means the server denied access. Check the intended account and
+client identity, saved-sign-in setting, redirect destination and the website's
+embedded-browser policy. A User-Agent override does not guarantee access. TLS
+certificate verification stays enabled and cannot be bypassed. Opening the system
+browser uses its own sign-ins; Colossus does not transfer cookies to it.
+
+The default Windows Chromium browser automatically uses a single eligible matching
+client identity. If several match, choose one in the certificate panel or cancel.
+The optional human WebView2 mode uses the native Windows certificate chooser when
+the site requests a client identity. Both use Windows certificate storage, which is
+shared across applications rather than isolated by a browser profile. The PEM
+identity in Desktop's network settings configures provider and HTTP calls
+separately. The website decides whether the selected identity can sign in.
 
 ## Computer use
 

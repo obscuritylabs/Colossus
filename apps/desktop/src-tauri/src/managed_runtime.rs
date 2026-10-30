@@ -211,6 +211,14 @@ pub(crate) async fn start(
     restarting: bool,
 ) -> Result<(), CommandErrorDto> {
     let normalized_settings = normalized_settings_snapshot(settings)?;
+    let _worktree_usage = normalized_settings
+        .workspace
+        .as_ref()
+        .map(|workspace| {
+            crate::desktop_settings::revalidate_workspace(workspace)
+                .and_then(|path| crate::workspace_worktrees::workspace_guard(&path))
+        })
+        .transpose()?;
     let settings = &normalized_settings;
     let space_id = settings.selected_space_id.as_deref().ok_or_else(|| {
         CommandErrorDto::invalid(

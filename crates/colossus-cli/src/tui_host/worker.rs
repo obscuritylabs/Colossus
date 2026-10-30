@@ -510,6 +510,36 @@ impl WorkerInteractiveHost {
         arguments: &str,
         events: &mpsc::Sender<HostEvent>,
     ) -> Result<Option<HostCommandResult>, String> {
+        if !matches!(
+            name,
+            "theme"
+                | "stream"
+                | "events"
+                | "reasoning"
+                | "suggestions"
+                | "multiline"
+                | "transcript"
+                | "trace"
+        ) {
+            return Ok(None);
+        }
+        // Human theme selection must not block an opt-out in another session.
+        // Its preview snapshot is never the profile written after selection.
+        let selected_theme = if name == "theme" && arguments.trim().is_empty() {
+            let preferences = serde_json::from_value::<TerminalPreferences>(
+                self.value(WorkerOperation::PresentationGet).await?,
+            )
+            .map_err(|error| error.to_string())?;
+            let Some(selected) = browse_themes(events, &self.themes, &preferences).await? else {
+                return Ok(Some(HostCommandResult::document(
+                    PresentationDocument::new(),
+                )));
+            };
+            Some(selected)
+        } else {
+            None
+        };
+        let _edit = self.operations.edit_preferences().await;
         let mut preferences = serde_json::from_value::<TerminalPreferences>(
             self.value(WorkerOperation::PresentationGet).await?,
         )
@@ -520,15 +550,9 @@ impl WorkerInteractiveHost {
         let changed = match name {
             "theme" => {
                 let argument = arguments.trim();
-                if argument.is_empty() {
-                    let selected = browse_themes(events, &self.themes, &preferences).await?;
-                    let Some(selected) = selected else {
-                        return Ok(Some(HostCommandResult::document(
-                            PresentationDocument::new(),
-                        )));
-                    };
+                if let Some(selected) = selected_theme.as_deref() {
                     self.themes
-                        .select(&selected, &mut preferences)
+                        .select(selected, &mut preferences)
                         .map_err(|error| error.to_string())?;
                 } else if argument == "list" {
                     return Ok(Some(HostCommandResult::document(
@@ -573,6 +597,15 @@ impl WorkerInteractiveHost {
             }
             "reasoning" => {
                 preferences.show_reasoning = parse_toggle(arguments, preferences.show_reasoning)?;
+                true
+            }
+            "suggestions" => {
+                preferences.next_prompt_mode = match arguments.trim() {
+                    "off" => colossus_contracts::NextPromptMode::Off,
+                    "on" | "local" => colossus_contracts::NextPromptMode::Local,
+                    "model" => colossus_contracts::NextPromptMode::Model,
+                    _ => return Err("/suggestions expects off, local, or model".into()),
+                };
                 true
             }
             "multiline" => {
@@ -1443,6 +1476,35 @@ impl WorkerInteractiveHost {
 
 #[async_trait]
 impl InteractiveHost for WorkerInteractiveHost {
+    async fn predict_next_prompt(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        role: &str,
+        model_profile: &str,
+    ) -> Result<(Option<String>, Option<u64>), String> {
+        let value = self
+            .value(WorkerOperation::PredictNextPrompt {
+                session_id: session_id.into(),
+                source_run_id: run_id.into(),
+                role: role.into(),
+                model_profile: model_profile.into(),
+            })
+            .await?;
+        let prediction: colossus_runtime::RuntimePromptPrediction =
+            serde_json::from_value(value).map_err(|error| error.to_string())?;
+        Ok((
+            prediction.text,
+            prediction.usage.map(|usage| usage.total_tokens),
+        ))
+    }
+
+    async fn presentation_preferences(&self) -> Result<TerminalPreferences, String> {
+        let _presentation = self.operations.enter_presentation().await;
+        serde_json::from_value(self.value(WorkerOperation::PresentationGet).await?)
+            .map_err(|error| error.to_string())
+    }
+
     async fn session_work_status(
         &self,
         session_id: &str,
@@ -2116,6 +2178,14 @@ impl InteractiveHost for WorkerInteractiveHost {
         events: mpsc::Sender<HostEvent>,
     ) -> Result<TerminalPreferences, String> {
         let _presentation = self.operations.enter_presentation().await;
+        let _edit = self.operations.edit_preferences().await;
+        let current = serde_json::from_value::<TerminalPreferences>(
+            self.value(WorkerOperation::PresentationGet).await?,
+        )
+        .map_err(|error| error.to_string())?;
+        let mut preferences = preferences;
+        super::common::preserve_model_opt_out(&mut preferences, &current);
+
         let mut observer = WorkerChannelObserver {
             sender: events.clone(),
         };

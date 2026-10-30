@@ -162,7 +162,33 @@ const CatalogDeleteDialog = lazy(() =>
   })),
 );
 
+const DesktopExtrasSettings = lazy(() =>
+  import("./DesktopExtrasSettings").then((module) => ({
+    default: module.DesktopExtrasSettings,
+  })),
+);
+const WorktreeSettings = lazy(() =>
+  import("./WorktreeSettings").then((module) => ({
+    default: module.WorktreeSettings,
+  })),
+);
 const DESKTOP_PAGES = [
+  {
+    id: "worktrees",
+    label: "Worktrees",
+    description:
+      "Create and manage owned Git worktrees for local Desktop and CLI work.",
+    keywords:
+      "git branch worktree isolated checkout archive remove cleanup root directory",
+  },
+  {
+    id: "desktop-features",
+    label: "Composer & companion",
+    description:
+      "App Shots, next-prompt suggestions and the mini hacker companion.",
+    keywords:
+      "app shots screenshot capture shortcut pet hacker composer prediction next prompt suggestions",
+  },
   {
     id: "dictation",
     label: "Dictation",
@@ -280,6 +306,7 @@ interface ManagedSettingsPaneProps {
   updateMessage: string;
   onReturnToWork?: (() => void) | undefined;
   onChooseWorkspace: () => void;
+  onWorkspaceOpened?: ((status: DesktopStatus) => void) | undefined;
   onConfigureManaged: () => void;
   onRestartManaged: () => void;
   onAddExternalTarget: () => void;
@@ -1911,6 +1938,7 @@ export function ManagedSettingsPane({
   updateChecking,
   updateMessage,
   onChooseWorkspace,
+  onWorkspaceOpened,
   onConfigureManaged,
   onRestartManaged,
   onAddExternalTarget,
@@ -3299,6 +3327,7 @@ export function ManagedSettingsPane({
             updateMessage={updateMessage}
             externalTargets={externalTargets}
             onChooseWorkspace={onChooseWorkspace}
+            onWorkspaceOpened={onWorkspaceOpened}
             onRestartManaged={onRestartManaged}
             onAddExternalTarget={onAddExternalTarget}
             onRemoveExternalTarget={onRemoveExternalTarget}
@@ -3505,6 +3534,7 @@ function GlobalSettingsBody({
   updateMessage,
   externalTargets,
   onChooseWorkspace,
+  onWorkspaceOpened,
   onRestartManaged,
   onAddExternalTarget,
   onRemoveExternalTarget,
@@ -3563,6 +3593,7 @@ function GlobalSettingsBody({
   updateMessage: string;
   externalTargets: RuntimeTarget[];
   onChooseWorkspace: () => void;
+  onWorkspaceOpened?: ((status: DesktopStatus) => void) | undefined;
   onRestartManaged: () => void;
   onAddExternalTarget: () => void;
   onRemoveExternalTarget: (targetId: string) => void;
@@ -4630,6 +4661,7 @@ function GlobalSettingsBody({
       updateMessage={updateMessage}
       externalTargets={externalTargets}
       onChooseWorkspace={onChooseWorkspace}
+      onWorkspaceOpened={onWorkspaceOpened}
       onConfigureManaged={onConfigureManaged}
       onRestartManaged={onRestartManaged}
       onAddExternalTarget={onAddExternalTarget}
@@ -8095,11 +8127,30 @@ function DesktopSettings(
   const releaseChannelLabel = desktop.releaseChannel
     .replaceAll("_", " ")
     .replace(/^./, (character) => character.toUpperCase());
+  if (section === "desktop-features")
+    return (
+      <Suspense fallback={<p role="status">Loading Desktop features…</p>}>
+        <DesktopExtrasSettings />
+      </Suspense>
+    );
   if (section === "appearance") return <AppearanceSettings />;
   if (section === "dictation")
     return (
       <Suspense fallback={<p role="status">Loading dictation settings…</p>}>
         <DictationSettings />
+      </Suspense>
+    );
+  if (section === "worktrees")
+    return (
+      <Suspense fallback={<p role="status">Loading worktrees…</p>}>
+        <WorktreeSettings
+          workspaceId={
+            desktop.selectedTargetId === desktop.selectedSpaceId
+              ? (desktop.workspace?.workspaceId ?? null)
+              : null
+          }
+          onOpened={(status) => props.onWorkspaceOpened?.(status)}
+        />
       </Suspense>
     );
   if (section === "git") return <GitSettings />;

@@ -2,6 +2,7 @@
 mod broker;
 mod capture;
 mod environment;
+pub(crate) mod human_appshot;
 pub(crate) use environment::configure as configure_environment;
 pub(crate) mod identity;
 mod indicator;

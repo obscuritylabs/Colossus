@@ -12,6 +12,8 @@ option java_package = "com.obscuritylabs.colossus.api.v1alpha1";
 
 // AgentRunService manages durable asynchronous runs and one-use interactions.
 service AgentRunService {
+  // Opt-in auxiliary generation; never mutates conversation messages.
+  rpc PredictNextPrompt(PredictNextPromptRequest) returns (PredictNextPromptResponse);
   // HumanTerminal operates a separately authorized fixed native shell.
   rpc HumanTerminal(HumanTerminalRequest) returns (HumanTerminalResponse);
   // ListProcessSessions discovers caller-owned managed shells in this runtime.
@@ -56,6 +58,17 @@ service AgentRunService {
   rpc ListVisibleRuns(ListVisibleRunsRequest) returns (ListVisibleRunsResponse);
   // Caller-scoped configuration metadata; never an enforcement attestation or raw config.
   rpc GetRuntimePolicyPosture(GetRuntimePolicyPostureRequest) returns (GetRuntimePolicyPostureResponse);
+}
+
+// An explicit opt-in auxiliary prediction for an exact owned completed source.
+message PredictNextPromptRequest {
+  // Exact caller-owned completed run; runtime loads its canonical context.
+  string source_run_id = 1;
+}
+// Optional editable text and its separate auxiliary token accounting.
+message PredictNextPromptResponse {
+  // Strict NextPromptPrediction JSON, at most 4 KiB, with separate auxiliary usage.
+  bytes prediction_json = 1;
 }
 
 // HumanTerminalRequest carries one closed strict JSON terminal envelope, at most128KiB.

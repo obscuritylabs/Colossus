@@ -15,7 +15,7 @@ import {
 } from "@colossus/ui";
 
 import { IconRefresh, IconPlus, IconX } from "@tabler/icons-react";
-import { SendShortcutContext, useAppearance } from "./Appearance";
+import { NextPromptModeContext, SendShortcutContext, useAppearance } from "./Appearance";
 import {
   ApiFailure,
   request,
@@ -673,6 +673,7 @@ export function AuthenticatedApp({
     unavailable = hostDetail.error;
   return (
     <SendShortcutContext value={appearance.sendShortcut}>
+      <NextPromptModeContext value={appearance.nextPromptMode}>
       <ControlPlaneFrame
         activeScopeKey={JSON.stringify(route)}
         current={appNavigation.current}
@@ -1301,6 +1302,7 @@ export function AuthenticatedApp({
           )}
         </Suspense>
       </ControlPlaneFrame>
+      </NextPromptModeContext>
     </SendShortcutContext>
   );
 }

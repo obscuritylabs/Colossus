@@ -15,7 +15,10 @@ import {
   validGoalIterations,
 } from "@colossus/ui/components/GoalControls";
 import { ComposerStopButton } from "@colossus/ui/components/Composer";
-import { ConversationComposerFrame } from "@colossus/ui/conversation";
+import {
+  ConversationComposerFrame,
+  NextPromptSuggestion,
+} from "@colossus/ui/conversation";
 import {
   ResearchControls,
   RESEARCH_SOURCE_OPTIONS,
@@ -57,6 +60,10 @@ import { DictationControl } from "./DictationControl";
 import { DictationRecordingBar } from "./DictationRecordingBar";
 
 interface WorkComposerProps {
+  nextPrompt?: string | null;
+  predictionTokens?: number | null;
+  onAcceptNextPrompt?: () => void;
+  onDismissNextPrompt?: () => void;
   onOpenDictationSettings?: (() => void) | undefined;
   dictation?:
     { controller: DictationController; state: DictationSnapshot } | undefined;
@@ -126,6 +133,10 @@ interface WorkComposerProps {
 }
 
 export function WorkComposer({
+  nextPrompt = null,
+  predictionTokens = null,
+  onAcceptNextPrompt,
+  onDismissNextPrompt,
   dictation: requestedDictation,
   onOpenDictationSettings,
   contextActions,
@@ -263,6 +274,27 @@ export function WorkComposer({
       }
       return;
     }
+    if (
+      !event.nativeEvent.isComposing &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      !slashMenuOpen &&
+      !prompt &&
+      nextPrompt
+    ) {
+      if (event.key === "Tab") {
+        event.preventDefault();
+        onAcceptNextPrompt?.();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onDismissNextPrompt?.();
+        return;
+      }
+    }
     if (event.key === "Backspace" || event.key === "Delete") {
       editIntent.current = {
         start: event.currentTarget.selectionStart,
@@ -336,6 +368,19 @@ export function WorkComposer({
       aria-label="Send a prompt"
       onSubmit={onSubmit}
     >
+      {(nextPrompt || predictionTokens !== null) &&
+        !draftReadOnly &&
+        !prompt &&
+        canCompose &&
+        onAcceptNextPrompt &&
+        onDismissNextPrompt && (
+          <NextPromptSuggestion
+            text={nextPrompt}
+            auxiliaryTokens={predictionTokens}
+            onAccept={onAcceptNextPrompt}
+            onDismiss={onDismissNextPrompt}
+          />
+        )}
       <div className="composer-header">
         <div className="composer-context">
           <ComposerModelChip

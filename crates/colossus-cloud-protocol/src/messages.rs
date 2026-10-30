@@ -96,6 +96,11 @@ impl RuntimeInventory {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    /// One opt-in auxiliary prediction for an exact owned completed run.
+    PredictNextPrompt {
+        /// Runtime-owned completed source mapped to the fixed cloud task.
+        source_run_id: String,
+    },
     /// Inspect exact caller-owned agent attempts through the shared SDK.
     InspectInboxes {
         /// Fixed local run allocated to the cloud task.
@@ -145,6 +150,11 @@ pub enum Command {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CloudReply {
+    /// Editable auxiliary text and usage, never a conversation mutation.
+    NextPromptPrediction {
+        /// Bounded caller-owned editable text and separate auxiliary usage.
+        prediction: colossus_sdk::NextPromptPrediction,
+    },
     /// Released message inspection, independently scoped from execution or sending.
     Inboxes {
         /// Exact attempts in the task's caller-owned collaboration.

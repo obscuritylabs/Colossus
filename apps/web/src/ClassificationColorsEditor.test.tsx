@@ -26,6 +26,7 @@ const appearance = {
   darkPalette: "colossus" as const,
   textSize: "comfortable" as const,
   sendShortcut: "enter" as const,
+  nextPromptMode: "local" as const,
   palettes: parseThemePalettes(null),
 };
 

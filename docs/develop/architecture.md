@@ -217,6 +217,11 @@ commands dispatch it without receiving secret values from the renderer.
   reader. Repository handles bind the selected workspace and validated metadata
   directories; no Git execution or write capability is exposed. See
   [ADR 0004](adr/0004-desktop-git-inspection.md).
+- Human-managed Git worktrees use the separate `colossus-worktrees` service from
+  Desktop and the offline CLI. Private ownership records and native cross-process
+  shared-use leases guard checkout lifecycle operations. The renderer supplies an
+  owned ID, not a deletion path, and no runtime agent tool exposes this authority.
+  See [ADR 0012](adr/0012-managed-worktrees.md).
 - Desktop file search and text diffs reuse the same native workspace/Git authority.
   The read-only renderer owns presentation and bounded document lifetimes; see
   [ADR 0005](adr/0005-desktop-file-diffs.md).

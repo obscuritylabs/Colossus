@@ -1,5 +1,18 @@
 use super::*;
 
+/// Whole-profile UI saves may restore an older preview. Paid suggestions require
+/// the explicit suggestions command, never promotion by an unrelated snapshot.
+pub(super) fn preserve_model_opt_out(
+    incoming: &mut TerminalPreferences,
+    current: &TerminalPreferences,
+) {
+    if incoming.next_prompt_mode == colossus_contracts::NextPromptMode::Model
+        && current.next_prompt_mode != colossus_contracts::NextPromptMode::Model
+    {
+        incoming.next_prompt_mode = current.next_prompt_mode;
+    }
+}
+
 pub(super) fn presentation_status(
     name: &str,
     arguments: &str,
@@ -11,6 +24,10 @@ pub(super) fn presentation_status(
     let (value, title) = match name {
         "stream" => (json!({"stream": preferences.stream_mode}), "Streaming"),
         "events" => (json!({"events": preferences.events_mode}), "Events"),
+        "suggestions" => (
+            json!({"suggestions": preferences.next_prompt_mode, "model_uses_additional_tokens": true}),
+            "Next prompt suggestions",
+        ),
         "transcript" => (
             json!({"transcript": preferences.transcript_density}),
             "Transcript",

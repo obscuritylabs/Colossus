@@ -16,6 +16,14 @@ Open **Manage Workspaces → Add Workspace from folder**, choose a folder you ow
 
 The selected workspace determines the working directory for tools, file browsing, Git inspection, and local terminal sessions. A folder alone does not limit every authorized effect to that path; choose the [execution boundary](settings.md#access-and-execution-boundaries) that fits the project. Desktop keeps CLI/TUI and Desktop state separate even if both use the same repository.
 
+## Work on another branch
+
+For an independent Git checkout, open **Settings → Global → Worktrees**. Create a
+worktree from a local branch, tag or commit, then open it as a workspace. The original
+checkout stays on its current branch. Desktop and CLI share this managed inventory;
+their runtime state remains separate. See [Git worktrees](../use/worktrees.md) for
+defaults, CLI commands, archive behavior and safe removal.
+
 ## Find and organize work
 
 Use **Search threads** in the sidebar. **This Workspace** narrows results to the selected folder; **All Workspaces** searches across your Desktop workspaces. Enable **Include archived Workspaces and threads** when searching older work. Select a result to open it, or restore it if archived.

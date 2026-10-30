@@ -94,6 +94,7 @@ pub struct SystemServiceAdapter {
     plugin_discovery: bool,
     workflows: bool,
     policy_posture: bool,
+    prompt_prediction: bool,
     agent_communication: bool,
     human_terminals: bool,
     model_catalog: Option<Arc<dyn ModelCatalogProvider>>,
@@ -109,6 +110,7 @@ impl SystemServiceAdapter {
             plugin_discovery: false,
             workflows: false,
             policy_posture: false,
+            prompt_prediction: false,
             agent_communication: false,
             human_terminals: false,
             model_catalog: None,
@@ -145,6 +147,10 @@ impl SystemServiceAdapter {
         self.policy_posture = true;
         self
     }
+    pub(crate) fn with_prompt_prediction(mut self) -> Self {
+        self.prompt_prediction = true;
+        self
+    }
     pub(crate) fn with_agent_communication(mut self) -> Self {
         self.agent_communication = true;
         self
@@ -175,6 +181,7 @@ impl SystemService for SystemServiceAdapter {
                 scopes::AGENT_MESSAGES_SEND,
             ),
             ("runtime.policy_posture.v1", scopes::RUNS_READ),
+            (colossus_api::NEXT_PROMPT_CAPABILITY, scopes::RUNS_EXECUTE),
             (SESSION_ACTIVITY_CAPABILITY, scopes::RUNS_READ),
             ("process_sessions.v1", scopes::RUNS_READ),
             ("agent_runs.cancel", scopes::RUNS_CONTROL),
@@ -189,6 +196,8 @@ impl SystemService for SystemServiceAdapter {
             enabled: caller.principal().has_scope(scope)
                 && (name != colossus_api::HUMAN_TERMINAL_CAPABILITY || self.human_terminals)
                 && (name != "runtime.policy_posture.v1" || self.policy_posture)
+                && (name != colossus_api::NEXT_PROMPT_CAPABILITY
+                    || (self.prompt_prediction && caller.principal().has_scope(scopes::RUNS_READ)))
                 && (!matches!(
                     name,
                     colossus_api::AGENT_COMMUNICATION_READ_CAPABILITY
@@ -599,6 +608,37 @@ mod tests {
                 && limit.value == 16
                 && limit.unit == "requests"
         }));
+    }
+
+    #[tokio::test]
+    async fn prediction_capability_requires_implementation_read_and_execute() {
+        for (implemented, scopes, expected) in [
+            (false, vec![scopes::RUNS_READ, scopes::RUNS_EXECUTE], false),
+            (true, vec![scopes::RUNS_READ], false),
+            (true, vec![scopes::RUNS_EXECUTE], false),
+            (true, vec![scopes::RUNS_READ, scopes::RUNS_EXECUTE], true),
+        ] {
+            let service = if implemented {
+                service().with_prompt_prediction()
+            } else {
+                service()
+            };
+            let info = service
+                .get_server_info(request_with(GetServerInfoRequest {}, scopes, Vec::new()))
+                .await
+                .unwrap()
+                .into_inner()
+                .server_info
+                .unwrap();
+            assert_eq!(
+                info.capabilities
+                    .iter()
+                    .find(|capability| capability.name == colossus_api::NEXT_PROMPT_CAPABILITY)
+                    .unwrap()
+                    .enabled,
+                expected
+            );
+        }
     }
 
     #[tokio::test]

@@ -30,6 +30,7 @@ nav = [
     { "Work with the CLI" = [
       { "Agent runs" = "use/agent-runs.md" },
       { "Terminal UI" = "use/terminal-ui.md" },
+      { "Git worktrees" = "use/worktrees.md" },
       { "ACP in editors" = "extend/acp.md" },
       { "Sessions" = "use/sessions.md" },
       { "Context" = "use/sessions-context.md" },
@@ -191,6 +192,8 @@ nav = [
       { "ADR 0009: Hosted execution" = "develop/adr/0009-hosted-execution.md" },
       { "ADR 0010: Control Plane Helm" = "develop/adr/0010-control-plane-helm-database-boundary.md" },
       { "ADR 0011: Fleet human terminals" = "develop/adr/0011-fleet-human-terminals.md" },
+      { "ADR 0012: Managed worktrees" = "develop/adr/0012-managed-worktrees.md" },
+      { "ADR 0013: Human App Shots" = "develop/adr/0013-human-app-shots.md" },
     ] },
     { "Runtime and ports" = "develop/runtime-ports.md" },
     { "OpenTelemetry implementation" = "develop/observability.md" },

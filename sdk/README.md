@@ -52,6 +52,27 @@ rejected. `instance_id` is a canonical non-nil UUID, `api_version` is
 `colossus.api.v1alpha1`, and `pid` is informational
 process-discovery metadata—not an authorization primitive.
 
+## Optional composer predictions
+
+Authenticated `ServerInfo` advertises `composer.prediction.v1` only for an implemented
+runtime and an application with `runs:read` plus `runs:execute`. Check this capability
+before using generated `AgentRunService.PredictNextPrompt`. The request names one
+directly owned completed `source_run_id`; it never supplies renderer-selected
+conversation text or another application's identity.
+
+`PredictNextPromptResponse.prediction_json` contains strict JSON fields
+`source_run_id`, `text` and `usage`. Text may be null; otherwise it is a bounded
+editable draft suggestion. Insert it only into the unchanged empty draft for that
+source and leave sending as a separate human action. Usage may be null, meaning
+unknown. Report known prediction tokens separately from the completed run's tokens.
+
+The server makes at most one bounded auxiliary provider attempt per actor and source
+and durably retains its receipt. Do not add automatic generation retries. Missing
+capability, stale context or unavailable text can use a local next-step fallback.
+The runtime does not append predictions to conversation history or grant tool
+execution authority. The [application SDK guide](../docs/develop/application-sdk.md#editable-next-prompt-predictions)
+owns the execution and cancellation details.
+
 The generated API is `v1alpha1`. Applications should pin an SDK release. Each remote
 connector makes authenticated `SystemService.GetServerInfo` its first read and refuses
 to expose an effectful client until the actual instance ID, API package, and deployment
