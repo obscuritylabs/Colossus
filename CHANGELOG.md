@@ -67,6 +67,7 @@ include breaking changes while the public API is still settling.
 - **release:** refresh preview.5 history and security notes ([3da21b1](https://github.com/obscuritylabs/Colossus/commit/3da21b194cea223acb1aee718d8271d47049a300))
 - **release:** preserve historical changelog punctuation ([02630a9](https://github.com/obscuritylabs/Colossus/commit/02630a9f52cfef0a347490986c2feece6167c3a8))
 - refresh integrated preview notes and capability coverage ([9b11321](https://github.com/obscuritylabs/Colossus/commit/9b1132139193b2bbf15d146c9dd8833cdaf93718))
+- **release:** refresh preview.5 validation history ([2822e35](https://github.com/obscuritylabs/Colossus/commit/2822e357cd193eeeadb21b05137a51ad2a9d05dd))
 
 #### Maintenance
 
@@ -94,8 +95,9 @@ include breaking changes while the public API is still settling.
 - **release:** prepare 0.11.11-preview.5 ([f7fa58e](https://github.com/obscuritylabs/Colossus/commit/f7fa58e5f8b1fad74b6d83616c05250fe7f3226e))
 - version the effective macOS bundle cache namespace ([627c21a](https://github.com/obscuritylabs/Colossus/commit/627c21a5e0ba20a55ef3f136a857b1cea9ab401a))
 - allow bounded cold Windows acceptance to finish ([9ca925d](https://github.com/obscuritylabs/Colossus/commit/9ca925d3ff423f5af10ffe65ccb6b015e7f7807f))
+- budget cold macOS Desktop acceptance ([c7e5994](https://github.com/obscuritylabs/Colossus/commit/c7e599426c8829c4a7da7c3519412cd3b6e8edc9))
 
-**Source:** [9ca925d](https://github.com/obscuritylabs/Colossus/commit/9ca925d3ff423f5af10ffe65ccb6b015e7f7807f)
+**Source:** [c7e5994](https://github.com/obscuritylabs/Colossus/commit/c7e599426c8829c4a7da7c3519412cd3b6e8edc9)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.5](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.5)
 
