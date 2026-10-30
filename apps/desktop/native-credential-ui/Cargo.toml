@@ -27,7 +27,7 @@ harness = false
 required-features = ["native-test-driver"]
 
 [dependencies]
-colossus-contracts = { version = "=0.11.11-preview.5", path = "../../../crates/colossus-contracts" }
+colossus-contracts = { version = "=0.11.11-preview.6", path = "../../../crates/colossus-contracts" }
 tauri = { version = "=2.12.4", features = [] }
 tokio = { version = "1.53.3", features = ["sync"] }
 zeroize = "1.8.2"

@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-bundles"
-version = "0.11.11-preview.5"
+version = "0.11.11-preview.6"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-contracts"
-version = "0.11.11-preview.5"
+version = "0.11.11-preview.6"
 dependencies = [
  "colossus-domain",
  "serde",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-darwin-process"
-version = "0.11.11-preview.5"
+version = "0.11.11-preview.6"
 dependencies = [
  "core-foundation",
  "libc",
@@ -201,11 +201,11 @@ dependencies = [
 
 [[package]]
 name = "colossus-domain"
-version = "0.11.11-preview.5"
+version = "0.11.11-preview.6"
 
 [[package]]
 name = "colossus-home"
-version = "0.11.11-preview.5"
+version = "0.11.11-preview.6"
 dependencies = [
  "colossus-linux-native",
  "colossus-windows-native",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-linux-native"
-version = "0.11.11-preview.5"
+version = "0.11.11-preview.6"
 dependencies = [
  "libc",
  "rustix",
@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-network"
-version = "0.11.11-preview.5"
+version = "0.11.11-preview.6"
 dependencies = [
  "hex",
  "reqwest",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-policy"
-version = "0.11.11-preview.5"
+version = "0.11.11-preview.6"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -315,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-ports"
-version = "0.11.11-preview.5"
+version = "0.11.11-preview.6"
 dependencies = [
  "async-trait",
  "colossus-contracts",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "colossus-windows-native"
-version = "0.11.11-preview.5"
+version = "0.11.11-preview.6"
 dependencies = [
  "thiserror",
  "tokio",
