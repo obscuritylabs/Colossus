@@ -68,6 +68,7 @@ async function openMcp(
         if (command === "get_managed_configuration")
           return structuredClone(snapshot);
         if (command === "sync_managed_configuration") return null;
+        if (command === "sync_pet_status") return;
         host.mcpActivationCalls.push({ command, args });
         if (command === "save_space_configuration") {
           return new Promise((resolve, reject) => {
