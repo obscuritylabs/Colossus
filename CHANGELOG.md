@@ -70,6 +70,7 @@ include breaking changes while the public API is still settling.
 - refresh integrated preview notes and capability coverage ([9b11321](https://github.com/obscuritylabs/Colossus/commit/9b1132139193b2bbf15d146c9dd8833cdaf93718))
 - **release:** refresh preview.5 validation history ([2822e35](https://github.com/obscuritylabs/Colossus/commit/2822e357cd193eeeadb21b05137a51ad2a9d05dd))
 - **release:** include native acceptance budget history ([a67920e](https://github.com/obscuritylabs/Colossus/commit/a67920ee16dba7ea76e754e6084f9847b4d7bfd9))
+- **release:** refresh final preview validation notes ([aa386e0](https://github.com/obscuritylabs/Colossus/commit/aa386e046819133377f2c44812e4bd43d477e857))
 
 #### Maintenance
 
@@ -98,8 +99,9 @@ include breaking changes while the public API is still settling.
 - version the effective macOS bundle cache namespace ([627c21a](https://github.com/obscuritylabs/Colossus/commit/627c21a5e0ba20a55ef3f136a857b1cea9ab401a))
 - allow bounded cold Windows acceptance to finish ([9ca925d](https://github.com/obscuritylabs/Colossus/commit/9ca925d3ff423f5af10ffe65ccb6b015e7f7807f))
 - budget cold macOS Desktop acceptance ([c7e5994](https://github.com/obscuritylabs/Colossus/commit/c7e599426c8829c4a7da7c3519412cd3b6e8edc9))
+- **windows:** randomize exclusive AppContainer fixture names ([9b6c50e](https://github.com/obscuritylabs/Colossus/commit/9b6c50e13d8dfa6d77f4529210fbfeb3bb752a2e))
 
-**Source:** [0b36852](https://github.com/obscuritylabs/Colossus/commit/0b368527df1ec9dc636c8f7188bf5f5367bf9d90)
+**Source:** [9b6c50e](https://github.com/obscuritylabs/Colossus/commit/9b6c50e13d8dfa6d77f4529210fbfeb3bb752a2e)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.5](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.5)
 
