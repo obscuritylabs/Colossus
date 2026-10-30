@@ -182,6 +182,14 @@ all independent failures; the aggregate waits for both. Linux Desktop, credentia
 VS Code lifecycle, fuzzing, supply-chain and live-service lanes also remain mandatory.
 Portable formatting belongs to the PR tier and is not repeated on platform runners.
 
+The Windows runtime lane allows 75 minutes for cold compilation and every required
+acceptance command. Its final outcome aggregation remains mandatory. The release
+smoke configuration gives verified inventory operations a bounded 30-second effect
+budget for cold disk I/O; its echo provider retains a separate five-second budget.
+The Windows fixture reports inventory elapsed time on success or failure and keeps
+native errors fatal. These test budgets do not change production defaults or the
+fixture's filesystem, executable, network, process, memory or custody restrictions.
+
 The Windows Desktop pre-merge job resolves the runner's
 [`clang-cl`](https://clang.llvm.org/docs/UsersManual.html#clang-cl) executable and checks
 its version before the first Cargo build, then sets that exact path as `CC` and `CXX`

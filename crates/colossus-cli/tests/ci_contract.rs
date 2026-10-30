@@ -701,7 +701,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "timeout-minutes").as_u64(),
-        Some(40),
+        Some(75),
         "Windows runtime acceptance must allow cold standard-runner compilation"
     );
     assert_eq!(
