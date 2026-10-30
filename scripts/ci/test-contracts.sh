@@ -286,6 +286,39 @@ if $script_dir/require-success.sh eligibility=skipped >/dev/null 2>&1; then
     exit 1
 fi
 
+# rust-cache uses shared-key instead of key, so the bundle recipe must be part
+# of the effective shared namespace in the trusted producer and every consumer.
+"${NODE:-node}" --input-type=module - "$script_dir/../../.github/workflows/cache-warm.yml" "$script_dir/../../.github/workflows/premerge.yml" "$script_dir/../../.github/workflows/release.yml" <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+function block(lines, title, sibling) {
+  const start = lines.indexOf(title);
+  assert.ok(start >= 0, 'Missing workflow scope: ' + title.trim());
+  const end = lines.findIndex((line, index) => index > start && sibling.test(line));
+  return lines.slice(start, end < 0 ? lines.length : end);
+}
+
+const namespaces = [];
+for (const [path, job, step] of [
+  [process.argv[2], 'macos-desktop-bundle', 'Save macOS Desktop bundle build cache'],
+  [process.argv[3], 'macos-desktop-bundle', 'Restore main Desktop bundle build cache'],
+  [process.argv[4], 'desktop_macos_build', 'Restore main Desktop bundle build cache'],
+]) {
+  const source = readFileSync(path, 'utf8').replaceAll('\r\n', '\n').split('\n');
+  const jobLines = block(source, '  ' + job + ':', /^  [\w-]+:$/u);
+  const cache = block(jobLines, '      - name: ' + step, /^      - /u).join('\n');
+  const namespace = cache.match(/^          shared-key: (\S+)$/mu)?.[1];
+  assert.equal(namespace, 'macos-desktop-bundle-recipe-v2',
+    job + ' must version the effective shared cache namespace');
+  assert.doesNotMatch(cache, /^          key:/mu,
+    job + ' must not rely on a key ignored by shared-key');
+  namespaces.push(namespace);
+}
+assert.equal(new Set(namespaces).size, 1,
+  'The bundle cache producer and both consumers must share an effective namespace');
+NODE
+
 # Keep the compiler-output mitigation local to Windows Desktop and its trusted
 # cache producer, and fail before Cargo if the exact compiler cannot be resolved.
 "${NODE:-node}" --input-type=module - "$script_dir/../../.github/workflows/premerge.yml" "$script_dir/../../.github/workflows/sccache-warm.yml" <<'NODE'

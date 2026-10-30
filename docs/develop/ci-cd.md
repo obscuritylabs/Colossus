@@ -31,9 +31,11 @@ GitHub scopes PR-written caches to that PR's merge ref, so another PR cannot res
 them. `Warm Rust build caches` writes dependency build archives on `main` after Rust
 manifests, lockfiles, toolchains or cache workflows change. Writers may dispatch it
 manually; it uses standard Linux/macOS runners and is not a merge gate. Each cache
-family shares a recipe key between its producer and consumers. When a warm-up recipe
-changes without a Rust environment change, bump that family's key in the producer
-and every consumer: GitHub cannot replace an existing entry.
+family shares an effective namespace between its producer and consumers. The pinned
+[`rust-cache` implementation](https://github.com/Swatinem/rust-cache/blob/c19371144df3bb44fab255c43d04cbc2ab54d1c4/src/config.ts#L70-L96)
+ignores `key` when `shared-key` is set. When changing a family's warm-up recipe,
+version its `shared-key`, as in `macos-desktop-bundle-recipe-v2`, and update the
+producer and every consumer together. GitHub cannot replace an existing entry.
 
 Linux PR lint/unit jobs share a dependency archive. macOS Desktop acceptance and bundle
 jobs use separate debug/release archives; unsigned macOS releases consume the same
