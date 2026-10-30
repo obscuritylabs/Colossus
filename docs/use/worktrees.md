@@ -71,7 +71,10 @@ Desktop and CLI use the same default. The inventory is limited to 128 live entri
 Archive preserves the checkout's files and Git branch. Close Desktop workspaces,
 workers, terminals and CLI sessions using it first. Colossus processes hold native
 file locks for their working lifetime; another process cannot archive or remove a
-checkout while one of those shared-use locks is held.
+checkout while one of those shared-use locks is held. Sessions opened in a subfolder
+also lease every enclosing managed checkout, including when the subfolder contains
+another repository. Archived checkouts must be restored before a session can start
+in any of their subfolders.
 
 Removal requires an archived, unused, unlocked checkout with no local changes,
 untracked files or ignored files. Remove build output yourself only when you no

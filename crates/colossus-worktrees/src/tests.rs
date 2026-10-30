@@ -308,7 +308,15 @@ fn runtime_lease_does_not_adopt_unmanaged_or_missing_workspaces() {
             .unwrap()
             .is_none()
     );
+    let nested = fixture.repository.join("nested/deeper");
+    fs::create_dir_all(&nested).unwrap();
+    assert!(acquire_workspace_lease(&nested).unwrap().is_none());
+    let plain = fixture._temp.path().join("plain");
+    fs::create_dir(&plain).unwrap();
+    assert!(acquire_workspace_lease(&plain).unwrap().is_none());
+    assert!(!fixture.root.exists());
     assert!(acquire_workspace_lease(&fixture.repository.join("missing")).is_err());
+    assert!(acquire_workspace_lease(&fixture.repository.join("README.md")).is_err());
 }
 
 #[test]
@@ -504,6 +512,8 @@ fn another_process_holds_use_lease_until_its_work_is_finished() {
     }
     let fixture = Fixture::new();
     let entry = fixture.create("cross-process");
+    let nested = entry.path.join("nested/deeper");
+    fs::create_dir_all(&nested).unwrap();
     let ready = fixture._temp.path().join("child-ready");
     let mut child = ChildGuard(
         Command::new(std::env::current_exe().unwrap())
@@ -513,7 +523,7 @@ fn another_process_holds_use_lease_until_its_work_is_finished() {
                 "tests::lease_holder_process",
                 "--nocapture",
             ])
-            .env("COLOSSUS_WORKTREE_LEASE_FIXTURE", &entry.path)
+            .env("COLOSSUS_WORKTREE_LEASE_FIXTURE", &nested)
             .env("COLOSSUS_WORKTREE_READY_FIXTURE", &ready)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -545,4 +555,167 @@ fn another_process_holds_use_lease_until_its_work_is_finished() {
         fixture.manager().remove(&entry.id).unwrap().state,
         WorktreeState::Removed
     );
+}
+
+#[test]
+fn nested_shared_users_block_archive_until_every_lease_is_released() {
+    let fixture = Fixture::new();
+    let entry = fixture.create("nested-users");
+    let nested = entry.path.join("nested/deeper");
+    fs::create_dir_all(&nested).unwrap();
+    let first = acquire_workspace_lease(&nested).unwrap().unwrap();
+    let second = acquire_workspace_lease(nested.parent().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(fixture.manager().list().unwrap().worktrees[0].in_use);
+    assert_eq!(
+        fixture.manager().archive(&entry.id).unwrap_err().code,
+        WorktreeErrorCode::Busy
+    );
+    drop(first);
+    assert_eq!(
+        fixture.manager().archive(&entry.id).unwrap_err().code,
+        WorktreeErrorCode::Busy
+    );
+    drop(second);
+    assert_eq!(
+        fixture.manager().archive(&entry.id).unwrap().state,
+        WorktreeState::Archived
+    );
+}
+
+#[test]
+fn archived_managed_parent_rejects_nested_session_startup() {
+    let fixture = Fixture::new();
+    let entry = fixture.create("nested-archived");
+    let nested = entry.path.join("nested/deeper");
+    fs::create_dir_all(&nested).unwrap();
+    fixture.manager().archive(&entry.id).unwrap();
+    let catalog = fs::read(fixture.root.join("catalog.json")).unwrap();
+    assert_eq!(
+        acquire_workspace_lease(&nested).err().unwrap().code,
+        WorktreeErrorCode::Conflict
+    );
+    assert_eq!(
+        fs::read(fixture.root.join("catalog.json")).unwrap(),
+        catalog
+    );
+    fixture.manager().open_path(&entry.id).unwrap();
+    assert!(acquire_workspace_lease(&nested).unwrap().is_some());
+}
+
+#[test]
+fn exclusive_managed_parent_blocks_nested_session_startup() {
+    let fixture = Fixture::new();
+    let entry = fixture.create("nested-exclusive");
+    let nested = entry.path.join("nested/deeper");
+    fs::create_dir_all(&nested).unwrap();
+    let storage = Storage::open(&fixture.root, false).unwrap();
+    let exclusive = crate::lease::exclusive(&storage, &entry.id).unwrap();
+    assert_eq!(
+        acquire_workspace_lease(&nested).err().unwrap().code,
+        WorktreeErrorCode::Busy
+    );
+    drop(exclusive);
+    assert!(acquire_workspace_lease(&nested).unwrap().is_some());
+}
+
+#[test]
+fn nested_unmanaged_repository_does_not_hide_its_managed_parent() {
+    let fixture = Fixture::new();
+    let entry = fixture.create("nested-repository");
+    let repository = entry.path.join("nested-repository");
+    Repository::init(&repository).unwrap();
+    let nested = repository.join("child");
+    fs::create_dir(&nested).unwrap();
+    let lease = acquire_workspace_lease(&nested).unwrap().unwrap();
+    assert_eq!(
+        fixture.manager().archive(&entry.id).unwrap_err().code,
+        WorktreeErrorCode::Busy
+    );
+    drop(lease);
+    fixture.manager().archive(&entry.id).unwrap();
+    assert_eq!(
+        acquire_workspace_lease(&nested).err().unwrap().code,
+        WorktreeErrorCode::Conflict
+    );
+}
+
+#[test]
+fn nested_managed_checkouts_retain_every_parent_and_release_on_failed_admission() {
+    let fixture = Fixture::new();
+    let outer = fixture.create("outer");
+    let inner_manager =
+        WorktreeManager::open(&fixture.repository, Some(&outer.path.join("inner-managed")))
+            .unwrap();
+    let inner = inner_manager
+        .create(&CreateWorktree {
+            name: "inner".into(),
+            branch: None,
+            base: None,
+            existing_branch: false,
+        })
+        .unwrap();
+    let nested = inner.path.join("child");
+    fs::create_dir(&nested).unwrap();
+    let lease = acquire_workspace_lease(&nested).unwrap().unwrap();
+    assert_eq!(
+        fixture.manager().archive(&outer.id).unwrap_err().code,
+        WorktreeErrorCode::Busy
+    );
+    assert_eq!(
+        inner_manager.archive(&inner.id).unwrap_err().code,
+        WorktreeErrorCode::Busy
+    );
+    drop(lease);
+    let storage = Storage::open(&fixture.root, false).unwrap();
+    let exclusive = crate::lease::exclusive(&storage, &outer.id).unwrap();
+    assert_eq!(
+        acquire_workspace_lease(&nested).err().unwrap().code,
+        WorktreeErrorCode::Busy
+    );
+    // Admission reached the outer parent after leasing the inner checkout. Its
+    // failure must release that provisional inner lease instead of leaking a user.
+    assert_eq!(
+        inner_manager.archive(&inner.id).unwrap().state,
+        WorktreeState::Archived
+    );
+    drop(exclusive);
+    assert_eq!(
+        fixture.manager().archive(&outer.id).unwrap().state,
+        WorktreeState::Archived
+    );
+}
+
+#[test]
+fn nested_managed_startup_rejects_missing_or_tampered_parent_metadata() {
+    let fixture = Fixture::new();
+    let entry = fixture.create("nested-orphan");
+    let nested = entry.path.join("nested/deeper");
+    fs::create_dir_all(&nested).unwrap();
+    let origin = Repository::open(&entry.path)
+        .unwrap()
+        .path()
+        .join(crate::lease::ORIGIN_FILE);
+    let original = fs::read(&origin).unwrap();
+    fs::remove_file(&origin).unwrap();
+    assert_eq!(
+        acquire_workspace_lease(&nested).err().unwrap().code,
+        WorktreeErrorCode::Ownership
+    );
+    assert!(!origin.exists());
+    fs::write(&origin, b"{invalid origin}").unwrap();
+    assert_eq!(
+        acquire_workspace_lease(&nested).err().unwrap().code,
+        WorktreeErrorCode::Ownership
+    );
+    assert_eq!(fs::read(&origin).unwrap(), b"{invalid origin}");
+    fs::write(&origin, original).unwrap();
+    let catalog = fixture.root.join("catalog.json");
+    fs::remove_file(&catalog).unwrap();
+    assert_eq!(
+        acquire_workspace_lease(&nested).err().unwrap().code,
+        WorktreeErrorCode::Ownership
+    );
+    assert!(!catalog.exists());
 }

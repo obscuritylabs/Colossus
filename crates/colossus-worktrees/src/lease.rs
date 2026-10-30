@@ -13,17 +13,37 @@ use std::{fs, path::Path};
 
 pub(crate) const ORIGIN_FILE: &str = "colossus-managed-worktree.json";
 
-/// Existing-only shared use lease. Keep it alive through worker/run/terminal cleanup.
-/// A competing archive/removal requires the same file's exclusive native lock.
+/// Existing-only shared use leases. Keep them alive through worker/run/terminal cleanup.
+/// Competing archive/removal requires each managed ancestor's exclusive native lock.
 pub struct WorkspaceLease {
+    _checkouts: Vec<CheckoutLease>,
+}
+
+struct CheckoutLease {
     _file: ConfinedFile,
     _root: ConfinedRoot,
 }
 
-/// Acquire a shared lock for a Colossus-managed checkout, or `None` for an unmanaged
-/// repository. This never creates a home, catalog, lock, runtime or provider.
+/// Acquire shared locks for all managed checkouts containing the selected directory,
+/// or `None` when it has no managed ancestor. A nested repository does not hide its
+/// managed parent. This never creates a home, catalog, lock, runtime or provider.
 pub fn acquire_workspace_lease(workspace: &Path) -> Result<Option<WorkspaceLease>> {
     let canonical = fs::canonicalize(workspace).map_err(|_| WorktreeError::ownership())?;
+    if !canonical.is_dir() {
+        return Err(WorktreeError::ownership());
+    }
+    let mut checkouts = Vec::new();
+    for ancestor in canonical.ancestors() {
+        if let Some(lease) = acquire_checkout_lease(ancestor)? {
+            checkouts.push(lease);
+        }
+    }
+    Ok((!checkouts.is_empty()).then_some(WorkspaceLease {
+        _checkouts: checkouts,
+    }))
+}
+
+fn acquire_checkout_lease(canonical: &Path) -> Result<Option<CheckoutLease>> {
     let managed_shape = canonical
         .file_name()
         .and_then(|value| value.to_str())
@@ -71,7 +91,7 @@ pub fn acquire_workspace_lease(workspace: &Path) -> Result<Option<WorkspaceLease
             Ok(None)
         };
     };
-    let Ok(git) = crate::repository::pointer_path(&canonical, pointer) else {
+    let Ok(git) = crate::repository::pointer_path(canonical, pointer) else {
         return if managed_shape {
             Err(WorktreeError::ownership())
         } else {
@@ -86,7 +106,7 @@ pub fn acquire_workspace_lease(workspace: &Path) -> Result<Option<WorkspaceLease
             Ok(None)
         };
     }
-    let binding = Binding::discover(&canonical)?;
+    let binding = Binding::discover(canonical)?;
     let origin: Origin = serde_json::from_slice(&read_small(&origin_path, 8192)?)
         .map_err(|_| WorktreeError::ownership())?;
     validate_origin(&origin, &binding)?;
@@ -119,7 +139,7 @@ pub fn acquire_workspace_lease(workspace: &Path) -> Result<Option<WorkspaceLease
     file.revalidate(&storage.root)
         .map_err(|_| WorktreeError::ownership())?;
     binding.revalidate()?;
-    Ok(Some(WorkspaceLease {
+    Ok(Some(CheckoutLease {
         _file: file,
         _root: storage.root.clone(),
     }))

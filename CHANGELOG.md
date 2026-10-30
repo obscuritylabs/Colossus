@@ -30,6 +30,8 @@ include breaking changes while the public API is still settling.
 - Managed worktrees on Unix make new checkout directories private before ownership
   admission, including directories containing tracked file links.
 - The Windows developer companion floats without the native window border and shadow.
+- Managed checkout leases also protect sessions opened in subfolders, including
+  nested repositories; archived parents reject new sessions in their subfolders.
 
 <!-- colossus:release-notes base=v0.11.10 -->
 
