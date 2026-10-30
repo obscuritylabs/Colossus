@@ -28,6 +28,7 @@ pub(super) fn apply(app: &AppHandle, value: &ExtrasPreferences) -> Result<(), Co
     .min_inner_size(156., 188.)
     .max_inner_size(156., 188.)
     .decorations(false)
+    .shadow(false)
     .transparent(true)
     .resizable(false)
     .skip_taskbar(true)
