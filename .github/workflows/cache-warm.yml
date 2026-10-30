@@ -56,7 +56,7 @@ jobs:
 
   macos-desktop-acceptance:
     name: Warm macOS Desktop acceptance dependencies
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 75
     env:
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
@@ -78,7 +78,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: apps/desktop/src-tauri -> target
-          shared-key: macos-desktop-acceptance
+          shared-key: macos-15-desktop-acceptance-v1
           key: recipe-v1
           cache-targets: true
       - name: Prepare verified debug desktop executables
@@ -92,7 +92,7 @@ jobs:
 
   macos-desktop-bundle:
     name: Warm macOS Desktop bundle dependencies
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 75
     env:
       COLOSSUS_DESKTOP_TEAM_ID: "ADHOC"
@@ -120,7 +120,7 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
           # rust-cache ignores key when shared-key is set; version the shared namespace.
-          shared-key: macos-desktop-bundle-recipe-v2
+          shared-key: macos-15-desktop-bundle-recipe-v3
           cache-targets: true
       - name: Build credential-free unsigned macOS bundle
         run: ./scripts/package-desktop-macos build

@@ -37,7 +37,7 @@ fn release_workflow_has_exactly_six_native_cli_targets() {
         targets,
         [
             ("macos-15-intel", "x86_64-apple-darwin", "tar.gz"),
-            ("macos-14", "aarch64-apple-darwin", "tar.gz"),
+            ("macos-15", "aarch64-apple-darwin", "tar.gz"),
             ("ubuntu-24.04", "x86_64-unknown-linux-musl", "tar.gz"),
             ("ubuntu-24.04-arm", "aarch64-unknown-linux-musl", "tar.gz"),
             ("windows-2025", "x86_64-pc-windows-msvc", "zip",),

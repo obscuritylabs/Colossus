@@ -214,7 +214,7 @@ jobs:
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             archive: tar.gz
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64-apple-darwin
             archive: tar.gz
           - runner: ubuntu-24.04
@@ -634,7 +634,7 @@ jobs:
     name: Build unsigned Colossus Desktop aarch64-apple-darwin
     if: needs.validate.outputs.target_channel != 'stable'
     needs: validate
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
@@ -665,7 +665,7 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
           # rust-cache ignores key when shared-key is set; version the shared namespace.
-          shared-key: macos-desktop-bundle-recipe-v2
+          shared-key: macos-15-desktop-bundle-recipe-v3
           cache-targets: true
           save-if: false
 
@@ -708,7 +708,7 @@ jobs:
     name: Package Colossus Desktop aarch64-apple-darwin
     if: needs.validate.outputs.target_channel != 'stable'
     needs: [validate, desktop_macos_build]
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     env:
       COLOSSUS_DESKTOP_TARGET: aarch64-apple-darwin

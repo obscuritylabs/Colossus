@@ -28,6 +28,11 @@ ARM64 and macOS jobs keep their native runners; short control, service-backed an
 bounded single-process fuzzing jobs retain their existing standard or slim runners.
 Provisioned runner names belong in `.github/actionlint.yaml`.
 
+Native ARM64 macOS jobs and their dependency and compiler-cache warmers use `macos-15`.
+Keep producers and consumers on the same image. Partition native dependency archives
+by image, using `macos-15-desktop-acceptance-v1` and
+`macos-15-desktop-bundle-recipe-v3`. x86_64 CLI packaging uses `macos-15-intel`.
+
 ## Rust build caches
 
 GitHub scopes PR-written caches to that PR's merge ref, so another PR cannot restore
@@ -37,7 +42,7 @@ manually; it uses standard Linux/macOS runners and is not a merge gate. Each cac
 family shares an effective namespace between its producer and consumers. The pinned
 [`rust-cache` implementation](https://github.com/Swatinem/rust-cache/blob/c19371144df3bb44fab255c43d04cbc2ab54d1c4/src/config.ts#L70-L96)
 ignores `key` when `shared-key` is set. When changing a family's warm-up recipe,
-version its `shared-key`, as in `macos-desktop-bundle-recipe-v2`, and update the
+version its `shared-key`, as in `macos-15-desktop-bundle-recipe-v3`, and update the
 producer and every consumer together. GitHub cannot replace an existing entry.
 
 Linux PR lint/unit jobs share a dependency archive. macOS Desktop acceptance and bundle
