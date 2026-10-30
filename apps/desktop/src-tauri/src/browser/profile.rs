@@ -275,7 +275,12 @@ mod tests {
     #[test]
     fn preferences_survive_store_reopen_and_profiles_have_one_writer() {
         let temp = tempfile::tempdir().unwrap();
-        let store = ProfileStore::at(temp.path(), "workspace-one").unwrap();
+        let root = temp
+            .path()
+            .canonicalize()
+            .expect("canonical profile test parent")
+            .join("application");
+        let store = ProfileStore::at(&root, "workspace-one").unwrap();
         assert_eq!(store.read().unwrap(), HumanBrowserPreferences::default());
         let expected = HumanBrowserPreferences {
             remember_sign_ins: cfg!(windows),
@@ -283,14 +288,14 @@ mod tests {
         };
         store.write(&expected).unwrap();
         assert_eq!(
-            ProfileStore::at(temp.path(), "workspace-one")
+            ProfileStore::at(&root, "workspace-one")
                 .unwrap()
                 .read()
                 .unwrap(),
             expected
         );
         assert_eq!(
-            ProfileStore::at(temp.path(), "workspace-two")
+            ProfileStore::at(&root, "workspace-two")
                 .unwrap()
                 .read()
                 .unwrap(),

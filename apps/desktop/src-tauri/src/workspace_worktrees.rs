@@ -515,7 +515,11 @@ mod tests {
     #[test]
     fn renderer_cannot_select_another_workspace_or_remote_target() {
         let temporary = tempfile::tempdir().unwrap();
-        let workspace = crate::desktop_settings::validate_workspace(temporary.path()).unwrap();
+        let root = temporary
+            .path()
+            .canonicalize()
+            .expect("canonical workspace test root");
+        let workspace = crate::desktop_settings::validate_workspace(&root).unwrap();
         let settings = DesktopSettings {
             workspace: Some(workspace.clone()),
             selected_space_id: Some("local".into()),
