@@ -167,6 +167,9 @@ plugins:
   workspaceDiscovery: true
   include: []
   exclude: []
+  documentation:
+    autoActivate: true
+    skill: colossus/documentation
   trustProfiles:
     default:
       mode: required

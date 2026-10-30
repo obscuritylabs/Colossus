@@ -111,9 +111,18 @@ impl Runtime {
         sticky: &[String],
     ) -> Result<PluginComposition, RuntimeError> {
         let catalog = self.plugin_catalog.capture()?;
+        let instructions = self
+            .plugin_catalog
+            .configuration
+            .documentation
+            .instruction(&catalog.records)
+            .map_or_else(
+                || instructions.to_owned(),
+                |policy| format!("[Colossus documentation policy]\n{policy}\n\n{instructions}"),
+            );
         compose_plugins(
             &catalog.records,
-            instructions,
+            &instructions,
             explicit,
             sticky,
             self.plugins_enabled,

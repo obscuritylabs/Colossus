@@ -75,7 +75,7 @@ async fn public_plugin_reads_require_scope_pin_digests_and_never_release_credent
     );
     let plugins = api.plugins(&authorized, false).await.expect("catalog");
     assert_eq!(plugins.len(), 1);
-    assert_eq!(plugins[0].skills.len(), 4);
+    assert_eq!(plugins[0].skills.len(), 5);
     assert!(plugins[0].actions.is_empty());
     let encoded = serde_json::to_string(&plugins).expect("inventory");
     assert!(!encoded.contains("instructions"));
