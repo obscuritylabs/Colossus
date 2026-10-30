@@ -4,6 +4,13 @@ use colossus_sdk::{ArtifactPurpose, IdempotencyKey, UploadArtifactRequest};
 use sha2::{Digest as _, Sha256};
 use tauri::Emitter as _;
 
+#[cfg_attr(
+    not(windows),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "The shared adapter preserves fallible Windows shortcut registration."
+    )
+)]
 pub(super) fn register(
     app: &AppHandle,
     old: Option<&ExtrasPreferences>,
