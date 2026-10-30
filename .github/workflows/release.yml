@@ -20,7 +20,7 @@ concurrency:
 jobs:
   validate:
     name: Validate release request
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -217,13 +217,13 @@ jobs:
           - runner: macos-14
             target: aarch64-apple-darwin
             archive: tar.gz
-          - runner: ubuntu-latest-m
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             archive: tar.gz
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             archive: tar.gz
-          - runner: windows-latest-l
+          - runner: windows-2025
             target: x86_64-pc-windows-msvc
             archive: zip
           - runner: windows-11-arm
@@ -1065,7 +1065,7 @@ jobs:
     name: Sign, package, and smoke Windows Desktop
     if: needs.validate.outputs.publish_draft == 'true'
     needs: validate
-    runs-on: windows-latest-l
+    runs-on: windows-2025
     environment: release-signing
     timeout-minutes: 100
     permissions:
@@ -1351,7 +1351,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest-m
+          - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu

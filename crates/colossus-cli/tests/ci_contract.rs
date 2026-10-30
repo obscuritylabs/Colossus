@@ -660,7 +660,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     let jobs = jobs(&workflow);
     assert_eq!(
         field(job(jobs, "linux-rust-integration"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("ubuntu-24.04")
     );
     assert_eq!(
         field(
@@ -706,7 +706,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "windows-desktop"), "runs-on").as_str(),
-        Some("windows-latest-l")
+        Some("windows-2025")
     );
     assert_eq!(
         field(job(jobs, "windows-desktop"), "timeout-minutes").as_u64(),
@@ -881,7 +881,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     }
     assert_eq!(
         field(job(jobs, "live-security"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("ubuntu-24.04")
     );
     let podman_readiness = field(
         named_step(
@@ -947,8 +947,42 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
     let release_jobs = jobs(&workflow);
     assert_eq!(
         field(job(release_jobs, "validate"), "runs-on").as_str(),
-        Some("ubuntu-latest-m")
+        Some("ubuntu-24.04")
     );
+    assert_eq!(
+        field(job(release_jobs, "desktop_windows_signed"), "runs-on").as_str(),
+        Some("windows-2025")
+    );
+    assert_eq!(
+        field(job(release_jobs, "desktop_windows_preview"), "runs-on").as_str(),
+        Some("windows-latest-l")
+    );
+    for (job_name, target, runner) in [
+        ("artifacts", "x86_64-unknown-linux-musl", "ubuntu-24.04"),
+        ("artifacts", "x86_64-pc-windows-msvc", "windows-2025"),
+        ("control_plane", "x86_64-unknown-linux-gnu", "ubuntu-24.04"),
+    ] {
+        let strategy = mapping(
+            field(job(release_jobs, job_name), "strategy"),
+            "release strategy",
+        );
+        let matrix = mapping(field(strategy, "matrix"), "release matrix");
+        let entries = field(matrix, "include")
+            .as_array()
+            .expect("release matrix entries");
+        let matching = entries
+            .iter()
+            .filter(|entry| entry.get("target").and_then(serde_json::Value::as_str) == Some(target))
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "{job_name} must have one {target} entry");
+        assert_eq!(
+            matching[0]
+                .get("runner")
+                .and_then(serde_json::Value::as_str),
+            Some(runner),
+            "{job_name} {target} runner"
+        );
+    }
     let desktop_build = job(release_jobs, "desktop_macos_build");
     let desktop = job(release_jobs, "desktop_macos");
     let sdk = job(release_jobs, "sdk_release");
@@ -1045,9 +1079,7 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         "Colossus-Desktop-VALIDATION-ONLY-ADHOC-${RELEASE_TAG}-aarch64-apple-darwin.zip",
         "colossus-desktop-validation-only-adhoc-aarch64-apple-darwin",
         "Upload non-runnable ADHOC validation archive and checksum",
-        "- runner: ubuntu-latest-m\n            target: x86_64-unknown-linux-musl",
         "shasum -a 256",
-        "runs-on: windows-latest-l",
         "./scripts/package-desktop-windows.ps1",
         "codeSigning = \"unsigned_validation_only\"",
         "smartScreenWarningExpected = $true",

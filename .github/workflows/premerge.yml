@@ -68,7 +68,7 @@ jobs:
     name: Complete Linux Rust and AppArmor acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -544,7 +544,7 @@ jobs:
     name: Representative Windows Desktop acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: windows-latest-l
+    runs-on: windows-2025
     timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: "0"
@@ -875,7 +875,7 @@ jobs:
     name: OCI and OPA security acceptance
     if: needs.eligibility.result == 'success'
     needs: eligibility
-    runs-on: ubuntu-latest-m
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - name: Check out repository

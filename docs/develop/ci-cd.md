@@ -19,11 +19,14 @@ See [Contributing](contributing.md) for the local development and review sequenc
 | Release | Annotated stable or approved prerelease tag | Six CLI targets, signed Windows packages, Control Plane/VSIX artifacts, stable SDK or macOS preview | `Colossus release gate` |
 
 Every hosted job needs a timeout. Routine PR jobs use standard public Linux runners.
-The four-core `ubuntu-latest-m` larger runner is reserved for final Linux integration,
-live OCI/OPA acceptance, release readiness and the x86_64 Linux release artifact; short
-control, service-backed and bounded single-process fuzzing jobs use standard or slim
-runners. Windows Desktop acceptance uses a larger runner. Provisioned runner names
-belong in `.github/actionlint.yaml`.
+Complete Linux integration, OCI/OPA acceptance, release readiness and x86_64 Linux
+release jobs use `ubuntu-24.04`. Windows Desktop acceptance, x86_64 CLI packaging and
+signed Desktop releases use `windows-2025`. Stable SDK builds and publication retain
+`ubuntu-latest-m`; manual unsigned Windows Desktop validation retains
+`windows-latest-l`. Those paths still require the corresponding paid runner allocation.
+ARM64 and macOS jobs keep their native runners; short control, service-backed and
+bounded single-process fuzzing jobs retain their existing standard or slim runners.
+Provisioned runner names belong in `.github/actionlint.yaml`.
 
 ## Rust build caches
 
@@ -153,7 +156,7 @@ and its successful PR gate before allocating acceptance runners. Current policy 
 PRs; routine path selection does not implement a lighter pre-merge tier. Shared CI and
 toolchain changes can affect every consumer and need broad evidence.
 
-Linux's complete Rust/native sandbox suite runs on a larger runner with an exact-path
+Linux's complete Rust/native sandbox suite runs on Ubuntu 24.04 with an exact-path
 AppArmor profile granting the temporary root-owned CLI Linux user-namespace authority.
 Three macOS jobs run concurrently: native sandbox/sidecar acceptance, Desktop acceptance
 and Desktop packaging. The native job exercises real sidecar bootstrap, pinned gRPC,
@@ -177,7 +180,7 @@ and builds acceptance examples. GitHub-hosted Windows runners are
 [administrators](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges),
 so this lane cannot establish ordinary-user capture/input acceptance. Computer-control
 changes also need maintainer [interactive receipts from the final clean commit](testing.md#windows-computer-control-acceptance).
-The larger Windows Desktop job prepares binaries and exercises the bridge, credentials,
+The Windows 2025 Desktop job prepares binaries and exercises the bridge, credentials,
 WebView2, plugins and approvals. Desktop checks require staged binaries. Each job reports
 all independent failures; the aggregate waits for both. Linux Desktop, credential-vault,
 VS Code lifecycle, fuzzing, supply-chain and live-service lanes also remain mandatory.
@@ -320,7 +323,8 @@ stale-label removal, resolved conversations and billing, then activate:
 The main ruleset requires a conflict-free PR, resolved conversations and both gates on
 the current head, with zero mandatory approvals, no bypass actors and no latest-main
 requirement. It blocks direct pushes, deletion and non-fast-forward updates. Merge
-queues are outside this topology because this private Team repository cannot use them.
+queues are outside this topology; the ruleset uses the current-head PR and pre-merge
+gates directly.
 
 ## Local development and completion
 

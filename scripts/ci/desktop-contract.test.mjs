@@ -1350,7 +1350,7 @@ test("pre-merge desktop packaging declares its non-runnable trust channel", () =
   const windows = workflow.slice(runtimeStart, windowsDesktopStart);
   const windowsDesktop = workflow.slice(windowsDesktopStart, windowsEnd);
   assert.match(windows, /runs-on: windows-2025/u);
-  assert.match(windowsDesktop, /runs-on: windows-latest-l/u);
+  assert.match(windowsDesktop, /runs-on: windows-2025/u);
   assert.match(windowsDesktop, /COLOSSUS_DESKTOP_TEAM_ID: "UNSIGNED"/u);
   assert.match(windowsDesktop, /cargo xtask desktop prepare --profile debug/u);
   assert.match(
@@ -1515,7 +1515,7 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
   assert.match(windowsJob, /Start-Process -FilePath \$uninstallers/u);
   assert.match(windowsJob, /Colossus processes remained after uninstall/u);
 
-  assert.match(signedWindowsJob, /runs-on: windows-latest-l/u);
+  assert.match(signedWindowsJob, /runs-on: windows-2025/u);
   assert.match(signedWindowsJob, /environment: release-signing/u);
   assert.match(signedWindowsJob, /id-token: write/u);
   assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC/u);
