@@ -309,7 +309,7 @@ for (const [path, job, step] of [
   const jobLines = block(source, '  ' + job + ':', /^  [\w-]+:$/u);
   const cache = block(jobLines, '      - name: ' + step, /^      - /u).join('\n');
   const namespace = cache.match(/^          shared-key: (\S+)$/mu)?.[1];
-  assert.equal(namespace, 'macos-desktop-bundle-recipe-v2',
+  assert.equal(namespace, 'macos-15-desktop-bundle-recipe-v3',
     job + ' must version the effective shared cache namespace');
   assert.doesNotMatch(cache, /^          key:/mu,
     job + ' must not rely on a key ignored by shared-key');
