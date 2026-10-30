@@ -10,6 +10,10 @@ include breaking changes while the public API is still settling.
 
 ## [0.11.11-preview.5] - 2026-10-30
 
+### Security
+
+- Updated Desktop ZIP handling to ZIP 9.0.5, the patched version for [GHSA-m665-v7pm-7grj](https://github.com/advisories/GHSA-m665-v7pm-7grj).
+
 <!-- colossus:release-notes base=v0.11.10 -->
 
 ### Merged changes
@@ -83,8 +87,10 @@ include breaking changes while the public API is still settling.
 - **agents:** add daily product maintenance ownership ([f3d5560](https://github.com/obscuritylabs/Colossus/commit/f3d5560e9f044c74d1a03fc44bc4d820c417e926))
 - stabilize compiler caches and remove duplicate macOS builds ([1b308dd](https://github.com/obscuritylabs/Colossus/commit/1b308dd454526872daf24993839c78a37263b808))
 - **cloud:** isolate native enrollment transport home ([e61d842](https://github.com/obscuritylabs/Colossus/commit/e61d842d20b1ebbf9c58cb17d8fbdf1769ad0195))
+- **release:** prepare 0.11.11-preview.5 ([f7fa58e](https://github.com/obscuritylabs/Colossus/commit/f7fa58e5f8b1fad74b6d83616c05250fe7f3226e))
+- version the effective macOS bundle cache namespace ([627c21a](https://github.com/obscuritylabs/Colossus/commit/627c21a5e0ba20a55ef3f136a857b1cea9ab401a))
 
-**Source:** [e61d842](https://github.com/obscuritylabs/Colossus/commit/e61d842d20b1ebbf9c58cb17d8fbdf1769ad0195)
+**Source:** [e0cbdb1](https://github.com/obscuritylabs/Colossus/commit/e0cbdb1ea9c8e463ad41723ff6f1283a93cf64a7)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.5](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.5)
 
@@ -1592,8 +1598,8 @@ Unpublished candidate; superseded by preview 12.
   resolved configuration.
 - Under acknowledged danger full access, structured filesystem and HTTP adapters use
   request-bound ambient authority as well as child processes. Absolute host paths and
-  every canonical HTTP(S) origin—including loopback, private, link-local, and metadata
-  origins—are in scope. Configured provider routes, credentials, MCP/integration
+  every canonical HTTP(S) originâ€”including loopback, private, link-local, and metadata
+  originsâ€”are in scope. Configured provider routes, credentials, MCP/integration
   declarations, extension trust, permits, audit, quarantine, transport validation, and
   configured bounds remain mandatory. Direct Unix timeout and output bounds cover the
   supervised effect, while process-count, memory, and cleanup are best-effort for
@@ -1615,7 +1621,7 @@ Unpublished candidate; superseded by preview 12.
   model-visible `network.http`, `web.fetch`, and `docs.fetch` tools. It is not an air-gap
   declaration.
 - Fresh Desktop schema-v4 settings default to **Allow all** and **Full access**. Migrations
-  from schema v1–v3 preserve the earlier effective isolation: Minimal maps to Offline
+  from schema v1â€“v3 preserve the earlier effective isolation: Minimal maps to Offline
   isolated, while Development and legacy `allow_all` map to Workspace isolated.
 - Codex CLI account commands now report completion only after Colossus verifies their
   runtime credential postcondition; unsafe stores are rejected before the official CLI
@@ -2061,7 +2067,7 @@ Unpublished candidate; superseded by preview 12.
   `Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.1-preview.1-aarch64-apple-darwin.zip`.
 - Verify the adjacent SHA-256 sidecar before opening the archive. Because this preview is
   not Apple-notarized, macOS requires an explicit Control-click **Open** or
-  **System Settings → Privacy & Security → Open Anyway** confirmation. Do not disable
+  **System Settings â†’ Privacy & Security â†’ Open Anyway** confirmation. Do not disable
   Gatekeeper or strip quarantine metadata.
 
 ## [0.10.0] - 2026-07-22
