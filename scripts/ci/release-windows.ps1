@@ -28,7 +28,7 @@ try {
         if ($LASTEXITCODE -ne 0 -or -not $versionOutput.StartsWith("colossus ")) { throw "version command failed" }
         & $binary --config config.yaml config show | Out-Null
         $plugins = @(& $binary --config config.yaml plugins list | ConvertFrom-Json)
-        if ($LASTEXITCODE -ne 0 -or $plugins.Count -ne 1 -or $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or $plugins[0].skills.Count -ne 4) { throw "embedded core discovery failed" }
+        if ($LASTEXITCODE -ne 0 -or $plugins.Count -ne 1 -or $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or $plugins[0].skills.Count -ne 5) { throw "embedded core discovery failed" }
         & $binary --config config.yaml run connected | Set-Content -Encoding utf8 result.json
         $result = Get-Content -Raw result.json | ConvertFrom-Json
         if ($result.output -ne "connected" -or $result.profile -ne "echo" -or $result.event_count -lt 3) { throw "offline smoke failed" }
@@ -94,7 +94,7 @@ try {
     $env:COLOSSUS_HOME = Join-Path $installedSmoke "colossus-home"
     try {
         $plugins = @(& $installed --config config.yaml plugins list | ConvertFrom-Json)
-        if ($LASTEXITCODE -ne 0 -or $plugins.Count -ne 1 -or $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or $plugins[0].skills.Count -ne 4) { throw "installed embedded core discovery failed" }
+        if ($LASTEXITCODE -ne 0 -or $plugins.Count -ne 1 -or $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or $plugins[0].skills.Count -ne 5) { throw "installed embedded core discovery failed" }
         $ripgrepVersion = (& $installedRipgrep --version | Select-Object -First 1)
         if ($LASTEXITCODE -ne 0 -or -not $ripgrepVersion.StartsWith("ripgrep 15.2.0")) { throw "installed ripgrep is unavailable" }
         $searchSpace = Join-Path $installedSmoke "search space"

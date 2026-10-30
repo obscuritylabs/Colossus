@@ -133,7 +133,7 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
             "macos-desktop-bundle",
             &premerge,
             "Restore main Desktop bundle build cache",
-            "macos-desktop-bundle",
+            "macos-desktop-bundle-recipe-v2",
             "apps/desktop/src-tauri -> target",
             "macos-14",
         ),
@@ -142,7 +142,7 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
             "desktop_macos_build",
             &release,
             "Restore main Desktop bundle build cache",
-            "macos-desktop-bundle",
+            "macos-desktop-bundle-recipe-v2",
             "apps/desktop/src-tauri -> target",
             "macos-14",
         ),
@@ -168,7 +168,14 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
         );
         for inputs in [warm_inputs, consumer_inputs] {
             assert_eq!(field(inputs, "shared-key").as_str(), Some(shared_key));
-            assert_eq!(field(inputs, "key").as_str(), Some("recipe-v1"));
+            if shared_key == "macos-desktop-bundle-recipe-v2" {
+                assert!(
+                    !inputs.contains_key("key"),
+                    "rust-cache ignores key when shared-key is set; version the shared namespace"
+                );
+            } else {
+                assert_eq!(field(inputs, "key").as_str(), Some("recipe-v1"));
+            }
             assert_eq!(field(inputs, "workspaces").as_str(), Some(workspace));
             assert_eq!(field(inputs, "cache-targets").as_bool(), Some(true));
         }
@@ -215,6 +222,21 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
             < step_index("Build Desktop native test dependencies")
     );
 
+    let bundle = job(jobs(&warm), "macos-desktop-bundle");
+    assert_eq!(
+        field(
+            named_step(bundle, "Build credential-free unsigned macOS bundle"),
+            "run"
+        )
+        .as_str(),
+        Some("./scripts/package-desktop-macos build"),
+        "the warmer must compile the same final Tauri configuration as packaging"
+    );
+    let bundle_steps =
+        serde_json::to_string(field(bundle, "steps")).expect("serialize macOS bundle cache steps");
+    assert!(!bundle_steps.contains("npm run tauri:build"));
+    assert!(!bundle_steps.contains("COLOSSUS_DESKTOP_SIGNING_IDENTITY"));
+
     for (workflow, names) in [
         (&pr, &["sdk", "desktop"][..]),
         (
@@ -240,14 +262,86 @@ fn main_cache_warmup_feeds_read_only_pr_and_macos_builds() {
 }
 
 #[test]
+fn compiler_cache_producers_and_consumers_pin_the_same_binary_version() {
+    let directory = repository_root().join(".github/workflows");
+    let mut cache_jobs = BTreeSet::new();
+    for entry in fs::read_dir(directory).expect("read workflow directory") {
+        let path = entry.expect("workflow entry").path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("yml") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("workflow filename");
+        let definition = workflow(name);
+        for (job_name, value) in jobs(&definition) {
+            let job = mapping(value, "workflow job");
+            let Some(steps) = job.get("steps").and_then(|steps| steps.as_array()) else {
+                continue;
+            };
+            for step in steps {
+                let Some(action) = step.get("uses").and_then(|action| action.as_str()) else {
+                    continue;
+                };
+                if action.starts_with("mozilla-actions/sccache-action@") {
+                    assert_eq!(
+                        action,
+                        "mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696"
+                    );
+                    assert_eq!(
+                        step.get("with")
+                            .and_then(|inputs| inputs.get("version"))
+                            .and_then(|version| version.as_str()),
+                        Some("v0.19.0"),
+                        "{name}:{job_name} must match the compiler cache writer's binary version"
+                    );
+                    cache_jobs.insert((name.to_owned(), job_name.to_owned()));
+                }
+            }
+        }
+    }
+    assert!(cache_jobs.contains(&("sccache-warm.yml".to_owned(), "warm".to_owned())));
+    assert!(cache_jobs.contains(&("premerge.yml".to_owned(), "windows-desktop".to_owned())));
+}
+
+#[test]
 fn r2_compiler_cache_writes_only_from_protected_main_or_release_tags() {
     let warm = workflow("sccache-warm.yml");
     let root = mapping(&warm, "R2 warmer");
     let triggers = mapping(field(root, "on"), "R2 warm triggers");
     assert_eq!(
-        triggers.keys().collect::<Vec<_>>(),
-        [&"workflow_dispatch"],
-        "R2 warming must not spend runner time on every matching main push"
+        triggers.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        ["push", "workflow_dispatch"].into_iter().collect()
+    );
+    let push = mapping(field(triggers, "push"), "R2 cache warm push");
+    assert_eq!(
+        strings(field(push, "branches"), "R2 cache warm branches"),
+        ["main".to_owned()].into_iter().collect()
+    );
+    let paths = strings(field(push, "paths"), "R2 cache warm paths");
+    for required in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "**/Cargo.toml",
+        "**/Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/config.toml",
+        ".github/workflows/sccache-warm.yml",
+        ".github/workflows/pr.yml",
+        ".github/workflows/premerge.yml",
+        ".github/workflows/release.yml",
+        ".github/workflows/publish-sdk.yml",
+        "scripts/ci/configure-sccache-r2.sh",
+    ] {
+        assert!(
+            paths.contains(required),
+            "R2 warm-up must refresh after {required} changes"
+        );
+    }
+    assert!(
+        !paths.contains("**"),
+        "cache warming must remain change selected"
     );
     let warm_job = job(jobs(&warm), "warm");
     assert!(
@@ -589,7 +683,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "macos-desktop-acceptance"), "timeout-minutes").as_u64(),
-        Some(75),
+        Some(90),
         "macOS Desktop acceptance must allow native and browser tests to finish"
     );
     assert_eq!(
@@ -607,7 +701,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     );
     assert_eq!(
         field(job(jobs, "windows-runtime"), "timeout-minutes").as_u64(),
-        Some(40),
+        Some(75),
         "Windows runtime acceptance must allow cold standard-runner compilation"
     );
     assert_eq!(
@@ -737,7 +831,6 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         "CARGO_TARGET_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/target",
         "cargo xtask check desktop",
         "./scripts/prepare-desktop-binaries debug",
-        "npm run tauri:build",
         "npm run tauri:bundle:macos",
         "COLOSSUS_DESKTOP_SIGNING_IDENTITY: \"-\"",
         "COLOSSUS_DESKTOP_TEAM_ID: \"ADHOC\"",
@@ -836,7 +929,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
         .expect("serialize macOS desktop bundle job");
     assert!(desktop_acceptance.contains("npm run test:browser-native"));
     assert!(!desktop_acceptance.contains("npm run tauri:build"));
-    assert!(desktop_bundle.contains("npm run tauri:build"));
+    assert!(!desktop_bundle.contains("npm run tauri:build"));
     assert!(desktop_bundle.contains("npm run tauri:bundle:macos"));
     assert!(desktop_bundle.contains("CARGO_TARGET_DIR"));
     assert!(!desktop_bundle.contains("npm run test:browser-native"));

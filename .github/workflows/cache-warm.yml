@@ -15,6 +15,7 @@ on:
       - .github/workflows/pr.yml
       - .github/workflows/premerge.yml
       - .github/workflows/release.yml
+      - scripts/package-desktop-macos
   workflow_dispatch:
 
 permissions:
@@ -118,9 +119,8 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: apps/desktop/src-tauri -> target
-          shared-key: macos-desktop-bundle
-          key: recipe-v1
+          # rust-cache ignores key when shared-key is set; version the shared namespace.
+          shared-key: macos-desktop-bundle-recipe-v2
           cache-targets: true
-      - name: Build pruned Tauri application
-        working-directory: apps/desktop
-        run: npm run tauri:build
+      - name: Build credential-free unsigned macOS bundle
+        run: ./scripts/package-desktop-macos build

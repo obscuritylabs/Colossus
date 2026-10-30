@@ -22,10 +22,16 @@ try {
     try {
         # Exercise the same runtime bootstrap that failed in the release job.
         & $binaryPath --config config.yaml config show | Out-Null
-        $plugins = @(& $binaryPath --config config.yaml plugins list | ConvertFrom-Json)
+        $pluginTimer = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            $plugins = @(& $binaryPath --config config.yaml plugins list | ConvertFrom-Json)
+        } finally {
+            $pluginTimer.Stop()
+            Write-Host ("Private core plugin inventory elapsed: {0} ms." -f $pluginTimer.ElapsedMilliseconds)
+        }
         if ($plugins.Count -ne 1 -or $plugins[0].manifest.name -ne "colossus" -or
             $plugins[0].origin -ne "bundled" -or -not $plugins[0].available -or
-            $plugins[0].skills.Count -ne 4) {
+            $plugins[0].skills.Count -ne 5) {
             throw "private release fixture did not bootstrap the embedded core"
         }
     } finally {

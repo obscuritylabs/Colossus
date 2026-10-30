@@ -912,6 +912,24 @@ const FIELD_DESCRIPTORS: ManagedFieldDescriptor[] = [
     [],
   ),
   advancedField(
+    "plugins.documentation.autoActivate",
+    "Plugins",
+    "Automatic documentation guidance",
+    "Ask agents to read the selected documentation skill for developer documentation tasks. Explicit selection remains available when disabled.",
+    "toggle",
+    true,
+    "low",
+  ),
+  advancedField(
+    "plugins.documentation.skill",
+    "Plugins",
+    "Documentation skill",
+    "Qualified PLUGIN/SKILL identifier for an available documentation skill. This guidance does not install plugins or grant tool permissions.",
+    "text",
+    "colossus/documentation",
+    "low",
+  ),
+  advancedField(
     "plugins.trustProfiles",
     "Plugins",
     "Trust profiles",
@@ -1082,6 +1100,7 @@ function advancedField(
   description: string,
   control: ManagedFieldDescriptor["control"],
   defaultValue: unknown,
+  risk: ManagedFieldDescriptor["risk"] = "high",
 ): ManagedFieldDescriptor {
   return {
     id,
@@ -1089,7 +1108,7 @@ function advancedField(
     title,
     description,
     scope: "both",
-    risk: "high",
+    risk,
     control,
     advanced: true,
     defaultValue,

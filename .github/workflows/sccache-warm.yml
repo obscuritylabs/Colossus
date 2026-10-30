@@ -1,6 +1,24 @@
 name: Warm R2 compiler cache
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - rust-toolchain
+      - rust-toolchain.toml
+      - .cargo/config.toml
+      - .github/workflows/sccache-warm.yml
+      - .github/workflows/pr.yml
+      - .github/workflows/premerge.yml
+      - .github/workflows/release.yml
+      - .github/workflows/publish-sdk.yml
+      - scripts/ci/configure-sccache-r2.sh
+      - scripts/prepare-desktop-binaries
+      - xtask/src/checks/desktop.rs
   workflow_dispatch:
 
 permissions:
@@ -37,6 +55,8 @@ jobs:
       - name: Enable shared compiler cache
         id: sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        with:
+          version: "v0.19.0"
       - name: Configure R2 compiler cache
         shell: bash
         env:
@@ -53,6 +73,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: '"CARGO_TARGET_DIR=$env:GITHUB_WORKSPACE\apps\desktop\src-tauri\target" >> $env:GITHUB_ENV'
+      - name: Select the Windows Desktop C and C++ compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 1
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Compiler = (Get-Command clang-cl.exe -CommandType Application -ErrorAction Stop).Source
+          & $Compiler --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          @("CC=$Compiler", "CXX=$Compiler") | Add-Content -LiteralPath $env:GITHUB_ENV
       - name: Warm Linux Rust dependencies
         if: runner.os == 'Linux'
         shell: bash

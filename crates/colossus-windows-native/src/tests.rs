@@ -12,6 +12,14 @@ const BOOTSTRAP_PARENT_FIXTURE_ENVIRONMENT: &str =
     "COLOSSUS_WINDOWS_NATIVE_BOOTSTRAP_PARENT_FIXTURE_V1";
 
 #[cfg(windows)]
+fn fixture_package_name() -> String {
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce).expect("random fixture package name");
+    let nonce: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("colossus.browser.{nonce}")
+}
+
+#[cfg(windows)]
 pub(crate) fn native_test_root() -> std::path::PathBuf {
     let parent = std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -637,11 +645,7 @@ fn allocation_owner_survives_failed_binding_and_retires_only_its_original_object
 #[cfg(windows)]
 #[test]
 fn package_allocation_rejects_adopting_an_existing_profile() {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let name = format!("colossus.browser.{nonce:032x}");
+    let name = fixture_package_name();
     let mut profile = ExclusiveAppContainerProfile::create(&name).unwrap();
     let sid = profile.sid_string().unwrap();
     assert!(sid.starts_with("S-1-15-2-"));
@@ -655,11 +659,7 @@ fn package_allocation_rejects_adopting_an_existing_profile() {
 #[cfg(windows)]
 #[test]
 fn partial_loopback_setup_is_retired_before_the_owned_package_can_be_recreated() {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let name = format!("colossus.browser.{nonce:032x}");
+    let name = fixture_package_name();
     let mut profile = ExclusiveAppContainerProfile::create(&name).expect("fresh exact package");
     let sid = profile.sid_string().expect("native package SID");
     // Non-elevated hosts normally deny this mutation. Both an acknowledged grant

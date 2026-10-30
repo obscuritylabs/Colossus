@@ -18,16 +18,26 @@ use std::{
 const JOURNAL_KEY: &str = "5555555555555555555555555555555555555555555555555555555555555555";
 const SIGNING_KEY: &str = "6666666666666666666666666666666666666666666666666666666666666666";
 
-fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> std::process::Output {
+fn command(
+    binary: &Path,
+    config: &Path,
+    workspace: &Path,
+    arguments: &[&str],
+) -> process_support::IsolatedCommand {
     let mut command = Command::new(binary);
-    let _isolated_home = process_support::isolate_user_home(&mut command, workspace);
+    let isolated_home = process_support::isolate_user_home(&mut command, workspace);
     command
         .current_dir(workspace)
         .arg("--config")
         .arg(config)
         .args(arguments)
         .env("COLOSSUS_RESEARCH_TEST_JOURNAL_KEY", JOURNAL_KEY)
-        .env("COLOSSUS_RESEARCH_TEST_SIGNING_KEY", SIGNING_KEY)
+        .env("COLOSSUS_RESEARCH_TEST_SIGNING_KEY", SIGNING_KEY);
+    process_support::IsolatedCommand::new(command, isolated_home)
+}
+
+fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> std::process::Output {
+    command(binary, config, workspace, arguments)
         .output()
         .expect("run Colossus")
 }
@@ -49,34 +59,6 @@ fn repository_research_crosses_gateway_and_reconstructs_citations() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("search listener");
     listener.set_nonblocking(true).expect("nonblocking search");
     let search_address = listener.local_addr().expect("search address");
-    let search_server = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut stream = loop {
-            match listener.accept() {
-                Ok((stream, _)) => break stream,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(Instant::now() < deadline, "search request timed out");
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => panic!("search connection: {error}"),
-            }
-        };
-        stream
-            .set_nonblocking(false)
-            .expect("blocking search stream");
-        let mut request = [0_u8; 4096];
-        let read = stream.read(&mut request).expect("search request");
-        let request = String::from_utf8_lossy(&request[..read]);
-        assert!(request.contains("GET /search?q=audit&format=json"));
-        let body = r#"{"results":[{"url":"https://example.test/audit","title":"External audit","content":"External evidence is policy released.","engine":"test"}]}"#;
-        write!(
-            stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        )
-        .expect("search response");
-    });
     fs::write(
         &config,
         format!(
@@ -145,7 +127,9 @@ sandbox:
     )
     .expect("config");
 
-    let output = run(
+    // Prepare the owner-private home and complete configuration before charging
+    // the search fixture's deadline to the launched CLI request.
+    let mut research_command = command(
         binary,
         &config,
         directory.path(),
@@ -153,6 +137,35 @@ sandbox:
             "research", "run", "audit", "--depth", "quick", "--source", "repo,web",
         ],
     );
+    let search_server = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "search request timed out");
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("search connection: {error}"),
+            }
+        };
+        stream
+            .set_nonblocking(false)
+            .expect("blocking search stream");
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).expect("search request");
+        let request = String::from_utf8_lossy(&request[..read]);
+        assert!(request.contains("GET /search?q=audit&format=json"));
+        let body = r#"{"results":[{"url":"https://example.test/audit","title":"External audit","content":"External evidence is policy released.","engine":"test"}]}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .expect("search response");
+    });
+    let output = research_command.output().expect("run Colossus");
     assert!(
         output.status.success(),
         "{}",

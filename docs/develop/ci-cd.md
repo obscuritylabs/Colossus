@@ -30,9 +30,12 @@ belong in `.github/actionlint.yaml`.
 GitHub scopes PR-written caches to that PR's merge ref, so another PR cannot restore
 them. `Warm Rust build caches` writes dependency build archives on `main` after Rust
 manifests, lockfiles, toolchains or cache workflows change. Writers may dispatch it
-manually; it uses standard Linux/macOS runners and is not a merge gate. Its `recipe-v1`
-key is shared with consumers. When warm-up commands change without a Rust environment
-change, bump the key in all eight cache steps: GitHub cannot replace an existing entry.
+manually; it uses standard Linux/macOS runners and is not a merge gate. Each cache
+family shares an effective namespace between its producer and consumers. The pinned
+[`rust-cache` implementation](https://github.com/Swatinem/rust-cache/blob/c19371144df3bb44fab255c43d04cbc2ab54d1c4/src/config.ts#L70-L96)
+ignores `key` when `shared-key` is set. When changing a family's warm-up recipe,
+version its `shared-key`, as in `macos-desktop-bundle-recipe-v2`, and update the
+producer and every consumer together. GitHub cannot replace an existing entry.
 
 Linux PR lint/unit jobs share a dependency archive. macOS Desktop acceptance and bundle
 jobs use separate debug/release archives; unsigned macOS releases consume the same
@@ -42,11 +45,23 @@ relative to its workspace (`apps/desktop/src-tauri -> target`). These jobs do no
 duplicate PR/tag archives. The cache retains dependency artifacts, not workspace crates
 or application binaries; misses build normally.
 
+The macOS bundle warmer builds the credential-free unsigned package using the same
+final Tauri configuration as acceptance and release. Pre-merge packaging invokes the
+canonical packager once; it does not first build a second Tauri configuration.
+
 Other configured PR/pre-merge lanes use GitHub `sccache` read-only, or R2 read-only when
 credentials are available. This covers the SDK/Desktop PR jobs and the five existing
 pre-merge `sccache` consumers. Forks and unconfigured repositories keep the GitHub
 fallback. `Warm R2 compiler cache` writes from `main` on Linux, macOS and Windows without
-replacing the dependency archives. It does not run after every main push.
+replacing the dependency archives. It runs after relevant dependency, toolchain and
+cache-recipe changes reach `main`, and writers may dispatch it manually. Its protected
+writer environment and main-only guard remain required; PRs cannot populate this cache.
+
+All compiler-cache actions select the same explicit sccache binary version, separately
+from the action's pinned installer revision. A new binary can change cache keys even
+when Rust is unchanged. Update producers and consumers together, refill from trusted
+`main`, and verify hits against the current inputs. The Windows warmer uses the same
+verified `clang-cl` compiler selection as Windows Desktop acceptance.
 
 Validated tagged CLI builds and stable SDK candidates use R2 read/write when enabled;
 the stable SDK publisher reads R2. Manual release validation and signed Windows Desktop
@@ -69,8 +84,9 @@ To enable R2:
 4. Set repository variable `SCCACHE_R2_ENABLED=true`, then dispatch `Warm R2 compiler
    cache` on `main`. Incomplete credentials, endpoint or region fail the job.
 
-Refill R2 after dependency/toolchain changes when repeated builds justify it. Existing
-objects remain reusable while compiler inputs match. Inspect hits, misses, errors and
+Refill R2 manually after initial enablement or when automatic warming missed an input
+change. Existing objects remain reusable while compiler inputs and cache-key formats
+match. Inspect hits, misses, errors and
 writes in the warmer and job summaries, then compare total duration and runner usage;
 a hit alone does not prove a shorter critical path. Three-platform warm-ups increase
 object storage and request usage.
@@ -144,8 +160,9 @@ and Desktop packaging. The native job exercises real sidecar bootstrap, pinned g
 guardian lifecycle and sandboxing. Desktop acceptance lints/tests the standalone bridge
 and checks Chromium keyboard behavior, accessibility, high contrast, drawers, approvals
 and 880×640 layout. Packaging independently builds release sidecar/CLI/Tauri binaries
-and verifies bundle structure. Each Desktop job has a separate build tree, transfers no
-build artifacts to the other, and allows 75 minutes for cold builds.
+and verifies bundle structure. The Desktop jobs have separate build trees and transfer
+no build artifacts to each other. Acceptance allows 90 minutes for cold builds and
+the later native command-approval compilation. Packaging retains its 75-minute budget.
 
 macOS native-debug and standalone Tauri graphs remain separate on bounded disks. Bundle
 verification covers the pruned lockfile, ad-hoc two-phase signing, outer seal and final
@@ -165,6 +182,14 @@ WebView2, plugins and approvals. Desktop checks require staged binaries. Each jo
 all independent failures; the aggregate waits for both. Linux Desktop, credential-vault,
 VS Code lifecycle, fuzzing, supply-chain and live-service lanes also remain mandatory.
 Portable formatting belongs to the PR tier and is not repeated on platform runners.
+
+The Windows runtime lane allows 75 minutes for cold compilation and every required
+acceptance command. Its final outcome aggregation remains mandatory. The release
+smoke configuration gives verified inventory operations a bounded 30-second effect
+budget for cold disk I/O; its echo provider retains a separate five-second budget.
+The Windows fixture reports inventory elapsed time on success or failure and keeps
+native errors fatal. These test budgets do not change production defaults or the
+fixture's filesystem, executable, network, process, memory or custody restrictions.
 
 The Windows Desktop pre-merge job resolves the runner's
 [`clang-cl`](https://clang.llvm.org/docs/UsersManual.html#clang-cl) executable and checks

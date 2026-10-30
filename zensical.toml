@@ -168,6 +168,7 @@ nav = [
   { "Develop" = [
     { "Overview" = "develop/index.md" },
     { "Contributing" = "develop/contributing.md" },
+    { "Daily agent maintenance" = "develop/agent-maintenance.md" },
     { "Front-end development" = "develop/frontend.md" },
     { "Source setup and test tiers" = "develop/setup-testing.md" },
     { "Test Helm locally on Windows" = "develop/local-helm.md" },
