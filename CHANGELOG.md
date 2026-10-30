@@ -1598,8 +1598,8 @@ Unpublished candidate; superseded by preview 12.
   resolved configuration.
 - Under acknowledged danger full access, structured filesystem and HTTP adapters use
   request-bound ambient authority as well as child processes. Absolute host paths and
-  every canonical HTTP(S) originâ€”including loopback, private, link-local, and metadata
-  originsâ€”are in scope. Configured provider routes, credentials, MCP/integration
+  every canonical HTTP(S) origin—including loopback, private, link-local, and metadata
+  origins—are in scope. Configured provider routes, credentials, MCP/integration
   declarations, extension trust, permits, audit, quarantine, transport validation, and
   configured bounds remain mandatory. Direct Unix timeout and output bounds cover the
   supervised effect, while process-count, memory, and cleanup are best-effort for
@@ -1621,7 +1621,7 @@ Unpublished candidate; superseded by preview 12.
   model-visible `network.http`, `web.fetch`, and `docs.fetch` tools. It is not an air-gap
   declaration.
 - Fresh Desktop schema-v4 settings default to **Allow all** and **Full access**. Migrations
-  from schema v1â€“v3 preserve the earlier effective isolation: Minimal maps to Offline
+  from schema v1–v3 preserve the earlier effective isolation: Minimal maps to Offline
   isolated, while Development and legacy `allow_all` map to Workspace isolated.
 - Codex CLI account commands now report completion only after Colossus verifies their
   runtime credential postcondition; unsafe stores are rejected before the official CLI
@@ -2067,7 +2067,7 @@ Unpublished candidate; superseded by preview 12.
   `Colossus-Desktop-DEVELOPER-PREVIEW-v0.10.1-preview.1-aarch64-apple-darwin.zip`.
 - Verify the adjacent SHA-256 sidecar before opening the archive. Because this preview is
   not Apple-notarized, macOS requires an explicit Control-click **Open** or
-  **System Settings â†’ Privacy & Security â†’ Open Anyway** confirmation. Do not disable
+  **System Settings → Privacy & Security → Open Anyway** confirmation. Do not disable
   Gatekeeper or strip quarantine metadata.
 
 ## [0.10.0] - 2026-07-22
