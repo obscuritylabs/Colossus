@@ -286,9 +286,9 @@ if $script_dir/require-success.sh eligibility=skipped >/dev/null 2>&1; then
     exit 1
 fi
 
-# Keep the compiler-output mitigation local to Windows Desktop, and fail before
-# any Cargo build if its exact native compiler cannot be resolved and executed.
-"${NODE:-node}" --input-type=module - "$script_dir/../../.github/workflows/premerge.yml" <<'NODE'
+# Keep the compiler-output mitigation local to Windows Desktop and its trusted
+# cache producer, and fail before Cargo if the exact compiler cannot be resolved.
+"${NODE:-node}" --input-type=module - "$script_dir/../../.github/workflows/premerge.yml" "$script_dir/../../.github/workflows/sccache-warm.yml" <<'NODE'
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
@@ -323,6 +323,21 @@ assert.ok(version >= 0 && checked > version && exported.every(index => index > c
   destination > Math.max(...exported),
   'Both compiler paths must be exported only after a successful version probe');
 assert.doesNotMatch(windows, /CMAKE_(?:C_COMPILER|CXX_COMPILER|GENERATOR_TOOLSET)|-T\s*(?:ClangCL|LLVM)/u);
+
+const warmer = readFileSync(process.argv[3], 'utf8').replaceAll('\r\n', '\n');
+const warmSelection = warmer.indexOf('Get-Command clang-cl.exe');
+const warmStart = warmer.lastIndexOf('\n      - name:', warmSelection);
+const warmEnd = warmer.indexOf('\n      - name:', warmStart + 1);
+assert.ok(warmSelection >= 0 && warmEnd > warmSelection && warmEnd < warmer.search(/\bcargo\s/u),
+  'The Windows cache producer must select the compiler before Cargo');
+const warmProbe = warmer.slice(warmStart, warmEnd);
+assert.match(warmProbe, /\n        if: runner\.os == 'Windows'\n/u);
+assert.match(warmProbe, /shell: pwsh\n/u);
+assert.match(warmProbe, /timeout-minutes: 1\n/u);
+assert.doesNotMatch(warmProbe, /continue-on-error:/u);
+const commandBody = value => value.slice(value.indexOf('\n        run: |\n'));
+assert.equal(commandBody(warmProbe), commandBody(probe),
+  'The Windows cache producer and Desktop consumer must use the same verified compiler');
 NODE
 
 # The optional R2 backend must not replace the GitHub read-only fallback when

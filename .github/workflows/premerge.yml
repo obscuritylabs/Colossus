@@ -91,6 +91,8 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        with:
+          version: "v0.19.0"
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
         run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
@@ -147,6 +149,8 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        with:
+          version: "v0.19.0"
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
         run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
@@ -365,12 +369,9 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
           shared-key: macos-desktop-bundle
-          key: recipe-v1
+          key: recipe-v2
           cache-targets: true
           save-if: false
-      - name: Build the pruned Tauri application
-        working-directory: apps/desktop
-        run: npm run tauri:build
       - name: Build validation-only ADHOC macOS bundle structure
         working-directory: apps/desktop
         env:
@@ -437,6 +438,8 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        with:
+          version: "v0.19.0"
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
         shell: bash
@@ -571,6 +574,8 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        with:
+          version: "v0.19.0"
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
         shell: bash
@@ -770,6 +775,8 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        with:
+          version: "v0.19.0"
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
         run: echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"

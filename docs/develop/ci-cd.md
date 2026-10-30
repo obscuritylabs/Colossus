@@ -30,9 +30,10 @@ belong in `.github/actionlint.yaml`.
 GitHub scopes PR-written caches to that PR's merge ref, so another PR cannot restore
 them. `Warm Rust build caches` writes dependency build archives on `main` after Rust
 manifests, lockfiles, toolchains or cache workflows change. Writers may dispatch it
-manually; it uses standard Linux/macOS runners and is not a merge gate. Its `recipe-v1`
-key is shared with consumers. When warm-up commands change without a Rust environment
-change, bump the key in all eight cache steps: GitHub cannot replace an existing entry.
+manually; it uses standard Linux/macOS runners and is not a merge gate. Each cache
+family shares a recipe key between its producer and consumers. When a warm-up recipe
+changes without a Rust environment change, bump that family's key in the producer
+and every consumer: GitHub cannot replace an existing entry.
 
 Linux PR lint/unit jobs share a dependency archive. macOS Desktop acceptance and bundle
 jobs use separate debug/release archives; unsigned macOS releases consume the same
@@ -42,11 +43,23 @@ relative to its workspace (`apps/desktop/src-tauri -> target`). These jobs do no
 duplicate PR/tag archives. The cache retains dependency artifacts, not workspace crates
 or application binaries; misses build normally.
 
+The macOS bundle warmer builds the credential-free unsigned package using the same
+final Tauri configuration as acceptance and release. Pre-merge packaging invokes the
+canonical packager once; it does not first build a second Tauri configuration.
+
 Other configured PR/pre-merge lanes use GitHub `sccache` read-only, or R2 read-only when
 credentials are available. This covers the SDK/Desktop PR jobs and the five existing
 pre-merge `sccache` consumers. Forks and unconfigured repositories keep the GitHub
 fallback. `Warm R2 compiler cache` writes from `main` on Linux, macOS and Windows without
-replacing the dependency archives. It does not run after every main push.
+replacing the dependency archives. It runs after relevant dependency, toolchain and
+cache-recipe changes reach `main`, and writers may dispatch it manually. Its protected
+writer environment and main-only guard remain required; PRs cannot populate this cache.
+
+All compiler-cache actions select the same explicit sccache binary version, separately
+from the action's pinned installer revision. A new binary can change cache keys even
+when Rust is unchanged. Update producers and consumers together, refill from trusted
+`main`, and verify hits against the current inputs. The Windows warmer uses the same
+verified `clang-cl` compiler selection as Windows Desktop acceptance.
 
 Validated tagged CLI builds and stable SDK candidates use R2 read/write when enabled;
 the stable SDK publisher reads R2. Manual release validation and signed Windows Desktop
@@ -69,8 +82,9 @@ To enable R2:
 4. Set repository variable `SCCACHE_R2_ENABLED=true`, then dispatch `Warm R2 compiler
    cache` on `main`. Incomplete credentials, endpoint or region fail the job.
 
-Refill R2 after dependency/toolchain changes when repeated builds justify it. Existing
-objects remain reusable while compiler inputs match. Inspect hits, misses, errors and
+Refill R2 manually after initial enablement or when automatic warming missed an input
+change. Existing objects remain reusable while compiler inputs and cache-key formats
+match. Inspect hits, misses, errors and
 writes in the warmer and job summaries, then compare total duration and runner usage;
 a hit alone does not prove a shorter critical path. Three-platform warm-ups increase
 object storage and request usage.
