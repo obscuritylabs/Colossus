@@ -209,6 +209,8 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        with:
+          version: "v0.19.0"
 
       - name: Configure read-only R2 compiler cache
         if: vars.SCCACHE_R2_ENABLED == 'true' && steps.sccache.outcome == 'success'

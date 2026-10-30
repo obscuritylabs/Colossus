@@ -10,6 +10,13 @@ use tokio::io::{AsyncBufReadExt as _, BufReader};
 const PARENT_CRASH_SID: &str = "COLOSSUS_WINDOWS_JOB_FIXTURE_SID";
 const PARENT_CRASH_HOME: &str = "COLOSSUS_WINDOWS_JOB_FIXTURE_HOME";
 
+fn fixture_package_name() -> String {
+    let mut nonce = [0_u8; 16];
+    getrandom::fill(&mut nonce).expect("random fixture package name");
+    let nonce: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("colossus.browser.{nonce}")
+}
+
 fn native_test_root() -> std::path::PathBuf {
     let parent = std::env::var_os("COLOSSUS_NATIVE_TEST_ROOT")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -74,12 +81,7 @@ async fn kernel_job_kills_the_retained_appcontainer_child_after_parent_process_c
         Foundation::WAIT_OBJECT_0,
         System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, WaitForSingleObject},
     };
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let mut profile =
-        ExclusiveAppContainerProfile::create(&format!("colossus.browser.{nonce:032x}")).unwrap();
+    let mut profile = ExclusiveAppContainerProfile::create(&fixture_package_name()).unwrap();
     let temporary = tempfile::tempdir_in(native_test_root()).unwrap();
     let mut parent = Command::new(std::env::current_exe().unwrap())
         .args([
@@ -153,13 +155,8 @@ async fn kernel_job_kills_the_retained_appcontainer_child_after_parent_process_c
 
 #[tokio::test(flavor = "current_thread")]
 async fn appcontainer_job_retains_and_terminates_descendants_after_the_direct_child_exits() {
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let mut profile =
-        ExclusiveAppContainerProfile::create(&format!("colossus.browser.{nonce:032x}"))
-            .expect("exclusive fixture package");
+    let mut profile = ExclusiveAppContainerProfile::create(&fixture_package_name())
+        .expect("exclusive fixture package");
     let user_profile = native_test_root();
     let temporary = tempfile::tempdir_in(user_profile).unwrap();
     let home = temporary.path().to_string_lossy().into_owned();

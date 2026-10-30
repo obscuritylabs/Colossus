@@ -1,6 +1,6 @@
 //! Native password custody, model selection, live/resumed SSE and approval against
 //! the real controller, mTLS connector and runtime. Only the loopback provider is synthetic.
-use super::{TestKeys, tls_files};
+use super::{TestKeys, isolated, tls_files};
 use crate::{
     config::{Config, LocalAuthConfig},
     http::now,
@@ -285,7 +285,15 @@ async fn connected(receiver: &mut mpsc::Receiver<StreamEvent>) {
 
 #[tokio::test]
 async fn local_native_client_selects_real_model_streams_resumes_and_approves() {
-    let directory = tempfile::tempdir().unwrap();
+    if isolated::run(
+        "auth::tests::transport::native::local_native_client_selects_real_model_streams_resumes_and_approves",
+        false,
+    )
+    .await
+    {
+        return;
+    }
+    let directory = isolated::directory();
     let root = directory.path().canonicalize().unwrap();
     let mut tasks = Tasks::default();
     let http = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

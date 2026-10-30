@@ -38,6 +38,9 @@ windows-sys = { workspace = true, features = [
 [dev-dependencies]
 tempfile.workspace = true
 
+[target.'cfg(windows)'.dev-dependencies]
+getrandom.workspace = true
+
 [lints.clippy]
 all = { level = "deny", priority = -1 }
 missing_safety_doc = "deny"

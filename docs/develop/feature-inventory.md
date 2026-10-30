@@ -23,6 +23,7 @@ the owning crates and tests.
 | Search and source-backed research | `colossus-search`, `colossus-research`, `colossus-runtime` | [Web search](../use/web-search.md), [Deep research](../use/deep-research.md) | Search adapter, evidence/citation, and CLI research tests |
 | Workflows and triggers | `colossus-workflow`, `colossus-runtime` | [Workflow authoring](../extend/workflows/authoring.md), [Triggers and recovery](../extend/workflows/triggers-recovery.md) | Parser, control-flow, idempotency, compensation, and restart tests |
 | Agent Plugins, integrations, standalone MCP, and release bundles | extension crates and runtime adapters | [Extend Colossus](../extend/index.md) | Upstream schema, confinement, OCI, Sigstore, registry, lifecycle, and live-adapter tests |
+| Conditional documentation guidance | runtime configuration and instruction snapshots, bundled documentation skill | [Skills and plugins](../use/skills-plugins.md), [Plugin configuration](../reference/configuration/extensions.md) | Documentation policy, instruction precedence, bounded resource reads, and sidecar configuration tests |
 | Public API, worker, SDKs, and Desktop | API, gRPC, worker, SDK crates and `apps/desktop` | [Public API and SDKs](application-sdk.md), [Colossus Desktop](../desktop/index.md) | Protocol, enrollment, parity, sidecar, SDK, and Desktop tests |
 | Hosted execution, Web Chat and managed attachments | `colossus-cloud`, `colossus-cloud-chat`, `colossus-cloud-executor`, server `hosted` modules and `apps/web` | [Hosted execution](adr/0009-hosted-execution.md), [Hosted operation](../cloud/work.md#start-a-hosted-conversation), [Cloud development](cloud-control-plane.md#develop-hosted-personal-chat) | Owner-bound migration and lease tests, HTTP attachment/isolation acceptance, shared SQL two-replica recovery and Web browser tests; arbitrary hosted workspace provisioning remains unavailable |
 | Agent messages, durable inboxes, and incoming A2A | `colossus-communication`, agent/runtime/API/SDK crates, `apps/ui`, `colossus-a2a-server` | [ADR 0007](adr/0007-agent-communication.md), [Inspect agent messages](../use/agent-communication.md), [Host A2A](agent-communication.md) | Canonical replay and attempt tests, provider input/hash and budget tests, owner/scope/recovery tests, A2A wire tests, host checks and rendered inbox tests |
@@ -31,6 +32,65 @@ the owning crates and tests.
 | Terminal and presentation | `colossus-presentation`, `colossus-tui`, interface adapters | [Terminal UI](../use/terminal-ui.md), [Extensions and presentation](extensions-presentation.md) | Semantic document, reducer, layout, PTY, and restoration tests |
 | Fleet human terminals | `colossus-terminal`, API/SDK/gRPC, connector/Control Plane, `apps/web` | [Enable a web shell](../cloud/connect-runtimes.md#enable-a-web-shell), [ADR 0011](adr/0011-fleet-human-terminals.md) | Native PTY input, ownership and replay tests; authenticated two-replica Fleet transport and web terminal acceptance |
 | Releases and updates | `colossus-update`, CLI installers, release workflows | [Core release operations](releasing.md), [Upgrade and compatibility](../get-started/upgrade-compatibility.md) | Release-contract, clean-install, signature, channel, and platform jobs |
+
+## Interface coverage
+
+The [client owners and daily coordinator](agent-maintenance.md) maintain material
+coverage differences here. These records were reviewed against
+[`ad338c4f`](https://github.com/obscuritylabs/Colossus/commit/ad338c4f8a94eed27f5ab735a433612747e9b56f)
+and describe checked-in behavior and existing test evidence, not a fresh execution
+of those tests or acceptance on every platform. Recheck the implementation and
+active follow-ups before assigning a fix.
+The documentation-guidance row was additionally reviewed against
+[`8e3d39b8`](https://github.com/obscuritylabs/Colossus/commit/8e3d39b8d69f6429ef7263a03685cd549800261a).
+Coverage is semantic: public Draft continuation and terminal approval/execution are
+different workflows with explicit revision binding.
+
+| Capability | Public API / SDK | CLI / TUI | Desktop | VS Code | Web |
+| --- | --- | --- | --- | --- | --- |
+| Standalone Goal creation | Supported; bounded iterations and caller tool ceiling | Supported; CLI and full-screen TUI `/goal` creation/completion acceptance in embedded and worker hosts | Supported; composer and native request validation evidence | Missing; composer exposes Plan, Execute, and Research | Supported on connected runtimes; capability and budget-bound composer |
+| Revision-bound Plan workflow | Supported; source-run-bound Draft continuation | Supported; revision-bound refinement, approval, and execution | Supported; exact-revision Plan continuation | Partial; canonical Plan inspection exists, continuation controls missing | Supported; source-run and revision-bound continuation |
+| Human managed-shell discovery, read, and Stop | Supported; scoped process-session requests | Unverified; dedicated human controls not evidenced by agent-tool tests | Supported; active-shell inspection and Stop | Missing; process-supervision controls unimplemented | Unverified; Fleet human terminals are a distinct workflow |
+| Conditional documentation guidance | Partial; explicit skill selection and bounded reads; policy configuration belongs to the host, without a public editor | Supported through YAML policy and existing `@` / `/plugin` selection | Supported; advanced Plugins controls and validated native overrides; feature-specific browser acceptance unverified | Partial; inherits host policy; guidance settings and skill selection controls absent | Partial; connected runtimes inherit policy; discovery-only plugin UI and no composer skill selections; Hosted-specific acceptance unverified |
+
+Evidence and owned follow-ups:
+
+- **Documentation guidance:** [runtime policy tests](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-runtime/src/documentation_policy_tests.rs),
+  [Desktop settings descriptors](https://github.com/obscuritylabs/Colossus/blob/main/apps/desktop/src/components/ManagedSettingsPane.tsx),
+  [generic settings rendering tests](https://github.com/obscuritylabs/Colossus/blob/main/apps/desktop/src/components/ManagedSettingsPane.test.ts),
+  and [native policy validation](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-sidecar/src/managed.rs).
+  `desktop_owner` and `test_owner`: add feature-specific browser acceptance for
+  guidance settings. `vscode_owner`: expose Managed Local guidance settings and
+  explicit skill selection through existing contracts. `maintenance_coordinator`:
+  decide whether remote policy editing is an intentional host-only difference
+  before assigning API work; assess Web/Hosted applicability and assign its owner.
+- **Goal:** [public API tests](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-api-runtime/src/service_tests/standalone_goal.rs),
+  [CLI tests](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-cli/tests/agent_smoke.rs),
+  [TUI full-screen acceptance](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-cli/tests/provider_terminal_smoke.rs),
+  [Desktop composer tests](https://github.com/obscuritylabs/Colossus/blob/main/apps/desktop/src/components/WorkComposer.test.ts),
+  and [Web composer tests](https://github.com/obscuritylabs/Colossus/blob/main/apps/web/src/RunComposer.test.tsx).
+  `vscode_owner`: expose bounded standalone Goal creation through the existing public
+  contract and verify cancellation and capability availability.
+- **Plans:** [public API conformance](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-api-runtime/src/service_tests.rs),
+  [terminal workflow tests](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-cli/tests/interactive_plan_smoke.rs),
+  [Desktop browser acceptance](https://github.com/obscuritylabs/Colossus/blob/main/apps/desktop/tests/browser/plan-workflow.spec.ts),
+  and [Web continuation tests](https://github.com/obscuritylabs/Colossus/blob/main/apps/web/src/ThreadDetail.test.tsx).
+  `vscode_owner`: add continuation against the exact visible source run and Plan
+  revision, including stale-revision rejection and uncertain-outcome handling.
+- **Shells:** [public API conformance](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-api-runtime/src/service_tests/process_sessions.rs)
+  and [Desktop browser acceptance](https://github.com/obscuritylabs/Colossus/blob/main/apps/desktop/tests/browser/active-shells.spec.ts).
+  `vscode_owner`: add scoped inspection/read/Stop through the public SDK.
+  `cli_owner`: determine the intended human workflow and either supply operator
+  controls with acceptance evidence or document a reason for the difference.
+  `maintenance_coordinator`: assess the Web process-session workflow separately
+  from Fleet human terminals and assign any applicable gap to its canonical owner.
+
+The [extension's documented limitations](https://github.com/obscuritylabs/Colossus/blob/main/apps/vscode/README.md#work-in-the-editor)
+also include memory, workflows, plugins, and session topology. They need individual
+public-API and client-coverage assessment; this seed inventory is not exhaustive.
+`maintenance_coordinator` owns triage and deduplication against existing issues/PRs before
+implementation. Named role follow-ups above are repository assignments, not claims
+that external tickets have been opened.
 
 Colossus is alpha software. Configuration, protocols, and supported deployment surfaces
 may change before a stable release. Compatibility retained for deployed Rust state or

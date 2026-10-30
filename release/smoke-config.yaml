@@ -59,7 +59,8 @@ sandbox:
   executables: []
   environment: []
   networkDestinations: []
-  timeoutMs: 5000
+  # Inventory verifies installed content on disk; allow bounded cold-run I/O.
+  timeoutMs: 30000
   maxOutputBytes: 1048576
   maxProcesses: 1
   maxMemoryBytes: 67108864

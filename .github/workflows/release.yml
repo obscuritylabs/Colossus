@@ -52,6 +52,8 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        with:
+          version: "v0.19.0"
 
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
@@ -241,6 +243,8 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        with:
+          version: "v0.19.0"
 
       - name: Configure R2 compiler cache for tagged release
         if: needs.validate.outputs.publish_draft == 'true' && vars.SCCACHE_R2_ENABLED == 'true' && steps.sccache.outcome == 'success'
@@ -582,6 +586,8 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        with:
+          version: "v0.19.0"
 
       - name: Configure R2 compiler cache for tagged release
         if: needs.validate.outputs.publish_draft == 'true' && vars.SCCACHE_R2_ENABLED == 'true' && steps.sccache.outcome == 'success'
@@ -658,8 +664,8 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: apps/desktop/src-tauri -> target
-          shared-key: macos-desktop-bundle
-          key: recipe-v1
+          # rust-cache ignores key when shared-key is set; version the shared namespace.
+          shared-key: macos-desktop-bundle-recipe-v2
           cache-targets: true
           save-if: false
 
@@ -875,6 +881,8 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        with:
+          version: "v0.19.0"
 
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'
@@ -1095,6 +1103,8 @@ jobs:
         id: sccache
         continue-on-error: true
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        with:
+          version: "v0.19.0"
 
       - name: Activate shared compiler cache
         if: steps.sccache.outcome == 'success'

@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+case "$(uname -s)" in
+  MINGW*|MSYS*)
+    repository_root="$(cygpath -m "${repository_root}")"
+    # Docker receives native host paths and unchanged Linux container paths.
+    export MSYS_NO_PATHCONV=1
+    ;;
+esac
+readonly repository_root
 readonly zensical_version="0.0.50"
 readonly zensical_digest="sha256:a67f689607908b47b9979ff8213906477f78826e9f8565f012e06071f883e973"
 readonly zensical_image="zensical/zensical:0.0.50@sha256:a67f689607908b47b9979ff8213906477f78826e9f8565f012e06071f883e973"

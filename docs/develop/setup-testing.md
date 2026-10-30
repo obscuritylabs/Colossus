@@ -237,7 +237,7 @@ Run from `apps/desktop` with the variables for the selected channel:
 
 | Channel (`COLOSSUS_DESKTOP_RELEASE_CHANNEL`) | `COLOSSUS_DESKTOP_TEAM_ID` | Command and signing identity |
 | --- | --- | --- |
-| `validation_only` | `ADHOC` | `npm run tauri:build`; Managed Local refuses to run. Packaging requires identity `-`. |
+| `validation_only` | `ADHOC` | `npm run tauri:bundle:macos` with `COLOSSUS_DESKTOP_SIGNING_IDENTITY=-`; Managed Local refuses to run. |
 | `developer_preview` | `ADHOC` | `npm run tauri:bundle:macos` with `COLOSSUS_DESKTOP_SIGNING_IDENTITY=-`. |
 | `stable` | Exact 10-character Apple Team ID | `npm run tauri:bundle:macos` with the matching Developer ID Application signing identity. |
 
