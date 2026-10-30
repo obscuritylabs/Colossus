@@ -67,6 +67,30 @@ fn toggle(writer: &mut dyn std::io::Write) {
     );
 }
 
+fn wait_for_compact_frame(output: &Arc<Mutex<Vec<u8>>>, mode: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let screen = screen_contents(output, 32, 120);
+        let expanded_cleared = mode == "inline"
+            || (!screen.contains("lines omitted") && !screen.contains("FILE-DETAIL-BEGIN"));
+        if screen.contains("F3 expand")
+            && screen.contains("▸ ✓ Read file")
+            && screen.contains("ready")
+            && screen.contains("preserved draft")
+            && expanded_cleared
+        {
+            return screen;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "PTY did not finish the compact {mode} frame:\n{screen}"
+        );
+        // Match the existing bounded screen wait; do not accept stale draft or
+        // ready text as acknowledgement that the F3 redraw has completed.
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 fn capture(output: &Arc<Mutex<Vec<u8>>>, name: &str) {
     if let Some(directory) = std::env::var_os("COLOSSUS_TUI_CAPTURE_DIR") {
         let path = std::path::PathBuf::from(directory);
@@ -178,7 +202,7 @@ fn f3_toggles_inline_tool_results_without_leaving_the_conversation() {
                 send(&mut writer, b"preserved draft");
             }
             wait_for_screen(&output, 32, 120, "preserved draft");
-            let compact = screen_contents(&output, 32, 120);
+            let compact = wait_for_compact_frame(&output, mode);
             assert!(!compact.contains("Tool details"), "{compact}");
             if mode == "alternate" {
                 assert!(!compact.contains("lines omitted"), "{compact}");

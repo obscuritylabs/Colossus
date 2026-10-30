@@ -329,7 +329,7 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                 ),
                 (
                     "Agents".into(),
-                    "The right sidebar shows open tasks, goals, retained memory count, configured MCP servers and subagents. A green MCP bubble means successful use in this session. Wheel over it or Alt+PageUp/PageDown to scroll; /tasks, /goals and /agents show full lists.".into(),
+                    "The right sidebar shows current run usage, open tasks, goals, retained memory count, configured MCP servers and subagents. The footer keeps a compact token total when the sidebar cannot fit. A green MCP bubble means successful use in this session. Wheel over it or Alt+PageUp/PageDown to scroll; /tasks, /goals and /agents show full lists.".into(),
                 ),
                 (
                     "Complete".into(),

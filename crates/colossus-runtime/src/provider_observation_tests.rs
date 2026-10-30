@@ -247,8 +247,29 @@ async fn loopback_with_screenshots(
     tool_turns: usize,
     large: bool,
     reject: bool,
+    interrupted: Option<oneshot::Sender<()>>,
+    screenshots: bool,
+) -> Loopback {
+    loopback_with_reply_text(
+        kind,
+        tool_turns,
+        large,
+        reject,
+        interrupted,
+        screenshots,
+        None,
+    )
+    .await
+}
+
+async fn loopback_with_reply_text(
+    kind: ProviderKind,
+    tool_turns: usize,
+    large: bool,
+    reject: bool,
     mut interrupted: Option<oneshot::Sender<()>>,
     screenshots: bool,
+    reply_text: Option<String>,
 ) -> Loopback {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/v1", listener.local_addr().unwrap());
@@ -282,7 +303,7 @@ async fn loopback_with_screenshots(
                 }
             }
             let step = requests.len();
-            let response = response(
+            let mut response = response(
                 kind,
                 step,
                 (step < tool_turns).then_some(if screenshots {
@@ -295,6 +316,12 @@ async fn loopback_with_screenshots(
                 kind == ProviderKind::OpenAiResponses && step < tool_turns,
             );
             if kind == ProviderKind::AnthropicMessages && step < tool_turns {
+                if let Some(text) = &reply_text {
+                    response["content"].as_array_mut().unwrap().insert(
+                        2,
+                        json!({"type":"text", "text":format!("TOOL_EXPLANATION_{step}{text}")}),
+                    );
+                }
                 protected.push((
                     response["content"].clone(),
                     prefix(&request, request["messages"].as_array().unwrap().len()),
@@ -759,6 +786,134 @@ async fn anthropic_aggregate_observation_budget_cannot_rewrite_a_signed_prefix()
         let requests = server.requests.await.unwrap();
         assert!(requests.len() >= 3 && requests.len() < 8);
         assert_eq!(requests.len(), fixture.tools.calls.load(Ordering::SeqCst));
+    }
+}
+
+#[tokio::test]
+async fn anthropic_replay_budget_keeps_signed_tool_history_without_counting_metadata_twice() {
+    for streamed in [false, true] {
+        let server = loopback_with_reply_text(
+            ProviderKind::AnthropicMessages,
+            3,
+            true,
+            false,
+            None,
+            false,
+            Some("explanation ".repeat(30 * 1024 / 12)),
+        )
+        .await;
+        let fixture = fixture(
+            ProviderKind::AnthropicMessages,
+            Some(server.base.clone()),
+            streamed,
+            true,
+        );
+        let instructions = "i".repeat(440 * 1024);
+        let result = fixture
+            .agent
+            .run(
+                "primary",
+                &instructions,
+                "Inspect three files and report the result",
+                4,
+            )
+            .await;
+        let _ = server.stop.send(());
+        let requests = server.requests.await.unwrap();
+        let result = result.unwrap_or_else(|error| {
+            panic!(
+                "streamed={streamed}: {error}; requests={}, tools={}",
+                requests.len(),
+                fixture.tools.calls.load(Ordering::SeqCst)
+            )
+        });
+        assert_eq!(result.output, "finished");
+        assert_eq!(requests.len(), 4);
+        assert_eq!(fixture.tools.calls.load(Ordering::SeqCst), 3);
+        for request in &requests {
+            assert!(serde_json::to_vec(request).unwrap().len() <= 1024 * 1024);
+        }
+        let session = result.session_id.as_deref().unwrap();
+        let canonical = fixture
+            .sessions
+            .list_messages(session)
+            .unwrap()
+            .into_iter()
+            .map(|record| record.message)
+            .collect::<Vec<_>>();
+        validate_model_transcript(&canonical).unwrap();
+        assert!(
+            fixture
+                .sessions
+                .pending_tool_turn(session)
+                .unwrap()
+                .is_none()
+        );
+        assert!(fixture.continuations.load(session).unwrap().is_none());
+
+        let final_request = requests.last().unwrap();
+        let mut old_storage = vec![json!({"type":"anthropic_replay"})];
+        for step in 0..3 {
+            let id = call_id(step);
+            let assistant = canonical
+                .iter()
+                .find(|message| message.tool_calls.iter().any(|call| call.call_id == id))
+                .unwrap();
+            let content = final_request["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|message| {
+                    message["role"] == "assistant"
+                        && message["content"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|block| block["id"] == id)
+                })
+                .unwrap()["content"]
+                .clone();
+            assert!(content.as_array().unwrap().iter().any(|block| {
+                block["type"] == "thinking"
+                    && block["signature"] == format!("EXACT_SIGNATURE_{step}")
+            }));
+            assert!(content.as_array().unwrap().iter().any(|block| {
+                block["type"] == "redacted_thinking"
+                    && block["data"] == format!("EXACT_REDACTED_{step}")
+            }));
+            let result = canonical
+                .iter()
+                .find(|message| {
+                    message.role == ModelMessageRole::Tool
+                        && message.tool_call_id.as_deref() == Some(&id)
+                })
+                .unwrap();
+            let observed = final_request["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|message| message["content"].as_array().unwrap())
+                .find(|block| block["type"] == "tool_result" && block["tool_use_id"] == id)
+                .unwrap();
+            assert_eq!(observed["content"], result.content.plain_text().as_ref());
+            old_storage
+                .push(json!({"message":assistant,"content":content,"prefix_hash":"0".repeat(64)}));
+        }
+        // Reconstruct the former conservative accounting: canonical messages plus
+        // every private storage entry, which duplicated these same assistants.
+        let previous_bytes = serde_json::to_vec(&ModelRequest {
+            instructions,
+            messages: canonical[..canonical.len() - 1].to_vec(),
+            tools: vec![],
+            max_output_tokens: None,
+        })
+        .unwrap()
+        .len()
+            + serde_json::to_vec(&old_storage).unwrap().len();
+        assert!(
+            previous_bytes > 896 * 1024,
+            "fixture must exercise the former rejection"
+        );
     }
 }
 

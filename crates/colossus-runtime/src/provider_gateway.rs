@@ -577,6 +577,14 @@ impl ModelProvider for GatewayModelProvider {
     > {
         self.replay_request(role, request, context, options)
     }
+    fn continuation_request_overhead(
+        &self,
+        request: &ModelRequest,
+        view: &colossus_contracts::ProviderContinuationView,
+        context: &ExecutionContext,
+    ) -> Result<usize, ModelProviderError> {
+        self.replay_request_overhead(request, view, context)
+    }
     fn finish_run_candidates(&self, run_id: &str) {
         let Ok(mut pending) = self.pending.lock() else {
             return;

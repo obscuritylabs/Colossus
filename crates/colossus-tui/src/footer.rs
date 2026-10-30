@@ -46,11 +46,8 @@ pub(super) fn render_footer(
     let context_reserve = context
         .as_ref()
         .map_or(0, |text| UnicodeWidthStr::width(text.as_str()) + 3);
-    let usage = state
-        .footer
-        .usage
-        .as_ref()
-        .filter(|usage| usage.session_id == state.session_id);
+    // Keep the total available when the rail is hidden or scrolled away.
+    let usage = state.visible_run_usage();
     let usage_reserve = usage.map_or(0, |usage| {
         UnicodeWidthStr::width(usage_footer_text(usage, 8).as_str()) + 3
     });

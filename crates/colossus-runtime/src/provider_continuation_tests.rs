@@ -6,6 +6,9 @@ use tokio::{
     net::TcpListener,
 };
 
+#[path = "provider_replay_budget_tests.rs"]
+mod replay_budget;
+
 mod replay_admission {
     use super::*;
     use crate::provider_gateway::GatewayModelProvider;
@@ -16,13 +19,17 @@ mod replay_admission {
     use colossus_ports::ProviderContinuationRepository;
     use colossus_testkit::InMemoryEventJournal;
 
-    struct Fixture {
-        provider: GatewayModelProvider,
-        context: ExecutionContext,
-        request: ModelRequest,
+    pub(super) struct Fixture {
+        pub(super) provider: GatewayModelProvider,
+        pub(super) context: ExecutionContext,
+        pub(super) request: ModelRequest,
     }
 
     fn fixture() -> Fixture {
+        fixture_with_content("", "original instructions")
+    }
+
+    pub(super) fn fixture_with_content(assistant_text: &str, instructions: &str) -> Fixture {
         let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
         let sessions: Arc<dyn SessionRepository> =
             Arc::new(EventSourcedSessionRepository::new(journal.clone()));
@@ -131,7 +138,7 @@ mod replay_admission {
             ..Default::default()
         };
         let mut request = ModelRequest {
-            instructions: "original instructions".into(),
+            instructions: instructions.into(),
             messages: vec![user],
             tools: vec![ModelToolDefinition {
                 name: "test.lookup".into(),
@@ -147,7 +154,7 @@ mod replay_admission {
         let assistant = ModelMessage {
             agent_message_origin: None,
             role: ModelMessageRole::Assistant,
-            content: "".into(),
+            content: assistant_text.into(),
             tool_call_id: None,
             tool_calls: vec![ModelToolCall {
                 call_id: "call-1".into(),
@@ -155,9 +162,16 @@ mod replay_admission {
                 arguments: json!({}),
             }],
         };
+        let mut content = vec![
+            json!({"type":"thinking","thinking":"private-thought","signature":"private-signature"}),
+        ];
+        if !assistant_text.is_empty() {
+            content.push(json!({"type":"text","text":assistant_text}));
+        }
+        content.push(json!({"type":"tool_use","id":"call-1","name":"test_lookup","input":{}}));
         let hidden_reasoning = vec![
             json!({"type":"anthropic_replay"}),
-            json!({"message": assistant, "content":[{"type":"thinking","thinking":"private-thought","signature":"private-signature"},{"type":"tool_use","id":"call-1","name":"test_lookup","input":{}}]}),
+            json!({"message": assistant, "content":content}),
         ];
         let bytes = serde_json::to_vec(&hidden_reasoning).unwrap().len();
         let state = ProviderContinuation {

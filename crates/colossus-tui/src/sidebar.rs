@@ -217,7 +217,10 @@ fn safe_label(label: &str) -> String {
 
 impl TuiState {
     pub(super) fn sidebar_width(&self, width: u16) -> u16 {
-        if self.sidebar.loaded() || !self.workspace_sessions.is_empty() {
+        if self.sidebar.loaded()
+            || !self.workspace_sessions.is_empty()
+            || self.visible_run_usage().is_some()
+        {
             panel_width(width)
         } else {
             self.agents.width(width)
@@ -225,7 +228,9 @@ impl TuiState {
     }
 
     pub(super) fn sidebar_inline_height(&self, width: u16) -> u16 {
-        if (self.sidebar.loaded() || !self.workspace_sessions.is_empty())
+        if (self.sidebar.loaded()
+            || !self.workspace_sessions.is_empty()
+            || self.visible_run_usage().is_some())
             && self.sidebar_width(width) > 0
         {
             12 + crate::workspace_view::sessions_height(self, u16::MAX)
