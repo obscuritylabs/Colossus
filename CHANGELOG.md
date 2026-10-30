@@ -49,6 +49,7 @@ include breaking changes while the public API is still settling.
 - **web:** disclose Fleet shell time limits ([536c3f7](https://github.com/obscuritylabs/Colossus/commit/536c3f7d018c0747c2d33d44b245773522d6a23e))
 - restore explicit terminal enrollment and patch build tools ([077bfad](https://github.com/obscuritylabs/Colossus/commit/077bfad5ad8a6473a1f520c04cea712e53ad7698))
 - correct Anthropic replay accounting and move TUI usage to sidebar ([#355](https://github.com/obscuritylabs/Colossus/pull/355))
+- **docs:** preserve Docker paths under Git Bash ([0b36852](https://github.com/obscuritylabs/Colossus/commit/0b368527df1ec9dc636c8f7188bf5f5367bf9d90))
 
 #### Security
 
@@ -68,6 +69,7 @@ include breaking changes while the public API is still settling.
 - **release:** preserve historical changelog punctuation ([02630a9](https://github.com/obscuritylabs/Colossus/commit/02630a9f52cfef0a347490986c2feece6167c3a8))
 - refresh integrated preview notes and capability coverage ([9b11321](https://github.com/obscuritylabs/Colossus/commit/9b1132139193b2bbf15d146c9dd8833cdaf93718))
 - **release:** refresh preview.5 validation history ([2822e35](https://github.com/obscuritylabs/Colossus/commit/2822e357cd193eeeadb21b05137a51ad2a9d05dd))
+- **release:** include native acceptance budget history ([a67920e](https://github.com/obscuritylabs/Colossus/commit/a67920ee16dba7ea76e754e6084f9847b4d7bfd9))
 
 #### Maintenance
 
@@ -97,7 +99,7 @@ include breaking changes while the public API is still settling.
 - allow bounded cold Windows acceptance to finish ([9ca925d](https://github.com/obscuritylabs/Colossus/commit/9ca925d3ff423f5af10ffe65ccb6b015e7f7807f))
 - budget cold macOS Desktop acceptance ([c7e5994](https://github.com/obscuritylabs/Colossus/commit/c7e599426c8829c4a7da7c3519412cd3b6e8edc9))
 
-**Source:** [c7e5994](https://github.com/obscuritylabs/Colossus/commit/c7e599426c8829c4a7da7c3519412cd3b6e8edc9)
+**Source:** [0b36852](https://github.com/obscuritylabs/Colossus/commit/0b368527df1ec9dc636c8f7188bf5f5367bf9d90)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.5](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.5)
 
