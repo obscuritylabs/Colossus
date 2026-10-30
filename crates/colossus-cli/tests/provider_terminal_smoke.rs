@@ -2652,21 +2652,9 @@ data: [DONE]
             for stale in ["1,501 tokens", "1,546 tokens", "1.5k", "terminal-secret"] {
                 assert!(!screen.contains(stale), "{case}");
             }
-            // Release the embedded journal writer before inspecting durable Goal state.
+            // Close both possible runtime owners before reopening durable Goal state.
+            // Dropping the TUI does not stop a separately hosted worker or its writer lease.
             drop(terminal);
-            let goals = goal_usage_process(binary, &config, &home)
-                .args(["goals", "list"])
-                .output()
-                .expect("list completed goals");
-            assert!(
-                goals.status.success(),
-                "{}",
-                String::from_utf8_lossy(&goals.stderr)
-            );
-            let goals: Vec<Value> = serde_json::from_slice(&goals.stdout).expect("goals JSON");
-            assert_eq!(goals.len(), 1);
-            assert_eq!(goals[0]["status"], "complete");
-            assert_eq!(goals[0]["iterations_completed"], 2);
             if let Some(worker) = worker.as_mut() {
                 assert!(
                     goal_usage_process(binary, &config, &home)
@@ -2678,6 +2666,19 @@ data: [DONE]
                 );
                 wait_for_exit(&mut worker.0);
             }
+            let goals = goal_usage_process(binary, &config, &home)
+                .args(["goals", "list"])
+                .output()
+                .expect("list completed goals");
+            assert!(
+                goals.status.success(),
+                "worker={with_worker} reported={final_reports_usage}: {}",
+                String::from_utf8_lossy(&goals.stderr)
+            );
+            let goals: Vec<Value> = serde_json::from_slice(&goals.stdout).expect("goals JSON");
+            assert_eq!(goals.len(), 1);
+            assert_eq!(goals[0]["status"], "complete");
+            assert_eq!(goals[0]["iterations_completed"], 2);
             let requests = server.join().expect("goal usage provider");
             assert_eq!(
                 requests.len(),
