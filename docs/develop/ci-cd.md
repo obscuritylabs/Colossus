@@ -160,8 +160,9 @@ and Desktop packaging. The native job exercises real sidecar bootstrap, pinned g
 guardian lifecycle and sandboxing. Desktop acceptance lints/tests the standalone bridge
 and checks Chromium keyboard behavior, accessibility, high contrast, drawers, approvals
 and 880×640 layout. Packaging independently builds release sidecar/CLI/Tauri binaries
-and verifies bundle structure. Each Desktop job has a separate build tree, transfers no
-build artifacts to the other, and allows 75 minutes for cold builds.
+and verifies bundle structure. The Desktop jobs have separate build trees and transfer
+no build artifacts to each other. Acceptance allows 90 minutes for cold builds and
+the later native command-approval compilation. Packaging retains its 75-minute budget.
 
 macOS native-debug and standalone Tauri graphs remain separate on bounded disks. Bundle
 verification covers the pruned lockfile, ad-hoc two-phase signing, outer seal and final
