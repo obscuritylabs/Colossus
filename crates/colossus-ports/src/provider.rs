@@ -126,6 +126,18 @@ pub trait ModelProvider: Send + Sync {
     > {
         Ok(None)
     }
+    /// Conservatively budget private continuation bytes absent from this exact request.
+    /// Implementations may exclude duplicated canonical metadata only after verifying
+    /// the selected private state. Persisted state sizes and token reservations stay
+    /// unchanged; adapters without that proof retain the complete byte reservation.
+    fn continuation_request_overhead(
+        &self,
+        _request: &ModelRequest,
+        view: &colossus_contracts::ProviderContinuationView,
+        _context: &ExecutionContext,
+    ) -> Result<usize, ModelProviderError> {
+        Ok(view.bytes)
+    }
     /// Abandon uncommitted output after failure, retaining required canonical replay.
     fn discard_continuation(&self, _context: &ExecutionContext) -> Result<(), ModelProviderError> {
         Ok(())

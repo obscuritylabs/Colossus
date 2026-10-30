@@ -10,7 +10,6 @@ pub(super) struct RunUsageState {
     root_run_id: Option<String>,
     root_terminal: bool,
     observed_run: bool,
-    last_presented: Option<RunTokenUsage>,
 }
 
 impl RunUsageState {
@@ -134,7 +133,7 @@ impl RunUsageState {
     }
 
     /// Only command completion may establish a unary run without live events.
-    /// Ordinary footer restoration remains passive and never creates a summary.
+    /// Ordinary footer restoration remains passive and never claims a run.
     fn complete_command(&mut self, session_id: &str, report: Option<&RunTokenUsage>) {
         if !self.accepting || !self.fresh_run_scope || self.observed_run {
             return;
@@ -152,19 +151,10 @@ impl RunUsageState {
         self.current = Some(report.clone());
     }
 
-    pub(super) fn finish(&mut self) -> Option<RunTokenUsage> {
+    pub(super) fn finish(&mut self) {
         self.accepting = false;
         self.fresh_run_scope = false;
-        if !self.observed_run {
-            return None;
-        }
         self.observed_run = false;
-        let report = self.current.clone()?;
-        if self.last_presented.as_ref() == Some(&report) {
-            return None;
-        }
-        self.last_presented = Some(report.clone());
-        Some(report)
     }
 }
 
@@ -188,14 +178,40 @@ impl TuiState {
     }
 
     pub(super) fn finish_run_usage(&mut self) {
-        if let Some(report) = self.run_usage.finish() {
-            self.append_entry(TranscriptEntry {
-                sequence: None,
-                kind: TranscriptKind::Command,
-                document: run_token_usage_document(&report),
-                temporary: false,
-            });
-        }
+        self.run_usage.finish();
+    }
+
+    pub(super) fn visible_run_usage(&self) -> Option<&RunTokenUsage> {
+        self.footer
+            .usage
+            .as_ref()
+            .filter(|report| report.session_id == self.session_id)
+    }
+
+    pub(super) fn usage_sidebar_lines(&self, width: usize) -> Vec<Line<'static>> {
+        self.visible_run_usage().map_or_else(Vec::new, |report| {
+            let mut lines = Vec::new();
+            for block in run_token_usage_document(report).blocks {
+                // The rail supplies its own border. Render card headings as
+                // wrapping text so narrow rails never truncate token counts.
+                if let PresentationBlock::Card { title, body, .. } = block {
+                    let heading = styled_document_lines(
+                        &PresentationDocument::from_block(PresentationBlock::Text(title)),
+                        &self.preferences,
+                        width,
+                    );
+                    lines.extend(heading.into_iter().map(|line| {
+                        line.patch_style(Style::default().add_modifier(Modifier::BOLD))
+                    }));
+                    lines.extend(styled_document_lines(
+                        &PresentationDocument { blocks: body },
+                        &self.preferences,
+                        width,
+                    ));
+                }
+            }
+            lines
+        })
     }
 }
 

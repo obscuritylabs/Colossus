@@ -2575,29 +2575,75 @@ data: [DONE]
             let terminal = terminal_support::Terminal::start(command);
             terminal.wait("Enter sends");
             terminal.resize(40, 140);
-            terminal.command("/goal Prove final iteration token accounting", "Run usage");
-            // Join visible transcript cells across wrapped rows, excluding the sidebar.
-            let screen =
-                terminal.wait_until_visual_rows("visible final Goal completion", |_, rows| {
-                    rows.iter()
+            terminal.command(
+                "/goal Prove final iteration token accounting",
+                "GOAL_USAGE_",
+            );
+            let visible_regions = Mutex::new(None);
+            // Read both regions from one physical-row frame. The heading can appear
+            // during a live iteration, so wait for final counts and completion too.
+            let screen = terminal.wait_until_visual_rows(
+                "final Goal completion and sidebar usage",
+                |screen, rows| {
+                    let Some(boundary) = rows
+                        .iter()
+                        .find(|row| row.starts_with("┌ Message") || row.starts_with("┌ Execute"))
+                        .and_then(|row| row.chars().position(|character| character == '┐'))
+                        .map(|column| column + 1)
+                    else {
+                        return false;
+                    };
+                    let transcript = rows
+                        .iter()
                         .map(|row| {
-                            row.split_once('│')
-                                .map_or(row.as_str(), |(transcript, _)| transcript)
+                            row.chars()
+                                .take(boundary)
+                                .collect::<String>()
                                 .trim()
+                                .to_owned()
                         })
-                        .collect::<String>()
-                        .contains("GOAL_USAGE_FINISHED")
-                });
+                        .collect::<String>();
+                    let sidebar = rows
+                        .iter()
+                        .map(|row| row.chars().skip(boundary + 1).collect::<String>())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let final_usage = sidebar.contains("Run usage")
+                        && if final_reports_usage {
+                            sidebar.contains("45 tokens")
+                                && sidebar.contains("Input 30")
+                                && sidebar.contains("Output 5")
+                        } else {
+                            sidebar.contains("Token usage was not reported for this run.")
+                                && screen.contains("tok—")
+                        };
+                    let ready = transcript.contains("GOAL_USAGE_FINISHED") && final_usage;
+                    if ready {
+                        *visible_regions.lock().expect("visible Goal regions") =
+                            Some((transcript, sidebar));
+                    }
+                    ready
+                },
+            );
+            let (transcript, sidebar) = visible_regions
+                .into_inner()
+                .expect("visible Goal regions")
+                .expect("completed Goal frame");
             let case = format!("worker={with_worker} reported={final_reports_usage}:\n{screen}");
+            assert!(!transcript.contains("Run usage"), "{case}");
+            assert!(sidebar.contains("Run usage"), "{case}");
             if final_reports_usage {
-                assert!(screen.contains("45 tokens"), "{case}");
+                assert!(sidebar.contains("45 tokens"), "{case}");
                 assert!(
-                    screen.contains("Input 30") && screen.contains("Output 5"),
+                    sidebar.contains("Input 30") && sidebar.contains("Output 5"),
                     "{case}"
                 );
             } else {
                 assert!(
-                    screen.contains("Token usage was not reported for this run."),
+                    sidebar.contains("Token usage was not reported for this run."),
                     "{case}"
                 );
                 assert!(screen.contains("tok—"), "{case}");

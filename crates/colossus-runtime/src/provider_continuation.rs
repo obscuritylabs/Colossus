@@ -437,6 +437,94 @@ impl GatewayModelProvider {
         Ok(Some((replay, plan)))
     }
 
+    pub(super) fn replay_request_overhead(
+        &self,
+        request: &ModelRequest,
+        view: &colossus_contracts::ProviderContinuationView,
+        context: &ExecutionContext,
+    ) -> Result<usize, ModelProviderError> {
+        if !view.replay {
+            return Ok(view.bytes);
+        }
+        let session = context.session_id.as_deref().ok_or_else(|| {
+            ModelProviderError::Configuration("Messages replay budget has no session".into())
+        })?;
+        let state = self
+            .continuations
+            .load(session)
+            .map_err(|_| {
+                ModelProviderError::Failed("unable to inspect protected Messages replay".into())
+            })?
+            .filter(|state| state.view == *view && state.plan.session_id == session)
+            .ok_or_else(|| {
+                ModelProviderError::Configuration("Messages replay budget reference changed".into())
+            })?;
+        let Some(saved) = &state.replay_request else {
+            // Legacy state cannot prove its exact prepared prefix here.
+            return Ok(view.bytes);
+        };
+        if saved.instructions != request.instructions
+            || saved.tools != request.tools
+            || !request.messages.starts_with(&saved.messages)
+            || request.messages.get(saved.messages.len()) != Some(&state.assistant)
+        {
+            return Err(ModelProviderError::Configuration(
+                "Messages replay budget requires its unchanged prepared prefix".into(),
+            ));
+        }
+        // The native payload replaces a matching assistant's content with private
+        // blocks. Its canonical `message` copy is storage bookkeeping, already
+        // charged by the complete canonical request. Keep every native block,
+        // signature, prefix hash and envelope byte conservatively reserved.
+        let mut entries = state
+            .hidden_reasoning
+            .iter()
+            .filter_map(|entry| entry.get("message"))
+            .map(|value| {
+                let message =
+                    serde_json::from_value::<ModelMessage>(value.clone()).map_err(|_| {
+                        ModelProviderError::Configuration(
+                            "invalid Messages replay budget metadata".into(),
+                        )
+                    })?;
+                let bytes = serde_json::to_vec(value)
+                    .map_err(|_| {
+                        ModelProviderError::Configuration(
+                            "invalid Messages replay budget metadata".into(),
+                        )
+                    })?
+                    .len();
+                Ok((message, bytes, false))
+            })
+            .collect::<Result<Vec<_>, ModelProviderError>>()?;
+        let mut credit = 0_usize;
+        for message in request.messages.iter().filter(|message| {
+            message.role == ModelMessageRole::Assistant && !message.tool_calls.is_empty()
+        }) {
+            // Match the native adapter's first-entry rule. A duplicate entry or
+            // repeated occurrence must never spend the same stored bytes twice.
+            let Some((_, stored_bytes, credited)) = entries
+                .iter_mut()
+                .find(|(original, _, _)| original == message)
+            else {
+                continue;
+            };
+            if *credited {
+                continue;
+            }
+            let canonical_bytes = serde_json::to_vec(message)
+                .map_err(|_| {
+                    ModelProviderError::Configuration(
+                        "invalid Messages replay budget metadata".into(),
+                    )
+                })?
+                .len();
+            credit = credit.saturating_add(canonical_bytes.min(*stored_bytes));
+            *credited = true;
+        }
+        Ok(view.bytes.saturating_sub(credit.min(view.bytes)))
+    }
+
     fn pending_candidate(
         &self,
         context: &ExecutionContext,

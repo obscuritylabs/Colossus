@@ -11,6 +11,28 @@ pub struct ContextService {
 }
 
 impl ContextService {
+    fn replay_request_overhead(
+        &self,
+        view: &colossus_contracts::ProviderContinuationView,
+        instructions: &str,
+        messages: &[ModelMessage],
+        tools: &[ModelToolDefinition],
+        context: &ExecutionContext,
+    ) -> Result<usize, ContextError> {
+        self.provider
+            .continuation_request_overhead(
+                &ModelRequest {
+                    instructions: instructions.into(),
+                    messages: messages.to_vec(),
+                    tools: tools.to_vec(),
+                    max_output_tokens: None,
+                },
+                view,
+                context,
+            )
+            .map_err(|error| ContextError::Configuration(error.to_string()))
+    }
+
     /// Compose the service from replaceable session, snapshot, and provider ports.
     pub fn new(
         config: ContextConfig,
@@ -406,8 +428,15 @@ impl ContextPreparer for ContextService {
             &request.tools,
         )
         .saturating_add(view.reserved_tokens);
+        let overhead = self.replay_request_overhead(
+            &view,
+            &request.instructions,
+            &request.messages,
+            &request.tools,
+            &request.context,
+        )?;
         let bytes = model_request_bytes(&request.instructions, &request.messages, &request.tools)
-            .saturating_add(view.bytes);
+            .saturating_add(overhead);
         if tokens > request.route.limits.input_budget_tokens {
             return Err(ContextBudgetExceeded::tokens(
                 tokens,
@@ -529,8 +558,15 @@ impl ContextPreparer for ContextService {
         {
             if view.replay {
                 let estimate = active_estimate.saturating_add(view.reserved_tokens);
+                let overhead = self.replay_request_overhead(
+                    &view,
+                    &instructions,
+                    &active_messages,
+                    &tools,
+                    &context,
+                )?;
                 if estimate > budget.limits.input_budget_tokens
-                    || active_bytes.saturating_add(view.bytes) > MAX_PREPARED_MODEL_REQUEST_BYTES
+                    || active_bytes.saturating_add(overhead) > MAX_PREPARED_MODEL_REQUEST_BYTES
                 {
                     return Err(ContextError::Configuration("Messages tool exchange exceeds its replay budget; finish or restart the turn before compacting".into()));
                 }
