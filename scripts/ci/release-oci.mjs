@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
-import { lstat, mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -56,6 +56,31 @@ export function validateRelease(release, assets, tag, sourceCommit) {
     releaseId: release.id, publishedAt: release.published_at,
     prerelease: release.prerelease, releaseUrl: release.html_url, assets: inventory,
   };
+}
+
+export const platforms = ["all", "windows", "linux", "mac"];
+
+export function selectPlatform(inventory, platform = "all") {
+  assert.ok(platforms.includes(platform), "Unknown release platform");
+  if (platform === "all") return inventory;
+  const family = (name) => {
+    if (/(?:^|[-_.])(windows|win32)(?:[-_.]|$)/iu.test(name)) return "windows";
+    if (/(?:^|[-_.])linux(?:[-_.]|$)/iu.test(name)) return "linux";
+    if (/(?:^|[-_.])(darwin|macos|mac)(?:[-_.]|$)/iu.test(name)) return "mac";
+    return "shared";
+  };
+  const assets = inventory.assets.filter(({ name }) => [platform, "shared"].includes(family(name)));
+  assert.ok(assets.some(({ name }) => family(name) === platform), "Release has no assets for selected platform");
+  return { ...inventory, platform, assets };
+}
+
+export function distributionTag(inventory) {
+  validateTag(inventory.tag);
+  const platform = inventory.platform ?? "all";
+  assert.ok(platforms.includes(platform), "Unknown release platform");
+  const tag = `${inventory.tag}${platform === "all" ? "" : `-${platform}`}`;
+  assert.ok(tag.length <= 128, "Distribution tag is too long");
+  return tag;
 }
 
 function command(executable, args, options = {}) {
@@ -183,7 +208,7 @@ export async function buildLayout(payload, layout, inventory) {
   await writeFile(join(payload, "release-inventory.json"), json(inventory), { flag: "wx", mode: 0o600 });
   await mkdir(layout, { mode: 0o700 }); // Refuse reuse of a partially built layout.
   oras([
-    "push", "--oci-layout", `${layout}:${inventory.tag}`, "--image-spec", "v1.1",
+    "push", "--oci-layout", `${layout}:${distributionTag(inventory)}`, "--image-spec", "v1.1",
     "--artifact-type", artifactType,
     "--annotation", `org.opencontainers.image.created=${inventory.publishedAt}`,
     "--annotation", `org.opencontainers.image.source=https://github.com/${repository}`,
@@ -193,7 +218,7 @@ export async function buildLayout(payload, layout, inventory) {
     "release-inventory.json:application/json",
     ...inventory.assets.map((asset) => `assets/${asset.name}:${mediaType(asset.name)}`),
   ], { cwd: payload });
-  const digest = oras(["resolve", "--oci-layout", `${layout}:${inventory.tag}`]);
+  const digest = oras(["resolve", "--oci-layout", `${layout}:${distributionTag(inventory)}`]);
   assert.match(digest, digestPattern);
   return digest;
 }
@@ -204,8 +229,8 @@ export async function verifyPulled(directory, inventory) {
   await verifyAssets(join(directory, "assets"), inventory);
 }
 
-export function validateDestination(destination, tag) {
-  validateTag(tag);
+export function validateDestination(destination, tag, platform = "all") {
+  tag = distributionTag({ tag, platform });
   assert.ok([
     `ghcr.io/obscuritylabs/colossus-release:${tag}`,
     `docker.io/obscuritylabs/colossus-release:${tag}`,
@@ -224,7 +249,7 @@ export function assessExisting(result, expected, destination) {
   return false;
 }
 
-async function prepare(tag, output) {
+async function prepare(tag, output, platform = "all") {
   const inventory = loadRelease(tag);
   await mkdir(output, { mode: 0o700 });
   const payload = join(output, "payload");
@@ -236,18 +261,33 @@ async function prepare(tag, output) {
     await downloadAsset(asset, tag, join(assets, asset.name));
   }
   assert.deepEqual(loadRelease(tag), inventory, "Release changed during download; start again with a fresh output directory");
-  const digest = await buildLayout(payload, join(output, "layout"), inventory);
+  await verifyAssets(assets, inventory);
+  const selected = selectPlatform(inventory, platform);
+  let selectedPayload = payload;
+  if (platform !== "all") {
+    selectedPayload = join(output, "selected");
+    await mkdir(join(selectedPayload, "assets"), { recursive: true, mode: 0o700 });
+    for (const asset of selected.assets) {
+      await copyFile(join(assets, asset.name), join(selectedPayload, "assets", asset.name), constants.COPYFILE_EXCL);
+    }
+  }
+  const digest = await buildLayout(selectedPayload, join(output, "layout"), selected);
+  if (platform !== "all") {
+    // Keep publication paths stable; the complete download is validation input only.
+    await rm(payload, { recursive: true });
+    await rename(selectedPayload, payload);
+  }
   await writeFile(join(output, "digest.txt"), `${digest}\n`, { flag: "wx", mode: 0o600 });
   console.log(`Prepared ${inventory.assets.length} assets: ${digest}`);
 }
 
 async function publish(output, destination) {
   const inventory = JSON.parse(await readFile(join(output, "payload/release-inventory.json"), "utf8"));
-  validateDestination(destination, inventory.tag);
-  assert.deepEqual(loadRelease(inventory.tag), inventory, "Published release no longer matches the prepared artifact");
+  validateDestination(destination, inventory.tag, inventory.platform);
+  assert.deepEqual(selectPlatform(loadRelease(inventory.tag), inventory.platform), inventory, "Published release no longer matches the prepared artifact");
   const auth = process.env.REGISTRY_AUTH_FILE;
   assert.ok(auth && (await lstat(auth)).isFile(), "An explicit registry auth file is required; no ambient credentials");
-  const layout = `${join(output, "layout")}:${inventory.tag}`;
+  const layout = `${join(output, "layout")}:${distributionTag(inventory)}`;
   const digest = oras(["resolve", "--oci-layout", layout]);
   assert.match(digest, digestPattern);
   assert.equal((await readFile(join(output, "digest.txt"), "utf8")).trim(), digest);
@@ -274,9 +314,12 @@ async function publish(output, destination) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const [operation, first, second, ...extra] = process.argv.slice(2);
-    assert.ok(first && second && extra.length === 0, "Usage: release-oci.mjs prepare <tag> <new-output-directory> | publish <prepared-directory> <registry-reference>");
-    if (operation === "prepare") await prepare(validateTag(first), resolve(second));
-    else if (operation === "publish") await publish(resolve(first), second);
+    assert.ok(first && second && extra.length <= 1, "Usage: release-oci.mjs prepare <tag> <new-output-directory> [all|windows|linux|mac] | publish <prepared-directory> <registry-reference>");
+    if (operation === "prepare") await prepare(validateTag(first), resolve(second), extra[0]);
+    else if (operation === "publish") {
+      assert.equal(extra.length, 0);
+      await publish(resolve(first), second);
+    }
     else throw new Error("Expected prepare or publish");
   } catch (error) {
     console.error(error.message);

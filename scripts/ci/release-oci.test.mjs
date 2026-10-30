@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  assessExisting, downloadAsset, limits, repository, validateDestination,
+  selectPlatform, distributionTag, assessExisting, downloadAsset, limits, repository, validateDestination,
   validateDownloadUrl, validateRelease, validateTag, verifyAssets,
 } from "./release-oci.mjs";
 
@@ -155,4 +155,26 @@ test("CI publication is separate from PR checks, uses scoped auth, and preserves
   assert.ok(publication.includes("if: always()"));
   assert.ok(source.includes("checksum: f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454"));
   assert.ok(!source.includes("colossus-release:latest"));
+});
+
+
+test("platform bundles retain both architectures, metadata, checksums and shared SDKs", () => {
+  const names = ["cli-x86_64-pc-windows-msvc.zip", "cli-aarch64-pc-windows-msvc.zip.sha256",
+    "Desktop-windows-provenance.json", "VSCode-win32-arm64.vsix", "cli-aarch64-unknown-linux-gnu.tar.gz",
+    "VSCode-linux-x64.vsix.sha256", "cli-aarch64-apple-darwin.zip", "VSCode-darwin-x64.vsix",
+    "sdk-SHA256SUMS", "sdk.tgz"];
+  const inventory = validateRelease(release, names.map((name, i) => asset(name, Buffer.from("a"), i + 1)), tag, commit);
+  assert.equal(selectPlatform(inventory), inventory);
+  for (const [platform, count] of [["windows", 6], ["linux", 4], ["mac", 4]]) {
+    const selected = selectPlatform(inventory, platform);
+    assert.equal(selected.assets.length, count);
+    assert.equal(distributionTag(selected), `${tag}-${platform}`);
+    assert.ok(selected.assets.some(({ name }) => name === "sdk-SHA256SUMS"));
+    for (const host of ["docker.io", "ghcr.io"]) {
+      validateDestination(`${host}/obscuritylabs/colossus-release:${tag}-${platform}`, tag, platform);
+    }
+    assert.throws(() => validateDestination(`ghcr.io/obscuritylabs/colossus-release:${tag}`, tag, platform));
+  }
+  assert.throws(() => selectPlatform(inventory, "android"));
+  assert.throws(() => selectPlatform({ ...inventory, assets: [asset()] }, "windows"));
 });
