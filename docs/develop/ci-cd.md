@@ -186,6 +186,10 @@ all independent failures; the aggregate waits for both. Linux Desktop, credentia
 VS Code lifecycle, fuzzing, supply-chain and live-service lanes also remain mandatory.
 Portable formatting belongs to the PR tier and is not repeated on platform runners.
 
+The Windows Desktop job allows 120 minutes for cold compilation and the complete
+acceptance sequence on a standard runner. Its CEF step retains a separate
+45-minute limit, and every acceptance result remains required.
+
 The Windows runtime lane allows 75 minutes for cold compilation and every required
 acceptance command. Its final outcome aggregation remains mandatory. The release
 smoke configuration gives verified inventory operations a bounded 30-second effect
