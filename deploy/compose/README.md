@@ -1,47 +1,55 @@
-# Colossus Compose deployment
+# Colossus with Docker Compose
 
-Run the release-matched web application, documentation, PostgreSQL and Hosted Chat
-on one Linux Docker engine. Docker Desktop's Linux engine works on Windows and macOS.
-PowerShell 7.2+ prepares the installation; Node 22+ is needed only for `test`.
+Run the web app, documentation and persistent Hosted Chat on one Linux Docker
+engine. Use Docker Desktop's Linux engine on Windows or macOS. Setup needs
+PowerShell 7.2+; normal operation needs Docker Compose 2.24+ only.
 
-From a source checkout, select an already published image release explicitly:
-
-```powershell
-pwsh ./deploy/compose/compose.ps1 -Action up -Name demo -ReleaseTag v0.11.11-preview.5
-pwsh ./deploy/compose/compose.ps1 -Action test -Name demo
-```
-
-The release server bundle includes this directory at `deploy/compose/`; its default
-image tag comes from the accompanying release chart. The helper resolves tags to
-registry digests before starting containers. It never pulls `latest`.
-
-Chat is enabled by default with an offline Echo provider and a ready **Local
-Colossus** project. Select real provider connections in the application deliberately.
-Use `-CoreOnly` on first installation for a Fleet-only Control Plane.
-
-The default browser address is `https://localhost:9443`; connectors use their own
-end-to-end mTLS listener on port 9444. Only loopback is published. Setup prints the
-private `admin-login.txt` and public `browser-ca.pem` paths, never the password.
-Review the CA before trusting it in your browser; setup does not modify trust stores.
-
-The private default allocation is `~/.colossus-deployments/compose-NAME`. Keep its
-files and the Docker volumes. Missing keys or retained volumes are errors, not a
-request to generate replacement state. `-StateDirectory` selects another absolute,
-owner-private parent. Hostnames, ports and the chat profile are fixed at allocation.
+From this directory, initialize once and start:
 
 ```powershell
-pwsh ./deploy/compose/compose.ps1 -Action status -Name demo
-pwsh ./deploy/compose/compose.ps1 -Action down -Name demo
-pwsh ./deploy/compose/compose.ps1 -Action up -Name demo
+pwsh ./init.ps1 -ReleaseTag v0.11.11-preview.5
+docker compose up -d --wait
 ```
 
-`down` retains databases, certificates and keys. `down -RemoveData -WhatIf` previews
-irreversible deletion of only this installation's owned Docker volumes; omit
-`-WhatIf` to perform it. The private allocation stays available for inspection.
-After data removal, use a fresh name or restore a backup.
+From a release server bundle, omit `-ReleaseTag` to select its matching version.
+Source checkouts should explicitly select an already published image release.
+`.env.example` lists the non-secret image, project and port settings.
 
-See the [operator guide](https://obscuritylabs.github.io/Colossus/cloud/deployment/compose/) for backup, restore,
-upgrade, remote bindings and the single-host trust model. The Hosted anchor has its
-own database, secrets and network, but shares the Docker host and its administrator.
-This is not an independently administered production checkpoint authority. Use the
-Helm deployment with an external authority for that boundary and high availability.
+Open `https://localhost:9443`, trust the public certificate
+`.local/material/browser/ca.pem` in your test browser, and sign in using
+`.local/admin-login.txt`. Setup never changes your operating system's trust store.
+The one-shot bootstrap container creates **Local Colossus** with Chat enabled and
+the offline Echo provider. Configure real providers in the application's normal
+connection settings when ready. No Desktop/CLI credentials are imported.
+
+Use Compose normally afterward:
+
+```sh
+docker compose ps
+docker compose logs -f
+docker compose down
+docker compose up -d --wait
+```
+
+`down` retains named volumes. Keep those volumes and the private `.local/` files;
+initialization refuses existing output and never replaces keys. `down --volumes`
+permanently deletes this project's databases and setup completion flag. Back up
+both PostgreSQL databases and retained keys before deliberate image upgrades.
+There is no custom upgrade, backup or restore command.
+
+Only loopback ports are published by default. For another hostname or port, pass
+`-HostName`, `-Port` and `-ConnectorPort` during initialization; configure DNS and
+firewall rules and explicitly change `COLOSSUS_BIND_ADDRESS` in `.env` if needed.
+Browser HTTPS and connector mTLS use separate private authorities. Leaves expire
+after one year; renewal is a deliberate operator task.
+
+The checkpoint service has its own database, secrets and private network but
+shares the Docker host's administrator. This does not establish independent
+production checkpoint custody. Use Helm/Kubernetes for that boundary and high
+availability. Agents receive no Docker socket or native host execution.
+
+The GitHub **Compose smoke tests** workflow only tests a temporary CI stack; it
+does not deploy your installation. Developers can run `node smoke.cjs` with Node
+22+ against a fresh Echo demo to verify HTTPS, authentication, streaming and a
+retained conversation. It refuses a non-Echo provider and reuses its saved task
+on subsequent runs.

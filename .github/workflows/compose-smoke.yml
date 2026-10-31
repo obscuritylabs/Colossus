@@ -1,0 +1,55 @@
+name: Compose smoke tests
+
+on:
+  pull_request:
+    paths:
+      - deploy/compose/**
+      - deploy/control-plane/controlled-project.ps1
+      - .github/workflows/compose-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compose-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Compose Chat smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.18.0
+      - name: Check initialization does not replace credentials
+        shell: pwsh
+        run: ./deploy/compose/test-init.ps1 -ScratchDirectory $env:RUNNER_TEMP
+      - name: Start, chat and restart on the temporary CI runner
+        working-directory: deploy/compose
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Test the adapter against a published release; this is not deployment.
+          ./init.ps1 -ReleaseTag v0.11.11-preview.5 -Name compose-smoke
+          try {
+            docker compose up -d --wait --wait-timeout 240
+            if ($LASTEXITCODE -ne 0) { throw 'Compose startup failed' }
+            node smoke.cjs
+            if ($LASTEXITCODE -ne 0) { throw 'Chat smoke failed' }
+            docker compose down
+            if ($LASTEXITCODE -ne 0) { throw 'Compose shutdown failed' }
+            docker compose up -d --wait --wait-timeout 240
+            if ($LASTEXITCODE -ne 0) { throw 'Compose restart failed' }
+            node smoke.cjs
+            if ($LASTEXITCODE -ne 0) { throw 'Retained Chat smoke failed' }
+          } finally {
+            docker compose ps --all
+            docker compose logs --no-color --tail 60
+            docker compose down --volumes
+          }

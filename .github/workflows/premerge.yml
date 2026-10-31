@@ -411,7 +411,7 @@ jobs:
           node --test ./scripts/helm-local/hosted-probe.test.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/helm-local/test-contract.ps1
-          ./deploy/compose/test-contract.ps1 -ScratchDirectory $testTemp
+          ./deploy/compose/test-init.ps1 -ScratchDirectory $testTemp
       - name: Install locked Desktop dependencies
         working-directory: apps/desktop
         run: npm ci --ignore-scripts

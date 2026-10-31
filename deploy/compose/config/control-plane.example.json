@@ -1,0 +1,33 @@
+{
+  "http_bind": "0.0.0.0:8080",
+  "grpc_bind": "0.0.0.0:8443",
+  "public_origin": "https://localhost:9443",
+  "grpc_endpoint": "https://localhost:9444",
+  "ca_certificate": "/run/colossus/ca.pem",
+  "ca_key": "/run/colossus/ca-key.pem",
+  "server_certificate": "/run/colossus/server.pem",
+  "server_key": "/run/colossus/server-key.pem",
+  "web_root": "/opt/colossus/web",
+  "local_development": false,
+  "database": {
+    "connectionVariable": "COLOSSUS_CONTROL_PLANE_DATABASE",
+    "schema": "colossus_cloud",
+    "tls": {"kind": "custom_ca", "caPemPath": "/run/colossus/database-ca.pem"},
+    "maxConnections": 8, "connectionTimeoutMs": 5000, "statementTimeoutMs": 15000
+  },
+  "auth_key_variable": "COLOSSUS_CONTROL_PLANE_AUTH_KEY",
+  "local_auth": {"session_seconds": 28800},
+  "bootstrap_admin": {"display_name": "Administrator", "username": "admin", "password_variable": "COLOSSUS_CONTROL_PLANE_BOOTSTRAP_PASSWORD"},
+  "chat": {
+    "home": "/var/lib/colossus/chat",
+    "wrapping_key_variable": "COLOSSUS_CHAT_WRAPPING_KEY",
+    "max_active_runtimes": 2, "idle_seconds": 300,
+    "projects": {"local": null},
+    "shared": {"keys": {
+      "journal_variable": "COLOSSUS_CHAT_JOURNAL_KEY", "signing_variable": "COLOSSUS_CHAT_SIGNING_KEY",
+      "anchor_endpoint": "https://anchor-browser:8443/v1/anchors",
+      "anchor_bearer_variable": "COLOSSUS_CHAT_ANCHOR_TOKEN",
+      "allow_loopback_http": false, "anchor_ca_pem_path": "/run/colossus/anchor-ca.pem"
+    }}
+  }
+}

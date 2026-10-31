@@ -53,23 +53,26 @@ owns supported deployment options.
 For a Docker-backed Windows installation with isolated client state and cleanup,
 follow [Test Helm locally on Windows](local-helm.md).
 
-Compose deployment changes require the offline boundary suite and live acceptance:
+Compose changes require initializer checks and a live Chat smoke test:
 
 ```powershell
-pwsh ./deploy/compose/test-contract.ps1 -ScratchDirectory /absolute/private/test-parent
-pwsh ./deploy/compose/compose.ps1 -Action up -Name acceptance -ReleaseTag v0.11.11-preview.5
-pwsh ./deploy/compose/compose.ps1 -Action test -Name acceptance
+pwsh ./deploy/compose/test-init.ps1 -ScratchDirectory /absolute/private/test-parent
+cd deploy/compose
+pwsh ./init.ps1 -ReleaseTag v0.11.11-preview.5 -Name acceptance
+docker compose up -d --wait
+node smoke.cjs
+docker compose down
+docker compose up -d --wait
+node smoke.cjs
 ```
 
-Chat is enabled by default; repeat with a fresh `-Name` and `-CoreOnly` for Fleet-only
-coverage. Use the primary checkout's `.local/tests/<task>/` for receipts and an
-owner-private `-StateDirectory` for synthetic material. Record exact Docker resource
-identities. Verify restart and backup/restore retain the same conversation, then use
-`down -RemoveData` to remove only the owned test volumes. The Compose workflow owns
-the Linux live and offline tiers; pre-merge acceptance owns Windows offline checks.
-`-LocalImages` on first setup
-selects already built/loaded images under the exact release tag and pins their local
-IDs; it never pulls missing images or changes the runtime's security configuration.
+Run live tests in a copied deployment tree under the primary checkout's ignored
+`.local/tests/<task>/`; record the exact Compose project before allocating resources.
+Verify restart retains the same conversation, then use `docker compose down --volumes`
+to remove only the disposable test project. `compose-smoke.yml` owns Linux smoke
+and initializer checks; pre-merge acceptance also checks initialization on Windows.
+The workflow is testing only, never a deployment service. It uses published preview.5
+images as its adapter compatibility baseline; current-source runtime gates remain separate.
 
 ### Keep test artifacts together
 
