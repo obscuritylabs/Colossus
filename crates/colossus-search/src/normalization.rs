@@ -189,25 +189,26 @@ pub(super) fn url_host_is_non_public_literal(value: &str) -> Result<bool, Search
         .is_some_and(non_public_network_address))
 }
 
-pub(super) fn redact_exact_secret(bytes: &[u8], secret: Option<&str>) -> Vec<u8> {
-    let Some(secret) = secret
-        .map(str::as_bytes)
-        .filter(|secret| !secret.is_empty())
-    else {
-        return bytes.to_vec();
+// JSON escapes must be decoded before matching, and matching must precede URL
+// normalization or text truncation that could transform a reflected credential.
+pub(super) fn redact_exact_secret(value: &mut Value, secret: Option<&str>) {
+    let Some(secret) = secret.filter(|secret| !secret.is_empty()) else {
+        return;
     };
-    let mut redacted = Vec::with_capacity(bytes.len());
-    let mut offset = 0;
-    while offset < bytes.len() {
-        if bytes[offset..].starts_with(secret) {
-            redacted.extend_from_slice(b"[REDACTED]");
-            offset += secret.len();
-        } else {
-            redacted.push(bytes[offset]);
-            offset += 1;
+    match value {
+        Value::String(text) => *text = text.replace(secret, "[REDACTED]"),
+        Value::Array(values) => {
+            for value in values {
+                redact_exact_secret(value, Some(secret));
+            }
         }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                redact_exact_secret(value, Some(secret));
+            }
+        }
+        _ => {}
     }
-    redacted
 }
 
 pub(super) fn take_chars(value: &str, limit: usize) -> String {

@@ -160,6 +160,19 @@ async fn one_response_server_on(
     status: u16,
     body: Value,
 ) -> (String, tokio::task::JoinHandle<String>) {
+    one_raw_response_server_on(
+        listener,
+        status,
+        serde_json::to_vec(&body).expect("response JSON"),
+    )
+    .await
+}
+
+async fn one_raw_response_server_on(
+    listener: TcpListener,
+    status: u16,
+    bytes: Vec<u8>,
+) -> (String, tokio::task::JoinHandle<String>) {
     let address = listener.local_addr().expect("address");
     let task = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.expect("accept");
@@ -170,7 +183,6 @@ async fn one_response_server_on(
             assert_ne!(read, 0);
             request.extend_from_slice(&scratch[..read]);
         }
-        let bytes = serde_json::to_vec(&body).expect("response JSON");
         let reason = if status == 200 { "OK" } else { "Found" };
         let head = format!(
             "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
@@ -433,6 +445,69 @@ async fn serpapi_injects_and_redacts_credentials_after_permit() {
     assert!(request.contains("num=3"));
     assert!(request.contains("api_key=unit-serp-secret"));
     assert!(!String::from_utf8_lossy(&released.bytes).contains(secret));
+}
+
+#[tokio::test]
+async fn search_redacts_json_escaped_credentials_before_releasing_results() {
+    for kind in [SearchKind::SerpApi, SearchKind::Searxng] {
+        for secret in ["unit-serp-secret", r#"unit-"quoted\secret"#] {
+            let title = format!("before {secret} after");
+            let url = format!("https://example.com/a?key={secret}");
+            let body = match kind {
+                SearchKind::SerpApi => json!({
+                    "organic_results": [{"title": title, "link": url,
+                        "snippet": secret, "source": secret}]
+                }),
+                SearchKind::Searxng => json!({
+                    "results": [{"title": title, "url": url,
+                        "content": secret, "engine": secret}]
+                }),
+            };
+            let body = serde_json::to_string(&body)
+                .expect("response JSON")
+                .replace("unit-serp-secret", r"\u0075nit-serp-secret")
+                .into_bytes();
+            assert!(!String::from_utf8_lossy(&body).contains(secret));
+            let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+            let (endpoint, server) = one_raw_response_server_on(listener, 200, body).await;
+            let profile = SearchProfile::new(
+                "credentialed",
+                kind,
+                endpoint,
+                Some("env:SEARCH_TEST_KEY".into()),
+                (kind == SearchKind::Searxng).then(|| "X-Search-Key".into()),
+                "unit-test",
+                5000,
+            )
+            .expect("profile");
+            let credentials = Arc::new(CountingCredentialResolver {
+                calls: AtomicUsize::new(0),
+                secret: secret.into(),
+            });
+            let executor = SearchExecutor::with_credentials(
+                profile.clone(),
+                Arc::clone(&credentials) as Arc<dyn CredentialResolver>,
+            );
+            let released = allow_gateway(&profile.network_origin().expect("origin"))
+                .execute(search_request(&profile, "colossus", 3), &executor)
+                .await
+                .expect("search");
+            let response: SearchResponse = serde_json::from_slice(&released.bytes).unwrap();
+            assert_eq!(response.results.len(), 1);
+            assert_eq!(response.results[0].title, "before [REDACTED] after");
+            assert_eq!(response.results[0].snippet, "[REDACTED]");
+            assert_eq!(response.results[0].source.as_deref(), Some("[REDACTED]"));
+            let url = Url::parse(&response.results[0].url).unwrap();
+            assert_eq!(
+                url.query_pairs()
+                    .find_map(|(key, value)| (key == "key").then(|| value.into_owned())),
+                Some("[REDACTED]".into())
+            );
+            assert!(!String::from_utf8_lossy(&released.bytes).contains(secret));
+            assert_eq!(credentials.calls.load(Ordering::Acquire), 1);
+            server.await.expect("server");
+        }
+    }
 }
 
 #[tokio::test]
