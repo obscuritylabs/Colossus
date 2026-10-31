@@ -10,6 +10,9 @@ TLS, PostgreSQL, runtime enrollment, backup and recovery procedures.
   replicas, fenced execution ownership and disposable caches. It requires a separately
   administered checkpoint-anchor service and externally managed keys. The chart replaces
   the former Kustomize base and hosted-chat overlays.
+- [`../compose/`](../compose/README.md) is the single-host Docker Compose deployment.
+  Hosted Chat is enabled by default; `-CoreOnly` selects Fleet-only operation. Its
+  local anchor shares the Docker host and does not establish independent custody.
 - `Dockerfile` builds the controller, its optional controlled-chat composition and
   the web assets from the same source. The image also contains `colossus-chat-anchor`
   for the separately administered anchor service. It contains no user execution environment.

@@ -53,6 +53,24 @@ owns supported deployment options.
 For a Docker-backed Windows installation with isolated client state and cleanup,
 follow [Test Helm locally on Windows](local-helm.md).
 
+Compose deployment changes require the offline boundary suite and live acceptance:
+
+```powershell
+pwsh ./deploy/compose/test-contract.ps1 -ScratchDirectory /absolute/private/test-parent
+pwsh ./deploy/compose/compose.ps1 -Action up -Name acceptance -ReleaseTag v0.11.11-preview.5
+pwsh ./deploy/compose/compose.ps1 -Action test -Name acceptance
+```
+
+Chat is enabled by default; repeat with a fresh `-Name` and `-CoreOnly` for Fleet-only
+coverage. Use the primary checkout's `.local/tests/<task>/` for receipts and an
+owner-private `-StateDirectory` for synthetic material. Record exact Docker resource
+identities. Verify restart and backup/restore retain the same conversation, then use
+`down -RemoveData` to remove only the owned test volumes. The Compose workflow owns
+the Linux live and offline tiers; pre-merge acceptance owns Windows offline checks.
+`-LocalImages` on first setup
+selects already built/loaded images under the exact release tag and pins their local
+IDs; it never pulls missing images or changes the runtime's security configuration.
+
 ### Keep test artifacts together
 
 Put ad hoc deployment files, screenshots, logs, and test profiles under the primary
