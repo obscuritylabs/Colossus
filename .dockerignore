@@ -5,6 +5,7 @@
 .agents/
 .codex/
 .local/
+deploy/compose/.local/
 .playwright-cli/
 
 # Local runtime state and credentials must never enter the build context.

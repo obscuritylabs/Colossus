@@ -1,0 +1,223 @@
+# Run init.ps1 once. Use ordinary Docker Compose commands afterward.
+x-service: &service
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
+
+services:
+  prepare:
+    <<: *service
+    image: ${COLOSSUS_SERVER_IMAGE:?}
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    entrypoint: [/bin/sh, /bundle/runtime/prepare.sh]
+    command: [core]
+    volumes:
+      - ./runtime:/bundle/runtime:ro
+      - type: bind
+        source: ./.local/material
+        target: /input
+        read_only: true
+        bind: {create_host_path: false}
+      - controller-material:/output/controller
+      - database-material:/output/database
+      - browser-material:/output/browser
+      - bootstrap-material:/output/bootstrap
+      - controller-data:/data/controller
+      - database-data:/data/database
+  postgres:
+    <<: *service
+    image: postgres:17.9@sha256:2a0d0fe14825b0939f78a8cad5cd4e6aa68bf94d0e5dd96e24b6d23af4315545
+    user: "999:999"
+    depends_on:
+      prepare: {condition: service_completed_successfully}
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/colossus/admin-password
+      POSTGRES_INITDB_ARGS: --auth-local=trust --auth-host=scram-sha-256
+    command: [postgres, -c, config_file=/run/colossus/postgresql.conf]
+    volumes:
+      - database-data:/var/lib/postgresql/data
+      - database-material:/run/colossus:ro
+      - ./runtime/database-init.sh:/docker-entrypoint-initdb.d/10-colossus.sh:ro
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m", "/var/run/postgresql:rw,noexec,nosuid,size=16m,uid=999,gid=999"]
+    networks: [database]
+    mem_limit: 1g
+    healthcheck:
+      test: [CMD, pg_isready, -U, colossus, -d, colossus]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+  control-plane:
+    <<: *service
+    image: ${COLOSSUS_SERVER_IMAGE:?}
+    user: "10001:10001"
+    depends_on:
+      postgres: {condition: service_healthy}
+    entrypoint: [/bin/sh, /bundle/runtime/start.sh]
+    command: [controller]
+    ports:
+      - "${COLOSSUS_BIND_ADDRESS:-127.0.0.1}:${COLOSSUS_CONNECTOR_PORT:-9444}:8443"
+    volumes:
+      - ./runtime:/bundle/runtime:ro
+      - controller-material:/run/colossus:ro
+      - controller-data:/var/lib/colossus
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    networks: [edge, database, anchor-client]
+    mem_limit: 2g
+    stop_grace_period: 120s
+    healthcheck:
+      test: [CMD, /bin/bash, /bundle/runtime/health.sh]
+      interval: 5s
+      timeout: 5s
+      start_period: 10s
+      retries: 40
+  documentation:
+    <<: *service
+    image: ${COLOSSUS_DOCUMENTATION_IMAGE:?}
+    user: "10001:10001"
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    networks: [edge]
+    mem_limit: 128m
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/docs/]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  browser:
+    <<: *service
+    image: nginx:1.30.5-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94
+    user: "10001:10001"
+    entrypoint: [nginx, -g, "daemon off;"]
+    depends_on:
+      control-plane: {condition: service_healthy}
+      documentation: {condition: service_healthy}
+    ports:
+      - "${COLOSSUS_BIND_ADDRESS:-127.0.0.1}:${COLOSSUS_BROWSER_PORT:-9443}:8443"
+    volumes:
+      - ./runtime/nginx.conf:/etc/nginx/nginx.conf:ro
+      - browser-material:/run/colossus:ro
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    networks: [edge]
+    mem_limit: 128m
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/health/ready]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  bootstrap:
+    <<: *service
+    image: node:22.18.0-bookworm-slim@sha256:752ea8a2f758c34002a0461bd9f1cee4f9a3c36d48494586f60ffce1fc708e0e
+    user: "10001:10001"
+    restart: "no"
+    depends_on:
+      browser: {condition: service_healthy}
+    entrypoint: [node, /setup/bootstrap.cjs]
+    environment:
+      COLOSSUS_PUBLIC_ORIGIN: ${COLOSSUS_PUBLIC_ORIGIN:?Run init.ps1 first}
+    volumes:
+      - ./bootstrap.cjs:/setup/bootstrap.cjs:ro
+      - bootstrap-material:/run/colossus
+    networks: [edge]
+    mem_limit: 128m
+  prepare-hosted:
+    <<: *service
+    image: ${COLOSSUS_SERVER_IMAGE:?}
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    entrypoint: [/bin/sh, /bundle/runtime/prepare.sh]
+    command: [hosted]
+    volumes:
+      - ./runtime:/bundle/runtime:ro
+      - type: bind
+        source: ./.local/material
+        target: /input
+        read_only: true
+        bind: {create_host_path: false}
+      - anchor-material:/output/anchor
+      - anchor-database-material:/output/anchor-database
+      - anchor-browser-material:/output/anchor-browser
+      - anchor-database-data:/data/anchor-database
+  anchor-postgres:
+    <<: *service
+    image: postgres:17.9@sha256:2a0d0fe14825b0939f78a8cad5cd4e6aa68bf94d0e5dd96e24b6d23af4315545
+    user: "999:999"
+    depends_on:
+      prepare-hosted: {condition: service_completed_successfully}
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/colossus/admin-password
+      POSTGRES_INITDB_ARGS: --auth-local=trust --auth-host=scram-sha-256
+    command: [postgres, -c, config_file=/run/colossus/postgresql.conf]
+    volumes:
+      - anchor-database-data:/var/lib/postgresql/data
+      - anchor-database-material:/run/colossus:ro
+      - ./runtime/database-init.sh:/docker-entrypoint-initdb.d/10-colossus.sh:ro
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m", "/var/run/postgresql:rw,noexec,nosuid,size=16m,uid=999,gid=999"]
+    networks: [anchor-database]
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD, pg_isready, -U, colossus, -d, colossus]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+  anchor:
+    <<: *service
+    image: ${COLOSSUS_SERVER_IMAGE:?}
+    user: "10001:10001"
+    depends_on:
+      anchor-postgres: {condition: service_healthy}
+    entrypoint: [/bin/sh, /bundle/runtime/start.sh]
+    command: [anchor]
+    volumes:
+      - ./runtime:/bundle/runtime:ro
+      - anchor-material:/run/colossus:ro
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    networks: [anchor-database, anchor-backend]
+    mem_limit: 256m
+    healthcheck:
+      test: [CMD, /bin/bash, -ec, "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  anchor-browser:
+    <<: *service
+    image: nginx:1.30.5-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94
+    user: "10001:10001"
+    entrypoint: [nginx, -g, "daemon off;"]
+    depends_on:
+      anchor: {condition: service_healthy}
+      bootstrap: {condition: service_completed_successfully}
+    volumes:
+      - ./runtime/anchor-nginx.conf:/etc/nginx/nginx.conf:ro
+      - anchor-browser-material:/run/colossus:ro
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    networks:
+      anchor-client:
+        aliases: [anchor-browser]
+      anchor-backend: {}
+    mem_limit: 64m
+
+volumes:
+  controller-data: {}
+  controller-material: {}
+  database-data: {}
+  database-material: {}
+  browser-material: {}
+  bootstrap-material: {}
+  anchor-material: {}
+  anchor-database-material: {}
+  anchor-browser-material: {}
+  anchor-database-data: {}
+networks:
+  edge: {}
+  database: {internal: true}
+  anchor-client: {internal: true}
+  anchor-backend: {internal: true}
+  anchor-database: {internal: true}

@@ -53,6 +53,27 @@ owns supported deployment options.
 For a Docker-backed Windows installation with isolated client state and cleanup,
 follow [Test Helm locally on Windows](local-helm.md).
 
+Compose changes require initializer checks and a live Chat smoke test:
+
+```powershell
+pwsh ./deploy/compose/test-init.ps1 -ScratchDirectory /absolute/private/test-parent
+cd deploy/compose
+pwsh ./init.ps1 -ReleaseTag v0.11.11-preview.5 -Name acceptance
+docker compose up -d --wait
+node smoke.cjs
+docker compose down
+docker compose up -d --wait
+node smoke.cjs
+```
+
+Run live tests in a copied deployment tree under the primary checkout's ignored
+`.local/tests/<task>/`; record the exact Compose project before allocating resources.
+Verify restart retains the same conversation, then use `docker compose down --volumes`
+to remove only the disposable test project. `compose-smoke.yml` owns Linux smoke
+and initializer checks; pre-merge acceptance also checks initialization on Windows.
+The workflow is testing only, never a deployment service. It uses published preview.5
+images as its adapter compatibility baseline; current-source runtime gates remain separate.
+
 ### Keep test artifacts together
 
 Put ad hoc deployment files, screenshots, logs, and test profiles under the primary

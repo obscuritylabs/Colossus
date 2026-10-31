@@ -28,13 +28,9 @@ async fn public_plugin_reads_require_scope_pin_digests_and_never_release_credent
     let root = temporary.path().canonicalize().expect("canonical root");
     let workspace = root.join("workspace");
     fs::create_dir(&workspace).expect("workspace");
+    // Let explicit-home binding create platform-private permissions. An ordinary
+    // directory inherits its parent's ACL on Windows and is correctly rejected.
     let home = root.join("home");
-    fs::create_dir(&home).expect("home");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).expect("owner-private home");
-    }
     let mut config = RuntimeConfig::offline_template(workspace.join("state.redb"));
     config.storage.adapter = StorageAdapter::Ephemeral;
     let runtime = Arc::new(

@@ -1,0 +1,12 @@
+{
+  "bind": "0.0.0.0:8080",
+  "trustedTlsIngress": true,
+  "database": {
+    "connectionVariable": "COLOSSUS_ANCHOR_DATABASE",
+    "schema": "colossus_chat_anchors",
+    "tls": {"kind": "custom_ca", "caPemPath": "/run/colossus/database-ca.pem"},
+    "maxConnections": 4, "connectionTimeoutMs": 5000, "statementTimeoutMs": 5000
+  },
+  "bearerVariable": "COLOSSUS_ANCHOR_TOKEN",
+  "storageKeyVariable": "COLOSSUS_ANCHOR_STORAGE_KEY"
+}
