@@ -363,7 +363,7 @@ lifecycle and scope before composing memory context.
 | A different provider receives compaction text | Inspect the `context_summarizer` route and its fallback to `primary` |
 | Turning off model assistance disables compaction | It does not; deterministic snapshots remain available |
 | A restored snapshot appears to lose later messages | Restore changes the derived active view only; inspect canonical messages with `sessions messages` |
-| Memory search returns no indexed result | Check scope, lifecycle status, and expiry with `memories index status`; canonical fallback may still return bounded matches |
+| Memory search returns no indexed result | Check scope, lifecycle status, and expiry with `colossus memories show MEMORY_ID`, then inspect index lag/errors with `colossus memories index status`; canonical fallback may still return bounded matches |
 | Web research is disabled | Configure the exact top-level `search.roles.research` route |
 | Research lanes are unexpectedly skipped | `maxWorkers` counts query/lane jobs; compare depth × selected lanes with the configured bound |
 | Research reaches the source limit early | `maxSources` applies across every query and lane in the run |
