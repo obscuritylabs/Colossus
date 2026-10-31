@@ -79,6 +79,7 @@ nav = [
     { "Projects and access" = "cloud/administration.md" },
     { "Deployment" = [
       { "Overview" = "cloud/deployment/index.md" },
+      { "Install with Compose" = "cloud/deployment/compose.md" },
       { "Install with Helm" = "cloud/deployment/kubernetes.md" },
       { "Configure your installation" = "cloud/deployment/configuration.md" },
       { "Enable hosted chat" = "cloud/deployment/hosted-chat.md" },

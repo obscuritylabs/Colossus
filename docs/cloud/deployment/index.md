@@ -8,11 +8,20 @@ icon: lucide/server
 
 # Deploy Colossus Cloud
 
-The Helm chart installs the Control Plane, browser app, release-matched
-documentation, and an optional PostgreSQL database on Kubernetes 1.34+.
-It supports GKE, EKS, OpenShift, and disconnected registries.
+Choose Docker Compose for a persistent single-host installation with Chat enabled
+by default, or Helm for Kubernetes 1.34+. Both reuse the released Control Plane,
+browser app and documentation images. Helm supports GKE, EKS, OpenShift and
+disconnected registries.
 
 <div class="grid cards" markdown>
+
+-   :lucide-server:{ .lg .middle } **Install on one Docker host**
+
+    ---
+
+    Start the web application, databases, documentation and Hosted Chat with Compose.
+
+    [Install with Compose :lucide-arrow-right:](compose.md)
 
 -   :lucide-package:{ .lg .middle } **Install**
 
@@ -48,7 +57,7 @@ It supports GKE, EKS, OpenShift, and disconnected registries.
 
 </div>
 
-## What the default installation provides
+## What the default Helm installation provides
 
 | Component | Default |
 | --- | --- |

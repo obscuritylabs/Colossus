@@ -42,7 +42,11 @@ test("offline bundle README uses a current source and archive-valid links", asyn
     const path = posix.normalize(decodeURIComponent(target.split(/[?#]/u)[0]));
     assert.ok(path.startsWith("deploy/"), `${target} must resolve inside the archive's packaged deployment tree`);
     assert.ok(server.includes('cp -R deploy/control-plane/. "$stage/deploy/"'), "The linked deployment tree must be retained in the bundle");
-    const linked = new URL(`../../deploy/control-plane/${path.slice("deploy/".length)}`, import.meta.url);
+    const compose = path.startsWith("deploy/compose/");
+    if (compose) {
+      assert.ok(server.includes('cp -R deploy/compose "$stage/deploy/compose"'), "The Compose deployment must ship beside the chart");
+    }
+    const linked = new URL(compose ? `../../${path}` : `../../deploy/control-plane/${path.slice("deploy/".length)}`, import.meta.url);
     assert.ok((await lstat(linked)).isFile(), `${target} must identify a packaged file`);
   }
 });

@@ -10,6 +10,7 @@ file before extracting it.
 | `bin/colossus-chat-anchor` | Independently administered Hosted checkpoint anchor |
 | `web/` | Matching browser application assets |
 | `deploy/chart/` | Helm chart, vendored dependency, and deployment examples |
+| `deploy/compose/` | Single-host Docker Compose setup and lifecycle helper; Chat enabled by default |
 | `LICENSE` | Release license |
 
 Check the binaries without starting a deployment:
@@ -33,6 +34,13 @@ before enabling hosted execution, and follow the
 when replacing an existing deployment.
 
 For Kubernetes, start with the packaged [chart reference](deploy/chart/README.md).
+For a single Linux Docker host, start with [Compose](deploy/compose/README.md):
+
+```powershell
+pwsh ./deploy/compose/compose.ps1 -Action up -Name local
+```
+
+Setup generates private credentials; it does not import native Desktop or CLI state.
 The separate release asset ending in `.docker.tar.gz` is the matching offline
 container image; verify its own checksum before loading it. Published image tags and
 digests are documented in
