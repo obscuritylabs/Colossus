@@ -81,12 +81,20 @@ Their pending native checks remain separate from implementation and historical t
 Evidence and owned follow-ups:
 
 - **Native documents:** `documentInputs` is separate from image support and defaults
-  Off; CLI setup exposes `--document-inputs off|auto|on`. Responses supports PDF,
-  DOCX, XLSX and PPTX; Chat Completions and native
-  Anthropic support PDF only. Codex and Echo do not support this path. Encrypted
+  Off; CLI setup exposes `--document-inputs off|auto|on`. Responses and Codex support
+  PDF, DOCX, XLSX and PPTX on eligible models; Chat Completions and native
+  Anthropic support PDF only. Echo does not support this path. Encrypted
   artifacts retain bytes; canonical messages and provider replay retain verified
   metadata, with inline resolution only inside the provider permit. This adds no
   local full document parser or provider Files upload/delete lifecycle.
+  Live per-format content checks recovered hidden document codes from PDF, DOCX,
+  XLSX and PPTX with `gpt-6-luna` through the existing Desktop Codex sign-in and
+  fixed subscription route, with tools disabled. A four-file request also recovered
+  all four codes in attachment order. A fresh-process continuation reused the same
+  session without new attachments and recovered secondary document codes absent
+  from the first answer. This establishes that tested model/account path; it does
+  not guarantee every Codex model or account. Final-source native GUI acceptance
+  remains unverified, owned by `test_owner` and `desktop_owner`.
   Admitted initial human input uses durable ordered public Message updates so
   attachment metadata can be reconstructed after reconnect; client drafts are not
   history authority. API/runtime owners retain canonical identity, ownership and

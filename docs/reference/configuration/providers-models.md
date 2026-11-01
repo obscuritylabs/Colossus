@@ -415,9 +415,14 @@ Off. Edit `capabilities.documentInputs` for an existing model profile.
 | Provider kind | Native document formats |
 | --- | --- |
 | `open_ai_responses` | PDF, DOCX, XLSX and PPTX |
+| `open_ai_codex` | PDF, DOCX, XLSX and PPTX, when the selected signed-in Codex model accepts file input |
 | `open_ai_compatible` | PDF, when the exact Chat Completions endpoint and model implement file input |
 | `anthropic_messages` | PDF, when the selected model supports PDF input |
-| `open_ai_codex`, `echo` | Unsupported; enabling the preference does not add protocol support |
+| `echo` | Unsupported; enabling the preference does not add protocol support |
+
+Codex documents use the existing sign-in and fixed subscription backend; no API key
+or different authorization endpoint is required. Format support remains specific
+to the selected model and account.
 
 Colossus sends verified bytes inline in the existing generation request. It does not
 upload a separate provider Files resource, fetch a document URL or run a local PDF

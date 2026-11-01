@@ -874,7 +874,7 @@ test("replacing a stored key enrolls once and saves the newly discovered credent
 
 test("Codex authentication precedes its catalog and enables model loading after sign-in", async ({
   page,
-}) => {
+}, testInfo) => {
   await mountSetup(page);
   await choosePreset(page, "Codex (ChatGPT subscription)");
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
@@ -899,6 +899,42 @@ test("Codex authentication precedes its catalog and enables model loading after 
   await expect(
     page.getByRole("button", { name: "Load models", exact: true }),
   ).toBeEnabled();
+  await page.getByLabel("Model ID", { exact: true }).fill("codex-test-model");
+  await page
+    .getByText("Model limits and capabilities", { exact: true })
+    .click();
+  const documents = page.getByRole("slider", {
+    name: "Document inputs",
+    exact: true,
+  });
+  await expect(documents).toHaveAttribute("aria-valuetext", "Off");
+  await documents.press("End");
+  await expect(documents).toHaveAttribute("aria-valuetext", "On");
+  await page
+    .getByRole("group", { name: "Document inputs", exact: true })
+    .screenshot({
+      path: testInfo.outputPath("codex-onboarding-document-inputs.png"),
+    });
+  await page
+    .getByRole("button", { name: "Save and start", exact: true })
+    .click();
+  await expect(
+    page.getByText("Configuration saved", { exact: true }),
+  ).toBeVisible();
+  const saved = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          setupRequests: { command: string; args: { request: unknown } }[];
+        }
+      ).setupRequests.find(
+        (entry) => entry.command === "configure_managed_runtime",
+      )?.args.request,
+  );
+  expect(saved).toMatchObject({
+    providerKind: "open_ai_codex",
+    modelMetadata: { capabilities: { documentInputs: "on" } },
+  });
 });
 
 for (const action of ["none", "replace"] as const) {

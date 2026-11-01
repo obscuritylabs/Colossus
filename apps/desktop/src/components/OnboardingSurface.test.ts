@@ -133,6 +133,9 @@ describe("OnboardingSurface", () => {
     expect(markup).toContain("API base URL");
     expect(markup).toContain("Load models");
     expect(markup).toContain("Model limits and capabilities");
+    expect(markup).toMatch(
+      /aria-label="Document inputs"[^>]*aria-valuetext="Off"/,
+    );
     expect(markup).toContain("separate secure window");
     expect(markup).toContain(
       '<span class="app-select-value">Allow all — all built-in tools</span>',
@@ -233,6 +236,59 @@ describe("OnboardingSurface", () => {
     expect(markup).not.toContain("Use a different API key");
     expect(openingButtonTag(markup, "Save and start")).toContain("disabled");
   });
+
+  it.each([undefined, "on"] as const)(
+    "retains the saved Codex document preference %s without enabling legacy settings",
+    (documentInputs) => {
+      const markup = renderOnboarding(
+        workspace,
+        {
+          provider: {
+            configured: true,
+            kind: "open_ai_codex",
+            model: "gpt-6-luna",
+          },
+          codexAuth: { state: "signed_in", message: "Signed in with ChatGPT." },
+          managedModelConfiguration: {
+            providers: [
+              {
+                profile: "primary-provider",
+                providerKind: "open_ai_codex",
+                baseUrl: "https://chatgpt.com/backend-api/codex",
+                hasCredential: false,
+                timeoutMs: null,
+                effectiveTimeoutMs: 300000,
+              },
+            ],
+            models: [
+              {
+                profile: "primary",
+                providerProfile: "primary-provider",
+                model: "gpt-6-luna",
+                contextWindowTokens: 32768,
+                maxOutputTokens: 4096,
+                reasoningEffort: null,
+                capabilities: {
+                  toolCalls: "auto",
+                  streaming: "auto",
+                  imageInputs: "auto",
+                  ...(documentInputs === undefined ? {} : { documentInputs }),
+                },
+              },
+            ],
+            roles: { primary: "primary" },
+          },
+        },
+        true,
+      );
+      expect(markup).toMatch(
+        new RegExp(
+          `aria-label="Document inputs"[^>]*aria-valuetext="${documentInputs === "on" ? "On" : "Off"}"`,
+        ),
+      );
+      expect(markup).not.toContain("Use a different API key");
+    },
+  );
 
   it("opens existing multiple providers in the full editor and shows apply errors", () => {
     const markup = renderOnboarding(

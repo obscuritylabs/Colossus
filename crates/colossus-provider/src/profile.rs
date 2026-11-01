@@ -22,14 +22,14 @@ impl ProviderKind {
     pub fn document_media_types(self) -> &'static [&'static str] {
         const PDF: &str = "application/pdf";
         match self {
-            Self::OpenAiResponses => &[
+            Self::OpenAiResponses | Self::OpenAiCodex => &[
                 PDF,
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             ],
             Self::OpenAiCompatible | Self::AnthropicMessages => &[PDF],
-            Self::Echo | Self::OpenAiCodex => &[],
+            Self::Echo => &[],
         }
     }
 

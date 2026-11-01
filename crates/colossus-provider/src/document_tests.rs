@@ -78,6 +78,41 @@ impl RunInputMediaResolver for Documents {
     }
 }
 
+struct DocumentSet {
+    files: BTreeMap<String, (ModelFileReference, Vec<u8>)>,
+    calls: std::sync::Mutex<BTreeMap<String, usize>>,
+}
+
+#[async_trait]
+impl RunInputMediaResolver for DocumentSet {
+    async fn resolve_image(
+        &self,
+        _: &ModelImageReference,
+    ) -> Result<ResolvedRunInputImage, RunInputMediaError> {
+        Err(RunInputMediaError::Unavailable)
+    }
+
+    async fn resolve_file(
+        &self,
+        reference: &ModelFileReference,
+    ) -> Result<ResolvedRunInputFile, RunInputMediaError> {
+        *self
+            .calls
+            .lock()
+            .unwrap()
+            .entry(reference.artifact_id.clone())
+            .or_default() += 1;
+        let (reference, bytes) = self
+            .files
+            .get(&reference.artifact_id)
+            .ok_or(RunInputMediaError::Unavailable)?;
+        Ok(ResolvedRunInputFile {
+            reference: reference.clone(),
+            bytes: bytes.clone(),
+        })
+    }
+}
+
 #[test]
 fn document_projection_preserves_mixed_order_and_uses_each_native_api() {
     for streaming in [false, true] {
@@ -161,6 +196,10 @@ fn document_format_matrix_does_not_infer_support_from_api_compatibility() {
             crate::documents::validate_document_request(ProviderKind::OpenAiResponses, &request)
                 .is_ok()
         );
+        assert!(
+            crate::documents::validate_document_request(ProviderKind::OpenAiCodex, &request)
+                .is_ok()
+        );
         for kind in [
             ProviderKind::OpenAiCompatible,
             ProviderKind::AnthropicMessages,
@@ -170,8 +209,246 @@ fn document_format_matrix_does_not_infer_support_from_api_compatibility() {
                 *mime == "application/pdf"
             );
         }
-        for kind in [ProviderKind::Echo, ProviderKind::OpenAiCodex] {
-            assert!(crate::documents::validate_document_request(kind, &request).is_err());
+        assert!(crate::documents::validate_document_request(ProviderKind::Echo, &request).is_err());
+    }
+}
+
+#[tokio::test]
+async fn codex_documents_use_existing_signed_in_sse_path_and_transient_native_projection() {
+    for (file_name, media_type, bytes) in [
+        ("report.pdf", "application/pdf", PDF),
+        (
+            "report.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            b"PK\x03\x04synthetic DOCX projection".as_slice(),
+        ),
+        (
+            "report.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            b"PK\x03\x04synthetic XLSX projection".as_slice(),
+        ),
+        (
+            "report.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            b"PK\x03\x04synthetic PPTX projection".as_slice(),
+        ),
+    ] {
+        codex_document_wire_case(file_name, media_type, bytes).await;
+    }
+}
+
+async fn codex_document_wire_case(file_name: &str, media_type: &str, bytes: &[u8]) {
+    // The resolver supplies an already validated reference. This fixture checks
+    // provider projection; real PDF/OOXML envelope checks belong to colossus-media.
+    let file = ModelFileReference {
+        file_name: file_name.into(),
+        media_type: media_type.into(),
+        size_bytes: bytes.len() as u64,
+        sha256: hex::encode(Sha256::digest(bytes)),
+        ..document_reference()
+    };
+    let media = Arc::new(Documents {
+        calls: AtomicUsize::new(0),
+        file: file.clone(),
+        bytes: bytes.into(),
+    });
+    let (payload, journal) =
+        codex_document_wire_request(document_request(file), media.clone()).await;
+    assert_eq!(media.calls.load(Ordering::Acquire), 1);
+    let content = &payload["input"][0]["content"];
+    assert_eq!(content[0]["text"], "before");
+    assert_eq!(
+        content[1],
+        json!({"type":"input_file", "filename":file_name,
+        "file_data":format!("data:{media_type};base64,{}", BASE64.encode(bytes))})
+    );
+    assert_eq!(content[2]["text"], "after");
+    let redacted = crate::executor::redacted_image_payload(&payload).to_string();
+    assert!(!redacted.contains(&BASE64.encode(bytes)));
+    for event in journal.read_global(1, 128).unwrap() {
+        assert!(
+            !journal
+                .decrypt_payload(&event)
+                .unwrap()
+                .to_string()
+                .contains(&BASE64.encode(bytes))
+        );
+    }
+}
+
+async fn codex_document_wire_request(
+    request: ModelRequest,
+    media: Arc<dyn RunInputMediaResolver>,
+) -> (Value, Arc<InMemoryEventJournal>) {
+    let body = concat!(
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"synthetic PDF result\"}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"codex-pdf\",\"status\":\"completed\",\"output\":[]}}\n\n",
+    );
+    let (url, server) = one_sse_server_with_content_type(body.into(), None).await;
+    let mut profile = ProviderProfile::new(
+        "codex",
+        ProviderKind::OpenAiCodex,
+        None,
+        Some(CODEX_CREDENTIAL_REFERENCE.into()),
+        5000,
+    )
+    .unwrap();
+    // Synthetic loopback transport follows the existing Codex auth fixture;
+    // production profiles still forbid a Codex endpoint override.
+    profile.base_url = Some(url);
+    let directory = codex_auth_tempdir();
+    let auth_path = directory.path().join("private").join("auth.json");
+    write_test_codex_auth(&auth_path, 4_102_444_800);
+    let executor = ProviderExecutor::new(profile.clone())
+        .with_codex_auth_store(CodexAuthStore::at_path(auth_path))
+        .with_run_input_media(media.clone());
+    let journal = Arc::new(InMemoryEventJournal::default());
+    let gateway = gateway(&profile, journal.clone());
+    let mut effect = provider_request(&profile);
+    effect.content["request"] = serde_json::to_value(request).unwrap();
+    let mut released = ReleasedItems::default();
+    gateway
+        .execute_stream(effect, &executor, &mut released)
+        .await
+        .unwrap();
+    let raw = server.await.unwrap();
+    assert!(
+        raw.to_ascii_lowercase()
+            .contains("chatgpt-account-id: account-secret")
+    );
+    assert!(
+        raw.to_ascii_lowercase()
+            .contains("accept: text/event-stream")
+    );
+    let payload: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(payload["store"], false);
+    assert_eq!(payload["stream"], true);
+    assert!(payload.get("max_output_tokens").is_none());
+    assert!(released.0.iter().any(|item| matches!(item,
+        ProviderStreamItem::Event { event: ProviderEvent::FinalOutput { text } }
+        if text == "synthetic PDF result")));
+    (payload, journal)
+}
+
+#[tokio::test]
+async fn codex_combined_documents_keep_all_four_ordered_exact_sources_in_one_generation() {
+    let fixtures = [
+        ("first.pdf", "application/pdf", PDF),
+        (
+            "second.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            b"PK\x03\x04distinct XLSX combined source".as_slice(),
+        ),
+        (
+            "third.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            b"PK\x03\x04distinct DOCX combined source".as_slice(),
+        ),
+        (
+            "fourth.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            b"PK\x03\x04distinct PPTX combined source".as_slice(),
+        ),
+    ];
+    let files = fixtures
+        .iter()
+        .map(|(name, mime, bytes)| {
+            let sha256 = hex::encode(Sha256::digest(bytes));
+            (
+                ModelFileReference {
+                    artifact_id: format!("artifact-{sha256}"),
+                    file_name: (*name).into(),
+                    media_type: (*mime).into(),
+                    size_bytes: bytes.len() as u64,
+                    sha256,
+                },
+                bytes.to_vec(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let media = Arc::new(DocumentSet {
+        files: files
+            .iter()
+            .map(|(file, bytes)| (file.artifact_id.clone(), (file.clone(), bytes.clone())))
+            .collect(),
+        calls: Default::default(),
+    });
+    let mut request = model_request_with_tools(&[]);
+    let mut parts = vec![ModelContentPart::Text {
+        text: "before".into(),
+    }];
+    for (index, (file, _)) in files.iter().enumerate() {
+        parts.push(ModelContentPart::File { file: file.clone() });
+        if index == 0 {
+            parts.push(ModelContentPart::Text {
+                text: "middle".into(),
+            });
+        }
+    }
+    parts.push(ModelContentPart::Text {
+        text: "after".into(),
+    });
+    request.messages[0].content = ModelContent::Parts(parts);
+    let (payload, journal) = codex_document_wire_request(request, media.clone()).await;
+    assert_eq!(
+        *media.calls.lock().unwrap(),
+        files
+            .iter()
+            .map(|(file, _)| (file.artifact_id.clone(), 1))
+            .collect()
+    );
+    let content = payload["input"][0]["content"].as_array().unwrap();
+    assert_eq!(
+        content
+            .iter()
+            .map(|part| part["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "input_text",
+            "input_file",
+            "input_text",
+            "input_file",
+            "input_file",
+            "input_file",
+            "input_text"
+        ]
+    );
+    assert_eq!(content[0]["text"], "before");
+    assert_eq!(content[2]["text"], "middle");
+    assert_eq!(content[6]["text"], "after");
+    let native = content
+        .iter()
+        .filter(|part| part["type"] == "input_file")
+        .collect::<Vec<_>>();
+    let redacted = crate::executor::redacted_image_payload(&payload).to_string();
+    let events = journal.read_global(1, 128).unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.event_type == "effect.started.v1")
+            .count(),
+        1
+    );
+    for (part, (file, bytes)) in native.iter().zip(&files) {
+        assert_eq!(part["filename"], file.file_name);
+        let encoded = part["file_data"]
+            .as_str()
+            .unwrap()
+            .strip_prefix(&format!("data:{};base64,", file.media_type))
+            .unwrap();
+        let decoded = BASE64.decode(encoded).unwrap();
+        assert_eq!(decoded, *bytes);
+        assert_eq!(decoded.len() as u64, file.size_bytes);
+        assert_eq!(hex::encode(Sha256::digest(&decoded)), file.sha256);
+        assert!(!redacted.contains(encoded));
+        for event in &events {
+            assert!(
+                !journal
+                    .decrypt_payload(event)
+                    .unwrap()
+                    .to_string()
+                    .contains(encoded)
+            );
         }
     }
 }

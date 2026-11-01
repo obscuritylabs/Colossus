@@ -70,24 +70,19 @@ fn document_request(media_type: &str, sizes: &[u64]) -> ModelRequest {
 #[test]
 fn document_gateway_requires_explicit_model_eligibility_before_effect_construction() {
     let request = document_request("application/pdf", &[1]);
-    let error = validate_route_media_inputs(
-        &document_route(false),
-        ProviderKind::OpenAiResponses,
-        &request,
-    )
-    .unwrap_err();
-    assert!(matches!(error, ModelProviderError::Configuration(_)));
-    assert!(
-        error
-            .to_string()
-            .contains("does not enable document inputs")
-    );
-    validate_route_media_inputs(
-        &document_route(true),
-        ProviderKind::OpenAiResponses,
-        &request,
-    )
-    .unwrap();
+    for kind in [ProviderKind::OpenAiResponses, ProviderKind::OpenAiCodex] {
+        let mut route = document_route(false);
+        route.provider = kind.as_str().into();
+        let error = validate_route_media_inputs(&route, kind, &request).unwrap_err();
+        assert!(matches!(error, ModelProviderError::Configuration(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("does not enable document inputs")
+        );
+        route.capabilities.document_inputs = true;
+        validate_route_media_inputs(&route, kind, &request).unwrap();
+    }
     let mut text_request = request;
     text_request.messages[0].content = "ordinary text".into();
     validate_route_media_inputs(&document_route(false), ProviderKind::Echo, &text_request)
@@ -96,14 +91,15 @@ fn document_gateway_requires_explicit_model_eligibility_before_effect_constructi
 
 #[test]
 fn document_gateway_hard_api_formats_remain_binding_when_the_model_enables_documents() {
-    let route = document_route(true);
     for (kind, accepts_pdf, accepts_office) in [
         (ProviderKind::OpenAiResponses, true, true),
         (ProviderKind::OpenAiCompatible, true, false),
         (ProviderKind::AnthropicMessages, true, false),
-        (ProviderKind::OpenAiCodex, false, false),
+        (ProviderKind::OpenAiCodex, true, true),
         (ProviderKind::Echo, false, false),
     ] {
+        let mut route = document_route(true);
+        route.provider = kind.as_str().into();
         for media_type in [
             "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
