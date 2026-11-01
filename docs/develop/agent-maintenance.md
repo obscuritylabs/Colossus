@@ -48,7 +48,8 @@ Ask Codex:
 > available run evidence, and the client owners inspect applicable workflows.
 > Deduplicate existing work, select one concrete maintenance item, implement it
 > with appropriate regression evidence and docs, get independent review, and run
-> the required completion gates. Leave local reviewable changes and report the result.
+> the required completion gates. Commit and deliver the validated fix through the
+> automatic pull-request handoff below, then report its verified PR URL.
 
 If the current chat predates the role files or the client does not expose custom
 roles, start a new chat. A coordinator can also delegate ordinary subagents with
@@ -161,8 +162,11 @@ agent for every phase.
   Failed acquisition or full capacity means no new implementation edits/start.
   Recover a stranded reservation only after
   verifying owner inactivity and saved work, not elapsed time. Retain blocked
-  or parked work with a next action. When capacity is full, continue audits and
-  research, and report the required handoff once.
+  or parked work with a next action. Before new intake, finish publication of
+  existing validated local fixes, including when capacity is full. Opening a PR
+  does not free a completed change's integration slot. When capacity is full,
+  continue publication handoffs, audits and research, and report an unchanged
+  required handoff only once.
 - **Independent review:** the author does not approve their own patch. Assign
   explicit architecture/security review for authority, credentials, sandbox or
   effect paths, API/ownership, persistence and recovery changes using the
@@ -175,10 +179,62 @@ agent for every phase.
   resolutions, native/platform gaps, and a named next owner/action. Invalidate
   evidence after source or relevant input changes. Local checks establish their
   stated scope; hosted final-head acceptance and immutable release candidates
-  remain prerequisites for authorized integration/publication.
+  remain prerequisites for authorized integration and release. Delivered fixes
+  also need the verified PR URL and exact published head described below.
 
 These work limits and receipts are agent working conventions. They preserve a
 reviewable handoff and do not introduce automatic merge or release authority.
+
+## Deliver validated fixes as pull requests
+
+The maintenance coordinator has standing user authorization to commit validated
+maintenance fixes, push their focused branches and open pull requests in
+`obscuritylabs/Colossus`. This includes documentation, tests, cleanup, compatible
+dependency updates and CI/CD repairs. Delivering a PR is part of finishing the
+maintenance item; a fix must not be reported as delivered while it exists only
+locally. This authorization also covers publishing previously completed local
+fixes before selecting new work.
+
+The coordinator is the single publisher under the existing primary checkout's
+implementation reservation. Keep the shared ledger reconciled while holding the
+reservation, including when resuming publication of an older completed item.
+Complete the handoff in this order:
+
+1. Resolve actionable independent review findings and pass the required local
+   completion gates on the final source. Reuse valid unchanged-source evidence
+   under the rules above. Preserve any remaining hosted or platform acceptance
+   gaps explicitly.
+2. Commit only the assigned changes on the focused branch. Record the exact
+   source commit and intended repository, branch and base before publication.
+   Check remote branch state and existing open or closed PRs before creating a
+   new PR. Reuse an existing open PR whose head matches the validated commit.
+   Reconcile a different head or an already merged change before acting. Respect
+   closed or declined PR decisions; do not automatically reopen them or create
+   replacement PRs.
+3. Push only the owned branch with a normal push. Do not force-push or update
+   unrelated refs. Open the PR using the repository template, with the supported
+   outcome, client coverage, checks, independent review and unverified acceptance.
+   Routine CI triggered by the authorized push or PR is expected.
+4. Verify the returned PR URL, repository, base and exact head. Save them with
+   the check and review evidence in the integration receipt and shared work
+   ledger, then report the PR URL. An open PR remains a completed change awaiting
+   integration and continues to count toward the limit of two.
+
+If checks, credentials, network access, push or PR creation prevent delivery,
+retain a durable `publication_pending` record with the exact saved source,
+failure or uncertainty, next owner and next action. Do not claim a delivered PR
+without a verified URL and head. Reconcile GitHub branch and PR state before
+retrying an uncertain creation so a lost response cannot create duplicate PRs.
+Keep blocked work due for the next run, and release only the owned reservation
+after its saved handoff is complete. Capacity limits prevent new implementation,
+not recovery and publication of already completed work.
+
+This standing authorization covers branch pushes and PR creation. Explicit
+workflow dispatches, reruns or cancellations, `ci:full` requests, changes to live
+protections, secrets or runner allocations, candidate deletion, merges, tags,
+release publication and deployments still require separate authorization and
+their existing final-head, platform and release prerequisites. Opening a PR does
+not establish integration or release readiness.
 
 ## Research useful feature opportunities
 
@@ -236,9 +292,10 @@ receipt recording; retain the draft when another publisher owns it. A stranded
 lock needs verified owner inactivity and GitHub reconciliation before recovery,
 not an elapsed-time expiry. Unknown outcomes retain their pending reservation.
 
-Qualified issue creation is part of the research assignment. It does not permit
-changing issue state, comments, assignees, labels or milestones on existing work,
-nor pushing code, approving major features, merging or publishing releases.
+Qualified issue creation is part of the research assignment. This research
+authorization does not permit changing issue state, comments, assignees, labels
+or milestones on existing work, nor pushing code, approving major features,
+merging or publishing releases.
 Use only verified existing labels on a new proposal when appropriate. Notify for
 a new issue or an actionable changed decision/blocker; retain unchanged research
 candidates quietly. Major proposals go through normal product triage before
@@ -293,14 +350,21 @@ task is suitable when each run should begin independently. Use this durable prom
 > .local/agent-maintenance/work.json ledger, using exclusive lock creation,
 > independent security/architecture review where relevant, and all required gates.
 > Keep one active implementation and at most two completed changes awaiting human
-> integration; finish or hand off existing work before starting another. Keep exact scan
+> integration; finish or hand off existing work before starting another. Resume
+> publication of validated local fixes even when capacity is full; opening a PR
+> does not free an integration slot. Keep exact scan
 > revisions, category review dates, freshness, validation and unresolved work,
 > plus an exact-source receipt with the next owner/action for every completed item.
-> Leave local reviewable maintenance changes; qualified feature-issue creation
-> follows the research policy, while code publication, merging, and releasing require
-> separate authorization. Notify only for a new actionable finding or decision,
-> completed change, failure, or meaningful blocker change. Stay quiet while there
-> is nothing new to act on.
+> After required local gates and independent review pass, commit the assigned
+> maintenance fix, push its focused branch and open or reuse a PR in
+> obscuritylabs/Colossus under the automatic delivery policy above. Verify and
+> record its URL and exact head in the shared ledger and integration receipt.
+> Retain publication_pending work and reconcile uncertain outcomes before retries.
+> Qualified feature-issue creation follows the research policy. Explicit hosted
+> dispatch/rerun/cancellation or ci:full, live infrastructure changes, merges,
+> tags, releases and deployments still require separate authorization and their
+> prerequisites. Report new PR URLs and actionable findings, completed changes,
+> failures or meaningful blocker changes; stay quiet while unchanged.
 
 Choose the daily time and time zone in the scheduler. Keep the computer on and
 Codex running for work that needs local files. Review the first few results and
