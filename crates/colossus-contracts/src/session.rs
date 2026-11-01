@@ -97,7 +97,7 @@ impl ModelContent {
                     .iter()
                     .filter_map(|part| match part {
                         ModelContentPart::Text { text } => Some(text.as_str()),
-                        ModelContentPart::Image { .. } => None,
+                        ModelContentPart::Image { .. } | ModelContentPart::File { .. } => None,
                     })
                     .collect::<Vec<_>>()
                     .join("\n"),
@@ -149,7 +149,19 @@ impl ModelContent {
         };
         parts.iter().filter_map(|part| match part {
             ModelContentPart::Image { image } => Some(image),
-            ModelContentPart::Text { .. } => None,
+            ModelContentPart::Text { .. } | ModelContentPart::File { .. } => None,
+        })
+    }
+
+    /// Iterate over immutable document artifact references in content order.
+    pub fn files(&self) -> impl Iterator<Item = &ModelFileReference> {
+        let parts = match self {
+            Self::Text(_) => &[][..],
+            Self::Parts(parts) => parts.as_slice(),
+        };
+        parts.iter().filter_map(|part| match part {
+            ModelContentPart::File { file } => Some(file),
+            _ => None,
         })
     }
 
@@ -161,7 +173,7 @@ impl ModelContent {
                 .iter()
                 .map(|part| match part {
                     ModelContentPart::Text { text } => text.len(),
-                    ModelContentPart::Image { .. } => 0,
+                    ModelContentPart::Image { .. } | ModelContentPart::File { .. } => 0,
                 })
                 .sum(),
         }
@@ -182,6 +194,34 @@ pub enum ModelContentPart {
         /// Exact image artifact reference.
         image: ModelImageReference,
     },
+    /// Verified document metadata; exact bytes remain in an encrypted artifact.
+    File {
+        /// Exact immutable run-input document reference.
+        file: ModelFileReference,
+    },
+}
+
+/// Maximum retained native documents in one provider-visible context.
+pub const MAX_DOCUMENT_INPUT_COUNT: usize = 4;
+/// Maximum exact bytes for one native document input.
+pub const MAX_DOCUMENT_INPUT_BYTES: u64 = 16 * 1_048_576;
+/// Maximum exact document bytes in one provider-visible context.
+pub const MAX_COMBINED_DOCUMENT_INPUT_BYTES: u64 = 32 * 1_048_576;
+
+/// Metadata-only reference to one owner-authorized native document input.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelFileReference {
+    /// Opaque artifact identity, never a filesystem path or provider file ID.
+    pub artifact_id: String,
+    /// Safe bounded display basename.
+    pub file_name: String,
+    /// Normalized supported document MIME type.
+    pub media_type: String,
+    /// Exact verified byte length.
+    pub size_bytes: u64,
+    /// Lowercase SHA-256 digest of the exact transmitted bytes.
+    pub sha256: String,
 }
 
 /// The only image-detail policy accepted in this release.
@@ -240,6 +280,44 @@ pub fn validate_model_message_content(message: &ModelMessage) -> Result<(), Mode
         ));
     }
     for part in parts {
+        if let ModelContentPart::File { file } = part {
+            if message.role != ModelMessageRole::User {
+                return Err(content_error("document parts require user provenance"));
+            }
+            if !file
+                .artifact_id
+                .strip_prefix("artifact-")
+                .is_some_and(|id| {
+                    id.len() == 64
+                        && id
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                })
+                || file.file_name.is_empty()
+                || file.file_name.len() > 255
+                || file.file_name.trim() != file.file_name
+                || matches!(file.file_name.as_str(), "." | "..")
+                || file.file_name.contains(['/', '\\'])
+                || file.file_name.chars().any(char::is_control)
+                || file.size_bytes == 0
+                || file.size_bytes > 16 * 1_048_576
+                || !matches!(
+                    file.media_type.as_str(),
+                    "application/pdf"
+                        | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                )
+                || file.sha256.len() != 64
+                || !file
+                    .sha256
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(content_error("document reference metadata is invalid"));
+            }
+            continue;
+        }
         let ModelContentPart::Image { image } = part else {
             continue;
         };

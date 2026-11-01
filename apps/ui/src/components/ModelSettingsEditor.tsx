@@ -23,12 +23,14 @@ export interface ModelSettingsDraft {
   toolCalls: ModelFeatureMode;
   streaming: ModelFeatureMode;
   imageInputs: ModelFeatureMode;
+  documentInputs?: ModelFeatureMode;
   serverCompaction?: ModelFeatureMode;
   declared?:
     | {
         toolCalls?: boolean | null;
         streaming?: boolean | null;
         imageInputs?: boolean | null;
+        documentInputs?: boolean | null;
         serverCompaction?: boolean | null;
       }
     | undefined;
@@ -267,6 +269,11 @@ export function ModelSettingsEditor<T extends ModelSettingsDraft>({
               ["streaming", "Streaming", "Show response text as it arrives."],
               ["imageInputs", "Image inputs", "Receive attached images."],
               [
+                "documentInputs",
+                "Document inputs",
+                "Receive provider-supported PDF and Office attachments. Off by default.",
+              ],
+              [
                 "serverCompaction",
                 "Server compaction",
                 "Use Responses compaction with local summarization as fallback.",
@@ -278,7 +285,10 @@ export function ModelSettingsEditor<T extends ModelSettingsDraft>({
               label={label}
               declared={draft.declared?.[feature]}
               description={description}
-              value={draft[feature] ?? "auto"}
+              value={
+                draft[feature] ??
+                (feature === "documentInputs" ? "off" : "auto")
+              }
               disabled={busy}
               onChange={(mode) => onChange({ ...draft, [feature]: mode })}
             />

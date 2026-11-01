@@ -20,7 +20,7 @@ Choose a mode beside the composer:
 | **Execute** | You want Colossus to carry out an authorized task, such as exploring or changing a repository. |
 | **Research** | You want a source-backed research run. Availability depends on the selected runtime and configuration. |
 
-Write a concrete request, including any limits that matter, and press **Enter** or the send button. **Shift+Enter** adds a new line. You can attach a supported PNG, JPEG, WebP, UTF-8 text, or source file with the paperclip. Desktop shows a thread in the selected workspace as soon as the run starts. Tool effects still follow that workspace's [access and approval settings](settings.md#access-and-execution-boundaries).
+Write a concrete request, including any limits that matter, and press **Enter** or the send button. **Shift+Enter** adds a new line. You can attach a supported PNG, JPEG, WebP, UTF-8 text, or source file with the paperclip. Native PDF and Office documents require a model with document inputs enabled and a compatible provider API; see [formats and limits](../reference/configuration/providers-models.md#native-document-inputs). The provider interprets documents; Desktop does not run a local document parser. Desktop shows a thread in the selected workspace as soon as the run starts. Tool effects still follow that workspace's [access and approval settings](settings.md#access-and-execution-boundaries).
 
 Pasting more than 1,000 characters into the message box shows a short **Pasted Content** placeholder, as in the TUI. The full text remains part of the draft, counts toward the prompt size limit, and is sent in place of the placeholder. You can write before or after it or paste more text. Deleting or changing a placeholder removes its hidden text from the draft.
 

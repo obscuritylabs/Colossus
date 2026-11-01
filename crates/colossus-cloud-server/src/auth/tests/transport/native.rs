@@ -455,6 +455,7 @@ async fn local_native_client_selects_real_model_streams_resumes_and_approves() {
             provider: route.provider,
             provider_profile: route.provider_profile,
             reasoning_effort: route.reasoning_effort.map(|effort| effort.as_str().into()),
+            document_media_types: Vec::new(),
         })
         .collect();
     let principal = ApplicationPrincipal::authenticated(

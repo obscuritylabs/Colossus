@@ -43,6 +43,7 @@ use uuid::Uuid;
 
 mod communication;
 mod context_failures;
+mod document_inputs;
 mod image_views;
 mod plan_interaction;
 mod process_sessions;
@@ -302,6 +303,10 @@ impl EventJournal for PostCommitReconciliationGapJournal {
 }
 
 fn runtime_fixture() -> RuntimeFixture {
+    runtime_fixture_with_config(|_| {})
+}
+
+fn runtime_fixture_with_config(configure: impl FnOnce(&mut RuntimeConfig)) -> RuntimeFixture {
     let directory = runtime_tempdir();
     // Keep every absolute fixture root in the same canonical namespace as
     // RuntimeOpenOptions. On macOS, tempfile may expose `/var/...` while the native
@@ -326,6 +331,7 @@ fn runtime_fixture() -> RuntimeFixture {
     for path in [&config.workflows.repository, &config.workflows.user] {
         fs::create_dir_all(path).expect("fixture directory");
     }
+    configure(&mut config);
 
     RuntimeFixture {
         runtime: Arc::new(
@@ -1587,6 +1593,7 @@ fn runtime_service_conformance() {
         .build()
         .expect("test runtime")
         .block_on(async {
+            document_inputs::document_admission_preserves_order_owner_and_model_boundaries().await;
             communication::watch_survives_requeue_after_all_attempts_close(Arc::clone(
                 &fixture.runtime,
             ))

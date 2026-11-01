@@ -9,6 +9,7 @@ fn profile() -> WireProfile {
         provider_profile: "work".into(),
         reasoning_effort: Some("ultra".into()),
         default_roles: vec!["primary".into()],
+        document_media_types: Vec::new(),
     }
 }
 fn supported() -> crate::ServerCapabilities {
@@ -74,5 +75,52 @@ fn configured_catalog_rejects_unbounded_or_ambiguous_metadata() {
         },
     ] {
         assert!(decode(vec![invalid], &supported()).is_err());
+    }
+}
+
+#[test]
+fn document_choices_require_the_authenticated_document_capability() {
+    let mut wire = profile();
+    wire.document_media_types = vec![
+        "application/pdf".into(),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into(),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation".into(),
+    ];
+    let capabilities = crate::ServerCapabilities::from_enabled([
+        "agent_runs.model_selection".into(),
+        "attachments.document_input".into(),
+    ]);
+    let decoded = decode(vec![wire.clone()], &capabilities).unwrap();
+    assert_eq!(decoded[0].document_media_types, wire.document_media_types);
+    assert!(
+        decode(vec![wire], &supported()).unwrap()[0]
+            .document_media_types
+            .is_empty()
+    );
+    assert!(
+        decode(vec![profile()], &capabilities).unwrap()[0]
+            .document_media_types
+            .is_empty()
+    );
+}
+
+#[test]
+fn document_choices_reject_unknown_duplicate_or_unbounded_media_types() {
+    let capabilities = crate::ServerCapabilities::from_enabled([
+        "agent_runs.model_selection".into(),
+        "attachments.document_input".into(),
+    ]);
+    for media_types in [
+        vec!["application/pdf"; 5],
+        vec!["application/pdf", "application/pdf"],
+        vec!["application/zip"],
+        vec!["application/pdf\n"],
+        vec!["APPLICATION/PDF"],
+        vec![""],
+    ] {
+        let mut wire = profile();
+        wire.document_media_types = media_types.into_iter().map(str::to_owned).collect();
+        assert!(decode(vec![wire], &capabilities).is_err());
     }
 }

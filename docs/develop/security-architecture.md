@@ -70,6 +70,14 @@ references. Filesystem reads, provider output, network responses, process output
 memory retrieval remain quarantined until mandatory post-effect policy permits release.
 A denial cannot leak private bytes through output, errors, audit payloads, or observers.
 
+The Safety Kernel defaults to a 1 MiB pre-effect policy input and an 8 MiB
+post-effect input. The exact `filesystem.read_run_input` and `filesystem.read_image`
+actions have a 24 MiB post-effect disclosure ceiling so their permitted 16 MiB
+raw results fit after complete base64 encoding and metadata. Their pre-effect
+ceiling remains 1 MiB. Explicit `with_policy_input_limit` overrides also constrain
+these actions. The adapter's raw byte bound, filesystem authority and mandatory
+post-effect decision still apply; policy receives the complete quarantined result.
+
 Tool input schemas at the typed MCP invocation and provider tool-definition positions
 are declarations. Their property and definition names (including `apiKey` and
 `password`) retain their exact schema and hash through request preparation. Secret-named
@@ -680,10 +688,21 @@ the complete bytes match the reservation. Metadata and downloads require
 `artifacts:read` and the same authenticated application ID. Original paths, partial
 uploads, and another application's artifacts are never released. Run-input
 attachments are accepted only from available `run_input` artifacts with supported
-bounded UTF-8 media types or validated static PNG, JPEG, and WebP content. Durable model
-history contains only verified image metadata. Exact bytes remain encrypted artifacts
+bounded UTF-8 media types, validated static PNG, JPEG and WebP content, or bounded
+native document envelopes. Durable model history contains only verified image and
+document metadata. Exact bytes remain encrypted artifacts
 and are re-resolved and reverified only after the provider permit is issued; policy,
 audit, diagnostics, logs, and released errors never receive the bytes or data URL.
+
+Native document admission verifies ownership, intended artifact use, supported MIME,
+display-name bounds, length and digest. Only user messages can introduce document
+parts. The provider/API format matrix and selected model's separate `documentInputs`
+preference are checked before provider dispatch. File bodies remain transient inside
+the permit-bearing generation adapter; no separate remote Files resource or local
+document parser is introduced. Documents stay untrusted user content and cannot grant
+tool, host-path or network authority. Diagnostics and reusable provider state exclude
+inline file bodies. Native Messages replay binds the exact rehydrated prefix by digest
+without retaining resolved bytes.
 
 `image.view` reads local images through `filesystem.read_image`, retaining native
 confinement, protected-state exclusions, and mandatory post-effect release. Built-in

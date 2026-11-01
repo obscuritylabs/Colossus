@@ -475,6 +475,7 @@ fn fixture_with_screenshots(
             tool_calls: true,
             streaming: streamed,
             image_inputs: false,
+            document_inputs: false,
         },
         None,
     )

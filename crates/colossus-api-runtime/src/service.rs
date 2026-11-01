@@ -449,6 +449,8 @@ impl RuntimeAgentRunApi {
         let mut text_bytes = 0_usize;
         let mut image_count = 0_usize;
         let mut image_bytes = 0_u64;
+        let mut document_count = 0_usize;
+        let mut document_bytes = 0_u64;
         for part in &request.input {
             let part = match part {
                 ContentPart::Text { text } => ModelContentPart::Text { text: text.clone() },
@@ -482,6 +484,82 @@ impl RuntimeAgentRunApi {
                                 text
                             ),
                         }
+                    } else if colossus_runtime::supported_document_media_type(&artifact.media_type)
+                    {
+                        if matches!(request.mode, RunMode::Research | RunMode::Goal)
+                            || matches!(request.plan_action, Some(PlanRunAction::Execute { .. }))
+                        {
+                            return Err(ApiError::failed_precondition(
+                                ApiErrorReason::InvalidRunTransition,
+                                "Research, standalone Goal, and approved-plan execution do not accept native document inputs",
+                            ));
+                        }
+                        let profile = match request.model_profile.as_deref() {
+                            Some(profile) => profile.to_owned(),
+                            None => {
+                                self.runtime
+                                    .provider_route(
+                                        request
+                                            .role
+                                            .as_deref()
+                                            .unwrap_or(self.default_role.as_str()),
+                                    )
+                                    .map_err(|_| {
+                                        ApiError::failed_precondition(
+                                            ApiErrorReason::ArtifactUnavailable,
+                                            "selected model is unavailable",
+                                        )
+                                    })?
+                                    .model_profile
+                            }
+                        };
+                        let formats = self
+                            .runtime
+                            .configured_model_document_media_types(&profile)
+                            .map_err(|_| {
+                                ApiError::failed_precondition(
+                                    ApiErrorReason::ArtifactUnavailable,
+                                    "selected model is unavailable",
+                                )
+                            })?;
+                        if !formats.contains(&artifact.media_type) {
+                            return Err(ApiError::failed_precondition(
+                                ApiErrorReason::ArtifactUnavailable,
+                                "selected model does not enable this native document format",
+                            ));
+                        }
+                        document_count += 1;
+                        document_bytes = document_bytes
+                            .checked_add(artifact.size_bytes)
+                            .ok_or_else(|| {
+                                ApiError::bounded_resource_exhausted(
+                                    ApiErrorReason::CapacityExceeded,
+                                    "document size overflowed",
+                                )
+                            })?;
+                        if document_count > colossus_contracts::MAX_DOCUMENT_INPUT_COUNT
+                            || document_bytes
+                                > colossus_contracts::MAX_COMBINED_DOCUMENT_INPUT_BYTES
+                        {
+                            return Err(ApiError::bounded_resource_exhausted(
+                                ApiErrorReason::CapacityExceeded,
+                                "documents exceed the 4-file or 32 MiB combined bound",
+                            ));
+                        }
+                        let file = self
+                            .runtime
+                            .run_input_file_reference(
+                                caller.principal().application_id(),
+                                artifact_id,
+                            )
+                            .map_err(|_| {
+                                ApiError::invalid(
+                                    ApiErrorReason::InvalidArgument,
+                                    "input.artifact",
+                                    "native document artifact failed bounded validation",
+                                )
+                            })?;
+                        ModelContentPart::File { file }
                     } else if artifact.media_type.starts_with("image/") {
                         if request.mode == RunMode::Research {
                             return Err(ApiError::failed_precondition(
@@ -516,7 +594,7 @@ impl RuntimeAgentRunApi {
                     } else {
                         return Err(ApiError::failed_precondition(
                             ApiErrorReason::ArtifactUnavailable,
-                            "the artifact is not a supported text or image run input",
+                            "the artifact is not a supported text, image, or native document run input",
                         )
                         .with_correlation_id(caller.request_id().clone()));
                     }
@@ -552,12 +630,12 @@ impl RuntimeAgentRunApi {
             )
             .with_correlation_id(caller.request_id().clone()));
         }
-        if image_count == 0 {
+        if image_count == 0 && document_count == 0 {
             let text = parts
                 .into_iter()
                 .find_map(|part| match part {
                     ModelContentPart::Text { text } => Some(text),
-                    ModelContentPart::Image { .. } => None,
+                    ModelContentPart::Image { .. } | ModelContentPart::File { .. } => None,
                 })
                 .unwrap_or_default();
             Ok(ModelContent::Text(text))

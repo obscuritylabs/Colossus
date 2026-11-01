@@ -160,7 +160,7 @@ fn validate_dimensions(width: u32, height: u32) -> Result<(), RunInputMediaError
     Ok(())
 }
 
-fn validate_file_name(value: &str) -> Result<(), RunInputMediaError> {
+pub(crate) fn validate_file_name(value: &str) -> Result<(), RunInputMediaError> {
     if value.is_empty()
         || value.len() > 255
         || value.trim() != value

@@ -182,11 +182,13 @@ export interface ManagedModelCapabilities {
   toolCalls: ModelFeatureMode;
   streaming: ModelFeatureMode;
   imageInputs: ModelFeatureMode;
+  documentInputs?: ModelFeatureMode;
   serverCompaction?: ModelFeatureMode;
   declared?: {
     toolCalls?: boolean | null;
     streaming?: boolean | null;
     imageInputs?: boolean | null;
+    documentInputs?: boolean | null;
     serverCompaction?: boolean | null;
   };
 }

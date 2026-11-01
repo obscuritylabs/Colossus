@@ -904,7 +904,7 @@ export function WorkComposer({
                   !canCompose || attachmentBusy || attachments.length >= 16
                 }
                 aria-label="Attach a file"
-                title="Attach a PNG, JPEG, WebP, UTF-8 text, or source file"
+                title="Attach an image, UTF-8 text/source file, or provider-supported document (up to four documents)"
                 onClick={onChooseAttachment}
               >
                 <IconPaperclip size={19} stroke={1.7} aria-hidden="true" />
@@ -1016,6 +1016,11 @@ export function WorkComposer({
       {error !== null ? (
         <div className="composer-error" role="alert">
           <span>{error.message}</span>
+          {error.violations.map((violation, index) => (
+            <span key={`${violation.field}-${index}`}>
+              {violation.description}
+            </span>
+          ))}
           {error.outcomeUnknown ? (
             <strong>Outcome unknown — do not retry automatically.</strong>
           ) : null}

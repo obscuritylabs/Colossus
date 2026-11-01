@@ -82,6 +82,14 @@ colossus -w . run "Reply with exactly: connected"
 Check `colossus -w . config show` for the credential reference. It must not contain
 the API key. Use `config effective` to check the configured network authority.
 
+## Attach native documents
+
+For a file-capable model, explicitly enable `capabilities.documentInputs` on its
+model profile. Responses accepts the supported PDF, DOCX, XLSX and PPTX attachments
+through the ordinary run-input path. Colossus sends the verified document inline;
+the provider handles extraction. See [native document inputs](../../reference/configuration/providers-models.md#native-document-inputs)
+for the exact format matrix, limits and capability settings.
+
 ## Troubleshoot the connection
 
 - **Credential unavailable or HTTP 401:** make sure `OPENAI_API_KEY` is set for the

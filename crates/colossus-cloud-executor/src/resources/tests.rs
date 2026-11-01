@@ -13,6 +13,7 @@ fn resources() -> ExecutionResources {
             provider_profile: "work".into(),
             reasoning_effort: Some("high".into()),
             default_roles: vec!["primary".into()],
+            document_media_types: Vec::new(),
         }],
         ..ExecutionResources::default()
     }

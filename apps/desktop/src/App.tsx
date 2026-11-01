@@ -3540,7 +3540,11 @@ export default function App() {
     setAttachmentBusy(true);
     setComposerError(null);
     try {
-      const attachment = await chooseRunAttachment(route.targetId);
+      const attachment = await chooseRunAttachment(
+        route.targetId,
+        role,
+        modelSelection.modelProfile,
+      );
       if (
         attachment !== null &&
         targetRoutes.current?.isCurrent(route) === true

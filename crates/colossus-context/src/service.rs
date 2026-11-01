@@ -421,6 +421,8 @@ impl ContextPreparer for ContextService {
             ));
         }
         validate_newest_image_turn(&request.messages)?;
+        validate_newest_document_turn(&request.messages)?;
+        validate_document_context(&request.messages)?;
         let tokens = estimate_tokens_for_model(
             &request.route.model,
             &request.instructions,
@@ -504,7 +506,14 @@ impl ContextPreparer for ContextService {
             colossus_tools::omit_unsupported_model_tool_images(&mut messages);
         }
         validate_newest_image_turn(&messages)?;
+        validate_newest_document_turn(&messages)?;
         let messages = compact_excess_images(&messages);
+        let messages = if continuation.as_ref().is_some_and(|view| view.replay) {
+            validate_document_context(&messages)?;
+            messages
+        } else {
+            compact_excess_documents(&messages)
+        };
         let messages = if continuation.as_ref().is_some_and(|view| view.replay) {
             colossus_tools::project_model_tool_observations_preserving_current_turn(&messages)
         } else {

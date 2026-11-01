@@ -17,6 +17,22 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
+    /// Native document MIME types accepted by this API adapter, independent of model intent.
+    /// Models must additionally enable document inputs before any file bytes are resolved.
+    pub fn document_media_types(self) -> &'static [&'static str] {
+        const PDF: &str = "application/pdf";
+        match self {
+            Self::OpenAiResponses => &[
+                PDF,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ],
+            Self::OpenAiCompatible | Self::AnthropicMessages => &[PDF],
+            Self::Echo | Self::OpenAiCodex => &[],
+        }
+    }
+
     /// Stable adapter label used in normalized results.
     pub fn as_str(self) -> &'static str {
         match self {

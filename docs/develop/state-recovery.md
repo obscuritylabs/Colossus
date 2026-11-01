@@ -74,8 +74,8 @@ and tool-observation messages, marker completion, and replay settlement then com
 in one journal batch. A failed provider request or cancellation preserves replay
 required by committed history.
 
-The private checkpoint retains the prepared request with image artifact references,
-never resolved image bytes. Same-session continuation keeps that exact prefix and
+The private checkpoint retains the prepared request with image and document artifact
+references, never resolved media bytes. Same-session continuation keeps that exact prefix and
 appends human guidance without retrieving a new memory prefix or archiving its tool
 observations. Route, tool, canonical-history and snapshot bindings remain checked.
 Protected journals retain both admitted and settled candidates across restart;

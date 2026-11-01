@@ -56,6 +56,7 @@ pub(super) async fn dispatch(
                         tool_calls: args.tool_calls,
                         streaming: args.streaming,
                         image_inputs: args.image_inputs,
+                        document_inputs: args.document_inputs,
                         server_compaction: args.server_compaction,
                     },
                     card.as_ref(),

@@ -109,6 +109,144 @@ fn multipart_model_content_preserves_order_and_requires_image_provenance() {
     );
 }
 
+fn file_reference() -> super::ModelFileReference {
+    super::ModelFileReference {
+        artifact_id: format!("artifact-{}", "3".repeat(64)),
+        file_name: "report.pdf".into(),
+        media_type: "application/pdf".into(),
+        size_bytes: 128,
+        sha256: "4".repeat(64),
+    }
+}
+
+fn document_message(file: super::ModelFileReference) -> ModelMessage {
+    ModelMessage {
+        agent_message_origin: None,
+        role: ModelMessageRole::User,
+        content: ModelContent::Parts(vec![ModelContentPart::File { file }]),
+        tool_call_id: None,
+        tool_calls: Vec::new(),
+    }
+}
+
+#[test]
+fn mixed_document_content_preserves_order_and_requires_user_provenance() {
+    let content = ModelContent::Parts(vec![
+        ModelContentPart::Text {
+            text: "before".into(),
+        },
+        ModelContentPart::File {
+            file: file_reference(),
+        },
+        ModelContentPart::Image {
+            image: image_reference(),
+        },
+        ModelContentPart::Text {
+            text: "after".into(),
+        },
+    ]);
+    let mut message = document_message(file_reference());
+    message.content = content.clone();
+    validate_model_message_content(&message).unwrap();
+    let json = serde_json::to_value(&message).unwrap();
+    assert_eq!(json["content"][1]["type"], "file");
+    assert_eq!(json["content"][2]["type"], "image");
+    assert_eq!(content.plain_text(), "before\nafter");
+    assert_eq!(content.text_bytes(), 11);
+    assert_eq!(content.files().collect::<Vec<_>>(), [&file_reference()]);
+    assert_eq!(content.images().collect::<Vec<_>>(), [&image_reference()]);
+    assert_eq!(
+        serde_json::from_value::<ModelMessage>(json).unwrap(),
+        message
+    );
+    for role in [
+        ModelMessageRole::System,
+        ModelMessageRole::Assistant,
+        ModelMessageRole::Tool,
+        ModelMessageRole::ToolObservation,
+    ] {
+        message.role = role;
+        assert!(validate_model_message_content(&message).is_err());
+    }
+}
+
+#[test]
+fn document_references_reject_unbounded_or_noncanonical_metadata() {
+    let valid = file_reference();
+    for (field, values) in [
+        (
+            "artifact_id",
+            vec![
+                "".into(),
+                "file-provider-handle".into(),
+                format!("artifact-{}", "a".repeat(63)),
+                format!("artifact-{}", "A".repeat(64)),
+                format!("artifact-{}", "g".repeat(64)),
+            ],
+        ),
+        (
+            "file_name",
+            vec![
+                "".into(),
+                "..".into(),
+                "../report.pdf".into(),
+                "folder\\report.pdf".into(),
+                " report.pdf".into(),
+                "report.pdf ".into(),
+                "report\n.pdf".into(),
+                "report\0.pdf".into(),
+                "x".repeat(256),
+            ],
+        ),
+        (
+            "media_type",
+            vec![
+                "application/zip".into(),
+                "application/pdf; charset=utf-8".into(),
+                "APPLICATION/PDF".into(),
+            ],
+        ),
+        (
+            "sha256",
+            vec!["a".repeat(63), "A".repeat(64), "g".repeat(64)],
+        ),
+    ] {
+        for value in values {
+            let mut json = serde_json::to_value(&valid).unwrap();
+            json[field] = serde_json::Value::String(value);
+            let invalid = serde_json::from_value(json).unwrap();
+            assert!(validate_model_message_content(&document_message(invalid)).is_err());
+        }
+    }
+    for size in [0, super::MAX_DOCUMENT_INPUT_BYTES + 1, u64::MAX] {
+        let mut invalid = valid.clone();
+        invalid.size_bytes = size;
+        assert!(validate_model_message_content(&document_message(invalid)).is_err());
+    }
+}
+
+#[test]
+fn durable_document_parts_reject_inline_bytes_paths_and_provider_handles() {
+    let part = ModelContentPart::File {
+        file: file_reference(),
+    };
+    for field in [
+        "bytes",
+        "file_data",
+        "file_id",
+        "file_url",
+        "path",
+        "source",
+    ] {
+        let mut json = serde_json::to_value(&part).unwrap();
+        json["file"][field] = serde_json::json!("private-or-provider-selected-content");
+        assert!(serde_json::from_value::<ModelContentPart>(json).is_err());
+        let mut json = serde_json::to_value(&part).unwrap();
+        json[field] = serde_json::json!("private-or-provider-selected-content");
+        assert!(serde_json::from_value::<ModelContentPart>(json).is_err());
+    }
+}
+
 #[test]
 fn application_actor_has_stable_journal_provenance() {
     let actor = Actor {

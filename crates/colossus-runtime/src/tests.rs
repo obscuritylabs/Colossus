@@ -139,11 +139,12 @@ fn image_capability_echo_and_bounds_fail_at_the_pre_effect_route_gate() {
             tool_calls: true,
             streaming: true,
             image_inputs: false,
+            document_inputs: false,
         },
         reasoning_effort: None,
     };
 
-    let error = super::provider_gateway::validate_route_image_inputs(
+    let error = super::provider_gateway::validate_route_media_inputs(
         &route,
         ProviderKind::OpenAiResponses,
         &request,
@@ -153,7 +154,7 @@ fn image_capability_echo_and_bounds_fail_at_the_pre_effect_route_gate() {
 
     route.capabilities.image_inputs = true;
     let error =
-        super::provider_gateway::validate_route_image_inputs(&route, ProviderKind::Echo, &request)
+        super::provider_gateway::validate_route_media_inputs(&route, ProviderKind::Echo, &request)
             .expect_err("Echo gate");
     assert!(error.to_string().contains("Echo provider"));
 
@@ -165,7 +166,7 @@ fn image_capability_echo_and_bounds_fail_at_the_pre_effect_route_gate() {
         panic!("image part");
     };
     image.size_bytes = 16 * 1_048_576 + 1;
-    let error = super::provider_gateway::validate_route_image_inputs(
+    let error = super::provider_gateway::validate_route_media_inputs(
         &route,
         ProviderKind::OpenAiResponses,
         &oversized,
@@ -196,6 +197,7 @@ fn configure_primary_model(
                 tool_calls: true,
                 streaming: true,
                 image_inputs: false,
+                document_inputs: false,
             }),
             reasoning_effort: None,
         },
@@ -2576,7 +2578,7 @@ fn paginated_mcp_discovery_rejects_before_its_aggregate_output_limit() {
 async fn run_input_reads_honor_image_size_without_widening_ordinary_effects() {
     let workspace = private_tempdir();
     let candidate = workspace.path().join("candidate.bin");
-    let bytes = vec![0x5a; 5 * 1_048_576];
+    let bytes = vec![0x5a; 16 * 1_048_576];
     fs::write(&candidate, &bytes).expect("write run-input fixture");
     let mut config = RuntimeConfig::offline_template("unused.redb");
     config.use_ephemeral_storage();
@@ -2606,6 +2608,15 @@ async fn run_input_reads_honor_image_size_without_widening_ordinary_effects() {
             .await
             .expect("run-input read"),
         bytes
+    );
+    fs::write(&candidate, vec![0x5a; 16 * 1_048_576 + 1]).expect("oversized run-input fixture");
+    let oversized = runtime
+        .read_run_input_file_bytes(&candidate)
+        .await
+        .expect_err("16 MiB remains the hard read bound");
+    assert!(
+        oversized.to_string().contains("permitted output bound"),
+        "{oversized}"
     );
 
     let before_render = runtime.journal().head().expect("journal head");
@@ -5332,6 +5343,7 @@ impl ModelProvider for WorkScriptedProvider {
                 tool_calls: true,
                 streaming: true,
                 image_inputs: false,
+                document_inputs: false,
             },
             reasoning_effort: None,
         })

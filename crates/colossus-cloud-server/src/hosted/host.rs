@@ -379,6 +379,8 @@ impl HostedExecution {
             .model_profiles()
             .into_iter()
             .map(|route| colossus_sdk::ConfiguredModelProfile {
+                // Hosted uploads retain their text-only admission contract.
+                document_media_types: Vec::new(),
                 default_roles: configuration
                     .runtime
                     .models

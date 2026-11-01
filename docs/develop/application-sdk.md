@@ -670,6 +670,24 @@ capability. SDK `ContentPart::Artifact` calls remain unchanged and caller orderi
 preserved, but servers reject image artifacts unless the selected model profile has
 explicitly enabled image inputs.
 
+Native document inputs use the same `ContentPart::Artifact` upload and run-input
+contract. The server derives a verified file reference from caller-owned bytes;
+applications never supply provider file IDs, base64 bodies or filesystem paths.
+The authenticated server advertises `attachments.document_input` separately.
+`ServerInfo.model_profiles` includes `ConfiguredModelProfile.document_media_types`
+(protobuf field 7), the supported MIME list after intersecting saved model intent
+with provider API formats. The Rust SDK retains that list only when both
+`attachments.document_input` and `agent_runs.model_selection` are advertised;
+unknown, duplicate or unbounded format metadata fails validation. An empty list
+does not enable native attachments on an older server.
+The selected model must separately enable `documentInputs`, and its provider API
+must support the exact format. See [native document inputs](../reference/configuration/providers-models.md#native-document-inputs)
+for formats and bounds. Capability discovery and artifact transport do not establish
+a client file-picker workflow or prove a model supports documents. Plan creation
+and refinement accept documents; approved-plan execution rejects newly attached
+documents and uses the saved Plan revision. Research and standalone Goal retain
+their existing text-only request contracts.
+
 Public v1alpha1 runs cannot select plugin skills. The removed `selected_skills` field
 numbers and names are reserved, and a streaming protobuf wire guard rejects those fields
 before allocation. Plugin selection remains a local runtime surface until an application

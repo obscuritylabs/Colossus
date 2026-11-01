@@ -3,7 +3,7 @@ use colossus_sdk::{
     UploadArtifactRequest,
 };
 use sha2::{Digest as _, Sha256};
-use std::{fs::File, io::Read as _, path::Path};
+use std::{fs::File, io::Read as _};
 use tauri::{AppHandle, State, ipc::Channel};
 use tauri_plugin_dialog::DialogExt as _;
 
@@ -25,6 +25,12 @@ use crate::{
 
 const MAX_ATTACHMENT_BYTES: usize = 16 * 1_048_576;
 const MAX_RENDERED_ARTIFACT_BYTES: usize = 1_048_576;
+
+#[path = "commands/attachment_validation.rs"]
+mod attachment_validation;
+use attachment_validation::{
+    attachment_media_type, require_document_support, validate_attachment_bytes,
+};
 
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn read_image_artifact(
@@ -86,6 +92,8 @@ pub(crate) async fn choose_run_attachment(
     app: AppHandle,
     state: State<'_, AppState>,
     target_id: String,
+    role: Option<String>,
+    model_profile: Option<String>,
 ) -> Result<Option<ArtifactReferenceDto>, CommandErrorDto> {
     let selected = app.dialog().file().blocking_pick_file();
     let Some(selected) = selected else {
@@ -103,9 +111,18 @@ pub(crate) async fn choose_run_attachment(
     let media_type = attachment_media_type(&path).ok_or_else(|| {
         CommandErrorDto::invalid(
             "attachment",
-            "Supported attachments are PNG, JPEG, static WebP, UTF-8 text, and source code.",
+            "Choose a supported image, UTF-8 text/source file, PDF, DOCX, XLSX, or PPTX document.",
         )
     })?;
+    let target = target(&state, &target_id).await?;
+    if colossus_media::supported_document_media_type(media_type) {
+        require_document_support(
+            &target.target.client.model_profiles(),
+            role.as_deref().unwrap_or("primary"),
+            model_profile.as_deref(),
+            media_type,
+        )?;
+    }
     let file = File::open(&path).map_err(|_| {
         CommandErrorDto::invalid("attachment", "The selected attachment could not be opened.")
     })?;
@@ -134,23 +151,8 @@ pub(crate) async fn choose_run_attachment(
             "Attachments must be no larger than 16 MiB.",
         ));
     }
-    if media_type.starts_with("image/") {
-        colossus_media::validate_image_bytes(&file_name, Some(media_type), &bytes).map_err(
-            |_| {
-                CommandErrorDto::invalid(
-                    "attachment",
-                    "Images must be valid static PNG, JPEG, or WebP files within the image limits.",
-                )
-            },
-        )?;
-    } else if std::str::from_utf8(&bytes).is_err() {
-        return Err(CommandErrorDto::invalid(
-            "attachment",
-            "Text attachments must contain bounded UTF-8 text.",
-        ));
-    }
+    validate_attachment_bytes(&file_name, media_type, &bytes)?;
     let idempotency_key = attachment_idempotency_key(&file_name, media_type, &bytes)?;
-    let target = target(&state, &target_id).await?;
     let _unary_slot = unary_slot(&target.target)?;
     let artifact = target
         .target
@@ -216,29 +218,6 @@ fn attachment_idempotency_key(
         hex::encode(digest.finalize())
     ))
     .map_err(CommandErrorDto::from_api)
-}
-
-fn attachment_media_type(path: &Path) -> Option<&'static str> {
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("json") => Some("application/json"),
-        Some("yaml" | "yml") => Some("application/yaml"),
-        Some("toml") => Some("application/toml"),
-        Some("xml") => Some("application/xml"),
-        Some("png") => Some("image/png"),
-        Some("jpg" | "jpeg") => Some("image/jpeg"),
-        Some("webp") => Some("image/webp"),
-        Some(
-            "txt" | "md" | "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java" | "c" | "h"
-            | "cpp" | "hpp" | "cs" | "rb" | "php" | "sh" | "zsh" | "fish" | "css" | "scss" | "html"
-            | "sql" | "graphql" | "proto",
-        ) => Some("text/plain"),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

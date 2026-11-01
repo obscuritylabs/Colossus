@@ -998,8 +998,10 @@ export function createRun(
 
 export function chooseRunAttachment(
   targetId: string,
+  role = "primary",
+  modelProfile?: string,
 ): Promise<ArtifactReference | null> {
-  return call("choose_run_attachment", { targetId });
+  return call("choose_run_attachment", { targetId, role, modelProfile });
 }
 
 export function readArtifactContent(

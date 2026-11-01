@@ -76,12 +76,15 @@ pub struct ModelFeatureDeclarations {
     pub streaming: Option<bool>,
     /// Advertised image support; absence means unknown.
     pub image_inputs: Option<bool>,
+    /// Advertised native document support; absence means unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_inputs: Option<bool>,
     /// Advertised Responses compaction support; absence means unknown.
     pub server_compaction: Option<bool>,
 }
 
 /// Saved request preferences. Legacy booleans retain explicit On/Off behavior.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelFeatureSettings {
     /// Structured tool preference.
@@ -90,10 +93,30 @@ pub struct ModelFeatureSettings {
     pub streaming: ModelFeatureMode,
     /// Image-input preference.
     pub image_inputs: ModelFeatureMode,
+    /// Native document preference; disabled until explicitly configured.
+    #[serde(skip_serializing_if = "document_inputs_disabled")]
+    pub document_inputs: ModelFeatureMode,
     /// Responses server compaction preference.
     pub server_compaction: ModelFeatureMode,
     /// Card metadata bound to this selected model, never an authority grant.
     pub declared: ModelFeatureDeclarations,
+}
+
+fn document_inputs_disabled(value: &ModelFeatureMode) -> bool {
+    *value == ModelFeatureMode::Off
+}
+
+impl Default for ModelFeatureSettings {
+    fn default() -> Self {
+        Self {
+            tool_calls: ModelFeatureMode::Auto,
+            streaming: ModelFeatureMode::Auto,
+            image_inputs: ModelFeatureMode::Auto,
+            document_inputs: ModelFeatureMode::Off,
+            server_compaction: ModelFeatureMode::Auto,
+            declared: ModelFeatureDeclarations::default(),
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for ModelFeatureSettings {
@@ -104,8 +127,13 @@ impl<'de> Deserialize<'de> for ModelFeatureSettings {
             tool_calls: ModelFeatureMode,
             streaming: ModelFeatureMode,
             image_inputs: ModelFeatureMode,
+            #[serde(default = "document_inputs_off")]
+            document_inputs: ModelFeatureMode,
             server_compaction: ModelFeatureMode,
             declared: ModelFeatureDeclarations,
+        }
+        fn document_inputs_off() -> ModelFeatureMode {
+            ModelFeatureMode::Off
         }
         let value = serde_json::Value::deserialize(deserializer)?;
         let legacy_missing_image = value.as_object().is_some_and(|fields| {
@@ -124,6 +152,7 @@ impl<'de> Deserialize<'de> for ModelFeatureSettings {
                 fields.image_inputs
             },
             server_compaction: fields.server_compaction,
+            document_inputs: fields.document_inputs,
             declared: fields.declared,
         })
     }
@@ -138,6 +167,9 @@ impl ModelFeatureSettings {
             image_inputs: self
                 .image_inputs
                 .eligible(self.declared.image_inputs, false),
+            document_inputs: self
+                .document_inputs
+                .eligible(self.declared.document_inputs, false),
         }
     }
 }
@@ -148,6 +180,7 @@ impl From<ModelCapabilities> for ModelFeatureSettings {
             tool_calls: value.tool_calls.into(),
             streaming: value.streaming.into(),
             image_inputs: value.image_inputs.into(),
+            document_inputs: value.document_inputs.into(),
             ..Self::default()
         }
     }
