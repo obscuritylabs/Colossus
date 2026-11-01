@@ -127,6 +127,46 @@ describe("RunTimeline assistant output", () => {
     expect(markup.match(/shared-message-copy /g)).toHaveLength(2);
   });
 
+  it("renders a hydrated artifact-only user message without a local prompt", () => {
+    const markup = renderOutput("Document reviewed", "completed", "complete", [
+      {
+        runId: "run-markdown-test",
+        sequence: 1,
+        createdAt: "2026-11-01T00:00:00Z",
+        update: {
+          type: "message",
+          message: {
+            sessionId: "session-markdown-test",
+            runId: "run-markdown-test",
+            sequence: 1,
+            role: "user",
+            content: [
+              {
+                type: "artifact",
+                artifact: {
+                  artifactId: "artifact-proposal",
+                  fileName: "proposal.pdf",
+                  mediaType: "application/pdf",
+                  sizeBytes: 2048,
+                  sha256: "a".repeat(64),
+                  purpose: "run_input",
+                  state: "available",
+                  createdAt: "2026-11-01T00:00:00Z",
+                },
+              },
+            ],
+            createdAt: "2026-11-01T00:00:00Z",
+          },
+        },
+      },
+    ]);
+    expect(markup).toContain('data-role="user"');
+    expect(markup).toContain('class="artifact-chip"');
+    expect(markup).toContain("proposal.pdf · 2.0 KB");
+    expect(markup).toContain('aria-label="Copy message"');
+    expect(markup.match(/proposal\.pdf/g)).toHaveLength(1);
+  });
+
   it("surfaces the canonical draft and its authenticated Plan workflow handoff", () => {
     const markup = renderOutput("", "completed", "complete", [], {
       mode: "plan",

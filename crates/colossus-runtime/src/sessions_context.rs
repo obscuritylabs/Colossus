@@ -263,10 +263,16 @@ impl Runtime {
         )
         .map_err(|error| StoreError::Verification(error.to_string()))?;
 
+        let receipt = self.branch_input_receipt(
+            (source_session_id, source_message_count, context_mode),
+            (branch_session_id, branch_run_id),
+            &prefix,
+            actor.clone(),
+        )?;
         if let Some(existing) = self.sessions.get_session(branch_session_id)? {
             let existing_messages = self.sessions.list_messages(branch_session_id)?;
             if existing_messages.is_empty() && !prefix.is_empty() {
-                self.sessions.append_messages(
+                self.sessions.append_messages_with_events(
                     branch_session_id,
                     branch_run_id,
                     prefix
@@ -276,6 +282,7 @@ impl Runtime {
                             actor: actor.clone(),
                         })
                         .collect(),
+                    receipt.into_iter().collect(),
                 )?;
                 return self
                     .sessions
@@ -295,13 +302,16 @@ impl Runtime {
                     StoreError::Verification("branch session context drifted".into()).into(),
                 );
             }
+            if let Some(receipt) = receipt {
+                self.journal.append(receipt)?;
+            }
             return Ok(existing);
         }
 
         self.sessions
             .create_session(branch_session_id, source.title.as_deref(), actor.clone())?;
         if !prefix.is_empty() {
-            self.sessions.append_messages(
+            self.sessions.append_messages_with_events(
                 branch_session_id,
                 branch_run_id,
                 prefix
@@ -311,7 +321,10 @@ impl Runtime {
                         actor: actor.clone(),
                     })
                     .collect(),
+                receipt.into_iter().collect(),
             )?;
+        } else if let Some(receipt) = receipt {
+            self.journal.append(receipt)?;
         }
         self.sessions
             .get_session(branch_session_id)?

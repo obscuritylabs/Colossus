@@ -703,6 +703,9 @@ document parser is introduced. Documents stay untrusted user content and cannot 
 tool, host-path or network authority. Diagnostics and reusable provider state exclude
 inline file bodies. Native Messages replay binds the exact rehydrated prefix by digest
 without retaining resolved bytes.
+Shared continuation and canonical branch copies also require the
+[conversation context authority](application-sdk.md#explicit-workspace-conversation-sharing).
+Direct artifact downloads remain bound to the artifact's owning application.
 
 `image.view` reads local images through `filesystem.read_image`, retaining native
 confinement, protected-state exclusions, and mandatory post-effect release. Built-in

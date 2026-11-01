@@ -2695,6 +2695,12 @@ fn canonical_session_branch_is_bounded_idempotent_and_detects_drift() {
         )
         .expect("branch");
     assert_eq!(first.message_count, 1);
+    assert_eq!(
+        runtime
+            .session_branch_input_boundary("branch-session", "branch-run")
+            .unwrap(),
+        Some(1)
+    );
     let replay = runtime
         .ensure_session_branch(
             "source-session",
@@ -2814,6 +2820,12 @@ fn conversation_session_branch_keeps_visible_messages_without_tool_traffic() {
         )
         .expect("conversation branch");
     assert_eq!(branch.message_count, 2);
+    assert_eq!(
+        runtime
+            .session_branch_input_boundary("conversation-branch", "branch-run")
+            .unwrap(),
+        Some(2)
+    );
     let messages = runtime
         .session_messages("conversation-branch")
         .expect("branch messages")

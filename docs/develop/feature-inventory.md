@@ -76,7 +76,7 @@ Their pending native checks remain separate from implementation and historical t
 | Human browser sign-in controls | Intentional difference: human native profiles and sign-ins belong to the Desktop host; existing agent browser contracts do not expose their cookies | Intentional difference: agent browser operations do not establish a human profile/settings workflow | Partial: Windows User-Agent, encrypted opt-in sign-in persistence, reset and redacted diagnostics implemented; final rebuilt-byte/platform acceptance pending | Intentional difference: no corresponding human native-profile host | Intentional difference: ordinary browser cookies remain owned by the user's browser; no Desktop profile sharing |
 | Developer companion | Intentional difference: floating window and preferences are local Desktop presentation | Intentional difference: no floating native companion window | Partial: status/preferences and scoped native actions implemented; Windows border fix implemented; native visual verification pending | Intentional difference: not an extension feature | Intentional difference: browser page does not own an OS floating companion |
 | Compose deployment with Chat by default | Existing Control Plane API exercised for bootstrap, authentication and retained Chat; public runtime SDK contracts unchanged | Intentional difference: one-time PowerShell initialization followed by ordinary Compose commands; native CLI/TUI runtimes remain separate Fleet enrollments; no new Hosted Chat client command | Intentional difference: separately installed client; no embedded Compose installer or new Hosted Chat transport; existing Fleet GUI acceptance unverified | Intentional difference: separately installed extension; no embedded Compose installer or new Hosted Chat transport; existing Fleet GUI acceptance unverified | Supported: default Hosted Chat with Echo, verified HTTPS and SSE through the existing web app; API smoke tested, full rendered Chat acceptance unverified |
-| Provider-native document attachments | Supported: existing caller-owned artifact/run-input transport; format validation and selected-model document capability stay in the host; SDK capability metadata does not grant document authority | CLI: native `--attach` through the owned artifact path; TUI human document workflow acceptance remains unverified | Implemented: native document attachment and model preference adapters; current-source rendered/native acceptance remains separately required | Missing: no human file attachment picker; public transport support alone is insufficient | Missing: Hosted attachment picker remains text-only; no native document workflow |
+| Provider-native document attachments | Supported: existing caller-owned artifact/run-input transport; format validation and selected-model document capability stay in the host; SDK capability metadata does not grant document authority | CLI: native `--attach` through the owned artifact path; Partial TUI: canonical document history renders, but `/attach` remains image-only | Implemented: native document attachment and model preference adapters; current-source rendered/native acceptance remains separately required | Missing: no human file attachment picker; public transport support alone is insufficient | Missing: Hosted attachment picker remains text-only; no native document workflow |
 
 Evidence and owned follow-ups:
 
@@ -87,13 +87,34 @@ Evidence and owned follow-ups:
   artifacts retain bytes; canonical messages and provider replay retain verified
   metadata, with inline resolution only inside the provider permit. This adds no
   local full document parser or provider Files upload/delete lifecycle.
+  Admitted initial human input uses durable ordered public Message updates so
+  attachment metadata can be reconstructed after reconnect; client drafts are not
+  history authority. API/runtime owners retain canonical identity, ownership and
+  append-once recovery checks.
+  History consumers preserve one human turn: Desktop suppresses its local prompt
+  when a durable User Message arrives; CLI/TUI use canonical transcripts; VS Code
+  ignores incremental Message frames and reloads its canonical view. Web/Hosted
+  retains the submitted human row and ignores the duplicate runtime User frame.
+  Activity projection coalesces canonical scalar and released User records by
+  session-message sequence, retaining ordered attachment labels. API/projection
+  and Cloud replay/reload tests protect these boundaries; client native/GUI and
+  vendor acceptance remain separately scoped.
+  Shared continuation explicitly includes admitted attachment context. New branch
+  copies check current source-session ownership/continuation authority even when
+  the caller owns an intermediate run; an authorized independent snapshot retains
+  its copied context after later revocation. Direct artifact downloads remain
+  owner-bound. API/runtime and test owners retain the active/revoked branch cases.
+  A durable verified branch-prefix receipt excludes copied User records from new
+  input publication, including failure before the new prompt commits; missing or
+  conflicting proof preserves recovery uncertainty.
   Public API execution and Plan creation/refinement accept the supported formats;
   approved-plan execution rejects new documents and uses its saved revision.
   Research and standalone Goal keep their existing text-only request contracts.
   `test_owner` owns live-provider extraction and same-session/restart evidence with
   matching source; passing loopback wire tests is not live vendor acceptance.
   `desktop_owner` and `test_owner` own rendered/native Desktop acceptance.
-  `cli_owner` and `test_owner` own TUI attachment workflow acceptance.
+  `cli_owner` owns native document submission through TUI `/attach`; `test_owner`
+  owns its acceptance after that adapter expands beyond images.
   `vscode_owner` owns a scoped file-picker/upload workflow and its public SDK
   acceptance; `maintenance_coordinator` owns assigning the Web/Hosted document
   workflow to its canonical API/client owners before claiming that coverage.

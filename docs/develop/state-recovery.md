@@ -87,6 +87,43 @@ may inspect the immediately preceding protected settled record and restore it on
 after canonical and provider bindings validate. It never fabricates private blocks
 or repeats tool execution.
 
+### Released input history
+
+Canonical session messages and public run-message publications have separate durable
+records. When a mode appends its accepted input as a parent user message, the public
+API publishes it only after the canonical append, preserving ordered text and
+caller-owned artifact metadata with the canonical sequence and timestamp.
+An owner-bound append-once operation verifies
+an exact existing publication before reconciling a lost acknowledgement.
+
+Recovery repairs a missing publication from verified canonical evidence before
+terminal settlement, using the captured execution grant. It does not repeat provider
+work, grant general feed reads or let a client draft become history authority. If
+bounded reconciliation cannot establish the correct publication, it preserves the
+unresolved state rather than inventing a message. Existing released history remains
+the reconnect source; document bodies stay in their encrypted artifacts.
+
+### Shared conversation snapshots
+
+Canonical branch copies require current authority over the source session: its
+owner or an explicitly enabled workspace continuation recipient. Ownership of an
+intermediate run does not bypass a revoked source-session relationship. The check
+applies before copying canonical content, including verified image/document references.
+
+Nonempty branch copies commit a private preparation receipt atomically with their
+copied messages; empty copies record an explicit zero boundary. The receipt binds
+the source, destination session/run, selection mode, actual filtered message count
+and prefix digest. Publication verifies that destination prefix before looking for
+a new user message beyond it. Copied messages cannot become a new input merely
+because they carry the branch run ID or match its prompt. Publication repair needs
+no new source disclosure; missing, conflicting or invalid proof leaves the run unresolved.
+
+Once an authorized copy commits, the recipient owns that independent snapshot and
+can retain and reuse its copied context after later source-share revocation.
+Trusted attachment references preserve that context authority; they do not grant
+direct downloads through the artifact owner's API. Revocation blocks new
+source access and unauthorized future copies, rather than deleting prior snapshots.
+
 ## Process ownership
 
 File-backed redb permits one writer lease. The worker may own that lease and coordinate

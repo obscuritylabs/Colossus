@@ -1594,6 +1594,7 @@ fn runtime_service_conformance() {
         .expect("test runtime")
         .block_on(async {
             document_inputs::document_admission_preserves_order_owner_and_model_boundaries().await;
+            document_inputs::message_lifecycle_regressions().await;
             communication::watch_survives_requeue_after_all_attempts_close(Arc::clone(
                 &fixture.runtime,
             ))

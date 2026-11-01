@@ -1,6 +1,81 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { installDesktopExtrasFixture } from "./support/desktop-extras";
+
+async function installOwnedDocumentChooser(page: Page) {
+  await page.evaluate(() => {
+    const host = window as unknown as {
+      __TAURI_INTERNALS__: {
+        invoke: (
+          command: string,
+          args?: Record<string, unknown>,
+        ) => Promise<unknown>;
+      };
+    };
+    const original = host.__TAURI_INTERNALS__.invoke;
+    host.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command !== "choose_run_attachment") return original(command, args);
+      return {
+        artifactId: "fixture-owned-pdf",
+        fileName: "proposal.pdf",
+        mediaType: "application/pdf",
+        sizeBytes: 2048,
+        sha256: "a".repeat(64),
+        purpose: "run_input",
+        state: "available",
+        createdAt: "2026-11-01T00:00:00Z",
+      };
+    };
+  });
+}
+
+for (const queueing of [false, true]) {
+  test(`file-only documents ${queueing ? "enter Next up" : "submit in a new thread"} without weakening empty-draft guards`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 950 });
+    await installDesktopExtrasFixture(page);
+    await page.goto("/?fixture=operations-studio&fixtureAttachments=1");
+    if (!queueing)
+      await page
+        .getByRole("button", { name: "New thread in Colossus", exact: true })
+        .click();
+    await installOwnedDocumentChooser(page);
+    const prompt = page.getByRole("textbox", { name: "Prompt", exact: true });
+    await prompt.fill(" \n\t");
+    const submit = page.getByRole("button", {
+      name: queueing ? "Add message to Next up" : "Send prompt",
+      exact: true,
+    });
+    if (queueing) await expect(submit).toHaveCount(0);
+    else await expect(submit).toBeDisabled();
+    await page
+      .getByRole("button", { name: "Attach a file", exact: true })
+      .click();
+    const chip = page.getByRole("button", {
+      name: "Remove proposal.pdf",
+      exact: true,
+    });
+    await expect(chip).toBeVisible();
+    await expect(submit).toBeEnabled();
+    await submit.click();
+    await expect(chip).toHaveCount(0);
+    await expect(prompt).toHaveValue("");
+    if (queueing) {
+      const queue = page.getByRole("region", { name: "Next up", exact: true });
+      await expect(queue.locator("li")).toHaveCount(1);
+      await expect(queue).toContainText("1 attachment");
+      await queue.screenshot({
+        path: testInfo.outputPath("file-only-document-queued.png"),
+      });
+    } else {
+      await expect(
+        page.getByText(/Showcase response: the request was accepted/u),
+      ).toBeVisible();
+      await expect(submit).toBeDisabled();
+    }
+  });
+}
 
 for (const [theme, palette, textSize, width] of [
   ["light", "colossus", "large", 700],

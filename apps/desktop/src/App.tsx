@@ -2703,7 +2703,7 @@ export default function App() {
     const cleanPrompt = expandedPrompt.trim();
     const cleanRole = role.trim();
     if (
-      cleanPrompt.length === 0 ||
+      (cleanPrompt.length === 0 && attachments.length === 0) ||
       cleanRole.length === 0 ||
       !isPromptWithinByteLimit(expandedPrompt) ||
       (mode === "research" && researchSources.length === 0) ||
@@ -2962,7 +2962,7 @@ export default function App() {
     }
     const cleanRole = role.trim();
     if (
-      cleanPrompt.length === 0 ||
+      (cleanPrompt.length === 0 && attachments.length === 0) ||
       cleanRole.length === 0 ||
       connection.state !== "connected" ||
       !isPromptWithinByteLimit(expandedPrompt)

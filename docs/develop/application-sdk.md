@@ -226,6 +226,20 @@ revocation closes ongoing shared watches and invalidates discovery cursors. Clou
 continuations create new recipient-owned runs using that recipient's captured scopes,
 roles, and tools. They never borrow the source application's execution grant.
 
+Read-only sharing exposes released history. Enabling continuation also authorizes
+the recipient to use the shared canonical conversation, including its admitted
+image and document content, under the recipient's model and provider policy.
+Creating a conversation branch requires current source-session ownership or an
+enabled continuation grant; owning an intermediate run in that session is not
+enough after revocation.
+
+A branch copied while authorized is an independent recipient-owned snapshot. It
+retains its copied conversation and trusted attachment references after later
+source-share revocation, including authority to reuse their content in that
+snapshot. Revocation prevents future source disclosure and new unauthorized copies;
+it cannot recall already shared context. Direct artifact downloads still require
+`artifacts:read` and the artifact's owning application identity.
+
 Managed Local exposes this opt-in in Desktop's Cloud settings with native confirmation.
 For an installed daemon, the source application can use `colossus cloud share-workspace`
 with its protected local connection configuration and the exact recipient application
@@ -687,6 +701,15 @@ a client file-picker workflow or prove a model supports documents. Plan creation
 and refinement accept documents; approved-plan execution rejects newly attached
 documents and uses the saved Plan revision. Research and standalone Goal retain
 their existing text-only request contracts.
+
+For ordinary execution, Plan creation/refinement and Research, admitted initial
+human input is published through the existing durable `RunUpdateKind::Message`
+contract after its canonical session message commits.
+Ordered text and artifact metadata use that message's actual session sequence and
+timestamp. Reconnects replay the same publication; they do not depend on a client
+draft or a guessed session position. Artifact metadata remains caller-authorized,
+and attachment download authority is unchanged. Peer task inputs keep their
+separate provenance rather than appearing as a human message.
 
 Public v1alpha1 runs cannot select plugin skills. The removed `selected_skills` field
 numbers and names are reserved, and a streaming protobuf wire guard rejects those fields

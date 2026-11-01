@@ -215,6 +215,7 @@ export function WorkComposer({
     null,
   );
   const roleMissing = role.trim().length === 0;
+  const hasDraftInput = prompt.trim().length > 0 || attachments.length > 0;
   const goalBlocked =
     mode === "goal" &&
     (!goalAvailable ||
@@ -945,7 +946,7 @@ export function WorkComposer({
               disabled={
                 !canCompose ||
                 !activeWorkRedirectable ||
-                prompt.trim().length === 0 ||
+                !hasDraftInput ||
                 promptOverLimit ||
                 roleMissing ||
                 goalBlocked
@@ -956,7 +957,7 @@ export function WorkComposer({
               Redirect
             </button>
           ) : null}
-          {!activeWorkRunning || prompt.trim().length > 0 ? (
+          {!activeWorkRunning || hasDraftInput ? (
             <ComposerSendButton
               className={`send-button${queueing && !slashCommandDraft ? " is-queue" : ""}`}
               type="submit"
@@ -971,7 +972,7 @@ export function WorkComposer({
               }
               disabled={
                 !canCompose ||
-                prompt.trim().length === 0 ||
+                !hasDraftInput ||
                 promptOverLimit ||
                 (!slashCommandDraft &&
                   (roleMissing ||
