@@ -37,6 +37,7 @@ async fn model_catalog_forwards_only_captured_public_metadata() {
             "provider_profile": "work",
             "reasoning_effort": "high",
             "default_roles": ["primary"],
+            "document_media_types": [],
         })
     );
     let ResourceReply::Result { value } = resources().execute(ResourceOperation::Context).await
