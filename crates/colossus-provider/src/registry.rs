@@ -142,6 +142,11 @@ impl ProviderRegistry {
                 settings.declared.image_inputs,
                 self.unsupported(&model, &provider, crate::ProviderFeature::Images),
             ),
+            document_inputs: !provider.profile.kind.document_media_types().is_empty()
+                && settings.document_inputs.eligible(
+                    settings.declared.document_inputs,
+                    self.unsupported(&model, &provider, crate::ProviderFeature::Documents),
+                ),
         };
         Ok(ResolvedModel {
             role: role.into(),
@@ -217,6 +222,7 @@ impl ProviderRegistry {
             ProviderFeature::Tools,
             ProviderFeature::Streaming,
             ProviderFeature::Images,
+            ProviderFeature::Documents,
             ProviderFeature::ServerCompaction,
         ]
         .into_iter()
@@ -240,6 +246,7 @@ impl ProviderRegistry {
                     resolved.provider.profile.kind == ProviderKind::OpenAiResponses
                 }
                 ProviderFeature::Images => resolved.provider.profile.kind != ProviderKind::Echo,
+                ProviderFeature::Documents => !resolved.provider.profile.kind.document_media_types().is_empty(),
                 _ => true,
             };
             let (effective, reason) = if !adapter_compatible {

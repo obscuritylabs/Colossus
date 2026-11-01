@@ -202,6 +202,7 @@ async fn predictions_use_adapter_transport_and_never_touch_canonical_continuatio
                 tool_calls: false,
                 streaming: false,
                 image_inputs: false,
+                document_inputs: false,
             },
             None,
         )

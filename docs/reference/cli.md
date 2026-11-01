@@ -168,8 +168,9 @@ positional:
 | `goals run` | `--role primary`; `--max-iterations 5` in `1..=50` |
 | `agents queue` | `--role subagent_default` |
 | `research run` | `--depth standard`; planned-query budgets are `quick=1`, `standard=3`, `deep=6`; `--source repo,web,mcp` |
+| `provider setup` | Native document inputs default Off; `--document-inputs off\|auto\|on` sets the separate model preference; supported formats depend on the selected provider API |
 | `artifacts upload` | Policy-authorized bounded files; `--purpose run-input`; encrypted bytes are owner-bound to the CLI application identity |
-| `run` | `--role primary`; `--goal-max-iterations 5`; fresh session unless `--session` or `--resume`; `--attach PATH` repeats up to 16 inputs. Text files retain the 1 MiB aggregate UTF-8 bound; static PNG, JPEG, and WebP images are limited to 16 MiB each and 32 MiB combined. |
+| `run` | `--role primary`; `--goal-max-iterations 5`; fresh session unless `--session` or `--resume`; `--attach PATH` repeats up to 16 inputs. Text files retain the 1 MiB aggregate UTF-8 bound; static PNG, JPEG, and WebP images are limited to 16 MiB each and 32 MiB combined. Native documents have a separate four-file, 16 MiB-per-file and 32 MiB-combined bound and require enabled `documentInputs`; see [provider formats](configuration/providers-models.md#native-document-inputs). |
 | `acp` | ACP v1 on stdin/stdout, selected workspace only, one active prompt per workspace, `primary` role, one MiB text prompt bound; see [ACP in editors](../extend/acp.md) |
 | `tui` | fresh session unless `--session` or `--resume` |
 | `worker` | serves authenticated local IPC; add `--public-api-dir ABS_OWNER_PRIVATE_DIR` to host authenticated loopback gRPC; `--once`, `--status`, `--shutdown`, enrollment, and revocation modes conflict |

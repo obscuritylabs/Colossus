@@ -95,6 +95,9 @@ pub(super) struct ProviderSetupArgs {
     /// Image inputs: off, auto (default), or on; true/false remain accepted.
     #[arg(long, action = clap::ArgAction::Set)]
     pub(super) image_inputs: Option<colossus_contracts::ModelFeatureMode>,
+    /// Native document inputs: off (default), auto, or on.
+    #[arg(long, action = clap::ArgAction::Set)]
+    pub(super) document_inputs: Option<colossus_contracts::ModelFeatureMode>,
     /// Responses server compaction: off, auto, or on.
     #[arg(long, action = clap::ArgAction::Set)]
     pub(super) server_compaction: Option<colossus_contracts::ModelFeatureMode>,

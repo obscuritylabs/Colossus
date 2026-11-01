@@ -20,6 +20,15 @@ pub struct ResolvedRunInputImage {
     pub bytes: Vec<u8>,
 }
 
+/// Exact transient document bytes, resolved only inside the generation permit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedRunInputFile {
+    /// Immutable metadata bound into the authorized provider request.
+    pub reference: colossus_contracts::ModelFileReference,
+    /// Exact verified bytes; never persist or include in diagnostics.
+    pub bytes: Vec<u8>,
+}
+
 /// Safe failure from the application-owned encrypted run-input media service.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum RunInputMediaError {
@@ -34,6 +43,14 @@ pub enum RunInputMediaError {
 /// Late-bound resolver for encrypted run-input image artifacts.
 #[async_trait]
 pub trait RunInputMediaResolver: Send + Sync {
+    /// Resolve and re-verify an already owner-authorized document reference.
+    async fn resolve_file(
+        &self,
+        _reference: &colossus_contracts::ModelFileReference,
+    ) -> Result<ResolvedRunInputFile, RunInputMediaError> {
+        Err(RunInputMediaError::Unavailable)
+    }
+
     /// Resolve and re-verify exact bytes after the provider permit has been issued.
     async fn resolve_image(
         &self,

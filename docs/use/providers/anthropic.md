@@ -1,6 +1,6 @@
 ---
 title: Connect the Anthropic API
-description: Configure native Anthropic Messages with model discovery, tools, streaming, images, and private thinking replay.
+description: Configure native Anthropic Messages with model discovery, tools, streaming, images, PDF input, and private thinking replay.
 audience: user
 type: how-to
 ---
@@ -32,7 +32,7 @@ boundary, authorize the exact `https://api.anthropic.com` origin through
 
 ## Supported behavior
 
-The native adapter supports text and verified image input, JSON and streamed
+The native adapter supports text, verified images and explicitly enabled PDF input, JSON and streamed
 responses, local and MCP tools including parallel tool calls, and token usage.
 Model discovery follows bounded catalog pagination. Missing model metadata remains
 unknown. Native input limits are used as conservative context budgets with an
@@ -77,7 +77,13 @@ interrupted stream is not automatically replayed. Existing bounded HTTP 502–50
 recovery applies before response content starts; rate limits and overload remain
 reported failures. Inspect the existing provider doctor commands when troubleshooting.
 
-Prompt-cache controls, native compaction, token-count requests, PDF/document inputs,
+PDFs use inline native document blocks, with provider-side interpretation. Enable
+`capabilities.documentInputs` on a PDF-capable model; DOCX, XLSX and PPTX are not
+supported by this adapter. See [native document inputs](../../reference/configuration/providers-models.md#native-document-inputs)
+for limits and capability behavior, and [Anthropic PDF support](https://platform.claude.com/docs/en/build-with-claude/pdf-support)
+for provider restrictions.
+
+Prompt-cache controls, native compaction, token-count requests,
 batch jobs, and Anthropic-hosted tools are not enabled by this adapter. Local tool
 execution continues through Colossus policy, approvals, sandboxing, and audit.
 

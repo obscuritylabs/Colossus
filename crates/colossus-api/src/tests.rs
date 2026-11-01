@@ -1,4 +1,7 @@
 use super::*;
+
+#[path = "tests/input_messages.rs"]
+mod input_messages;
 use crate::repository::RUN_INDEXED_EVENT;
 use colossus_contracts::{
     Actor, ActorType, EventClassification, EventEnvelope, ExecutionContext, NewEvent,

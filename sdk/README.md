@@ -78,6 +78,15 @@ connector makes authenticated `SystemService.GetServerInfo` its first read and r
 to expose an effectful client until the actual instance ID, API package, and deployment
 mode match trusted enrollment.
 
+Native documents use the existing caller-owned artifact upload and run-input
+contract. Check authenticated `ServerInfo.capabilities` for
+`attachments.document_input` and the selected `model_profiles` entry's
+`document_media_types` before offering a format; an omitted or empty list enables
+none. References contain opaque artifact IDs, never provider file IDs, paths or
+base64. The server validates ownership, contents and the selected route again.
+See [application attachments](../docs/develop/application-sdk.md#model-selection)
+for the canonical contract and supported run modes.
+
 Each SDK exposes a bounded decoder for the canonical
 `grpc-status-details-bin` trailer and `ColossusErrorDetail`. Decoders require one
 exact type URL, cap the serialized status and detail sizes, bound user-facing text

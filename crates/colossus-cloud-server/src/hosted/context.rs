@@ -46,6 +46,8 @@ impl HostedExecution {
                     .is_some_and(|value| value.enabled)
             })
             .map(|(id, model)| colossus_sdk::ConfiguredModelProfile {
+                // Hosted web uploads remain text-only until their separate input contract expands.
+                document_media_types: Vec::new(),
                 profile: id.clone(),
                 model: model.model.clone(),
                 provider: configuration

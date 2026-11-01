@@ -40,6 +40,40 @@ impl RunWriter {
         Ok(update)
     }
 
+    pub(super) fn user_message_published(
+        &self,
+        input: &[colossus_api::ContentPart],
+    ) -> ApiResult<bool> {
+        let mut sequence = lock(&self.sequence);
+        let published =
+            self.repository
+                .user_message_published(&self.caller, &self.run_id, input)?;
+        if published {
+            self.synchronize_locked(&mut sequence)?;
+        }
+        Ok(published)
+    }
+
+    pub(super) fn append_user_message_once(
+        &self,
+        message: colossus_api::ReleasedSessionMessage,
+    ) -> ApiResult<()> {
+        let mut sequence = lock(&self.sequence);
+        let result = self.repository.append_user_message_once(
+            &self.caller,
+            &self.run_id,
+            *sequence,
+            message,
+        )?;
+        if result.replayed {
+            self.synchronize_locked(&mut sequence)?;
+        } else {
+            *sequence = result.value.sequence;
+            self.feeds.publish(&self.run_id, *sequence, false);
+        }
+        Ok(())
+    }
+
     pub(super) fn request_cancellation(
         &self,
         caller: &CallerContext,
@@ -200,6 +234,7 @@ mod tests {
     struct CommitThenOutcomeUnknownJournal {
         inner: InMemoryEventJournal,
         fail_next_batch_after_commit: AtomicBool,
+        fail_next_append_after_commit: AtomicBool,
     }
 
     impl CommitThenOutcomeUnknownJournal {
@@ -211,7 +246,17 @@ mod tests {
 
     impl EventJournal for CommitThenOutcomeUnknownJournal {
         fn append(&self, event: NewEvent) -> Result<EventEnvelope, StoreError> {
-            self.inner.append(event)
+            let persisted = self.inner.append(event)?;
+            if self
+                .fail_next_append_after_commit
+                .swap(false, Ordering::AcqRel)
+            {
+                Err(StoreError::OutcomeUnknown(
+                    "test append committed before acknowledgement".into(),
+                ))
+            } else {
+                Ok(persisted)
+            }
         }
 
         fn append_batch(&self, events: Vec<NewEvent>) -> Result<Vec<EventEnvelope>, StoreError> {
@@ -569,5 +614,70 @@ mod tests {
             .expect("run");
         assert_eq!(resumed.status, RunStatus::Running);
         assert_eq!(resumed.last_sequence, 5);
+    }
+    #[test]
+    fn committed_user_message_reconciles_without_a_read_grant_or_duplicate_and_keeps_writer_head() {
+        let journal = Arc::new(CommitThenOutcomeUnknownJournal::default());
+        let repository: Arc<dyn RunRepository> =
+            Arc::new(EventSourcedRunRepository::new(journal.clone()));
+        let owner = caller(
+            "app:message-owner",
+            "message-create",
+            &[scopes::RUNS_EXECUTE],
+        );
+        let request: CreateRunRequest = serde_json::from_value(serde_json::json!({
+            "input": [{"type":"text", "text":"accepted"}], "role":"assistant", "mode":"execute",
+            "model_profile":null,"reasoning_effort":null,"session_id":null,"end_user_id":null,
+            "research_depth":null,"research_sources":[],"plan_action":null,"branch":null,
+            "goal_max_iterations":0, "skill_ids":[], "max_turns":1, "idempotency_key":"message-create"
+        })).unwrap();
+        let new =
+            NewRun::from_request("message-run", "message-session", "assistant", &request).unwrap();
+        let run = repository.create_run(&owner, &request, &new).unwrap().value;
+        let writer = RunWriter::new(
+            repository.clone(),
+            Arc::new(RunFeeds::default()),
+            owner.clone(),
+            &run,
+        );
+        let message = colossus_api::ReleasedSessionMessage {
+            session_id: run.session_id.clone(),
+            run_id: run.id.clone(),
+            sequence: 1,
+            role: colossus_api::ReleasedMessageRole::User,
+            content: vec![colossus_api::ReleasedContentPart::Text {
+                text: "accepted".into(),
+            }],
+            created_at: "2026-11-01T00:00:00Z".into(),
+        };
+        journal
+            .fail_next_append_after_commit
+            .store(true, Ordering::Release);
+        writer.append_user_message_once(message.clone()).unwrap();
+        writer
+            .append(RunUpdateKind::State {
+                status: RunStatus::Running,
+            })
+            .unwrap();
+        writer.append_user_message_once(message).unwrap();
+        writer
+            .append(RunUpdateKind::Notice {
+                notice: colossus_api::RunNotice {
+                    reason: "fixture.ready".into(),
+                    message: "ready".into(),
+                },
+            })
+            .unwrap();
+        let current = writer.current_execution_run().unwrap().unwrap();
+        assert_eq!(current.last_sequence, 4);
+        let reader = caller("app:message-owner", "message-reader", &[scopes::RUNS_READ]);
+        let updates = repository.updates_after(&reader, &run.id, 0, 16).unwrap();
+        assert_eq!(
+            updates
+                .iter()
+                .filter(|update| matches!(update.kind, RunUpdateKind::Message { .. }))
+                .count(),
+            1
+        );
     }
 }

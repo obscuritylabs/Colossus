@@ -64,6 +64,15 @@ impl ProviderExecutor {
             .ok_or_else(|| {
                 ProviderError::Configuration("Responses state reference changed".into())
             })?;
+        if state
+            .hidden_reasoning
+            .iter()
+            .any(crate::documents::contains_private_document_data)
+        {
+            return Err(ProviderError::Configuration(
+                "private provider state contains a transient document source".into(),
+            ));
+        }
         Ok(Some(state))
     }
 
@@ -125,11 +134,15 @@ impl ProviderExecutor {
             };
             items = items.split_off(start);
         }
-        // Never retain resolved image bytes in provider continuation state.
-        if contains_image_data(&items) {
+        // Never retain resolved media bodies or remote file handles in provider state.
+        if contains_image_data(&items)
+            || items
+                .iter()
+                .any(crate::documents::contains_private_document_data)
+        {
             if replay {
                 return Err(ProviderError::Configuration(
-                    "Messages replay cannot contain image bytes".into(),
+                    "Messages replay cannot contain resolved media bytes".into(),
                 ));
             }
             return Ok(None);
@@ -176,6 +189,18 @@ impl ProviderExecutor {
                     .len(),
             )?;
             items.push(json!({"message":assistant, "content":output, "prefix_hash":prefix_hash}));
+        }
+        if items
+            .iter()
+            .any(crate::documents::contains_private_document_data)
+        {
+            if replay {
+                return Err(ProviderError::Configuration(
+                    "Messages replay cannot contain resolved document bytes or remote file handles"
+                        .into(),
+                ));
+            }
+            return Ok(None);
         }
         let bytes = serde_json::to_vec(&items)
             .map_err(|_| ProviderError::Malformed("invalid provider state".into()))?

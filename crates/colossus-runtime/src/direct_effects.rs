@@ -1,6 +1,50 @@
 use super::*;
 
 impl Runtime {
+    /// Validate a bounded native document envelope without extracting or executing content.
+    pub fn validate_run_input_document(
+        &self,
+        file_name: &str,
+        declared_media_type: Option<&str>,
+        bytes: &[u8],
+    ) -> Result<colossus_media::ValidatedDocument, RuntimeError> {
+        colossus_media::validate_document_bytes(file_name, declared_media_type, bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Admit a document owned by this application as immutable metadata.
+    pub fn run_input_file_reference(
+        &self,
+        owner_id: &str,
+        artifact_id: &str,
+    ) -> Result<colossus_contracts::ModelFileReference, RuntimeError> {
+        self.run_input_media
+            .file_reference(owner_id, artifact_id)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Safe per-model document formats after current feature observations and API eligibility.
+    pub fn configured_model_document_media_types(
+        &self,
+        model_profile: &str,
+    ) -> Result<Vec<String>, RuntimeError> {
+        let resolved = self
+            .providers
+            .model(model_profile)
+            .map_err(|error| RuntimeError::Config(error.to_string()))?;
+        if !resolved.route().capabilities.document_inputs {
+            return Ok(Vec::new());
+        }
+        Ok(resolved
+            .provider()
+            .profile()
+            .kind
+            .document_media_types()
+            .iter()
+            .map(|media| (*media).to_owned())
+            .collect())
+    }
+
     /// Validate exact local bytes with the shared bounded run-input image contract.
     pub fn validate_run_input_image(
         &self,

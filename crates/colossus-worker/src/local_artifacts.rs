@@ -1,4 +1,8 @@
 use super::*;
+
+#[cfg(test)]
+#[path = "local_artifacts_tests.rs"]
+mod tests;
 use colossus_api::{
     ApiScope, ApplicationKind, ApplicationPrincipal, ArtifactApi, ArtifactChunk, ArtifactDownload,
     ArtifactReference, CallerContext, CreateArtifactUploadRequest, EventSourcedArtifactApi,
@@ -66,9 +70,19 @@ pub(super) async fn prepare_model_content(
             "at most 16 attachments may be supplied".into(),
         ));
     }
-    let mut text_attachments = Vec::new();
-    let mut images = Vec::<ModelImageReference>::new();
-    let mut combined_image_bytes = 0_u64;
+    if prompt.len() > 1_048_576 {
+        return Err(WorkerError::Protocol(
+            "combined prompt and attachments exceed 1 MiB".into(),
+        ));
+    }
+    let mut parts = vec![ModelContentPart::Text {
+        text: prompt.into(),
+    }];
+    let mut image_count = 0_usize;
+    let mut image_bytes = 0_u64;
+    let mut document_count = 0_usize;
+    let mut document_bytes = 0_u64;
+    let mut text_bytes = prompt.len();
     for path in attachments {
         let bytes = runtime.read_run_input_file_bytes(path).await?;
         let file_name = path
@@ -76,35 +90,81 @@ pub(super) async fn prepare_model_content(
             .and_then(|name| name.to_str())
             .filter(|name| !name.is_empty())
             .ok_or_else(|| WorkerError::Protocol("attachment file name is invalid".into()))?;
-        match runtime.validate_run_input_image(file_name, None, &bytes) {
-            Ok(validated) => {
-                combined_image_bytes = combined_image_bytes
-                    .checked_add(validated.size_bytes)
-                    .ok_or_else(|| {
-                        WorkerError::Protocol("combined image input size overflowed".into())
-                    })?;
-                if images.len() >= 16 || combined_image_bytes > 32 * 1_048_576 {
-                    return Err(WorkerError::Protocol(
-                        "image inputs exceed the 16-image or 32 MiB bound".into(),
-                    ));
-                }
-                images.push(import_validated_image(runtime, file_name, &bytes, &validated).await?);
+        if colossus_runtime::document_media_type_for_file_name(file_name).is_some() {
+            let validated = runtime.validate_run_input_document(file_name, None, &bytes)?;
+            document_count += 1;
+            document_bytes = document_bytes
+                .checked_add(validated.size_bytes)
+                .ok_or_else(|| WorkerError::Protocol("attachment size overflowed".into()))?;
+            if document_count > colossus_contracts::MAX_DOCUMENT_INPUT_COUNT
+                || document_bytes > colossus_contracts::MAX_COMBINED_DOCUMENT_INPUT_BYTES
+            {
+                return Err(WorkerError::Protocol(
+                    "documents exceed the 4-file or 32 MiB combined bound".into(),
+                ));
             }
-            Err(error) if image_candidate(path, &bytes) => return Err(error.into()),
-            Err(_) => text_attachments.push((path.clone(), bytes)),
+            let key = format!(
+                "local-document-{}",
+                hex::encode(Sha256::digest(
+                    format!("{file_name}\0{}", validated.sha256).as_bytes()
+                ))
+            );
+            let artifact =
+                upload_artifact_bytes(runtime, file_name, &validated.media_type, &bytes, &key)
+                    .await?;
+            let file =
+                runtime.run_input_file_reference("app:colossus-cli", &artifact.artifact_id)?;
+            parts.push(ModelContentPart::File { file });
+        } else {
+            match runtime.validate_run_input_image(file_name, None, &bytes) {
+                Ok(validated) => {
+                    image_count += 1;
+                    image_bytes =
+                        image_bytes
+                            .checked_add(validated.size_bytes)
+                            .ok_or_else(|| {
+                                WorkerError::Protocol("attachment size overflowed".into())
+                            })?;
+                    if image_count > 16 || image_bytes > 32 * 1_048_576 {
+                        return Err(WorkerError::Protocol(
+                            "images exceed the 16-image or 32 MiB combined bound".into(),
+                        ));
+                    }
+                    let image =
+                        import_validated_image(runtime, file_name, &bytes, &validated).await?;
+                    parts.push(ModelContentPart::Image { image });
+                }
+                Err(error) if image_candidate(path, &bytes) => return Err(error.into()),
+                Err(_) => {
+                    let text =
+                        runtime.prompt_with_text_attachment_bytes("", &[(path.clone(), bytes)])?;
+                    text_bytes = text_bytes.saturating_add(text.len());
+                    if text_bytes > 1_048_576 {
+                        return Err(WorkerError::Protocol(
+                            "combined text attachments exceed 1 MiB".into(),
+                        ));
+                    }
+                    parts.push(ModelContentPart::Text { text });
+                }
+            }
         }
     }
-    let text = runtime.prompt_with_text_attachment_bytes(prompt, &text_attachments)?;
-    if images.is_empty() {
-        return Ok(ModelContent::Text(text));
+    if image_count == 0 && document_count == 0 {
+        Ok(ModelContent::Text(
+            parts
+                .into_iter()
+                .filter_map(|part| {
+                    if let ModelContentPart::Text { text } = part {
+                        Some(text)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<String>(),
+        ))
+    } else {
+        Ok(ModelContent::Parts(parts))
     }
-    let mut parts = vec![ModelContentPart::Text { text }];
-    parts.extend(
-        images
-            .into_iter()
-            .map(|image| ModelContentPart::Image { image }),
-    );
-    Ok(ModelContent::Parts(parts))
 }
 
 pub(super) async fn import_image_reference(
@@ -127,7 +187,7 @@ async fn import_validated_image(
     bytes: &[u8],
     validated: &colossus_runtime::ValidatedImage,
 ) -> Result<ModelImageReference, WorkerError> {
-    let artifact = upload_image_bytes(
+    let artifact = upload_artifact_bytes(
         runtime,
         file_name,
         &validated.media_type,
@@ -140,7 +200,7 @@ async fn import_validated_image(
         .map_err(Into::into)
 }
 
-async fn upload_image_bytes(
+async fn upload_artifact_bytes(
     runtime: &Runtime,
     file_name: &str,
     media_type: &str,
@@ -240,6 +300,13 @@ fn cli_artifact_caller() -> Result<CallerContext, WorkerError> {
 }
 
 fn artifact_media_type(path: &Path) -> &'static str {
+    if let Some(media) = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(colossus_runtime::document_media_type_for_file_name)
+    {
+        return media;
+    }
     match path
         .extension()
         .and_then(|extension| extension.to_str())

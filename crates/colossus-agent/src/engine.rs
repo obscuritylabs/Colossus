@@ -233,6 +233,28 @@ impl AgentService {
             .provider
             .route_with_options(role, &scope.agent_options)?;
         let image_count = prompt.images().count();
+        let files = prompt.files().collect::<Vec<_>>();
+        if !files.is_empty() && !route.capabilities.document_inputs {
+            return Err(AgentError::Configuration(format!(
+                "model profile {} does not enable document inputs",
+                route.model_profile
+            )));
+        }
+        let document_bytes = files
+            .iter()
+            .try_fold(0_u64, |total, file| total.checked_add(file.size_bytes));
+        if files.len() > colossus_contracts::MAX_DOCUMENT_INPUT_COUNT
+            || files.iter().any(|file| {
+                file.size_bytes == 0
+                    || file.size_bytes > colossus_contracts::MAX_DOCUMENT_INPUT_BYTES
+            })
+            || document_bytes
+                .is_none_or(|total| total > colossus_contracts::MAX_COMBINED_DOCUMENT_INPUT_BYTES)
+        {
+            return Err(AgentError::Configuration(
+                "document input count or byte bound exceeded".into(),
+            ));
+        }
         let image_bytes = prompt.images().try_fold(0_u64, |total, image| {
             total
                 .checked_add(image.size_bytes)

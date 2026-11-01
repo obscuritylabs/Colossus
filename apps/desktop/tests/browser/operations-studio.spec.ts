@@ -901,6 +901,7 @@ test("managed settings expose complete catalog editors without horizontal overfl
     "Tool calls",
     "Streaming",
     "Image inputs",
+    "Document inputs",
     "Server compaction",
   ]) {
     const capability = page.getByRole("slider", { name: label, exact: true });

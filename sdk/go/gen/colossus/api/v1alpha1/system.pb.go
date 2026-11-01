@@ -342,9 +342,12 @@ type ConfiguredModelProfile struct {
 	// reasoning_effort is the configured default, when explicitly set.
 	ReasoningEffort *string `protobuf:"bytes,5,opt,name=reasoning_effort,json=reasoningEffort,proto3,oneof" json:"reasoning_effort,omitempty"`
 	// default_roles lists only caller-authorized roles resolving to this profile.
-	DefaultRoles  []string `protobuf:"bytes,6,rep,name=default_roles,json=defaultRoles,proto3" json:"default_roles,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	DefaultRoles []string `protobuf:"bytes,6,rep,name=default_roles,json=defaultRoles,proto3" json:"default_roles,omitempty"`
+	// document_media_types intersects explicit model intent with this provider API's formats.
+	// Older servers omit it; an empty list never enables native document attachments.
+	DocumentMediaTypes []string `protobuf:"bytes,7,rep,name=document_media_types,json=documentMediaTypes,proto3" json:"document_media_types,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ConfiguredModelProfile) Reset() {
@@ -415,6 +418,13 @@ func (x *ConfiguredModelProfile) GetReasoningEffort() string {
 func (x *ConfiguredModelProfile) GetDefaultRoles() []string {
 	if x != nil {
 		return x.DefaultRoles
+	}
+	return nil
+}
+
+func (x *ConfiguredModelProfile) GetDocumentMediaTypes() []string {
+	if x != nil {
+		return x.DocumentMediaTypes
 	}
 	return nil
 }
@@ -796,14 +806,15 @@ const file_colossus_api_v1alpha1_system_proto_rawDesc = "" +
 	"capability\x18\x01 \x01(\tR\n" +
 	"capability\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12H\n" +
-	"\x12removal_not_before\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x10removalNotBefore\"\xf9\x01\n" +
+	"\x12removal_not_before\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x10removalNotBefore\"\xab\x02\n" +
 	"\x16ConfiguredModelProfile\x12\x18\n" +
 	"\aprofile\x18\x01 \x01(\tR\aprofile\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\x1a\n" +
 	"\bprovider\x18\x03 \x01(\tR\bprovider\x12)\n" +
 	"\x10provider_profile\x18\x04 \x01(\tR\x0fproviderProfile\x12.\n" +
 	"\x10reasoning_effort\x18\x05 \x01(\tH\x00R\x0freasoningEffort\x88\x01\x01\x12#\n" +
-	"\rdefault_roles\x18\x06 \x03(\tR\fdefaultRolesB\x13\n" +
+	"\rdefault_roles\x18\x06 \x03(\tR\fdefaultRoles\x120\n" +
+	"\x14document_media_types\x18\a \x03(\tR\x12documentMediaTypesB\x13\n" +
 	"\x11_reasoning_effort\"\xa5\x04\n" +
 	"\n" +
 	"ServerInfo\x12\x1f\n" +

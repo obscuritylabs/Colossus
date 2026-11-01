@@ -34,6 +34,7 @@ import {
   connectColossus,
   createManagedCredential,
   createRun,
+  chooseRunAttachment,
   desktopReleaseChannel,
   deleteManagedCredential,
   deleteGlobalMcpServer,
@@ -100,6 +101,21 @@ describe("desktop API target routing", () => {
     tauri.invoke.mockReset();
     tauri.invoke.mockResolvedValue(undefined);
     tauri.channels.length = 0;
+  });
+
+  it("binds attachment admission to the target and next message model preferences", async () => {
+    await chooseRunAttachment("selected-target", "reviewer", "document-model");
+    expect(tauri.invoke).toHaveBeenLastCalledWith("choose_run_attachment", {
+      targetId: "selected-target",
+      role: "reviewer",
+      modelProfile: "document-model",
+    });
+    await chooseRunAttachment("selected-target");
+    expect(tauri.invoke).toHaveBeenLastCalledWith("choose_run_attachment", {
+      targetId: "selected-target",
+      role: "primary",
+      modelProfile: undefined,
+    });
   });
 
   it("passes bounded notification content to the native notification command", async () => {

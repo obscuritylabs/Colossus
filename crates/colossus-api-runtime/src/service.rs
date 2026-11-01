@@ -50,6 +50,8 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::Instrument as _;
 use uuid::Uuid;
+mod input_messages;
+use input_messages::InputMessageRelease;
 mod posture;
 mod prompt_predictions;
 mod sharing;
@@ -153,7 +155,7 @@ pub struct RuntimeAgentRunApi {
     shell_reads: Arc<ListAdmission>,
     shell_controls: Arc<ListAdmission>,
     active_changed: Arc<tokio::sync::Notify>,
-    recovery: Arc<Mutex<()>>,
+    recovery: Arc<tokio::sync::Mutex<()>>,
     pending_recoveries: Arc<Mutex<BTreeMap<String, CallerContext>>>,
     default_role: String,
     instructions: String,
@@ -257,7 +259,7 @@ impl RuntimeAgentRunApi {
             shell_reads,
             shell_controls,
             active_changed: Arc::new(tokio::sync::Notify::new()),
-            recovery: Arc::new(Mutex::new(())),
+            recovery: Arc::new(tokio::sync::Mutex::new(())),
             pending_recoveries: Arc::new(Mutex::new(BTreeMap::new())),
             default_role: default_role.into(),
             instructions: instructions.into(),
@@ -363,6 +365,9 @@ impl RuntimeAgentRunApi {
                 )
                 .with_correlation_id(caller.request_id().clone())
             })?;
+        // Owning a run created in somebody else's shared session does not retain
+        // that source session's continuation authority after its grant is revoked.
+        self.session_id(caller, Some(&source.session_id))?;
         let session = self
             .runtime
             .get_session(&source.session_id)
@@ -449,6 +454,8 @@ impl RuntimeAgentRunApi {
         let mut text_bytes = 0_usize;
         let mut image_count = 0_usize;
         let mut image_bytes = 0_u64;
+        let mut document_count = 0_usize;
+        let mut document_bytes = 0_u64;
         for part in &request.input {
             let part = match part {
                 ContentPart::Text { text } => ModelContentPart::Text { text: text.clone() },
@@ -482,6 +489,82 @@ impl RuntimeAgentRunApi {
                                 text
                             ),
                         }
+                    } else if colossus_runtime::supported_document_media_type(&artifact.media_type)
+                    {
+                        if matches!(request.mode, RunMode::Research | RunMode::Goal)
+                            || matches!(request.plan_action, Some(PlanRunAction::Execute { .. }))
+                        {
+                            return Err(ApiError::failed_precondition(
+                                ApiErrorReason::InvalidRunTransition,
+                                "Research, standalone Goal, and approved-plan execution do not accept native document inputs",
+                            ));
+                        }
+                        let profile = match request.model_profile.as_deref() {
+                            Some(profile) => profile.to_owned(),
+                            None => {
+                                self.runtime
+                                    .provider_route(
+                                        request
+                                            .role
+                                            .as_deref()
+                                            .unwrap_or(self.default_role.as_str()),
+                                    )
+                                    .map_err(|_| {
+                                        ApiError::failed_precondition(
+                                            ApiErrorReason::ArtifactUnavailable,
+                                            "selected model is unavailable",
+                                        )
+                                    })?
+                                    .model_profile
+                            }
+                        };
+                        let formats = self
+                            .runtime
+                            .configured_model_document_media_types(&profile)
+                            .map_err(|_| {
+                                ApiError::failed_precondition(
+                                    ApiErrorReason::ArtifactUnavailable,
+                                    "selected model is unavailable",
+                                )
+                            })?;
+                        if !formats.contains(&artifact.media_type) {
+                            return Err(ApiError::failed_precondition(
+                                ApiErrorReason::ArtifactUnavailable,
+                                "selected model does not enable this native document format",
+                            ));
+                        }
+                        document_count += 1;
+                        document_bytes = document_bytes
+                            .checked_add(artifact.size_bytes)
+                            .ok_or_else(|| {
+                                ApiError::bounded_resource_exhausted(
+                                    ApiErrorReason::CapacityExceeded,
+                                    "document size overflowed",
+                                )
+                            })?;
+                        if document_count > colossus_contracts::MAX_DOCUMENT_INPUT_COUNT
+                            || document_bytes
+                                > colossus_contracts::MAX_COMBINED_DOCUMENT_INPUT_BYTES
+                        {
+                            return Err(ApiError::bounded_resource_exhausted(
+                                ApiErrorReason::CapacityExceeded,
+                                "documents exceed the 4-file or 32 MiB combined bound",
+                            ));
+                        }
+                        let file = self
+                            .runtime
+                            .run_input_file_reference(
+                                caller.principal().application_id(),
+                                artifact_id,
+                            )
+                            .map_err(|_| {
+                                ApiError::invalid(
+                                    ApiErrorReason::InvalidArgument,
+                                    "input.artifact",
+                                    "native document artifact failed bounded validation",
+                                )
+                            })?;
+                        ModelContentPart::File { file }
                     } else if artifact.media_type.starts_with("image/") {
                         if request.mode == RunMode::Research {
                             return Err(ApiError::failed_precondition(
@@ -516,7 +599,7 @@ impl RuntimeAgentRunApi {
                     } else {
                         return Err(ApiError::failed_precondition(
                             ApiErrorReason::ArtifactUnavailable,
-                            "the artifact is not a supported text or image run input",
+                            "the artifact is not a supported text, image, or native document run input",
                         )
                         .with_correlation_id(caller.request_id().clone()));
                     }
@@ -552,12 +635,12 @@ impl RuntimeAgentRunApi {
             )
             .with_correlation_id(caller.request_id().clone()));
         }
-        if image_count == 0 {
+        if image_count == 0 && document_count == 0 {
             let text = parts
                 .into_iter()
                 .find_map(|part| match part {
                     ModelContentPart::Text { text } => Some(text),
-                    ModelContentPart::Image { .. } => None,
+                    ModelContentPart::Image { .. } | ModelContentPart::File { .. } => None,
                 })
                 .unwrap_or_default();
             Ok(ModelContent::Text(text))
@@ -573,6 +656,36 @@ impl RuntimeAgentRunApi {
         request: &CreateRunRequest,
     ) -> ApiResult<ModelContent> {
         self.rendered_input(caller, request).await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_artifacts_for_test(mut self, artifacts: Arc<dyn ArtifactApi>) -> Self {
+        self.artifacts = artifacts;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn observe_input_for_test(
+        &self,
+        caller: &CallerContext,
+        run: &Run,
+        request: &CreateRunRequest,
+        prompt: ModelContent,
+        envelope: RunEventEnvelope,
+    ) -> Result<(), ModelProviderError> {
+        let mut observer = PublicRunObserver {
+            writer: Arc::new(RunWriter::new(
+                Arc::clone(&self.repository),
+                Arc::clone(&self.feeds),
+                caller.clone(),
+                run,
+            )),
+            accepts_related_run_events: true,
+            input: InputMessageRelease::new(self, caller, run, request, Some(prompt)),
+            output: Default::default(),
+            tool_contexts: Default::default(),
+        };
+        observer.observe(envelope).await
     }
 
     fn reserve_execution_locked(
@@ -848,6 +961,13 @@ impl RuntimeAgentRunApi {
             generation,
         } = pending;
         let service = self.clone();
+        // This observed head bounds only live absence proof, never public message
+        // identity/sequence. An unavailable head leaves recovery uncertainty intact.
+        let input_lower_bound = service
+            .runtime
+            .get_session(&run.session_id)
+            .ok()
+            .map(|session| session.map_or(0, |session| session.message_count));
         #[cfg(test)]
         let execution_fault = lock(&service.next_execution_fault).take();
         #[cfg(not(test))]
@@ -867,6 +987,8 @@ impl RuntimeAgentRunApi {
                 let run_id = run.id.clone();
                 let started = Instant::now();
                 service.telemetry.execution_started(&run_id, source);
+                let fallback_caller = caller.clone();
+                let fallback_request = request.clone();
                 let task = Box::pin(service.execute(
                     caller,
                     run,
@@ -874,17 +996,32 @@ impl RuntimeAgentRunApi {
                     create_session,
                     control,
                     Arc::clone(&writer),
+                    input_lower_bound,
                     panic_after_start,
                     fail_terminal_append,
                 ));
-                let mut terminal_persisted = match AssertUnwindSafe(task).catch_unwind().await {
-                    Ok(persisted) => persisted,
-                    Err(_) => writer.append(unknown_outcome_failure()).is_ok(),
-                };
+                let mut terminal_persisted: bool = AssertUnwindSafe(task)
+                    .catch_unwind()
+                    .await
+                    .unwrap_or_default();
                 if !terminal_persisted {
                     terminal_persisted = match writer.synchronize_durable_state() {
                         Ok(current) if current.status.is_terminal() => true,
-                        Ok(_) => writer.append(unknown_outcome_failure()).is_ok(),
+                        Ok(current) => {
+                            let repair = async {
+                                if let Some(input) = InputMessageRelease::new(
+                                    &service,
+                                    &fallback_caller,
+                                    &current,
+                                    &fallback_request,
+                                    None,
+                                ) {
+                                    input.after(input_lower_bound).publish(&writer).await?;
+                                }
+                                writer.append(unknown_outcome_failure()).map(|_| ())
+                            };
+                            matches!(AssertUnwindSafe(repair).catch_unwind().await, Ok(Ok(())))
+                        }
                         Err(_) => false,
                     };
                 }
@@ -895,18 +1032,20 @@ impl RuntimeAgentRunApi {
                     service.feeds.close(&run_id);
                 }
                 service.interactions.cancel_run(&run_id);
-                let mut registry = lock(&service.execution);
-                let matching = registry
-                    .active
-                    .get(&run_id)
-                    .is_some_and(|active| active.generation == generation);
-                if matching {
-                    registry.active.remove(&run_id);
-                    let _ = registry
-                        .admission
-                        .release(&run_id, generation, Instant::now());
-                }
-                drop(registry);
+                let matching = {
+                    let mut registry = lock(&service.execution);
+                    let matching = registry
+                        .active
+                        .get(&run_id)
+                        .is_some_and(|active| active.generation == generation);
+                    if matching {
+                        registry.active.remove(&run_id);
+                        let _ = registry
+                            .admission
+                            .release(&run_id, generation, Instant::now());
+                    }
+                    matching
+                };
                 if matching {
                     service.active_changed.notify_waiters();
                 }
@@ -921,7 +1060,7 @@ impl RuntimeAgentRunApi {
                     terminal_persisted,
                     started.elapsed(),
                 );
-                service.drain_pending_recoveries();
+                service.drain_pending_recoveries().await;
             }
             .instrument(execution_span),
         );
@@ -947,8 +1086,8 @@ impl RuntimeAgentRunApi {
         lock(&self.pending_recoveries).remove(run_id);
     }
 
-    fn drain_pending_recoveries(&self) {
-        let _recovery = lock(&self.recovery);
+    async fn drain_pending_recoveries(&self) {
+        let _recovery = self.recovery.lock().await;
         let pending = lock(&self.pending_recoveries)
             .iter()
             .map(|(run_id, caller)| (run_id.clone(), caller.clone()))
@@ -1002,7 +1141,7 @@ impl RuntimeAgentRunApi {
         }
     }
 
-    fn recover_orphan(&self, caller: &CallerContext, run: Run) -> ApiResult<Run> {
+    async fn recover_orphan(&self, caller: &CallerContext, run: Run) -> ApiResult<Run> {
         if run.status.is_terminal() {
             self.settle_communication(&run)?;
             return Ok(run);
@@ -1010,7 +1149,7 @@ impl RuntimeAgentRunApi {
         if lock(&self.execution).active.contains_key(&run.id) {
             return Ok(run);
         }
-        let _recovery = lock(&self.recovery);
+        let _recovery = self.recovery.lock().await;
         if lock(&self.execution).active.contains_key(&run.id) {
             return self
                 .repository
@@ -1027,8 +1166,32 @@ impl RuntimeAgentRunApi {
         }
         let recovered = recovered_caller(&execution, &current.id, caller)?;
         let recovery_span = self.telemetry.recovery_span(&current.id);
-        let _recovery_span = recovery_span.enter();
-        self.telemetry.recovery_started(&current.id, current.status);
+        {
+            let _entered = recovery_span.enter();
+            self.telemetry.recovery_started(&current.id, current.status);
+        }
+        if matches!(
+            current.status,
+            RunStatus::Running | RunStatus::Waiting | RunStatus::Cancelling
+        ) && let Some(mut input) =
+            InputMessageRelease::new(self, &recovered, &current, &execution.request, None)
+        {
+            let writer = RunWriter::new(
+                Arc::clone(&self.repository),
+                Arc::clone(&self.feeds),
+                recovered.clone(),
+                &current,
+            );
+            input
+                .publish(&writer)
+                .instrument(recovery_span.clone())
+                .await?;
+        }
+        let current = self
+            .repository
+            .recoverable_run(&recovered, &current.id)?
+            .map(|(run, _)| run)
+            .ok_or_else(|| missing_run(caller))?;
         match current.status {
             RunStatus::Queued => {
                 let create_session = execution.request.session_id.is_none();
@@ -1129,8 +1292,12 @@ impl RuntimeAgentRunApi {
         })
     }
 
-    fn cancel_orphan(&self, caller: &CallerContext, request: &CancelRunRequest) -> ApiResult<Run> {
-        let _recovery = lock(&self.recovery);
+    async fn cancel_orphan(
+        &self,
+        caller: &CallerContext,
+        request: &CancelRunRequest,
+    ) -> ApiResult<Run> {
+        let _recovery = self.recovery.lock().await;
         let active_run = lock(&self.execution).active.get(&request.run_id).cloned();
         if let Some(active_run) = active_run {
             let run = active_run
@@ -1165,6 +1332,11 @@ impl RuntimeAgentRunApi {
             recovered.clone(),
             &result.value,
         );
+        if let Some(mut input) =
+            InputMessageRelease::new(self, &recovered, &result.value, &execution.request, None)
+        {
+            input.publish(&writer).await?;
+        }
         match before.status {
             RunStatus::Queued => {
                 writer.append(cancelled_before_start())?;
@@ -1193,6 +1365,7 @@ impl RuntimeAgentRunApi {
         create_session: bool,
         control: RunControl,
         writer: Arc<RunWriter>,
+        input_lower_bound: Option<u64>,
         panic_after_start: bool,
         fail_terminal_append: bool,
     ) -> bool {
@@ -1328,6 +1501,13 @@ impl RuntimeAgentRunApi {
                 let _ = writer.append(invariant_failure());
                 return true;
             }
+            if let Some(mut input) =
+                InputMessageRelease::new(self, &caller, &run, &request, Some(prompt.clone()))
+                    .map(|input| input.after(input_lower_bound))
+                && input.publish(&writer).await.is_err()
+            {
+                return false;
+            }
             let depth = match request
                 .research_depth
                 .unwrap_or(PublicResearchDepth::Standard)
@@ -1415,6 +1595,7 @@ impl RuntimeAgentRunApi {
             let mut observer = PublicRunObserver {
                 writer: Arc::clone(&writer),
                 accepts_related_run_events: true,
+                input: None,
                 output: Default::default(),
                 tool_contexts: Default::default(),
             };
@@ -1484,6 +1665,8 @@ impl RuntimeAgentRunApi {
         let mut observer = PublicRunObserver {
             writer: Arc::clone(&writer),
             accepts_related_run_events,
+            input: InputMessageRelease::new(self, &caller, &run, &request, Some(prompt.clone()))
+                .map(|input| input.after(input_lower_bound)),
             output: Default::default(),
             tool_contexts: Default::default(),
         };
@@ -1598,6 +1781,11 @@ impl RuntimeAgentRunApi {
                 }
             }
         };
+        if let Some(input) = &mut observer.input
+            && input.publish(&writer).await.is_err()
+        {
+            return false;
+        }
         if fail_terminal_append {
             return false;
         }
@@ -1827,7 +2015,7 @@ impl AgentRunApi for RuntimeAgentRunApi {
                 .with_correlation_id(caller.request_id().clone())
             })?;
         if source.principal().application_id() == caller.principal().application_id() {
-            self.recover_orphan(caller, run)
+            self.recover_orphan(caller, run).await
         } else {
             Ok(run)
         }
@@ -1965,7 +2153,7 @@ impl AgentRunApi for RuntimeAgentRunApi {
         let run = if shared {
             run
         } else {
-            self.recover_orphan(caller, run)?
+            self.recover_orphan(caller, run).await?
         };
         let watch_permit = self
             .watches
@@ -2016,7 +2204,7 @@ impl AgentRunApi for RuntimeAgentRunApi {
             self.interactions.cancel_run(&request.run_id);
             return Ok(run);
         }
-        self.cancel_orphan(caller, &request)
+        self.cancel_orphan(caller, &request).await
     }
 
     async fn archive_thread(
@@ -2060,7 +2248,7 @@ impl AgentRunApi for RuntimeAgentRunApi {
         if !lock(&self.execution).active.contains_key(&request.run_id)
             && let Some((run, _)) = self.repository.recoverable_run(caller, &request.run_id)?
         {
-            let _ = self.recover_orphan(caller, run)?;
+            let _ = self.recover_orphan(caller, run).await?;
         }
         let active_run = lock(&self.execution)
             .active
@@ -2090,6 +2278,7 @@ impl AgentRunApi for RuntimeAgentRunApi {
 struct PublicRunObserver {
     writer: Arc<RunWriter>,
     accepts_related_run_events: bool,
+    input: Option<InputMessageRelease>,
     output: crate::output_projection::OutputProjection,
     tool_contexts: ToolActivityContexts,
 }
@@ -2101,6 +2290,22 @@ impl RunEventObserver for PublicRunObserver {
             return Err(ModelProviderError::Failed(
                 "public run event identity did not match".into(),
             ));
+        }
+        if envelope.run_id == self.writer.run_id()
+            && let Some(input) = &mut self.input
+        {
+            if !input.matches_parent(&envelope) {
+                return Err(ModelProviderError::Failed(
+                    "public user message identity did not match".into(),
+                ));
+            }
+            if !input.publish(&self.writer).await.map_err(|_| {
+                ModelProviderError::Failed("public user message is unavailable".into())
+            })? {
+                return Err(ModelProviderError::Failed(
+                    "canonical user message is unavailable".into(),
+                ));
+            }
         }
         self.output.apply(&mut envelope.event);
         let context = ToolActivityContexts::prepare(&envelope);
@@ -3228,7 +3433,7 @@ impl RuntimeAgentRunApi {
             .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
         if let Some(replay) = self.repository.resolve_create_run(caller, &request)? {
             return Ok(CreateRunResponse {
-                run: self.recover_orphan(caller, replay)?,
+                run: self.recover_orphan(caller, replay).await?,
             });
         }
         Self::require_research_tools(caller, &request)?;
@@ -3284,7 +3489,7 @@ impl RuntimeAgentRunApi {
                 self.spawn_execution(*pending, ExecutionSource::Submitted);
                 run
             }
-            CreateDecision::Replay(run) => self.recover_orphan(caller, run)?,
+            CreateDecision::Replay(run) => self.recover_orphan(caller, run).await?,
         };
         Ok(CreateRunResponse { run })
     }

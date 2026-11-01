@@ -17,6 +17,7 @@ the owning crates and tests.
 | Native, OCI, and Windows isolation | `colossus-sandbox`, platform process crates, sidecar crates | [Sandbox](../admin/sandbox.md) | Platform acceptance suites and CLI sandbox targets |
 | Durable journal, projections, recovery, and audit export | journal, projection, audit, telemetry crates | [State and recovery](state-recovery.md), [Audit and recovery](../admin/audit-telemetry-recovery.md) | Shared conformance, tamper, crash, outage, and export tests |
 | Providers, model routing, and normalized turns | `colossus-provider`, `colossus-agent`, `colossus-runtime` | [Choose a provider](../use/providers/index.md), [Providers and models](../reference/configuration/providers-models.md) | Provider and agent suites plus CLI provider smoke tests |
+| Provider-native document inputs | `colossus-contracts`, `colossus-media`, provider adapters, runtime/API artifact admission and client adapters | [Native document inputs](../reference/configuration/providers-models.md#native-document-inputs), [Public API and SDKs](application-sdk.md) | Document envelope and ownership tests, bounded context preparation, native wire projection and diagnostic/replay checks; live-provider acceptance remains separately scoped |
 | Sessions and context | `colossus-session`, `colossus-context`, `colossus-runtime` | [Sessions](../use/sessions.md), [context and snapshots](../use/sessions-context.md) | Repository, snapshot, compaction, and branch tests |
 | Tasks, decisions, plans, goals, and subagents | `colossus-work`, `colossus-agent`, `colossus-runtime` | [Tasks, decisions, and plans](../use/tasks-decisions-plans.md), [Goals and subagents](../use/goals-subagents.md) | Lifecycle, lineage, budget, cancellation, and recovery tests |
 | Memory and lexical projection | `colossus-memory` | [Memories](../use/memories.md), [Context and memory configuration](../reference/configuration/context-memory-research.md) | Canonical lifecycle, Tantivy, fallback, and recovery tests |
@@ -75,9 +76,56 @@ Their pending native checks remain separate from implementation and historical t
 | Human browser sign-in controls | Intentional difference: human native profiles and sign-ins belong to the Desktop host; existing agent browser contracts do not expose their cookies | Intentional difference: agent browser operations do not establish a human profile/settings workflow | Partial: Windows User-Agent, encrypted opt-in sign-in persistence, reset and redacted diagnostics implemented; final rebuilt-byte/platform acceptance pending | Intentional difference: no corresponding human native-profile host | Intentional difference: ordinary browser cookies remain owned by the user's browser; no Desktop profile sharing |
 | Developer companion | Intentional difference: floating window and preferences are local Desktop presentation | Intentional difference: no floating native companion window | Partial: status/preferences and scoped native actions implemented; Windows border fix implemented; native visual verification pending | Intentional difference: not an extension feature | Intentional difference: browser page does not own an OS floating companion |
 | Compose deployment with Chat by default | Existing Control Plane API exercised for bootstrap, authentication and retained Chat; public runtime SDK contracts unchanged | Intentional difference: one-time PowerShell initialization followed by ordinary Compose commands; native CLI/TUI runtimes remain separate Fleet enrollments; no new Hosted Chat client command | Intentional difference: separately installed client; no embedded Compose installer or new Hosted Chat transport; existing Fleet GUI acceptance unverified | Intentional difference: separately installed extension; no embedded Compose installer or new Hosted Chat transport; existing Fleet GUI acceptance unverified | Supported: default Hosted Chat with Echo, verified HTTPS and SSE through the existing web app; API smoke tested, full rendered Chat acceptance unverified |
+| Provider-native document attachments | Supported: existing caller-owned artifact/run-input transport; format validation and selected-model document capability stay in the host; SDK capability metadata does not grant document authority | CLI: native `--attach` through the owned artifact path; Partial TUI: canonical document history renders, but `/attach` remains image-only | Implemented: native document attachment and model preference adapters; current-source rendered/native acceptance remains separately required | Missing: no human file attachment picker; public transport support alone is insufficient | Missing: Hosted attachment picker remains text-only; no native document workflow |
 
 Evidence and owned follow-ups:
 
+- **Native documents:** `documentInputs` is separate from image support and defaults
+  Off; CLI setup exposes `--document-inputs off|auto|on`. Responses and Codex support
+  PDF, DOCX, XLSX and PPTX on eligible models; Chat Completions and native
+  Anthropic support PDF only. Echo does not support this path. Encrypted
+  artifacts retain bytes; canonical messages and provider replay retain verified
+  metadata, with inline resolution only inside the provider permit. This adds no
+  local full document parser or provider Files upload/delete lifecycle.
+  Live per-format content checks recovered hidden document codes from PDF, DOCX,
+  XLSX and PPTX with `gpt-6-luna` through the existing Desktop Codex sign-in and
+  fixed subscription route, with tools disabled. A four-file request also recovered
+  all four codes in attachment order. A fresh-process continuation reused the same
+  session without new attachments and recovered secondary document codes absent
+  from the first answer. This establishes that tested model/account path; it does
+  not guarantee every Codex model or account. Final-source native GUI acceptance
+  remains unverified, owned by `test_owner` and `desktop_owner`.
+  Admitted initial human input uses durable ordered public Message updates so
+  attachment metadata can be reconstructed after reconnect; client drafts are not
+  history authority. API/runtime owners retain canonical identity, ownership and
+  append-once recovery checks.
+  History consumers preserve one human turn: Desktop suppresses its local prompt
+  when a durable User Message arrives; CLI/TUI use canonical transcripts; VS Code
+  ignores incremental Message frames and reloads its canonical view. Web/Hosted
+  retains the submitted human row and ignores the duplicate runtime User frame.
+  Activity projection coalesces canonical scalar and released User records by
+  session-message sequence, retaining ordered attachment labels. API/projection
+  and Cloud replay/reload tests protect these boundaries; client native/GUI and
+  vendor acceptance remain separately scoped.
+  Shared continuation explicitly includes admitted attachment context. New branch
+  copies check current source-session ownership/continuation authority even when
+  the caller owns an intermediate run; an authorized independent snapshot retains
+  its copied context after later revocation. Direct artifact downloads remain
+  owner-bound. API/runtime and test owners retain the active/revoked branch cases.
+  A durable verified branch-prefix receipt excludes copied User records from new
+  input publication, including failure before the new prompt commits; missing or
+  conflicting proof preserves recovery uncertainty.
+  Public API execution and Plan creation/refinement accept the supported formats;
+  approved-plan execution rejects new documents and uses its saved revision.
+  Research and standalone Goal keep their existing text-only request contracts.
+  `test_owner` owns live-provider extraction and same-session/restart evidence with
+  matching source; passing loopback wire tests is not live vendor acceptance.
+  `desktop_owner` and `test_owner` own rendered/native Desktop acceptance.
+  `cli_owner` owns native document submission through TUI `/attach`; `test_owner`
+  owns its acceptance after that adapter expands beyond images.
+  `vscode_owner` owns a scoped file-picker/upload workflow and its public SDK
+  acceptance; `maintenance_coordinator` owns assigning the Web/Hosted document
+  workflow to its canonical API/client owners before claiming that coverage.
 - **Compose:** Hosted Chat is the web workflow. `deploy/compose/test-init.ps1`,
   `deploy/compose/smoke.cjs` and `.github/workflows/compose-smoke.yml` own
   initialization and smoke checks. Acceptance uses published `v0.11.11-preview.5`

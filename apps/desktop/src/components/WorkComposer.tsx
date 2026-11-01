@@ -215,6 +215,7 @@ export function WorkComposer({
     null,
   );
   const roleMissing = role.trim().length === 0;
+  const hasDraftInput = prompt.trim().length > 0 || attachments.length > 0;
   const goalBlocked =
     mode === "goal" &&
     (!goalAvailable ||
@@ -904,7 +905,7 @@ export function WorkComposer({
                   !canCompose || attachmentBusy || attachments.length >= 16
                 }
                 aria-label="Attach a file"
-                title="Attach a PNG, JPEG, WebP, UTF-8 text, or source file"
+                title="Attach an image, UTF-8 text/source file, or provider-supported document (up to four documents)"
                 onClick={onChooseAttachment}
               >
                 <IconPaperclip size={19} stroke={1.7} aria-hidden="true" />
@@ -945,7 +946,7 @@ export function WorkComposer({
               disabled={
                 !canCompose ||
                 !activeWorkRedirectable ||
-                prompt.trim().length === 0 ||
+                !hasDraftInput ||
                 promptOverLimit ||
                 roleMissing ||
                 goalBlocked
@@ -956,7 +957,7 @@ export function WorkComposer({
               Redirect
             </button>
           ) : null}
-          {!activeWorkRunning || prompt.trim().length > 0 ? (
+          {!activeWorkRunning || hasDraftInput ? (
             <ComposerSendButton
               className={`send-button${queueing && !slashCommandDraft ? " is-queue" : ""}`}
               type="submit"
@@ -971,7 +972,7 @@ export function WorkComposer({
               }
               disabled={
                 !canCompose ||
-                prompt.trim().length === 0 ||
+                !hasDraftInput ||
                 promptOverLimit ||
                 (!slashCommandDraft &&
                   (roleMissing ||
@@ -1016,6 +1017,11 @@ export function WorkComposer({
       {error !== null ? (
         <div className="composer-error" role="alert">
           <span>{error.message}</span>
+          {error.violations.map((violation, index) => (
+            <span key={`${violation.field}-${index}`}>
+              {violation.description}
+            </span>
+          ))}
           {error.outcomeUnknown ? (
             <strong>Outcome unknown — do not retry automatically.</strong>
           ) : null}

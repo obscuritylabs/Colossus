@@ -103,13 +103,23 @@ pub(super) fn apply_snapshot(
     let mut prepared = Vec::with_capacity(messages.len().saturating_sub(source_end) + 1);
     let markers = messages[..source_end]
         .iter()
-        .flat_map(|message| message.content.images())
-        .map(image_compaction_marker)
+        .flat_map(|message| match &message.content {
+            ModelContent::Text(_) => &[][..],
+            ModelContent::Parts(parts) => parts.as_slice(),
+        })
+        .filter_map(|part| match part {
+            ModelContentPart::Image { image } => Some(image_compaction_marker(image)),
+            ModelContentPart::File { file } => Some(document_compaction_marker(file)),
+            ModelContentPart::Text { text } if text.starts_with("[Compacted document: ") => {
+                Some(text.clone())
+            }
+            ModelContentPart::Text { .. } => None,
+        })
         .collect::<Vec<_>>();
     let marker_block = if markers.is_empty() {
         String::new()
     } else {
-        format!("\n\nCompacted image inputs:\n{}", markers.join("\n"))
+        format!("\n\nCompacted media inputs:\n{}", markers.join("\n"))
     };
     prepared.push(ModelMessage {
             agent_message_origin: None,
@@ -230,6 +240,14 @@ pub(super) fn estimate_tokens_for_model(
         .flat_map(|message| message.content.images())
         .map(|image| image_token_cost(model, image.width_pixels, image.height_pixels))
         .fold(0_u64, u64::saturating_add);
+    // Reserve a conservative byte-based allowance without parsing content locally.
+    // Compressed Office content and PDF page images can cost more; this is not an
+    // upper bound or a substitute for the provider's parsed context limit.
+    let document_tokens = messages
+        .iter()
+        .flat_map(|message| message.content.files())
+        .map(|file| document_token_cost(file.size_bytes))
+        .fold(0_u64, u64::saturating_add);
     u64::try_from(total.div_ceil(3))
         .unwrap_or(u64::MAX)
         .saturating_add(16)
@@ -244,7 +262,12 @@ pub(super) fn estimate_tokens_for_model(
                 .saturating_mul(16),
         )
         .saturating_add(image_tokens)
+        .saturating_add(document_tokens)
         .max(1)
+}
+
+pub(super) fn document_token_cost(size_bytes: u64) -> u64 {
+    size_bytes.div_ceil(3).max(2_048)
 }
 
 pub(super) fn model_request_bytes(
@@ -365,12 +388,17 @@ fn truncate_snapshot_content(value: &str, limit: usize) -> String {
     };
     let summary_start = separator.saturating_add(2);
     let header = &value[..summary_start];
-    const IMAGE_MARKERS: &str = "\n\nCompacted image inputs:\n";
-    let (summary, marker_block) = value[summary_start..]
-        .split_once(IMAGE_MARKERS)
-        .map_or((&value[summary_start..], ""), |(summary, _markers)| {
-            (summary, &value[summary_start + summary.len()..])
-        });
+    // Retain markers from current and previously prepared image-only snapshots.
+    let body = &value[summary_start..];
+    let marker_start = [
+        "\n\nCompacted media inputs:\n",
+        "\n\nCompacted image inputs:\n",
+    ]
+    .into_iter()
+    .filter_map(|heading| body.find(heading))
+    .min()
+    .unwrap_or(body.len());
+    let (summary, marker_block) = body.split_at(marker_start);
     let reserved = header.len().saturating_add(marker_block.len());
     let summary_limit = limit
         .max(reserved.saturating_add(3))
@@ -432,6 +460,91 @@ pub(super) fn compact_excess_images(messages: &[ModelMessage]) -> Vec<ModelMessa
         }
     }
     prepared
+}
+
+pub(super) fn compact_excess_documents(messages: &[ModelMessage]) -> Vec<ModelMessage> {
+    let mut retained_count = 0_usize;
+    let mut retained_bytes = 0_u64;
+    let mut prepared = messages.to_vec();
+    for message in prepared.iter_mut().rev() {
+        let ModelContent::Parts(parts) = &mut message.content else {
+            continue;
+        };
+        for part in parts.iter_mut().rev() {
+            let ModelContentPart::File { file } = part else {
+                continue;
+            };
+            let fits = retained_count < colossus_contracts::MAX_DOCUMENT_INPUT_COUNT
+                && file.size_bytes > 0
+                && file.size_bytes <= colossus_contracts::MAX_DOCUMENT_INPUT_BYTES
+                && retained_bytes
+                    .checked_add(file.size_bytes)
+                    .is_some_and(|total| {
+                        total <= colossus_contracts::MAX_COMBINED_DOCUMENT_INPUT_BYTES
+                    });
+            if fits {
+                retained_count += 1;
+                retained_bytes += file.size_bytes;
+            } else {
+                *part = ModelContentPart::Text {
+                    text: document_compaction_marker(file),
+                };
+            }
+        }
+    }
+    prepared
+}
+
+pub(super) fn validate_newest_document_turn(messages: &[ModelMessage]) -> Result<(), ContextError> {
+    let newest = messages
+        .iter()
+        .rev()
+        .find(|message| message.begins_user_turn());
+    if newest.is_some_and(|message| !documents_within_bounds(std::slice::from_ref(message))) {
+        return Err(ContextError::Configuration(
+            "the newest user turn exceeds the 4-document, 16 MiB-per-document, or 32 MiB-combined document input bound and cannot be compacted".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_document_context(messages: &[ModelMessage]) -> Result<(), ContextError> {
+    if !documents_within_bounds(messages) {
+        return Err(ContextError::Configuration(
+            "the unchanged provider replay prefix exceeds document input bounds and cannot be compacted; finish or restart the turn first".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn documents_within_bounds(messages: &[ModelMessage]) -> bool {
+    let mut count = 0_usize;
+    let mut bytes = 0_u64;
+    for file in messages.iter().flat_map(|message| message.content.files()) {
+        count += 1;
+        let Some(total) = bytes.checked_add(file.size_bytes) else {
+            return false;
+        };
+        if count > colossus_contracts::MAX_DOCUMENT_INPUT_COUNT
+            || file.size_bytes == 0
+            || file.size_bytes > colossus_contracts::MAX_DOCUMENT_INPUT_BYTES
+            || total > colossus_contracts::MAX_COMBINED_DOCUMENT_INPUT_BYTES
+        {
+            return false;
+        }
+        bytes = total;
+    }
+    true
+}
+
+pub(super) fn document_compaction_marker(file: &colossus_contracts::ModelFileReference) -> String {
+    format!(
+        "[Compacted document: {} | {} | {} bytes | sha256:{}]",
+        truncate_chars(&file.file_name, 120),
+        file.media_type,
+        file.size_bytes,
+        file.sha256.chars().take(12).collect::<String>(),
+    )
 }
 
 pub(super) fn validate_newest_image_turn(messages: &[ModelMessage]) -> Result<(), ContextError> {

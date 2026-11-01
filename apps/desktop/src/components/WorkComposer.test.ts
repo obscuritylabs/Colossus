@@ -8,6 +8,17 @@ import { WorkComposer } from "./WorkComposer";
 
 type WorkComposerProps = ComponentProps<typeof WorkComposer>;
 
+const documentAttachment: WorkComposerProps["attachments"][number] = {
+  artifactId: "artifact-pdf",
+  fileName: "proposal.pdf",
+  mediaType: "application/pdf",
+  sizeBytes: 2048,
+  sha256: "a".repeat(64),
+  purpose: "run_input",
+  state: "available",
+  createdAt: "2026-11-01T00:00:00Z",
+};
+
 function renderComposer(
   attachmentsAvailable: boolean,
   overrides: Partial<WorkComposerProps> = {},
@@ -250,6 +261,58 @@ describe("WorkComposer capabilities", () => {
     const markup = renderComposer(true);
 
     expect(markup).toContain('aria-label="Attach a file"');
+  });
+
+  it("allows attachment-only drafts while preserving empty and guarded submission checks", () => {
+    for (const prompt of ["", " \n\t"]) {
+      const markup = renderComposer(true, {
+        prompt,
+        attachments: [documentAttachment],
+      });
+      const send = markup.match(
+        /<button[^>]*aria-label="Send prompt"[^>]*>/,
+      )?.[0];
+      expect(send).toBeDefined();
+      expect(send).not.toContain("disabled");
+      const empty = renderComposer(true, { prompt });
+      expect(
+        empty.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0],
+      ).toContain("disabled");
+    }
+    for (const guard of [
+      { canCompose: false },
+      { role: "" },
+      { promptOverLimit: true },
+      { mode: "goal" as const, goalAvailable: true, goalMaxIterations: 5 },
+      { mode: "research" as const, researchSources: [] },
+    ]) {
+      const markup = renderComposer(true, {
+        attachments: [documentAttachment],
+        ...guard,
+      });
+      expect(
+        markup.match(/<button[^>]*aria-label="Send prompt"[^>]*>/)?.[0],
+      ).toContain("disabled");
+    }
+  });
+
+  it("shows file-only Queue and Redirect actions while work runs", () => {
+    const markup = renderComposer(true, {
+      attachments: [documentAttachment],
+      activeWorkRunning: true,
+      activeWorkRedirectable: true,
+      queueing: true,
+    });
+    for (const label of [
+      "Add message to Next up",
+      "Redirect current response",
+    ]) {
+      const start = markup.indexOf(`aria-label="${label}"`);
+      expect(start).toBeGreaterThan(-1);
+      expect(markup.slice(start, markup.indexOf(">", start))).not.toContain(
+        "disabled",
+      );
+    }
   });
 
   it("explains planning before changes in plain language", () => {

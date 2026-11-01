@@ -233,6 +233,13 @@ pub struct ModelCapabilities {
     /// Whether this model may receive verified run-input image artifacts.
     #[serde(default)]
     pub image_inputs: bool,
+    /// Whether this model may receive explicitly enabled native document inputs.
+    #[serde(default, skip_serializing_if = "document_inputs_disabled")]
+    pub document_inputs: bool,
+}
+
+fn document_inputs_disabled(value: &bool) -> bool {
+    !value
 }
 
 /// Provider-neutral reasoning effort requested for one model profile.
@@ -522,6 +529,9 @@ pub struct ProviderModelInfo {
     /// Advertised image-input support; absence is unknown rather than unsupported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_inputs: Option<bool>,
+    /// Explicit native document declaration, independent of image support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_inputs: Option<bool>,
     /// Advertised streaming support; absence is unknown rather than unsupported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub streaming: Option<bool>,

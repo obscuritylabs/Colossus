@@ -236,7 +236,7 @@ fn active_and_passive_projection_checkpoints_commit_together() {
             "memory-v1",
             "workflows-v1",
             "effects-recovery-v1",
-            "session-activity-v5"
+            "session-activity-v6"
         ]
     );
 }
