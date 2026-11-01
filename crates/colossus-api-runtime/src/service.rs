@@ -1000,10 +1000,10 @@ impl RuntimeAgentRunApi {
                     panic_after_start,
                     fail_terminal_append,
                 ));
-                let mut terminal_persisted = match AssertUnwindSafe(task).catch_unwind().await {
-                    Ok(persisted) => persisted,
-                    Err(_) => false,
-                };
+                let mut terminal_persisted: bool = AssertUnwindSafe(task)
+                    .catch_unwind()
+                    .await
+                    .unwrap_or_default();
                 if !terminal_persisted {
                     terminal_persisted = match writer.synchronize_durable_state() {
                         Ok(current) if current.status.is_terminal() => true,
