@@ -1,0 +1,170 @@
+<b>Bookmarks</b> checkbox isn't selected.</p>
+
+<h3 id="term-radiobutton" data-text="Radio button" tabindex="-1">Radio button</h3>
+<p>A <i>radio button</i> is a small button used to choose one item from a
+group of mutually exclusive options. To refer to a radio button, use the radio
+button's label, or refer to the group of buttons by its label.</p>
+<p class="example"><span class="compare-better">Recommended</span>: Select <b>Do not remember
+passwords</b>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: For <b>Startup mode</b>,
+select an option.</p>
+
+<h3 id="term-expander" data-text="Expander arrow" tabindex="-1">Expander arrow</h3>
+<p>An <i>expander arrow</i> is the UI element used to expand or collapse a section of
+  navigation or content. Avoid referring to these explicitly in documentation, but when you do, use
+  the terms <i>expander arrow</i> and <i>expandable section</i> rather than terms like
+  <i>expando</i> or <i>zippy</i>.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: To expand the
+  <b>Advanced options</b> section, click the
+  <span class="material-icons" aria-hidden="true" translate="no">arrow_right</span>expander arrow.</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: To expand
+  the <b>Advanced options</b> section, click the zippy.</p>
+
+<h3 id="term-toggle" data-text="Toggle" tabindex="-1">Toggle</h3>
+<p>A <i>toggle</i> is the UI element that switches back and forth between on and off
+states. Don't use the word <i>toggle</i> as a verb. Describe the action that you want the
+user to take.</p>
+<p class="example"><span class="compare-better">Recommended</span>: To turn on the setting, click
+  the <b>Wi-Fi</b> toggle.</p>
+
+<p>In some cases, you might not know what state the toggle is in before the user interacts with it
+  so be clear what position the toggle should be in.</p>
+  <p class="example"><span class="compare-better">Recommended</span>: In <b>Settings</b>, click
+    the <b>Magic mode</b> toggle to the on position.</p>
+</section>
+
+
+
+<section>
+<h2 id="keyboard" data-text="Press and type keyboard keys" tabindex="-1">Press and type keyboard keys</h2>
+<p>To indicate that the user should press a given keyboard key or
+  combination, use the <code translate="no" dir="ltr">kbd</code> element.</p>
+
+The following is an example of a <code translate="no" dir="ltr">&lt;kbd&gt;</code> tag:
+
+<p class="example"><span class="compare-better">Recommended</span>:
+  <code translate="no" dir="ltr">Press &lt;kbd&gt;Control+C&lt;/kbd&gt;.</code></p>
+
+<p>When rendered, the text appears as follows:</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: Press <kbd>Control+C</kbd>.</p>
+
+
+
+<p>If you're working with non-HTML markup, use monospace formatting, which is how the
+<code translate="no" dir="ltr">kbd</code> element renders.</p>
+<p>To refer to a letter key, use uppercase instead of lowercase.</p>
+<p class="example"><span class="compare-better">Recommended</span>: To save, press
+  <kbd>Control+S</kbd>.</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: To save, press
+  <kbd>Control+s</kbd>.</p>
+<p>To refer to a key that the user types to enter that key's value as text input,
+  use the <code translate="no" dir="ltr">code</code> element, not the <code translate="no" dir="ltr">kbd</code> element.
+  For more information, see <a href="/style/text-formatting#code-font">Code font</a>.</p>
+<p>To refer to a keyboard key, use the key's name. If that's ambiguous, use the
+form <i>the <kbd><var translate="no">KEY_NAME</var></kbd> key</i>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: Press <kbd>Esc</kbd>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: Press the <kbd>Esc</kbd> key.</p>
+
+<p>Spell out the names of modifier keys such as Command, Control, Option, and
+Shift. Don't use symbols for those keys. To refer to a key combination, use the
+form <i><kbd><var translate="no">MODIFIER</var>+<var translate="no">KEY_NAME</var></kbd></i>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: Press
+<kbd>Control+V</kbd>.</p>
+
+<p>When you provide shortcuts for multiple operating systems, put the macOS shortcut in
+parentheses after the Windows and Linux shortcut.</p>
+<p class="example"><span class="compare-better">Recommended</span>: To copy, press
+<kbd>Control+C</kbd> (or <kbd>Command+C</kbd> on macOS).</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: To copy, press
+<kbd>Ctrl+C</kbd> (<kbd>⌘+C</kbd>).</p>
+
+<p>To refer to a key or combination that uses the Shift key, use the form
+  <i><kbd><var translate="no">MODIFIER</var>+Shift+<var translate="no">KEY_NAME</var></kbd></i>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: Press
+<kbd>Control+Shift+?</kbd>.</p>
+
+<p>Spell out the names of characters that could be confusing in a keyboard
+shortcut, such as comma, hyphen, period, and plus.</p>
+<p>To refer to a keyboard shortcut, use either <i>keyboard shortcut</i> or <i>key
+combination</i>.</p>
+<p>To refer to pressing a key or combination to cause an action to occur, use
+the verb <i>press</i>. To refer to typing a key or combination as part of text, use
+the verbs <i>enter</i> or <i>type</i>.</p>
+</section>
+
+<section id="prepositions">
+<h2 id="prepositions" data-text="Prepositions" tabindex="-1">Prepositions</h2>
+<p>When documenting the UI, use the following prepositions.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th width="20%">Preposition</th>
+      <th width="25%">UI element</th>
+      <th width="55%"><span class="compare-better">Recommended</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>in</td>
+      <td>
+        <p>dialogs</p>
+        <p>fields</p>
+        <p>lists</p>
+        <p>menus</p>
+        <p>panes</p>
+        <p>windows</p>
+      </td>
+      <td>
+        <p>In the <b>Alert</b> dialog, click <b>OK</b>.</p>
+        <p>In the <b>Name</b> field, enter <code translate="no" dir="ltr">wsfc-1</code>.</p>
+        <p>In the <b>Item</b> list, select <b>Desktop</b>.</p>
+        <p>In the <b>File</b> menu, click <b>Tools</b>.</p>
+        <p>In the <b>Metrics</b> pane, click <b>New</b>.</p>
+        <p>In the <b>Task</b> window, click <b>Start</b>.</p>
+      </td>
+    </tr>
+    <tr>
+      <td>on</td>
+      <td>
+        <p>pages</p>
+        <p>tabs</p>
+        <p>toolbars</p>
+      </td>
+      <td>
+        <p>On the <b>Create an instance</b> page, click <b>Add</b>.</p>
+        <p>On the <b>Edit</b> tab, click <b>Save</b>.</p>
+        <p>On the <b>Dashboard</b> toolbar, click <b>Edit</b>.</p>
+      </td>
+    </tr>
+  </tbody>
+  </table>
+</section>
+
+<section>
+<h2 id="verbs" data-text="Verbs in procedures" tabindex="-1">Verbs in procedures</h2>
+<p>To describe an action on the page, use the following verbs. For more
+  information about each verb, see its corresponding entry on the
+  <a href="/style/word-list">word list</a>.</p>
+<ul>
+  <li><a href="/style/word-list#click">Click</a></li>
+  <li><a href="/style/word-list#choose">Choose</a></li>
+  <li><a href="/style/word-list#drag">Drag</a></li>
+  <li><a href="/style/word-list#enable">Enable</a></li>
+  <li><a href="/style/word-list#enter">Enter, type</a></li>
+  <li>Go to (see <a href="/style/word-list#scroll">scroll</a>)</li>
+  <li><a href="/style/word-list#hold-the-pointer-over">Hold the pointer over</a></li>
+  <li><a href="/style/word-list#press">Press</a></li>
+  <li><a href="/style/word-list#select">Select</a></li>
+  <li><a href="/style/word-list#tap">Tap</a></li>
+  <li><a href="/style/word-list#turn-on">Turn on, turn off</a></li>
+</ul>
+
+<p>For information about writing procedures, see <a href="/style/procedures">Procedures</a>.</p>
+</section>
+
+  
+
+  

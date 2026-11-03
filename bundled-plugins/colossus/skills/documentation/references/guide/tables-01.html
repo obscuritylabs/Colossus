@@ -1,0 +1,206 @@
+<!-- Source: https://developers.google.com/style/tables; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/tables">
+<h1>Tables</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<p>In many contexts, tables are the best way to represent sets of related pieces of data. However,
+in some contexts, other approaches are better choices.</p>
+
+<section id="list-or-table">
+<h2 id="list-or-table" data-text="List or table?" tabindex="-1">List or table?</h2>
+<p>Tables and lists are both ways to present a set of similarly structured
+items; sometimes it's not obvious when to choose one presentation over the
+other. To decide which presentation to use, consult the following table:</p>
+<table>
+  <tr>
+    <th>Item type</th>
+    <th>Example</th>
+    <th>How to present</th>
+  </tr>
+  <tr>
+    <td>Each item is a single unit.</td>
+    <td>A list of programming language names, or a list of steps to follow.</td>
+    <td>Use a <a href="/style/lists#numbered-lettered-bulleted-lists">numbered list, lettered list, or bulleted
+list</a>.</td>
+  </tr>
+  <tr>
+    <td>Each item is a pair of pieces of related data.</td>
+    <td>A list of term/definition pairs.</td>
+    <td>Use a <a href="/style/lists#description-lists">description list</a> (or, in some
+contexts, a table).</td>
+  </tr>
+  <tr>
+    <td>Each item is three or more pieces of related data.</td>
+    <td>A set of parameters, where each parameter has a name, a data type, and a
+description.</td>
+    <td>Use a table.</td>
+  </tr>
+</table>
+
+<h3 id="places-not-to-use-tables" data-text="Places not to use tables" tabindex="-1">Places not to use tables</h3>
+<ul>
+  <li>Don't use tables to lay out a page; use your site's standard CSS instead.</li>
+  <li>Usually if you have only one row of material, a table isn't the best
+choice for how to present it. But in some contexts (especially for consistency
+of layout in reference documentation), it might be.</li>
+  <li>If you have only one column in your table, turn the table into a list.</li>
+  <li>Don't use tables to lay out code snippets.</li>
+  <li>Don't use tables to lay out long one-dimensional lists in multiple
+columns. For example, if you have a long list of function names, don't try to
+save space by splitting the list in half and presenting the two halves as a
+two-column table. Use tables only to present two-dimensional data—that is,
+material that semantically makes sense to display in rows and columns.</li>
+  <li>Avoid tables in the middle of a numbered procedure.</li>
+</ul>
+</section>
+
+<section id="multiple-paragraphs">
+<h2 id="multi-paragraph-table-cells" data-text="Multi-paragraph table cells" tabindex="-1">Multi-paragraph table cells</h2>
+<p>Any table cell can contain more than one paragraph.</p>
+<p>To create multiple paragraphs, use the <code translate="no" dir="ltr">p</code> element rather
+than using the <code translate="no" dir="ltr">br</code> element. (The HTML specification
+describes which uses of the <a
+href="https://html.spec.whatwg.org/multipage/semantics.html#the-br-element"><code translate="no" dir="ltr">br</code>
+element</a> are legitimate and which aren't.)</p>
+
+
+
+<p>Example of a table with some cells that contain more than one paragraph:</p>
+<table>
+  <tr>
+    <th>Attribute name</th>
+    <th>Type</th>
+    <th>Description</th>
+  </tr>
+  <tr>
+    <td><code translate="no" dir="ltr">href</code></td>
+    <td>HTML</td>
+    <td><p>Defines the URL for a link.</p>
+        <p>For example, go to the
+        <code translate="no" dir="ltr">&lt;a href="https://www.google.com">Google Search&lt;/a&gt;</code> page.</p></td>
+  </tr>
+  <tr>
+    <td><code translate="no" dir="ltr">src</code></td>
+    <td>HTML</td>
+    <td><p>Defines the path of the image to be displayed.</p>
+        <p>For example, <code translate="no" dir="ltr">&lt;img src="kitten.jpg"&gt;</code>.</p></td>
+  </tr>
+</table>
+
+
+
+</section>
+
+<section id="table-introductions">
+<h2 id="introductory-sentences-for-tables" data-text="Introductory sentences for tables" tabindex="-1">Introductory sentences for tables</h2>
+
+<p>Introduce tables with a complete sentence that describes the purpose of the table because not all
+screen readers preannounce tables. The introductory sentence can end with a colon or a period;
+usually a colon if it immediately precedes the table, and usually a period if there's more material
+(such as a note paragraph) between the introduction and the table.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: Change the environment variables
+  to values for your deployment, as listed in the following table:</p>
+
+<p>For more information, see the
+  <a href="/style/accessibility#tables">Tables</a> section of the "Accessibility" page.</p>
+</section>
+
+<section id="table-placement">
+<h2 id="table-placement" data-text="Table placement" tabindex="-1">Table placement</h2>
+<ul>
+  <li>When introducing a table, use a complete sentence and try to refer to the
+table's position, using a phrase like <i>the following table</i> or <i>the preceding table</i>.</li>
+  <li>Don't put a table in the middle of a sentence.</li>
+  <li>Avoid using footnotes when possible. If your table does refer to footnotes, place them
+    immediately following the table. For more information, see
+    <a href="/style/footnotes">Footnotes</a>.</li>
+</ul>
+</section>
+
+<section id="table-captions">
+<h2 id="table-captions" data-text="Table captions" tabindex="-1">Table captions</h2>
+<p>If your document contains only one table, the table doesn't need a caption.
+However, be sure to place the table adjacent to the text that refers to it.</p>
+<p>If your document contains more than one table in fairly close proximity to
+each other, include a caption for each one, using a <a
+href="https://html.spec.whatwg.org/multipage/tables.html#the-caption-element"><code translate="no" dir="ltr">caption</code>
+element</a> as the first child of the <code translate="no" dir="ltr">table</code> element. Start the
+caption with a number, in the form "&lt;b&gt;Table <var translate="no">NUMBER</var>.&lt;/b&gt;
+<var translate="no">DESCRIPTION</var>". Use sentence case for the caption, but don't place a
+period at the end.</p>
+<p>When referring to the table from text, refer to it by its number&mdash;for example,
+  <i>... as shown in table 2</i>. Do not capitalize <i>table</i> unless it starts a sentence.</p>
+<p>Your site's CSS determines the styling and placement of the caption.</p>
+<div class="example">
+<p><span class="compare-better">Recommended</span>:</p>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+&lt;table&gt;
+  &lt;caption&gt;&lt;b&gt;Table 1.&lt;/b&gt; Prehistoric birds&lt;/caption&gt;
+  ...
+&lt;/table&gt;
+</pre></devsite-code>
+</div>
+</section>
+
+<section id="table-formatting">
+<h2 id="table-formatting" data-text="Table formatting" tabindex="-1">Table formatting</h2>
+  <ul>
+<li>Don't add styling to the table element.</li>
+<li>Don't apply a visual style such as a different font, font color, or background color to convey a
+  header row or column by itself. Use the <code translate="no" dir="ltr">th</code> element to semantically mark up headers in
+  tables.</li>
+<li>Don't merge cells. Don't use <code translate="no" dir="ltr">colspan</code> or <code translate="no" dir="ltr">rowspan</code> attributes.</li>
+<li>Sort rows in a logical order, or alphabetically if there is no logical order.</li>
+<li>If the table is long or complicated—for example, with multiple header rows or columns—consider
+splitting it into multiple tables.</li>
+<li>Don't present new information in tables through images or symbols alone; always provide a
+descriptive <code translate="no" dir="ltr">alt</code> attribute for the image or symbol. For more information, see
+<a href="/style/images#alt-text">Alt text</a>.</li>
+
+
+  </ul>
+</section>
+
+<section id="table-column-heads">
+<h2 id="table-column-heads" data-text="Table column heads" tabindex="-1">Table column heads</h2>
+<ul>
+  <li>Use sentence case.</li>
+  <li>Write concise headings.</li>
+  <li>Don't end with punctuation, including a period, an ellipsis, or a colon.</li>
+  <li>Use table headings for the first column and the first row only. Use the
+    <a href="https://www.w3.org/TR/2014/REC-html5-20141028/tabular-data.html#the-th-element"><code translate="no" dir="ltr">th</code> element</a>.</li>
+  <li>Include the <a href="https://www.w3.org/TR/WCAG20-TECHS/H63.html">
+<code translate="no" dir="ltr">scope</code> attribute</a> as appropriate for accessibility.</li>
+</ul>
+</section>
+
+<section id="responsive-tables">
+<h2 id="responsive-tables" data-text="Responsive tables" tabindex="-1">Responsive tables</h2>
+<p>Where possible, use table CSS that adapts to different viewport sizes.</p>
+
+
+
+</section>
+
+<section id="table-linking">
+<h2 id="link-to-tables" data-text="Link to tables" tabindex="-1">Link to tables</h2>
+<p>Where possible, avoid linking to tables; instead, refer to them by table number.</p>
+</section>
+
+  
+
+  

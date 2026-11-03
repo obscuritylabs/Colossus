@@ -1,0 +1,136 @@
+<!-- Source: https://developers.google.com/style/code-samples; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/code-samples">
+<h1>Code samples</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<p>This page explains how to format code samples. For more information about formatting and
+  explaining code that appears in text, command-line syntax, and placeholders, see the following
+  resources:</p>
+<ul>
+<li><a href="/style/code-in-text">Code in text</a></li>
+<li><a href="/style/code-syntax">Documenting command-line syntax</a></li>
+<li><a href="/style/placeholders">Formatting placeholders</a></li>
+</ul>
+
+<section id="guidelines">
+<h2 id="basic-guidelines" data-text="Basic guidelines" tabindex="-1">Basic guidelines</h2>
+<p>Follow these guidelines when formatting code samples:</p>
+<ul>
+  <li><p><b>Follow the indentation guidelines in the relevant
+    <a href="#coding">code style guide</a></b>. For most programming languages, this means using
+    spaces instead of tabs and using two spaces for each indentation level. However, some contexts
+    use four spaces for each indentation level, and some contexts use tabs. This guidance applies to
+    formatting code samples, not to <a href="/style/code-syntax#formatting-a-command">formatting commands</a>.</p></li>
+  <li><p><b>Wrap lines</b> at 80 characters. If you expect readers to have a relatively narrow
+    browser window or to print out your document, consider wrapping at a smaller number of
+    characters for readability.</p></li>
+  <li><b>Mark code blocks as preformatted text</b>. In HTML, use a <code translate="no" dir="ltr">pre</code> element;
+    in Markdown, indent every line of the code block by four spaces.</li>
+
+  
+
+  <li><b>Indicate omitted code by using a comment</b> in the syntax of the language of your code
+    sample. Don't use three dots or the ellipsis character (<code translate="no" dir="ltr">&#8230;</code>). If a code
+    block contains an omission, don't format the block as click-to-copy.</li>
+</ul>
+
+<p><span class="compare-better">Recommended</span>:</p>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+&lt;pre&gt;
+function helloWorld() {
+  alert('Hello, world! This sentence is so long that it wraps onto a second
+    line.');
+}
+&lt;/pre&gt;
+</pre></devsite-code>
+
+<p>This renders the following code block:</p>
+
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+function helloWorld() {
+  alert('Hello, world! This sentence is so long that it wraps onto a second
+    line.');
+}
+</pre></devsite-code>
+
+<p><span class="compare-better">Recommended</span>:</p>
+<div></div><devsite-code><pre class="devsite-click-to-copy devsite-disable-click-to-copy" translate="no" dir="ltr" is-upgraded syntax="YAML"><span class="devsite-syntax-nt">apiVersion</span><span class="devsite-syntax-p">:</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-l devsite-syntax-l-Scalar devsite-syntax-l-Scalar-Plain">serving.knative.dev/v1</span>
+<span class="devsite-syntax-nt">kind</span><span class="devsite-syntax-p">:</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-l devsite-syntax-l-Scalar devsite-syntax-l-Scalar-Plain">Service</span>
+<span class="devsite-syntax-c1"># Several lines of code are omitted here.</span>
+<span class="devsite-syntax-nt">spec</span><span class="devsite-syntax-p">:</span>
+<span class="devsite-syntax-w">  </span><span class="devsite-syntax-nt">template</span><span class="devsite-syntax-p">:</span>
+<span class="devsite-syntax-w">    </span><span class="devsite-syntax-nt">spec</span><span class="devsite-syntax-p">:</span>
+<span class="devsite-syntax-w">      </span><span class="devsite-syntax-nt">containers</span><span class="devsite-syntax-p">:</span>
+<span class="devsite-syntax-w">      </span><span class="devsite-syntax-p devsite-syntax-p-Indicator">-</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nt">image</span><span class="devsite-syntax-p">:</span><span class="devsite-syntax-w"> </span><var translate="no"><span class="devsite-syntax-l devsite-syntax-l-Scalar devsite-syntax-l-Scalar-Plain">IMAGE_URL</span></var>
+<span class="devsite-syntax-w">        </span><span class="devsite-syntax-nt">ports</span><span class="devsite-syntax-p">:</span>
+<span class="devsite-syntax-w">        </span><span class="devsite-syntax-p devsite-syntax-p-Indicator">-</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-nt">name</span><span class="devsite-syntax-p">:</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-l devsite-syntax-l-Scalar devsite-syntax-l-Scalar-Plain">h2c</span>
+<span class="devsite-syntax-w">          </span><span class="devsite-syntax-nt">containerPort</span><span class="devsite-syntax-p">:</span><span class="devsite-syntax-w"> </span><span class="devsite-syntax-l devsite-syntax-l-Scalar devsite-syntax-l-Scalar-Plain">8080</span></pre></devsite-code>
+
+
+
+
+</section>
+
+<section id="intros">
+<h2 id="introductory-statements" data-text="Introductory statements" tabindex="-1">Introductory statements</h2>
+<p>In most cases, precede a code sample with an introductory sentence or
+paragraph. The introduction can end with a colon or a period; usually a colon if it
+immediately precedes the sample, usually a period if there's more material (such
+as a note paragraph) between the introduction and the sample, or if the
+introduction paragraph ends in a sentence that isn't directly related to the
+sample.</p>
+
+<div class="example">
+<p><span class="compare-better">Recommended</span> (ending with a period): The
+following code sample shows how to use the <code translate="no" dir="ltr">get</code> method. For
+information about other methods, see [link]. [sample]</p>
+<p><span class="compare-better">Also recommended</span>: The following code
+sample shows how to use the <code translate="no" dir="ltr">get</code> method: [sample] For information about
+other methods, see [link].</p>
+<p><span class="compare-worse">Not recommended</span> (ending with a colon): The
+following code sample shows how to use the <code translate="no" dir="ltr">get</code> method. For
+information about other methods, see [link]: [sample]</p>
+</div>
+
+<p>For more information about how to introduce code samples, see
+  <a href="/style/code-syntax">Document command-line syntax</a>.
+  </p>
+</section>
+
+<section id="coding">
+  <h2 id="code-style-guides" data-text="Code style guides" tabindex="-1">Code style guides</h2>
+  
+  
+
+  <p>The following public Google coding-style guides are available on GitHub:</p>
+  <ul>
+    <li><a href="https://google.github.io/styleguide/cppguide.html">C++ style guide</a>.</li>
+    <li><a href="https://google.github.io/styleguide/htmlcssguide.html">HTML/CSS style guide</a>.</li>
+    <li><a href="https://google.github.io/styleguide/javaguide.html">Java style guide</a>.</li>
+    <li><a href="https://google.github.io/styleguide/javascriptguide.xml">JavaScript style guide</a>.</li>
+    <li><a href="https://google.github.io/styleguide/pyguide">Python style guide</a></li>
+    <li><a href="https://google.github.io/styleguide/">Full list of Google's programming style guides</a></li>
+  </ul>
+
+  <p>Some open source projects have their own overriding style guides. For
+  example, Java code in the Android Open Source Project follows the <a
+  href="https://source.android.com/setup/contribute/code-style">AOSP Java Code
+  Style for Contributors</a> guide.</p>
+</section>
+
+  
+
+  

@@ -1,0 +1,99 @@
+<!-- Source: https://developers.google.com/style/dashes; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/dashes">
+<h1>Dashes</h1>
+
+
+  
+    
+      
+    
+    
+
+<p>This page explains when to use em dashes. For information about hyphens, see the following:</p>
+
+<ul>
+  <li><a href="/style/hyphens">Hyphens</a></li>
+  <li><a href="/style/numbers#ranges-of-numbers">Ranges of numbers</a></li>
+  <li><a href="/style/units-of-measure#ranges">Ranges of numbers with units</a></li>
+</ul>
+
+<section id="dashes">
+<h2 id="em-dashes" data-text="Em dashes" tabindex="-1">Em dashes</h2>
+<p>To indicate a break in the flow of a sentence&mdash;or an interruption&mdash;use an em
+dash, also known as a long dash. Don't put a space before or after it.</p>
+<p>You can type the em dash character in various ways:</p>
+<dl>
+  <dt>HTML</dt>
+  <dd>&amp;mdash;</dd>
+  <dt>macOS</dt>
+  <dd>Press <kbd>Option+Shift+hyphen</kbd>.</dd>
+  <dt>Linux desktop environment</dt>
+  <dd>Enable the Compose key (instructions for doing that vary depending on
+your flavor of Linux&mdash;for examples, see <a
+href="http://fsymbols.com/keyboard/linux/compose/">Linux Keyboard Shortcuts For
+Text Symbols</a>). After the Compose key is enabled, you can create an em dash
+by typing the Compose key followed by three hyphens.</dd>
+  <dd>Alternatively, press <kbd>Control+Shift+U</kbd>. Let go of those keys, and then type
+    <kbd>2014</kbd>. Then press <kbd>Return</kbd>.</dd>
+  <dd><aside class="note"> <b>Note</b>: These Linux options don't work if
+    you're signed in to the Linux command line from a remote system using <code translate="no" dir="ltr">ssh</code> or the
+    like; you have to be in a Linux desktop environment.</aside></dd>
+  <dt>Windows</dt>
+  <dd>Turn num lock on, and then hold down the left <kbd>Alt</kbd> key and type <kbd>0151</kbd>
+    on the numeric keypad.</dd>
+</dl>
+<p>Don't use an en dash (the shorter dash) or a hyphen in place of an em dash.
+The use of an en dash with spaces around it in place of
+an em dash is gradually becoming more common, but it's still not very widespread
+in the US in professional publishing; so far (as of early 2016), it's mostly
+used in Canada and a few other places. For now, only use the em dash.</p>
+</section>
+
+<section id="ndashes">
+<h2 id="en-dashes" data-text="En dashes" tabindex="-1">En dashes</h2>
+<p>Don't use. Instead, use a hyphen or the word <i>to</i>. For more information, see
+  the following:</p>
+  <ul>
+    <li><a href="/style/units-of-measure#ranges">Ranges of numbers with units</a></li>
+    <li><a href="/style/hyphens#number-range">Range of numbers</a></li>
+  </ul>
+</section>
+
+<section id="colons">
+<h2 id="colons-instead-of-dashes-in-description-lists" data-text="Colons instead of dashes in description lists" tabindex="-1">Colons instead of dashes in description lists</h2>
+<p>Another common but nonstandard construction is to use an em dash, an en dash, or a hyphen
+  surrounded by spaces to separate an item and its description. Instead, use
+  <a href="/style/lists#description-lists-that-use-run-in-headings">a colon or a period</a>.
+  For a series of items, use
+  <a href="/style/lists#description-lists">an HTML description list</a> (<code translate="no" dir="ltr">&lt;dl&gt;</code>).</p>
+
+  <p class="example"><span class="compare-better">Recommended</span>: Example: This is an
+  example.</p>
+  <p class="example"><span class="compare-worse">Not recommended</span>: Example - This is
+  an example.</p>
+  <p class="example"><span class="compare-better">Recommended</span>: Appendix A: My first
+  appendix</p>
+  <p class="example"><span class="compare-worse">Not recommended</span>: Appendix A&mdash;My first
+  appendix</p>
+
+<div class="example">
+  <p><span class="compare-better">Recommended</span>:</p>
+    <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+    &lt;dl&gt;
+      &lt;dt&gt;Example&lt;/dt&gt;
+      &lt;dd&gt;This is an example.&lt;/dd&gt;
+      &lt;dt&gt;Another example&lt;/dt&gt;
+      &lt;dd&gt;This is another example.&lt;/dd&gt;
+    &lt;/dl&gt;
+    </pre></devsite-code>
+</div>
+
+</section>
+
+
+
+
+
+  
+
+  

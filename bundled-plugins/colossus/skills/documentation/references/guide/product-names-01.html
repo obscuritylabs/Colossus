@@ -1,0 +1,165 @@
+<!-- Source: https://developers.google.com/style/product-names; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/product-names">
+<h1>Product names</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<p>This page describes how to use product names.</p>
+
+
+
+<h2 id="capitalize" data-text="Capitalize product names" tabindex="-1">Capitalize product names</h2>
+
+  <p>
+    In general, Google product names are in <i>title case</i>, sometimes called
+    <i>init-capped</i>, which means that every word is capitalized except for
+    prepositions like <i>of</i> or <i>on</i> and articles like <i>a</i> or
+    <i>the</i>. When you refer to a Google product, use title case except
+    when you're matching a UI label. For information about how to refer to UI
+    labels, see
+    <a href="/style/ui-elements">UI elements and interaction</a>.
+  </p>
+  <p>
+    When you write about any product, follow the official capitalization for the
+    names of brands, companies, software, products, services, features, and
+    terms defined by companies and open source communities.
+  </p>
+    <ul>
+      <li>
+        <p>
+          For example, if you're using Kubernetes-related terms, then follow
+          the capitalization that's shown in the Kubernetes <a
+          href="https://kubernetes.io/docs/concepts/">Concepts
+          documentation</a>.
+        </p>
+
+
+
+        <p class="example">
+          <span class="compare-better">Recommended in a Kubernetes
+          context</span>: A Job creates one or more Pods.
+        </p>
+        <p class="example">
+          <span class="compare-better">Recommended</span>: The Cloud Scheduler
+          job publishes a message to a Pub/Sub topic at one-minute intervals.
+        </p>
+      </li>
+      <li>
+        <p>
+          If an official name begins with a lowercase letter, then put it in
+          lowercase even at the start of a sentence. But it's better to revise
+          the sentence to avoid putting a lowercase word at the start, if
+          possible.
+        </p>
+        <p class="example">
+          <span class="compare-better">Recommended</span>: You can use macOS to
+          run the app.
+        </p>
+        <p class="example">
+          <span class="compare-worse">Not recommended</span>: macOS can run the
+          app.
+        </p>
+      </li>
+    </ul>
+
+  <h3 id="feature-names" data-text="Feature names" tabindex="-1">Feature names</h3>
+    <p>
+      A <i>feature</i> is a distinctive attribute or capability of a product.
+      Features are usually described in terms of what they can do as part of a
+      product. In general, feature names are lowercase, although there are
+      exceptions.
+    </p>
+    <p>
+      When you write about a feature, don't capitalize it unless the name is
+      officially capitalized. If you're unsure, follow the precedent that's set
+      by other documents that describe the feature. As with products, match
+      the capitalization of a UI label if you're referring to one.
+    </p>
+    <p>
+      For more general information about capitalization, see
+      <a href="/style/capitalization">Capitalization</a>.
+    </p>
+
+<h2 id="shortening" data-text="Shorten Google product names" tabindex="-1">Shorten Google product names</h2>
+  <p>
+    When referring to a Google product, sometimes you might want to abbreviate
+    the product name. For example, when you're referring to Google
+    Spreadsheets, it can be awkward to refer to it as Google Spreadsheets
+    every time; sometimes you might want to call it Spreadsheets.
+  </p>
+
+
+
+  <p>
+    Use the full trademarked product name. Don't abbreviate product names,
+    except in cases where you're matching a UI label. In such cases, make it
+    clear that you're referring to the Google product and not some other thing
+    with a similar name.
+  </p>
+  <p>
+    Also consider whether you need to refer to a product name throughout a
+    document, or if you can use a more general term. For example, if you've
+    established that you're talking about <i>Anthos Service Mesh</i>, you can
+    probably frame your discussion around the concept of <i>a service mesh</i>
+    throughout much of the document.
+  </p>
+
+
+
+<section id="possessives">
+<h2 id="possessives-of-product-names" data-text="Possessives of product names" tabindex="-1">Possessives of product names</h2>
+<p>For information about forming possessives with product names, see
+  <a href="/style/possessives#product,-feature,-and-company-names">Product, feature, and company names</a>.</p>
+</section>
+
+<section id="the-with-names">
+<h2 id="articles-before-product-names" data-text="Articles before product names" tabindex="-1">Articles before product names</h2>
+<p>Don't use <i>the</i> before a product name unless you're using the name to
+  modify something else. <em>Do</em> use <i>the</i> before tool and API names.</p>
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>: Using Cloud Datastore with Cloud Dataproc</p>
+    <p><span class="compare-better">Recommended</span>: The Cloud Datastore options page</p>
+    <p><span class="compare-better">Recommended</span>: The Google Cloud console</p>
+    <p><span class="compare-better">Recommended</span>: The Transcoder API</p>
+    <p><span class="compare-better">Recommended</span>: The <code translate="no" dir="ltr">gcloud</code> CLI</p>
+    <p><span class="compare-worse">Not recommended</span>: Using the Cloud Datastore with Cloud
+      Dataproc</p>
+  </div>
+
+<p>If you use a product name as a modifier with an indefinite article (<i>a</i> or <i>an</i>), pay
+  close attention to which article precedes the product name.</p>
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>: An Anthos Service Mesh environment</p>
+    <p><span class="compare-better">Recommended</span>: A Service Mesh environment</p>
+  </div>
+
+<p>For more information about using articles, see <a href="/style/articles">Articles</a>.</p>
+</section>
+
+<section id="multiple-products">
+<h2 id="use-service-to-refer-to-multiple-products" data-text='Use "service" to refer to multiple products' tabindex="-1">Use "service" to refer to multiple products</h2>
+<p>It's OK to refer to Google products as services, such as <i>the Google Kubernetes Engine
+  service</i> or <i>the Compute Engine service</i>. However, if the term <i>services</i> leads to
+  ambiguity, use the product names.</p>
+</section>
+
+<section id="product-names-as-verbs">
+<h2 id="dont-use-product-names-as-verbs" data-text="Don't use product names as verbs" tabindex="-1">Don't use product names as verbs</h2>
+<p>Don't use product names or feature names as verbs.</p>
+</section>
+
+  
+
+  

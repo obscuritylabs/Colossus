@@ -3,3 +3,7 @@
 
 # Unified patches use a single space for an empty context line.
 native/browser/component/patches/macos-owned-process/chromium.patch whitespace=-blank-at-eol
+
+# Preserve original Google article bytes, including source whitespace.
+bundled-plugins/colossus/skills/documentation/references/guide/** -text -whitespace
+bundled-plugins/colossus/skills/documentation/upstream/** -text

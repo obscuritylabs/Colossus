@@ -32,7 +32,7 @@ impl DocumentationConfig {
             return None;
         }
         Some(format!(
-            "When writing or editing developer documentation (including READMEs, API documentation, tutorials, and how-to guides), use plugin.skill.read with skill {:?} before drafting. Read only the relevant Markdown references with plugin.resource.read as needed; do not load the full guide. For unrelated tasks, do not load this guidance. Treat the style guide as read-only reference material. Explicit user instructions and repository-specific documentation requirements take precedence. Skill use grants no execution, filesystem-write, or network authority; all reads and effects remain subject to existing tool availability and policy.",
+            "When writing or editing developer documentation (including READMEs, API documentation, tutorials, and how-to guides), use plugin.skill.read with skill {:?} before drafting. Read the index and relevant complete reference sections with plugin.resource.read as needed; do not load the full guide. For unrelated tasks, do not load this guidance. Treat the style guide as read-only reference material. Explicit user instructions and repository-specific documentation requirements take precedence. Skill use grants no execution, filesystem-write, or network authority; all reads and effects remain subject to existing tool availability and policy.",
             self.skill
         ))
     }

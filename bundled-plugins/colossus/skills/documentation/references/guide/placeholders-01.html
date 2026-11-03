@@ -1,0 +1,375 @@
+<!-- Source: https://developers.google.com/style/placeholders; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/placeholders">
+<h1>Format placeholders</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+
+<p>This page explains how to format placeholders in commands, code samples, and text
+strings. This page doesn't explain how to implement visual styling for placeholders, but it does
+show examples of how Google developer documentation style renders placeholders as visually
+distinct from other text.</p>
+
+<p>For more information about formatting code, command-line syntax, and code samples, see the
+following links:</p>
+<ul>
+<li><a href="/style/code-in-text">Code in text</a></li>
+<li><a href="/style/code-syntax">Documenting command-line syntax</a></li>
+<li><a href="/style/code-samples">Code samples</a></li>
+</ul>
+
+<p>
+Placeholders in sample code and commands represent values that the reader must replace when they use
+the sample input. Placeholders in example output can also represent other values that vary. In
+general, a placeholder has a descriptive name as a default value.
+</p>
+
+
+
+<p>For example, the placeholder <code translate="no" dir="ltr"><var translate="no">PROJECT_ID</var></code> represents a project ID in sample
+code, commands, and example output.</p>
+
+
+
+<p>In example output, the placeholder <code translate="no" dir="ltr"><var translate="no">HTTP_RESPONSE_CODE</var></code> represents an
+  HTTP response code; the reader isn't expected to set this to a specific value.</p>
+
+<section id="placeholder-variables">
+<h2 id="placeholders" data-text="Placeholders" tabindex="-1">Placeholders</h2>
+
+
+<p>When you create placeholders follow this general guidance around using the letter
+<i>x</i>:</p>
+
+<ul>
+
+
+<li>In general, don't use a single <i>x</i> or a series of <i>x</i>'s as placeholders; use a more
+    informative placeholder.</li>
+  <li>In some contexts (such as HTTP status codes), a series of <i>x</i>'s is the standard,
+      so it's OK to use (for example) <i>xx</i> in those cases.</li>
+</ul>
+
+
+
+<p>There are several ways to format placeholders, depending on whether you're
+  working in HTML or Markdown, or whether the placeholder is inline, in a code block, or in a
+  paragraph. For details, see the following sections.</p>
+
+<h3 id="placeholders-in-inline-text" data-text="Placeholders in inline text" tabindex="-1">Placeholders in inline text</h3>
+
+<p>If your sample code and command placeholders occur in a sentence, use the following formatting:</p>
+ <ul>
+   <li><p>In HTML, wrap variable placeholders by using the <code translate="no" dir="ltr">var</code>
+     element, like this:</p>
+       <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>&lt;code&gt;&lt;var&gt;PLACEHOLDER_NAME&lt;/var&gt;&lt;/code&gt;</pre></devsite-code>
+   </li>
+
+  
+
+   <li>In Markdown, wrap inline placeholders in backticks (`), and use an
+asterisk (*) before the first backtick and after the second one
+(<code translate="no" dir="ltr">*`PLACEHOLDER_NAME`*</code>).</li>
+
+
+
+ </ul>
+
+<p>If your placeholder does not represent a code sample or command, use the following formatting:</p>
+<ul>
+   <li><p>In HTML, wrap placeholders by using the <code translate="no" dir="ltr">var</code>
+     element, like this:</p>
+       <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>&lt;var&gt;PLACEHOLDER_NAME&lt;/var&gt;</pre></devsite-code>
+   </li>
+</ul>
+
+<h3 id="placeholders-in-code-blocks" data-text="Placeholders in code blocks" tabindex="-1">Placeholders in code blocks</h3>
+
+<p>If your placeholders are in a block of code, use the following formatting:</p>
+    <ul>
+
+
+
+      <li><p>In HTML, wrap the code block in a <code translate="no" dir="ltr">pre</code> element,
+        and tag placeholders with <code translate="no" dir="ltr">var</code> elements:</p>
+      <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+      &lt;pre&gt;
+      gcloud compute forwarding-rules create &lt;var&gt;FORWARDING_RULE_NAME&lt;/var&gt; \
+          --global | --region=&lt;var&gt;REGION&lt;/var&gt; \
+          --load-balancing-scheme=&lt;var&gt;LOAD_BALANCING_SCHEME&lt;/var&gt; \
+          --network=&lt;var&gt;NETWORK&lt;/var&gt; \
+          ...
+      &lt;/pre&gt;
+      </pre></devsite-code>
+      </li>
+
+
+
+
+
+      <li>In Markdown, wrap the code block in a code fence (```). Inside a
+code fence, you can't apply formatting like bold or italic.
+      <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+```
+PLACEHOLDER_NAME
+```</pre></devsite-code>
+      </li>
+
+
+
+  </ul>
+
+<h3 id="placeholder-text" data-text="Placeholder text" tabindex="-1">Placeholder text</h3>
+
+<p><b>Use uppercase characters with underscore delimiters.</b></p>
+
+<p>For example, in HTML:</p>
+<div class="example">
+    <p><span class="compare-better">Recommended</span>:</p>
+    <ul>
+      <li><code translate="no" dir="ltr">.../&lt;var&gt;API_NAME&lt;/var&gt;</code></li>
+      <li><code translate="no" dir="ltr">.../&lt;var&gt;METHOD_NAME&lt;/var&gt;</code></li>
+    </ul>
+    <p><span class="compare-worse">Not recommended</span>:</p>
+    <ul>
+      <li><code translate="no" dir="ltr">.../&lt;var&gt;API-name&lt;/var&gt;</code></li>
+      <li><code translate="no" dir="ltr">.../&lt;var&gt;API_name&lt;/var&gt;</code></li>
+      <li><code translate="no" dir="ltr">.../&lt;var&gt;API name&lt;/var&gt;</code></li>
+      <li><code translate="no" dir="ltr">.../&lt;var&gt;api_name&lt;/var&gt;</code></li>
+      <li><code translate="no" dir="ltr">.../&lt;var&gt;api-name&lt;/var&gt;</code></li>
+      <li><code translate="no" dir="ltr">.../&lt;var&gt;apiName&lt;/var&gt;</code></li>
+    </ul>
+</div>
+<p>In Markdown:</p>
+<div class="example">
+    <p><span class="compare-better">Recommended</span>:
+    <ul>
+      <li><code translate="no" dir="ltr">.../*API_NAME*</code></li>
+      <li><code translate="no" dir="ltr">.../*METHOD_NAME*</code></li>
+    </ul>
+</div>
+
+<p>If the context in which your placeholders appear makes using
+uppercase characters with underscore delimiters a bad idea, use something else
+that makes sense to you, but be internally consistent.</p>
+
+<p><b>Don't include possessive adjectives in placeholders.</b></p>
+
+<div class="example">
+<p><span class="compare-worse">Not recommended</span>:</p>
+<ul>
+  <li><code translate="no" dir="ltr">.../&lt;var&gt;MY_API_NAME&lt;/var&gt;</code></li>
+  <li><code translate="no" dir="ltr">.../&lt;var&gt;YOUR_API_NAME&lt;/var&gt;</code></li>
+</ul>
+</div>
+
+<aside class="note"><b>Note</b>: You can mark up command-line syntax with <a
+href="/style/code-syntax#optional-arguments">brackets</a>, <a
+href="/style/code-syntax#set-of-two-arguments">braces</a>, and <a
+href="/style/code-syntax#arguments-that-can-repeat">ellipses</a>. Don't put the
+brackets, braces, or ellipses in the <code translate="no" dir="ltr">var</code> element.</aside>
+
+</section>
+
+<section id="explain-placeholders">
+<h2 id="explain-placeholders" data-text="Explain placeholders" tabindex="-1">Explain placeholders</h2>
+<p>When you use a placeholder in text or code, explain the placeholder the first time you use it.
+It's not necessary to repeat the explanation in the document unless doing so might benefit the
+reader&mdash;for example, in circumstances such as the following:</p>
+<ul>
+  <li>Your document is lengthy.</li>
+  <li>You've introduced several other placeholders in a long procedure.</li>
+  <li>Your document isn't intended to be read from beginning to end.</li>
+</ul>
+<p>The following is an example of a command that uses a placeholder with an explanation of that
+placeholder:</p>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>&lt;pre class="devsite-click-to-copy"&gt;
+gcloud compute instances create &lt;var&gt;INSTANCE_NAME&lt;/var&gt; \
+    --metadata enable-guest-attributes=TRUE
+&lt;/pre&gt;
+
+&lt;p&gt;Replace &lt;code&gt;&lt;var&gt;INSTANCE_NAME&lt;/var&gt;&lt;/code&gt; with the name that
+you want your new VM instance to have.&lt;/p&gt;
+</pre></devsite-code>
+
+
+
+<h3 id="single-placeholder" data-text="Single placeholder" tabindex="-1">Single placeholder</h3>
+<p>Use the following format for a single placeholder:</p>
+<ul>
+  <li>Replace <var translate="no">PLACEHOLDER</var> with a description of what
+the placeholder represents.</li>
+</ul>
+<div class="example">
+<p><span class="compare-better">Recommended</span>:</p>
+<ol>
+  <li><p>Stream the build logs to the Google Cloud console:</p>
+    <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>gcloud builds log --stream=<var translate="no">BUILD_ID</var></pre></devsite-code>
+    <p>Replace <code translate="no" dir="ltr"><var translate="no">BUILD_ID</var></code> with the ID of the <code translate="no" dir="ltr">WORKING</code> build that
+      you copied in the preceding step.</p>
+  </li>
+</ol>
+</div>
+
+<h3 id="two-or-more-placeholders" data-text="Two or more placeholders" tabindex="-1">Two or more placeholders</h3>
+<p>Use the following format for two or more placeholders:</p>
+<ul>
+  <li>Follow the command line with a descriptive list of the placeholders
+    used in the command line. Explain what each placeholder represents
+    even if the placeholder value is intuitive to you.</li>
+  <li>Introduce this list with <i>Replace the following:</i></li>
+  <li>List the placeholders in the order in which they appear in the command line.</li>
+  <li><p>Tag each placeholder in a code sample or command with <code translate="no" dir="ltr">code</code> and
+    <code translate="no" dir="ltr">var</code> elements, followed by a
+    <a href="/style/colons">colon and a description that starts with a lowercase letter</a>.
+    For
+    non-code samples, remove the <code translate="no" dir="ltr">code</code> elements&mdash;for example:</p>
+    <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>&lt;li&gt;&lt;code&gt;&lt;var&gt;INSTANCE_NAME&lt;/var&gt;&lt;/code&gt;: description&lt;/li&gt;</pre></devsite-code>
+  </li>
+  <li>If the description contains an example, introduce it with an <i>em dash</i> or
+    <i>such as</i>&mdash;for example:
+    <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>&lt;li&gt;&lt;code&gt;&lt;var&gt;INSTANCE_NAME&lt;/var&gt;&lt;/code&gt;: description&amp;mdash&semi;for example,...&lt;/li&gt;</pre></devsite-code>
+
+    <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>&lt;li&gt;&lt;code&gt;&lt;var&gt;INSTANCE_NAME&lt;/var&gt;&lt;/code&gt;: description, such as...&lt;/li&gt;</pre></devsite-code>
+  </li>
+  <li>Each item in the list follows our <a href="/style/lists">list style</a>.
+</ul>
+<div class="example">
+<p><span class="compare-better">Recommended</span>:</p>
+<ol>
+  <li><p>Set the maximum concurrency target for a new reservation:</p>
+    <div></div><devsite-code><pre class="devsite-click-to-copy notranslate" dir="ltr" is-upgraded>
+    bq mk \
+        --project_id=<var translate="no">ADMIN_PROJECT_ID</var> \
+        --location=<var translate="no">LOCATION</var> \
+        --target_job_concurrency=<var translate="no">CONCURRENCY</var> \
+        --reservation \
+        <var translate="no">RESERVATION_NAME</var></pre></devsite-code>
+    <p>Replace the following:</p>
+    <ul>
+      <li><code translate="no" dir="ltr"><var translate="no">ADMIN_PROJECT_ID</var></code>: the project that owns the reservation</li>
+      <li><code translate="no" dir="ltr"><var translate="no">LOCATION</var></code>: the location of the reservation</li>
+      <li><code translate="no" dir="ltr"><var translate="no">CONCURRENCY</var></code>: the maximum concurrency target</li>
+      <li><code translate="no" dir="ltr"><var translate="no">RESERVATION_NAME</var></code>: the name of the reservation</li>
+    </ul>
+  </li>
+</ol>
+</div>
+<div class="example">
+<p><span class="compare-better">Recommended</span>:</p>
+<ol>
+  <li><p>In Cloud Shell, set the environment variables:</p>
+    <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>export ONPREM_PROJECT=<var translate="no">ON_PREM_PROJECT_NAME</var> \
+    export ONPREM_ZONE=<var translate="no">ZONE</var></pre></devsite-code>
+    <p>Replace the following:</p>
+    <ul>
+      <li><code translate="no" dir="ltr"><var translate="no">ON_PREM_PROJECT_NAME</var></code>: the Google Cloud project
+name for your on-premises project. You can find your project number on the
+<a target="console" track-name="consoleLink" track-type="how-to" href="https://console.cloud.google.com/home/dashboard">Dashboard</a>
+page of the Google Cloud console.</li>
+      <li><code translate="no" dir="ltr"><var translate="no">ZONE</var></code>: a <a
+href="/compute/docs/regions-zones#identifying_a_region_or_zone">Google Cloud
+zone</a> that's close to your location&mdash;for example, <code translate="no" dir="ltr">us-east1</code>.</li>
+    </ul>
+  </li>
+</ol>
+</div>
+
+<h3 id="placeholders-in-output" data-text="Placeholders in output" tabindex="-1">Placeholders in output</h3>
+<p>If you provide a code output example, explain any placeholders that appear in
+sample output:</p>
+<ul>
+  <li>Use <code translate="no" dir="ltr">var</code> elements to identify the placeholder text in
+the output.</li>
+
+    
+
+  <li>Follow the example output with a list of the placeholders used in the
+example.</li>
+  <li>Introduce the list of placeholders with <i>This output includes the
+    following values:</i></li>
+  <li>List the placeholders in the order in which they appear in the
+example.</li>
+  <li><p>Tag each placeholder with a <code translate="no" dir="ltr">var</code> element,
+    followed by a colon and a description that starts with a lowercase letter&mdash;for example:</p>
+    <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>&lt;li&gt;&lt;code&gt;&lt;var&gt;INSTANCE_NAME&lt;/var&gt;&lt;/code&gt;: description&lt;/li&gt;</pre></devsite-code>
+  </li>
+  <li>If the description contains an example, introduce it with an <i>em dash</i> or
+    <i>such as</i>&mdash;for example:
+    <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>&lt;li&gt;&lt;code&gt;&lt;var&gt;INSTANCE_NAME&lt;/var&gt;&lt;/code&gt;: description&amp;mdash&semi;for example,...&lt;/li&gt;</pre></devsite-code>
+
+    <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>&lt;li&gt;&lt;code&gt;&lt;var&gt;INSTANCE_NAME&lt;/var&gt;&lt;/code&gt;: description, such as...&lt;/li&gt;</pre></devsite-code>
+  </li>
+</ul>
+<p>For more information, see <a href="/style/code-syntax#output">Output from commands</a>.</p>
+<div class="example">
+<p><span class="compare-better">Recommended</span>:</p>
+<h4 id="response" data-text="Response" tabindex="-1">Response</h4>
+<p>The output is similar to the following:</p>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+{
+ "name": "operations/build/<var translate="no">PROJECT_ID</var>/<var translate="no">OPERATION_ID</var>",
+ "metadata": {
+  "@type": "type.googleapis.com/google.devtools.cloudbuild.v1.BuildOperationMetadata",
+  "build": {
+   "id": "<var translate="no">BUILD_ID</var>",
+   "status": "QUEUED",
+   "createTime": "2019-09-20T15:55:29.353258929Z",
+   "steps": [
+    {
+     "name": "gcr.io/compute-image-import/gce_vm_image_import:release",
+     "env": [
+      "BUILD_ID=<var translate="no">BUILD_ID</var>"
+     ],
+     "args": [
+      "-timeout=7056s",
+      "-image_name=<var translate="no">IMAGE_NAME</var>",
+      "-client_id=api",
+      "-data-disk",
+      "-source_file=<var translate="no">SOURCE_FILE</var>"
+     ]
+    }
+   ],
+   "timeout": "7200s",
+   "projectId": "<var translate="no">PROJECT_ID</var>",
+   "logsBucket": "gs://<var translate="no">PROJECT_NUMBER</var>.cloudbuild-logs.googleusercontent.com",
+   "options": {
+    "logging": "LEGACY"
+   },
+   "logUrl": "https://console.cloud.google.com/gcr/builds/<var translate="no">BUILD_ID</var>?project=<var translate="no">PROJECT_NUMBER</var>"
+  }
+ }
+}
+</pre></devsite-code>
+<p>This output includes the following values:</p>
+  <ul>
+    <li><code translate="no" dir="ltr"><var translate="no">PROJECT_ID</var></code>: the project ID for the project that
+  the image was imported into</li>
+    <li><code translate="no" dir="ltr"><var translate="no">OPERATION_ID</var></code>: the ID of the import operation</li>
+    <li><code translate="no" dir="ltr"><var translate="no">BUILD_ID</var></code>: the ID of the build for the import
+  operation</li>
+    <li><code translate="no" dir="ltr"><var translate="no">IMAGE_NAME</var></code>: the name of the image to be
+  imported</li>
+    <li><code translate="no" dir="ltr"><var translate="no">SOURCE_FILE</var></code>: the URI for the image in Cloud
+  Storage&mdash;for example, <code translate="no" dir="ltr">gs://my-bucket/my-image.vmdk</code></li>
+    <li><code translate="no" dir="ltr"><var translate="no">PROJECT_NUMBER</var></code>: the number for the import
+  project</li>
+  </ul>
+</div>
+
+</section>
+  
+
+  

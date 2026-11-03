@@ -1,7 +1,7 @@
 ---
 name: documentation
-description: Write or edit developer documentation using selectively loaded guidance based on the Google Developer Documentation Style Guide. Use for READMEs, API documentation, tutorials, and how-to guides.
-license: CC-BY-4.0
+description: Write or edit developer documentation using the locally bundled, unabridged Google Developer Documentation Style Guide. Use for READMEs, API documentation, tutorials, and how-to guides.
+license: CC-BY-4.0 AND Apache-2.0
 ---
 # Developer documentation
 
@@ -10,18 +10,29 @@ repository's documentation instructions and the user's requirements first. They 
 precedence over this general style guidance. Preserve required formats, terminology,
 examples, and public contracts; do not expand the requested edit to restyle other files.
 
-Choose only references relevant to the task. Read them with `plugin.resource.read`,
-using this skill's qualified identifier and a path from the table. Do not load every
-reference or fetch the upstream website by default.
+Read `references/index.md` with `plugin.resource.read`, using this skill's qualified
+identifier. It indexes the complete captured guide, including the word list, source
+URLs, and redirects. Read the original pages relevant to the requested edit before
+making style decisions. Do not substitute an inferred convention or a summary for
+what the source actually recommends and its exceptions.
 
-| Task | Reference path |
+The following topics help locate the relevant pages in that index:
+
+| Task | Topics |
 | --- | --- |
-| Tone, clear sentences, terminology, grammar | `references/language.md` |
-| Page organization, headings, links, lists | `references/structure.md` |
-| Instructions, prerequisites, outcomes, notices | `references/procedures.md` |
-| API names, code samples, commands, placeholders | `references/code.md` |
-| Inclusive language, images, accessible content | `references/accessibility.md` |
-| Attribution, license, upstream sources, maintenance | `references/sources.md` |
+| Heading wording and organization | Headings and titles, paragraphs, lists |
+| Tone, grammar, terminology | Voice and tone, language topics, word list |
+| Instructions and notices | Procedures, notes and other notices |
+| API names, examples, commands | Code in text, code samples, command-line syntax, placeholders |
+| Inclusive and accessible content | Inclusive language, accessibility, images |
+| Attribution and snapshot maintenance | `references/sources.md`, `snapshot.json` |
+
+The guide resources are HTML text, preserving the complete original article markup,
+tables, examples, anchors, and exceptions. Large pages have ordered parts; read the
+parts covering the relevant section, including any continuation or qualifications.
+Platform icons have explicit text labels; apply product-specific guidance only in
+its stated scope. Use the index to follow original guide links through local plugin
+resources. Do not load the entire guide or fetch the website by default.
 
 Draft for the intended reader and their next action. Check technical statements and
 examples against the implementation and the repository's validation requirements.
@@ -33,7 +44,11 @@ plugin readers; do not run scripts, modify the reference installation, or reques
 permissions just to read guidance. An authorized documentation edit still uses the
 normal workspace write tools and permissions.
 
-This is a curated adaptation, not a complete or official copy of Google's guide.
+This is an unabridged snapshot of the published guide's article text, not a summary
+or an official Google distribution. Site navigation and generated page summaries
+are excluded. External image files are not redistributed; their original URLs and
+alternative text remain in the articles. No guidance is paraphrased or omitted.
 Source: [Google Developer Documentation Style Guide](https://developers.google.com/style),
-by Google, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
-See `references/sources.md` and `LICENSE.txt` for attribution and maintenance.
+by Google. Prose is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/);
+code samples under [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+See `references/sources.md`, `LICENSE.txt`, and `LICENSE-APACHE.txt`.

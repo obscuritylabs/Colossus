@@ -1,0 +1,191 @@
+<!-- Source: https://developers.google.com/style/units-of-measure; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/units-of-measure">
+<h1>Units of measurement</h1>
+
+
+  
+    
+      
+    
+    
+
+<p>Put a nonbreaking space (<code translate="no" dir="ltr">&amp;nbsp;</code>) between the number and the unit.</p>
+
+<section id="spaces">
+<h2 id="spaces-in-units-of-measurement" data-text="Spaces in units of measurement" tabindex="-1">Spaces in units of measurement</h2>
+<p>For most units of measurement, when you specify a number with the unit, use a
+nonbreaking space between the number and the unit. This guidance applies in both
+HTML and Markdown.</p>
+<p>For guidance about when to spell out units, see the
+<a href="/style/abbreviations#spelling-out">Abbreviations</a> page.</p>
+<p>For guidance about whether to hyphenate, see the <a href="/style/hyphens#compounds">Hyphens</a>
+page.</p>
+<div class="example">
+<p><span class="compare-better">Recommended</span>: <code translate="no" dir="ltr">64&amp;nbsp;GB</code> (64&nbsp;GB)</p>
+<p><span class="compare-better">Recommended</span>: <code translate="no" dir="ltr">25&amp;nbsp;mm</code> (25&nbsp;mm)</p>
+<p><span class="compare-better">Recommended</span>: a 128-bit system</p>
+<p><span class="compare-worse">Not recommended</span>: <code translate="no" dir="ltr">64 GB</code></p>
+<p><span class="compare-worse">Not recommended</span>: 64GB</p>
+</div>
+<p>For more information about making abbreviations plural, see <a
+href="/style/pluralization#making-abbreviations-plural">Plural abbreviations</a>.</p>
+
+<p>However, when the unit of measure is money or percent or degrees of an angle,
+don't use a space. For more information, see <a href="#currency">Currency</a>.</p>
+<div class="example">
+<p><span class="compare-better">Recommended</span>: $10</p>
+<p><span class="compare-better">Recommended</span>: £25</p>
+<p><span class="compare-better">Recommended</span>: 65%</p>
+<p><span class="compare-better">Recommended</span>: 180&deg;</p>
+</div>
+
+<p>For degrees of temperature, include a nonbreaking space between the number and the degree symbol.
+Don't use a space between the degree symbol (<code translate="no" dir="ltr">&amp;deg;</code>) and the temperature scale
+(<i>F</i> or <i>C</i>).</p>
+
+<div class="ds-selector-tabs">
+  <section>
+  <h3 id="example" data-text="Example" tabindex="-1">Example</h3>
+  <p>50&nbsp;&deg;C</p>
+  </section>
+  <section>
+  <h3 id="html" data-text="HTML" tabindex="-1">HTML</h3>
+  <p><code translate="no" dir="ltr">50&amp;nbsp;&amp;deg;C</code></p>
+  </section>
+  <section>
+  <h3 id="markdown" data-text="Markdown" tabindex="-1">Markdown</h3>
+  <p><code translate="no" dir="ltr">50&amp;nbsp;&amp;deg;C</code></p>
+  </section>
+</div>
+
+<p>For Kelvin temperatures, leave out the degree symbol but use a nonbreaking space before the
+<i>K</i>.</p>
+
+<div class="ds-selector-tabs">
+  <section>
+  <h3 id="example_1" data-text="Example" tabindex="-1">Example</h3>
+  <p>300&nbsp;K</p>
+  </section>
+  <section>
+  <h3 id="html_1" data-text="HTML" tabindex="-1">HTML</h3>
+  <p><code translate="no" dir="ltr">300&amp;nbsp;K</code></p>
+  </section>
+  <section>
+  <h3 id="markdown_1" data-text="Markdown" tabindex="-1">Markdown</h3>
+  <p><code translate="no" dir="ltr">300&amp;nbsp;K</code></p>
+  </section>
+</div>
+</section>
+
+<p>When a number and unit of measurement combine to modify a noun, don't hyphenate unless
+  the hyphen is needed for clarity.</p>
+  <p class="example"><span class="compare-better">Recommended</span>:
+    <code translate="no" dir="ltr">200&amp;nbsp;GB disk</code> (200&nbsp;GB disk)</p>
+
+<section id="ranges">
+<h2 id="ranges-of-numbers-with-units" data-text="Ranges of numbers with units" tabindex="-1">Ranges of numbers with units</h2>
+<p>In a range of numbers, repeat the unit for each number. <i>Unit</i> includes both symbols (like
+  the degree symbol (º)) and abbreviations (like <i>MB</i> for megabytes) but not nouns
+  (like <i>file</i>). For more information, see
+  <a href="/style/hyphens#number-range">Range of numbers</a>.</p>
+<p>Use the word <i>to</i> between the numbers, rather than a hyphen. A hyphen
+can be misinterpreted as a subtraction sign.</p>
+<div class="example">
+<p><span class="compare-better">Recommended</span>: -40&nbsp;&deg;C to 85&nbsp;&deg;C</p>
+<p><span class="compare-worse">Not recommended</span>: -40-85&nbsp;&deg;C</p>
+</div>
+</section>
+
+<section id="multiplied-units">
+<h2 id="hyphens-with-multiplied-units" data-text="Hyphens with multiplied units" tabindex="-1">Hyphens with multiplied units</h2>
+<section id="multiplied-units">
+    <p>When the components of a unit of measurement are multiplied by each other,
+    hyphenate them.</p>
+    <p class="example"><span class="compare-better">Recommended</span>: 5 vCPU-hours</p>
+    <p class="example"><span class="compare-better">Recommended</span>: 40 person-hours</p>
+  </section>
+</section>
+
+<section id="using-k">
+<h2 id="use-k-to-indicate-thousands" data-text="Use k to indicate thousands" tabindex="-1">Use <i>k</i> to indicate thousands</h2>
+<p>In some contexts, it might be appropriate to indicate thousands of something by
+following a number with a lowercase <i>k</i>. If you do that, then follow these
+guidelines:</p>
+<ul>
+  <li>Don't put a space between the number and <i>k</i>.</li>
+  <li>Add a noun to indicate what the number measures, and to make clear that
+you're not using <i>k</i> as an abbreviation for <i>kilobytes</i>.</li>
+</ul>
+<p><span class="compare-better">Recommended</span>: On this plan, you are
+limited to 55k download operations and 20k upload operations per day.</p>
+</section>
+
+<section id="currency">
+<h2 id="currency" data-text="Currency" tabindex="-1">Currency</h2>
+<p>If you're writing about monetary amounts, make sure that the reader knows what
+currency you're referring to. For example, the dollar sign—the <i>$</i>
+symbol—can refer to US dollars, Canadian dollars, Mexican pesos, and several
+other currencies.</p>
+<p>If there's any possibility of ambiguity, use a currency indicator before
+the amount. For details, see section 9.20 and following in the <cite>Chicago
+Manual of Style</cite>, 17th edition.</p>
+<p class="example"><span class="compare-better">Recommended</span>: US$10</p>
+</section>
+
+<section id="rates">
+<h2 id="rates" data-text="Rates" tabindex="-1">Rates</h2>
+<p>Use <i>per</i> instead of the division slash (/) when space permits.
+  It's OK to use the division slash when space is limited,
+  such as in a table with small cells.</p>
+<p>Shorten <i>per</i> to <i>p</i> only for well-established abbreviations for
+  rate units, such as <i>Gbps</i> for <i>gigabits per second</i> or
+  <i>MBps</i> for <i>megabytes per second</i>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: requests per day</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: requests/day</p>
+<p class="example"><span class="compare-better">Recommended</span>: Gbps</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: Gb/s</p>
+</section>
+
+<section>
+<h2 id="byte-units" data-text="Decimal and binary units" tabindex="-1">Decimal and binary units</h2>
+<p>Use the same system to measure bytes as the technology that you're documenting.
+  Don't use <i>MB</i> if you mean <i>MiB</i>, or <i>GB</i> if you mean <i>GiB</i>. The following
+  table lists common types of
+  <a href="https://en.wikipedia.org/wiki/Byte#Multiple-byte_units">decimal and binary units</a>:</p>
+  <table>
+    <tr>
+      <th>Decimal units</th>
+      <th>Binary units</th>
+    </tr>
+    <tr>
+      <td>kB (kilobyte, or 1000 bytes)</td>
+      <td>KiB (kibibyte, or 1024 bytes)</td>
+    </tr>
+    <tr>
+      <td>MB (megabyte, or 1000<sup>2</sup> bytes)</td>
+      <td>MiB (mebibyte, or 1024<sup>2</sup> bytes)</td>
+    </tr>
+    <tr>
+      <td>GB (gigabyte, or 1000<sup>3</sup> bytes)</td>
+      <td>GiB (gibibyte, or 1024<sup>3</sup> bytes)</td>
+    </tr>
+  </table>
+
+
+
+
+
+<p>For more information about abbreviating measurement terms, see
+  <a href="/style/abbreviations#spelling-out">When to spell out a term</a>.</p>
+</section>
+
+<h2 id="more-resources" data-text="More resources" tabindex="-1">More resources</h2>
+
+<ul>
+  <li><a href="/style/mathematical-notation">Mathematical notation</a></li>
+  <li><a href="/style/numbers">Numbers</a></li>
+</ul>
+
+  
+
+  

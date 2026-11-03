@@ -1,0 +1,283 @@
+<!-- Source: https://developers.google.com/style/mathematical-notation; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/mathematical-notation">
+<h1>Mathematical notation</h1>
+
+
+  
+    
+    
+
+<p>This page describes how to format common mathematical notation such as
+exponents, expressions, equations, operators, and variables in
+documentation. Formatting best practices can help ensure that your
+documentation is compatible with assistive technologies and
+renders accurately.</p>
+
+<p>For general information about using and formatting numbers, see
+<a href="/style/numbers">Numbers</a>.</p>
+
+<p class="note"><b>Note:</b> This page includes examples of formatting in HTML
+and Markdown in standard text. If you're using a third-party tool to display
+complex math, follow that tool's formatting guidance to ensure that your
+mathematical markup displays correct.</p>
+
+<section id="html-entities">
+<h2 id="use-html-entities-for-mathematical-symbols" data-text="Use HTML entities for mathematical symbols" tabindex="-1">Use HTML entities for mathematical symbols</h2>
+<p>In general, use HTML entities for mathematical symbols instead of keyboard
+symbols. The following table lists entities for symbols that are common in
+arithmetic and algebra. For the plus sign (<code translate="no" dir="ltr">+</code>), equals sign
+(<code translate="no" dir="ltr">=</code>), and division sign (<code translate="no" dir="ltr">/</code>), you can use
+their keyboard equivalents.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th width="15%">Symbol</th>
+      <th width="25%">Markup</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>+</td>
+      <td>Use the keyboard symbol.</td>
+      <td>Plus sign</td>
+    </tr>
+    <tr>
+      <td>&minus;</td>
+      <td><code translate="no" dir="ltr">&#38;minus;</code></td>
+      <td>Minus sign</td>
+    </tr>
+    <tr>
+      <td>&times;</td>
+      <td><code translate="no" dir="ltr">&#38;times;</code></td>
+      <td><p>Multiplication sign</p>
+        <p>Alternatively, you can use the dot operator <code translate="no" dir="ltr">&#8729;</code>
+        (<code translate="no" dir="ltr">&#38;#8729;</code>) or asterisk operator <code translate="no" dir="ltr">&#42;</code>
+        (<code translate="no" dir="ltr">&#38;#42;</code>) to match the UI. Don't use an asterisk
+        (<code translate="no" dir="ltr">*</code>) to indicate multiplication in text.</p>
+        <p>You can indicate multiplication by omitting the multiplication
+        symbol if doing so doesn't create ambiguity&mdash;for example,
+        instead of <i>a</i>&nbsp;&times;&nbsp;<i>b</i>, you can write
+        <i>ab</i>.</p></td>
+    </tr>
+    <tr>
+      <td>/</td>
+      <td>Use the keyboard symbol.</td>
+      <td>Division sign</td>
+    </tr>
+    <tr>
+      <td>=</td>
+      <td>Use the keyboard symbol.</td>
+      <td>Equals sign</td>
+    </tr>
+    <tr>
+      <td>&ne;</td>
+      <td><code translate="no" dir="ltr">&#38;ne;</code></td>
+      <td>Not equal to</td>
+    </tr>
+    <tr>
+      <td>&plusmn;</td>
+      <td><code translate="no" dir="ltr">&#38;plusmn;</code></td>
+      <td>Plus-minus sign</td>
+    </tr>
+    <tr>
+      <td>&mnplus;</td>
+      <td><code translate="no" dir="ltr">&#38;mnplus;</code></td>
+      <td>Minus-plus sign</td>
+    </tr>
+    <tr>
+      <td>&lt;</td>
+      <td><code translate="no" dir="ltr">&#38;lt;</code></td>
+      <td>Less than sign</td>
+    </tr>
+    <tr>
+      <td>&gt;</td>
+      <td><code translate="no" dir="ltr">&#38;gt;</code></td>
+      <td>Greater than sign</td>
+    </tr>
+    <tr>
+      <td>&asymp;</td>
+      <td><code translate="no" dir="ltr">&#38;asymp;</code></td>
+      <td>Approximately equal to</td>
+    </tr>
+    <tr>
+      <td>&nap;</td>
+      <td><code translate="no" dir="ltr">&#38;nap;</code></td>
+      <td>Not approximately equal to</td>
+    </tr>
+    <tr>
+      <td>&cong;</td>
+      <td><code translate="no" dir="ltr">&#38;cong;</code></td>
+      <td>Congruent to</td>
+    </tr>
+    <tr>
+      <td>&le;</td>
+      <td><code translate="no" dir="ltr">&#38;le;</code></td>
+      <td>Less than or equal to</td>
+    </tr>
+    <tr>
+      <td>&ge;</td>
+      <td><code translate="no" dir="ltr">&#38;ge;</code></td>
+      <td>Greater than or equal to</td>
+    </tr>
+    <tr>
+      <td>&equiv;</td>
+      <td><code translate="no" dir="ltr">&#38;equiv;</code></td>
+      <td>Identical to</td>
+    </tr>
+    <tr>
+      <td>&nequiv;</td>
+      <td><code translate="no" dir="ltr">&#38;nequiv;</code></td>
+      <td>Not identical to</td>
+    </tr>
+    <tr>
+      <td>&radic;</td>
+      <td><code translate="no" dir="ltr">&#38;radic;</code></td>
+      <td>Square root</td>
+    </tr>
+    <tr>
+      <td>&sum;</td>
+      <td><code translate="no" dir="ltr">&#38;sum;</code></td>
+      <td>N-ary summation</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="format-mathematical-notation" data-text="Format mathematical notation" tabindex="-1">Format mathematical notation</h2>
+<p>The following sections provide formatting for common math-related notation.</p>
+
+<h3 id="operators" data-text="Operators" tabindex="-1">Operators</h3>
+
+<p>To ensure accessibility and accurate HTML syntax, use
+<a href="#html-entities">HTML entities</a>
+instead of keyboard symbols for operators. For example, use
+<code translate="no" dir="ltr">&#38;minus;</code> instead of a hyphen (<code translate="no" dir="ltr">-</code>).</p>
+<p>Include a non-breaking space (<code translate="no" dir="ltr">&#38;nbsp;</code>) on both sides
+of operators within a single expression, equation, or
+statement.</p>
+<p>Don't italicize operators.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: <i>a</i>&nbsp;&minus;&nbsp;<i>b</i></p>
+
+<p>To render <i>a</i>&nbsp;&minus;&nbsp;<i>b</i>, use the following markup:</p>
+  <ul>
+    <li><b>HTML:</b> <code translate="no" dir="ltr">&lt;i&gt;a&lt;/i&gt;&#38;nbsp;&#38;minus;&#38;nbsp;&lt;i&gt;b&lt;/i&gt;</code></li>
+    <li><b>Markdown:</b> <code translate="no" dir="ltr">_a_&#38;nbsp;&#38;minus;&#38;nbsp;_b_</code></li>
+  </ul>
+
+<h3 id="variables" data-text="Variables" tabindex="-1">Variables</h3>
+
+<p>Italicize variables.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: <i>x</i>&nbsp;&ne;&nbsp;<i>y</i></p>
+<p class="example"><span class="compare-better">Recommended</span>: <i>x</i><sup><i>y</i></sup></p>
+<p class="example"><span class="compare-better">Recommended</span>: <i>y</i><sub><i>i</i></sub></p>
+
+<p>To render <i>x</i>&nbsp;&ne;&nbsp;<i>y</i>, use the following markup:</p>
+  <ul>
+    <li><b>HTML:</b> <code translate="no" dir="ltr">&lt;i&gt;x&lt;/i&gt;&#38;nbsp;&#38;ne;&#38;nbsp;&lt;i&gt;y&lt;/i&gt;</code></li>
+    <li><b>Markdown:</b> <code translate="no" dir="ltr">_x_&#38;nbsp;&#38;ne;&#38;nbsp;_y_</code></li>
+  </ul>
+
+<h3 id="expressions-equations" data-text="Expressions and equations" tabindex="-1">Expressions and equations</h3>
+
+<p>Include short expressions and equations inline with your text.</p>
+<p>Include a non-breaking space (<code translate="no" dir="ltr">&#38;nbsp;</code>) between components
+such as operators and variables so that the expression or equation renders on
+the same line.</p>
+<p>When an expression or equation creates an awkward line break, consider
+placing it on its own line.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: The equation
+that describes a linear trend line is
+<i>y</i>&nbsp;=&nbsp;<i>a</i>&nbsp;+&nbsp;<i>bx</i>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: The equation
+that describes a polynomial trend line, where the order is <i>o</i>, is the
+following:</br>
+<i>y</i>&nbsp;=&nbsp;<i>a</i>&nbsp;+&nbsp;<i>b</i>&nbsp;&times;&nbsp;<i>x</i>&nbsp;+&nbsp;...&nbsp;+&nbsp;<i>k</i>&nbsp;&times;&nbsp;<i>x</i><sup><i>o</i></sup></p>
+
+<p>To render <i>y</i>&nbsp;=&nbsp;<i>a</i>&nbsp;+&nbsp;<i>bx</i>, use the
+following markup:</p>
+  <ul>
+    <li><b>HTML:</b> <code translate="no" dir="ltr">&lt;i&gt;y&lt;/i&gt;&#38;nbsp;&#38;=&#38;nbsp;&lt;i&gt;a&lt;/i&gt;&#38;nbsp;+&#38;nbsp;&lt;i&gt;bx&lt;/i&gt;</code></li>
+    <li><b>Markdown:</b> <code translate="no" dir="ltr">_y_&#38;nbsp;&#38;=&#38;nbsp;_a_&#38;nbsp;+&#38;nbsp;_bx_</code></li>
+  </ul>
+
+<h3 id="fractions" data-text="Fractions" tabindex="-1">Fractions</h3>
+
+<p><p>Express fractions as decimal numbers, when possible.</p>
+<p>If you must express fractions as words, connect the numerator and
+denominator with a hyphen unless one of them is already hyphenated.</p></p>
+
+<p class="example"><span class="compare-better">Recommended</span>: 0.02</p>
+<p class="example"><span class="compare-better">Recommended</span>: one and one-half</p>
+<p class="example"><span class="compare-better">Recommended</span>: three-sevenths</p>
+<p class="example"><span class="compare-better">Recommended</span>: three seventy-fourths</p>
+
+<h3 id="exponents-subscripts" data-text="Exponents and subscripts" tabindex="-1">Exponents and subscripts</h3>
+
+<p>Use
+  <a href="https://wikipedia.org/wiki/Exponentiation">standard mathematical notation</a>.
+  Don't put a space between the base and the exponent.</p>
+<p>To render exponents, use the HTML <code translate="no" dir="ltr">&lt;sup&gt;</code> tag. Don't use the
+keyboard caret symbol (<code translate="no" dir="ltr">^</code>) to indicate an exponent.</p>
+<p>To render subscripts, use the HTML <code translate="no" dir="ltr">&lt;sub&gt;</code> tag.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: 2<sup>3</sup></p>
+<p class="example"><span class="compare-better">Recommended</span>: <i>x</i><sup><i>y</i></sup></p>
+<p class="example"><span class="compare-better">Recommended</span>: <i>y</i><sub><i>i</i></sub></p>
+<p class="example"><span class="compare-worse">Not recommended</span>: 2^3</p>
+
+<p>To render 2<sup>3</sup>, use the following markup in HTML and Markdown:
+<code translate="no" dir="ltr">2&lt;sup&gt;3&lt;/sup&gt;</code></p>
+
+<section id="expressions-as-words">
+
+<h2 id="notation-as-words" data-text="Notation as words" tabindex="-1">Notation as words</h2>
+<p>In general, you can use mathematical notation in place of words in running
+text. For example, in a sentence, you might use the statement
+<i>x</i>&nbsp;&ne;&nbsp;<i>y</i> instead of writing "<i>x</i> is not equal to
+<i>y</i>." If the use of notation instead of words creates ambiguous, grammatically
+incorrect, or difficult-to-read text, then use words to convey the
+mathematical concept.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: Check
+whether <i>a</i>&nbsp;&gt;&nbsp;<i>b</i>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: The area
+is calculated by multiplying the length by the width.</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: Check
+whether <i>a</i> is greater than <i>b</i>.</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: The
+area is calculated by multiplying <i>l</i>&nbsp;&times;&nbsp;<i>w</i>.</p>
+
+</section>
+
+</section>
+
+<section id="math-concepts">
+
+<h2 id="tools-for-complex-or-multiline-equations" data-text="Tools for complex or multiline equations" tabindex="-1">Tools for complex or multiline equations</h2>
+
+<p>The methods described on this page that use HTML entities and tags are suitable for most common
+mathematical notation. However, for more complex, multiline equations, or formulas that are
+difficult to represent clearly with standard HTML, consider using <a href="/style/images">diagrams,
+other images</a>, or a dedicated math rendering tool to support comprehension. Images and diagrams
+like pie charts or bar graphs, in particular, are especially helpful for comparing statistics and
+illustrating percentages.</p>
+
+
+
+</section>
+
+<h2 id="more-resources" data-text="More resources" tabindex="-1">More resources</h2>
+
+<ul>
+  <li><a href="/style/numbers">Numbers</a></li>
+  <li><a href="/style/units-of-measure">Units of measure</a></li>
+  <li><a href="/style/text-formatting">Text-formatting summary</a></li>
+</ul>
+
+  
+
+  

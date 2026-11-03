@@ -124,6 +124,8 @@ test("release readiness permits maintained SDK, build, and plugin Python sources
     "examples/sdk/provider-failure/server.py",
     "bundled-plugins/colossus/skills/security-review/scripts/init_review.py",
     "scripts/tests/test_security_review_workspace.py",
+    "scripts/google_style_guide.py",
+    "scripts/tests/test_google_style_guide.py",
   ]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /local release-readiness verification passed/u);
