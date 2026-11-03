@@ -203,9 +203,9 @@ impl SearchExecutor {
             }
             bytes.extend_from_slice(&chunk);
         }
-        let bytes = redact_exact_secret(&bytes, secret.as_deref());
-        let value: Value = serde_json::from_slice(&bytes)
+        let mut value: Value = serde_json::from_slice(&bytes)
             .map_err(|_| SearchAdapterError::Malformed("search response is not JSON".into()))?;
+        redact_exact_secret(&mut value, secret.as_deref());
         let response = normalize_response(self.profile.kind, &input.request, &value)?;
         let bytes = serde_json::to_vec(&response)
             .map_err(|error| SearchAdapterError::Malformed(error.to_string()))?;
