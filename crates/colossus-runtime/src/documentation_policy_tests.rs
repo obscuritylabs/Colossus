@@ -93,12 +93,7 @@ fn documentation_policy_is_conditional_metadata_and_preserves_higher_priority_in
     assert!(policy < home && home < repo && repo < user);
     assert!(text.ends_with("Plan only."));
     assert!(!text.contains("# Developer documentation"));
-    assert_eq!(
-        text,
-        read_plugin_resource(&skill, "references/guide/headings-01.html")
-            .expect("exact requested part")
-            .content
-    );
+    assert!(!text.contains("bare infinitive"));
     let composition = runtime
         .compose_plugin_skills("base", &[], &[])
         .expect("preview");
@@ -256,7 +251,9 @@ async fn documentation_references_are_selective_confined_and_add_no_authority() 
     assert!(text.contains("bare infinitive"));
     assert!(text.contains("Billing"));
     assert!(text.contains("Pricing"));
-    assert!(!text.contains("# Language and tone"));
+    let expected = read_plugin_resource(&skill, "references/guide/headings-01.html")
+        .expect("exact requested part");
+    assert_eq!(text, expected.content.as_str());
     for path in ["../SKILL.md", "/etc/passwd", "references/../../plugin.json"] {
         assert!(runtime.execute_plugin_operation(read(path)).await.is_err());
     }

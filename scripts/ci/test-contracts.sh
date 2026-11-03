@@ -421,7 +421,7 @@ trap - EXIT HUP INT TERM
 "${NODE:-node}" --test "$script_dir/../development-launch.test.mjs"
 
 # Verify the complete checked-in style guide without contacting upstream.
-"${PYTHON:-python3}" -B -m unittest discover \
+"${PYTHON:-python3}" -B -X warn_default_encoding -W error::EncodingWarning -m unittest discover \
     -s "$script_dir/../tests" -p 'test_google_style_guide.py'
 
 # These offline integrity and harness tests use synthetic archives and executable

@@ -73,11 +73,11 @@ class GuideTests(unittest.TestCase):
         with patch.object(guide, "urlopen", side_effect=AssertionError("network forbidden")):
             with contextlib.redirect_stdout(io.StringIO()):
                 guide.check(guide.SKILL)
-        manifest = json.loads((guide.SKILL / "snapshot.json").read_text())
+        manifest = json.loads((guide.SKILL / "snapshot.json").read_text(encoding="utf-8"))
         self.assertGreaterEqual(len(manifest["pages"]), 70)
         for entry in manifest["pages"]:
-            parts = [(guide.SKILL / path).read_text() for path in entry["resources"]]
-            source = gzip.decompress((guide.SKILL / entry["source"]).read_bytes()).decode()
+            parts = [(guide.SKILL / path).read_text(encoding="utf-8") for path in entry["resources"]]
+            source = gzip.decompress((guide.SKILL / entry["source"]).read_bytes()).decode("utf-8")
             original = guide.Page(source).article()
             # Remove only the mechanical scope labels and provenance/title wrapper.
             reconstructed = "".join(parts).split("</h1>\n", 1)[1]
@@ -89,7 +89,9 @@ class GuideTests(unittest.TestCase):
                                        "size": len(content.encode()), "content": content}).encode()
                 self.assertLess(len(envelope), 64 * 1024, path)
         headings = next(e for e in manifest["pages"] if e["url"].endswith("/headings"))
-        text = " ".join(Text("".join((guide.SKILL / p).read_text() for p in headings["resources"])).parts)
+        text = " ".join(Text("".join(
+            (guide.SKILL / p).read_text(encoding="utf-8") for p in headings["resources"]
+        )).parts)
         for guidance in ["bare infinitive", "noun phrase", "Billing", "Pricing", "Mixed heading styles"]:
             self.assertIn(guidance, text)
 
@@ -98,7 +100,7 @@ class GuideTests(unittest.TestCase):
             root = Path(temporary) / "snapshot"
             shutil.copytree(guide.SKILL, root)
             manifest_path = root / "snapshot.json"
-            manifest = json.loads(manifest_path.read_text())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             part = root / manifest["pages"][0]["resources"][0]
             original = part.read_bytes()
             part.write_bytes(original[:-1])
@@ -106,11 +108,11 @@ class GuideTests(unittest.TestCase):
                 guide.check(root)
             part.write_bytes(original)
             removed = manifest["pages"].pop()
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "missing page|missing navigation"):
                 guide.check(root)
             manifest["pages"].append(removed)
-            manifest_path.write_text(json.dumps(manifest))
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             source_path = root / removed["source"]
             data = gzip.decompress(source_path.read_bytes())
             source_path.write_bytes(gzip.compress(data.replace(b"<html", b"<HTML", 1), mtime=0))
