@@ -1,0 +1,464 @@
+<!-- Source: https://developers.google.com/style/lists; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/lists">
+<h1>Lists</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<section id="list-or-table">
+<h2 id="list-or-table" data-text="List or table?" tabindex="-1">List or table?</h2>
+<p>Tables and lists are both ways to present a set of similarly structured
+items. Sometimes it's not obvious when to choose one presentation over the
+other. To decide which presentation to use, see
+  <a href="/style/tables#list-or-table">List or table?</a></p>
+<p class="note"><b>Note</b>: Don't use a list to show only one item. If you want to set a single
+  item off from surrounding text, then use some other formatting. One exception to this guideline is
+  a single-step procedure. For more information, see
+  <a href="/style/procedures#single-step-procedures">Single-step procedures</a>.</p>
+</section>
+
+<section id="types">
+<h2 id="types-of-lists" data-text="Types of lists" tabindex="-1">Types of lists</h2>
+<p>Choose one of the following list styles. The following table includes common ways to present
+  lists in our documentation:</p>
+<table>
+  <tr>
+    <th>List type</th>
+    <th>Used for</th>
+    <th>HTML elements</th>
+  </tr>
+  <tr>
+    <td>Numbered list</td>
+    <td><p>A set of items where the sequence is significant, such as ordered steps, phases, or
+      priorities. The following is an example of a numbered list:</p>
+     <blockquote>
+      <p>Here's a sequence of steps to follow:</p>
+        <ol>
+          <li>Open the box.</li>
+          <li>Remove the bobcat from the box.</li>
+          <li>Feed the bobcat.</li>
+        </ol></blockquote>
+      <p>Nested sequential lists are labeled with lowercase letters or lowercase Roman
+        numerals. The following is an example of a nested sequential list:</p>
+      <blockquote><p>Here's a list of things to do after breakfast, in order:</p>
+        <ol>
+          <li>Go shopping.
+            <ol>
+              <li>Buy groceries:
+                <ul>
+                  <li>Flour</li>
+                  <li>Eggs</li>
+                  <li>Sugar</li>
+                  <li>Butter</li>
+                </ul>
+              </li>
+              <li>Go to mall:
+                <ol>
+                  <li>Buy dress.</li>
+                  <li>Buy shoes.</li>
+                </ol>
+              </li>
+            </ol>
+          </li>
+          <li>Make cake.</li>
+          <li>Build birthday present out of spare parts.</li>
+          <li>Clean house.</li>
+        </ol></blockquote>
+      <p>See also <a href="/style/procedures#sublists">Sub-steps in numbered procedures</a>.</p>
+    </td>
+    <td><code translate="no" dir="ltr">ol</code>, <code translate="no" dir="ltr">li</code></td>
+  </tr>
+  <tr>
+    <td>Bulleted list</td>
+    <td><p>A set of items that's not a sequence, such as a set of nonsequential options or examples.
+      Make sure it's clear whether or not every item is required. The following is an example of a
+      bulleted list:</p>
+      <blockquote><p>Here's a list of things that can go wrong, in no particular order:</p>
+        <ul>
+          <li>Your bicycle might explode.</li>
+          <li>The sun might go out.</li>
+          <li>An ant might break its leg and require a tiny splint.</li>
+        </ul></blockquote>
+    </td>
+    <td><code translate="no" dir="ltr">ul</code>, <code translate="no" dir="ltr">li</code></td>
+  </tr>
+  <tr>
+    <td>Description list</td>
+    <td><p>A set of terms, each with a description, definition, or explanation. Use this type of list
+      if you want to draw attention to two or more terms (such as a glossary). The following is an
+      example of a description list:</p>
+      <blockquote><p>Here are some descriptions of types of birds:</p>
+        <dl>
+          <dt>Emu</dt>
+          <dd>The best kind of bird.</dd>
+          <dt>Crow</dt>
+          <dd>The other best kind of bird.</dd>
+          <dt>Peacock</dt>
+          <dd>Also the best kind of bird.</dd>
+          <dt>Phoenix</dt>
+          <dd>An even better kind of bird.</dd>
+        </dl></blockquote>
+    </td>
+    <td><code translate="no" dir="ltr">dl</code>, <code translate="no" dir="ltr">dt</code>, <code translate="no" dir="ltr">dd</code></td>
+  </tr>
+    <tr>
+    <td>Description list that uses bulleted run-in headings</td>
+    <td><p>A set of introductory terms or phrases, each followed by a description, definition, or
+      explanation. Use this type of list if you want to highlight and explain several concepts or
+      save space. For information about how to format and punctuate run-in headings and their
+      descriptions, see
+      <a href="#description-lists-that-use-run-in-headings">Description lists that use run-in
+        headings</a> in this document.</p>
+      <p>The following is an example of a description list that uses bulleted run-in headings:</p>
+      <blockquote><p>Here are some descriptions of types of birds:</p>
+        <ul>
+          <li><b>Emu</b>: the best kind of bird</li>
+          <li><b>Crow</b>: the other best kind of bird</li>
+          <li><b>Peacock</b>: also the best kind of bird</li>
+          <li><b>Phoenix</b>: an even better kind of bird</li>
+        </ul></blockquote>
+    </td>
+    <td><code translate="no" dir="ltr">ul</code>, <code translate="no" dir="ltr">li</code></td>
+  </tr>
+</table>
+
+
+
+</section>
+
+<section id="multiple-paragraphs">
+<h2 id="multiple-paragraph-list-items" data-text="Multiple paragraph list items" tabindex="-1">Multiple paragraph list items</h2>
+<p>Any list item can contain more than one paragraph.</p>
+<p>To create multiple paragraphs, use the <code translate="no" dir="ltr">p</code> element rather
+than using the <code translate="no" dir="ltr">br</code> element. (The HTML specification describes which uses of the
+<a href="https://html.spec.whatwg.org/multipage/semantics.html#the-br-element"><code translate="no" dir="ltr">br</code>
+element</a> are legitimate and which aren't.)</p>
+
+<p>Example of a list item that contains more than one paragraph:</p>
+<ul>
+  <li>This list item is a single paragraph.</li>
+  <li><p>This list item contains multiple paragraphs.</p>
+      <p>As you can see!</p></li>
+  <li>This is another list item that's only one paragraph long.</li>
+  </ul>
+
+
+</section>
+
+<section id="intros">
+<h2 id="introductory-sentences-for-lists" data-text="Introductory sentences for lists" tabindex="-1">Introductory sentences for lists</h2>
+<p>Introduce a list with the appropriate context. In most cases, precede a list
+with an introductory sentence. The sentence can end with a colon or a period; usually a colon if it
+immediately precedes the list, usually a period if there's more material (such as a note
+paragraph) between the introduction and the list.</p>
+<p>If the list doesn't need any additional context other than the heading that immediately precedes
+  the list, it's OK to not introduce a list with an introductory sentence.</p>
+<p>Introduce a list with a complete sentence, not a partial one that's
+completed by the list items. You can also use <i>the following</i> as a noun phrase (see
+<a href="/style/word-list#following">following</a> in the word list).</p>
+
+<table>
+  <thead>
+    <tr>
+      <th width="50%"><span class="compare-better">Recommended</span></th>
+      <th width="50%"><span class="compare-worse">Not recommended</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>
+          <p>Use the <b>Submit</b> button for any of the following purposes:</p>
+          <ul>
+            <li>To submit the form.</li>
+            <li>To indicate that you're done.</li>
+            <li>To allow the next person to enter their data.</li>
+          </ul></td>
+      <td>
+          <p>Use the <b>Submit</b> button to:</p>
+          <ul>
+            <li>Submit the form.</li>
+            <li>Indicate that you're done.</li>
+            <li>Allow the next person to enter their data.</li>
+          </ul></td>
+    </tr>
+    <tr>
+      <td>
+          <p>To get the USB driver, follow these steps:</p>
+          <ol>
+          <li>Click <b>Tools&nbsp;<span aria-label="and then">></span>
+          Android&nbsp;<span aria-label="and then">></span> SDK Manager</b>.</li>
+          <li>Select <b>Google USB Driver</b>, and then click <b>OK</b>.</li>
+          </ol></td>
+      <td>
+          <p>To get the USB driver:</p>
+          <ol>
+          <li>Click
+          <b>Tools&nbsp;<span aria-label="and then">></span> Android&nbsp;<span aria-label="and then">></span>
+          SDK Manager</b>.</li>
+          <li>Select <b>Google USB Driver</b>, and then click <b>OK</b>.</li>
+          </ol></td>
+    </tr>
+    <tr>
+      <td>
+          <p>If you need to add an instance manually, do the following:</p>
+          <ol>
+          <li>Click <b>Create instance</b>.</li>
+          <li>For <b>Name</b>, enter a name.</li>
+          </ol>
+      </td>
+      <td>
+          <p>If you need to add an instance manually:</p>
+          <ol>
+          <li>Click <b>Create instance</b>.</li>
+          <li>For <b>Name</b>, enter a name.</li>
+          </ol>
+      </td>
+    </tr>
+    <tr>
+      <td><h4 id="objectives" data-text="Objectives" tabindex="-1">Objectives</h4>
+          <ul>
+          <li>Create an instance</li>
+          <li>Snapshot an instance</li>
+          <li>Delete an instance</li>
+          </ul></td>
+      <td><h4 id="objectives_1" data-text="Objectives" tabindex="-1">Objectives</h4>
+        <p>
+          In the following tutorial, you will complete the following tasks:
+        </p>
+          <ul>
+          <li>Create an instance</li>
+          <li>Snapshot an instance</li>
+          <li>Delete an instance</li>
+          </ul></td>
+    </tr>
+</tbody></table>
+<p>For information about introducing sub-steps, see <a href="/style/procedures#sublists">Sub-steps in numbered procedures</a>.</p>
+<p>For information about punctuation and capitalization of lists, see
+<a href="#capitalization">Capitalization and end punctuation</a>.</p>
+</section>
+
+<section id="numbering">
+<h2 id="unusual-list-numbering" data-text="Unusual list numbering" tabindex="-1">Unusual list numbering</h2>
+<p>Use nonstandard numbering in the following situations:</p>
+<ul>
+  <li>To present a list in reverse-numerical order, use an
+    <code translate="no" dir="ltr">ol</code> element with a <code translate="no" dir="ltr">reversed</code> attribute.</li>
+  <li>To set a value manually, use the <code translate="no" dir="ltr">value</code> attribute. In some cases, setting a
+    value manually can be convenient. However, in most cases, it isn't a good idea to manually
+    number a list item in a numbered list, because if the number of items changes later, you'll
+    have to manually change the value.</li>
+</ul>
+</section>
+
+<section id="sublists">
+<h2 id="sub-steps-in-a-numbered-procedure" data-text="Sub-steps in a numbered procedure" tabindex="-1">Sub-steps in a numbered procedure</h2>
+<p>For information about sub-steps in a numbered procedure, see
+  <a href="/style/procedures#sublists">Procedures</a>.</p>
+</section>
+
+<section id="parallel">
+<h2 id="parallel-syntax" data-text="Parallel syntax" tabindex="-1">Parallel syntax</h2>
+<p>Use the same syntax/structure for all list items in a given list, if
+possible.</p>
+
+
+
+
+
+</section>
+
+<section id="capitalization">
+<h2 id="capitalization-and-end-punctuation" data-text="Capitalization and end punctuation" tabindex="-1">Capitalization and end punctuation</h2>
+<p>Capitalization and end punctuation depend on the type of list and the
+contents of the list.</p>
+
+<h3 id="numbered-lettered-bulleted-lists" data-text="Numbered, lettered, and bulleted lists" tabindex="-1">Numbered, lettered, and bulleted lists</h3>
+<p>Start each list item with a capital letter, unless case is an important part of
+the information conveyed by the list—such as in a list of glossary terms.</p>
+<p>End each list item with a period or other appropriate sentence-ending
+punctuation, except in the following cases:</p>
+<ul>
+  <li>If the item consists of a single word, don't add end punctuation.</li>
+  <li>If the item doesn't include a verb, don't add end punctuation.</li>
+  <li>If the item is entirely in code font, don't add end punctuation.</li>
+  <li>If the item is entirely link text or a document title, don't add end punctuation.</li>
+</ul>
+<p>If you end up with inconsistent punctuation in your list, then either rewrite your list to use
+  <a href="#parallel">parallel construction</a> or add end punctuation to every list item
+  for consistency.</p>
+<div class="example">
+<p><span class="compare-better">Recommended</span>:</p>
+<p>The following words are adjectives:</p>
+<ul>
+  <li>Big</li>
+  <li>Small</li>
+  <li>Gratuitous</li>
+</ul>
+<p><span class="compare-better">Recommended</span>:</p>
+<p>The SDK supports the following UI elements:</p>
+<ul>
+  <li>Text box</li>
+  <li>Bulleted list</li>
+  <li>Button</li>
+</ul>
+<p><span class="compare-better">Recommended</span>:</p>
+<p>The API supports the following actions:</p>
+<ul>
+  <li>Create</li>
+  <li>Replace</li>
+  <li>Update</li>
+  <li>Delete</li>
+</ul>
+<p><span class="compare-better">Recommended</span>:</p>
+<p>You can do any of the following by using the API:</p>
+<ul>
+  <li>Create an item.</li>
+  <li>Replace one item with another.</li>
+  <li>Update an item.</li>
+  <li>Delete an item.</li>
+</ul>
+</div>
+
+<h3 id="description-lists" data-text="Description lists" tabindex="-1">Description lists</h3>
+<p>Sometimes it's useful to add an explanatory phrase to a list item, which can
+affect the punctuation. In general, don't add an explanatory phrase to only a
+single list item; instead, use a description list, and provide explanatory
+phrases for all items.</p>
+<p>In most contexts, start each term (<code translate="no" dir="ltr">dt</code> element) with a capital letter.</p>
+<p>Don't end the term with a period. Do generally put a period at the end of
+each <code translate="no" dir="ltr">dd</code> ("description") element.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th width="50%"><span class="compare-better">Recommended</span></th>
+      <th width="50%"><span class="compare-worse">Not recommended</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><p>The following words are adjectives:</p>
+          <dl>
+            <dt>Big</dt>
+            <dd>A short word.</dd>
+            <dt>Relevant</dt>
+            <dd>A fancy word.</dd>
+            <dt>Gratuitous</dt>
+            <dd>A long word.</dd>
+            <dt>Purple</dt>
+            <dd>A vibrant color.</dd>
+          </dl></td>
+      <td><p>The following words are adjectives:</p>
+          <ul>
+            <li>Big</li>
+            <li>Relevant</li>
+            <li>Gratuitous</li>
+            <li>Purple—this is a color.</li>
+          </ul></td>
+    </tr>
+  </tbody>
+</table>
+
+<h3 id="description-lists-that-use-run-in-headings" data-text="Description lists that use run-in headings" tabindex="-1">Description lists that use run-in headings</h3>
+<p>In most contexts, format run-in headings as follows:</p>
+   <ul>
+     <li>Start the run-in heading with a capital letter.</li>
+     <li>End the run-in heading with a period or a colon, but be consistent within the list.</li>
+     <li>
+       You can decide whether to bold the punctuation that ends the heading based on factors
+       such as on-page consistency.
+     </li>
+   </ul>
+<p>For the descriptions that follow the punctuation, capitalize the first letter as follows:</p>
+   <ul>
+      <li>If the text follows a period, start the text with a capital letter.</li>
+      <li>If the text follows a colon, start the text with a lowercase letter.</li>
+   </ul>
+<p>To end the descriptive text, punctuate as follows:</p>
+   <ul>
+      <li>If the description follows a period, end the description with a period.</li>
+      <li>If the description follows a colon, do one of the following:</li>
+        <ul>
+          <li>
+            If the description is a list of items or short phrases without verbs, don't include a
+            period.
+          </li>
+          <li>
+            If the description includes a verb or expresses a standalone thought, end the
+            description with a period.
+          </li>
+        </ul>
+   </ul>
+<p>Don't use a dash to set off a description from an item in a description list. For more
+  information, see
+  <a href="/style/dashes#colons-instead-of-dashes-in-description-lists">Colons instead of dashes in
+  lists</a>.</p>
+<div class="example">
+<p><span class="compare-better">Recommended</span>:</p>
+<p>The following words are adjectives:</p>
+<ul>
+  <li><b>Big</b>: a short word</li>
+  <li><b>Relevant</b>: a fancy word</li>
+  <li><b>Gratuitous</b>: a long word</li>
+  <li><b>Purple</b>: a vibrant color</li>
+</ul>
+<p><span class="compare-better">Recommended</span>:</p>
+    <p>The coffee shop has several great choices:</p>
+      <ul>
+        <li><b>Coffee</b>: latte, mocha,  cappuccino, espresso, macchiato</li>
+        <li><b>Tea</b>: chai tea, chai latte, black tea, green tea, herbal tea</li>
+      </ul>
+<p><span class="compare-better">Recommended</span>:</p>
+    <p>Budget Airlines reduces your ticket cost in several ways:</p>
+      <ul>
+        <li><b>It increases fuel economy by reducing baggage weight</b>. By charging
+          astronomical prices for anything larger than a wallet....</li>
+        <li><b>It carries more passengers per flight</b>. By reducing leg room to industry and
+          medical minimums, it fits more seats....</li>
+      </ul>
+</div>
+<aside class="note"><b>Note</b>: The guidelines here about list punctuation
+differ from the <a
+href="https://material.io/guidelines/style/writing.html#writing-capitalization-punctuation">Material
+Design guidelines</a>. If you're writing UI text rather than prose
+documentation, then follow the Material Design guidelines.</aside>
+
+<h2 id="comma-separated-lists" data-text="Comma-separated lists" tabindex="-1">Comma-separated lists</h2>
+
+<p>When you write a list in a paragraph, use
+<a href="/style/commas#serial-commas">serial commas</a> to separate the items.
+</p>
+
+<p>Avoid ending a list with <i>etc.</i> or phrases like <i>and so on</i>.
+Instead, introduce the list in a way that makes it clear that the list isn't
+all-inclusive.</p>
+
+<p><span class="compare-better">Recommended</span>: The service processes data
+like event logs, clickstream data, social network interactions, and e-commerce
+transactions.</p>
+
+<p><span class="compare-worse">Not recommended</span>: The service processes
+event logs, clickstream data, social network interactions, e-commerce
+transactions, etc.</p>
+
+<p>For more information, see <a href="/style/word-list#etc">etc.</a></p>
+
+
+
+
+</section>
+
+  
+
+  

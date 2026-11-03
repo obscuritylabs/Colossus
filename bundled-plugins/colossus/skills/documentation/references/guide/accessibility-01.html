@@ -1,0 +1,346 @@
+<!-- Source: https://developers.google.com/style/accessibility; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/accessibility">
+<h1>Write accessible documentation</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<p>We write our developer documentation with accessibility in mind. This page is not an exhaustive
+  reference, but describes some general guidelines and examples that illustrate best practices to
+  follow. The
+  <a href="https://www.who.int/en/news-room/fact-sheets/detail/disability-and-health">World Health Organization</a>
+  estimates that 15% of the world's population (more than 1 billion people) have an accessibility
+  need. When documentation is written with accessibility in mind, it improves the overall
+  experience for all readers.</p>
+<p>For other writing best practices, see the following resources:</p>
+<ul>
+  <li><a href="/style/translation">Write for a global audience</a></li>
+  <li><a href="/style/inclusive-documentation">Write inclusive documentation</a></li>
+  <li><a href="/style/tone">Voice and tone</a></li>
+</ul>
+
+
+<section>
+<h2 id="general-dos-and-donts" data-text="General dos and don'ts" tabindex="-1">General dos and don'ts</h2>
+<ul>
+  <li>Don't use ableist language. Avoid bias and harm when discussing disability and accessibility.
+    For more information, see
+    <a href="/style/inclusive-documentation">Writing inclusive documentation</a>.</li>
+  <li>Ensure that readers can reach all parts of the document (including
+tabs, form-submission buttons, and interactive elements) by using only a keyboard,
+without a mouse or trackpad.</li>
+  <li>Use a screen reader to test your documentation. This test can help you find accessibility
+    issues in your content and is a good way to self-edit your content. To try out a screen reader,
+  see <a href="https://wikipedia.org/wiki/List_of_screen_readers">List of screen readers</a>.</li>
+  <li>In HTML, use <a href="/style/semantic-tagging">semantic
+tagging</a>. For example, use the <code translate="no" dir="ltr">em</code> element only to
+indicate emphasis, not to indicate italics.
+
+  </li>
+  <li>In HTML, prefer
+    <a href="https://developer.mozilla.org/en-US/docs/Web/HTML/Element">native
+elements</a> over custom styles.</li>
+  <li>Avoid unnecessary font formatting. (Screen readers explicitly describe
+text modifications.)</li>
+  <li>If you're documenting a product that includes specialized accessibility
+features, then explicitly document those features. For example, the Google Cloud
+CLI (<code translate="no" dir="ltr">gcloud</code> CLI) includes togglable accessibility features
+such as percentage progress bars and ASCII box rendering.</li>
+  <li>Don't force line breaks (hard returns) within sentences and paragraphs. Line breaks might not
+    work well in resized windows or with enlarged text.</li>
+  <li>Avoid when possible <a href="https://wikipedia.org/wiki/Camel_case">camel case</a> and
+    <a href="https://wikipedia.org/wiki/All_caps">all caps</a>. Some screen readers read
+    capitalized letters individually, and some languages are
+    <a href="https://wikipedia.org/wiki/Unicase">unicase</a>. Follow
+    <a href="/style/capitalization">capitalization</a> guidelines.</li>
+ <li>Depending on the screen reader (or personal settings), not all punctuation marks are read. Make
+  sure that the same meaning is conveyed to the reader without punctuation marks. For that reason, avoid
+   when possible the use of exclamation marks, question marks, and semicolons.</li>
+  <li>Don't use <i>&</i> instead of <i>and</i> in headings, text, navigation, or
+tables of contents. However, it's OK to use <i>&</i> when referencing UI
+elements that use <i>&</i>, or in table headings and diagram labels where space
+constraints require abbreviation. Of course, it's fine to use <code translate="no" dir="ltr">&</code>
+for technical purposes in code.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="ease-of-reading" data-text="Ease of reading" tabindex="-1">Ease of reading</h2>
+  <ul>
+    <li>Break up walls of text to aid in scannability. For example, separate
+      <a href="/style/paragraph-structure">paragraphs</a>,
+      create
+      <a href="/style/headings">headings</a>,
+      and use
+      <a href="/style/lists">lists</a>.</li>
+    <li>Use shorter sentences. Try to use fewer than 26 words per sentence.</li>
+    <li>Define acronyms and abbreviations on first usage and if they're used infrequently.</li>
+    <li>Use parallel writing structures for similar things. For example, start each list in the same
+      format.</li>
+    <li>Place distinguishing and important information of a paragraph in the first sentence to aid in
+      scannability.</li>
+    <li><p>Use clear and direct language. Avoid the use of double negatives and exceptions for exceptions.</p>
+      <p class="example"><span class="compare-better">Recommended</span>: You can continue without a
+        path.</p>
+      <p class="example"><span class="compare-worse">Not recommended</span>: A missing path won't
+        prevent you from continuing.</p>
+    </li>
+    <li>Left-align text for readability. Don't center or full-justify text.</li>
+  </ul>
+</section>
+
+<section>
+  <h2 id="headings-and-titles" data-text="     Headings and titles" tabindex="-1">
+    Headings and titles</h2>
+<p>Use descriptive headings and titles because they help a reader navigate their browser and the
+   page. It's easier to jump between pages and sections of a page if the headings and titles are
+   unique.</p>
+  <ul>
+    <li>Use a heading hierarchy.</li>
+    <li>Don't skip levels of the heading hierarchy. For example, put an <code translate="no" dir="ltr">h3</code> element
+      only after an <code translate="no" dir="ltr">h2</code> element.</li>
+    <li>To change the visual formatting of a heading, use CSS rather than using a heading level that
+     doesn't fit the hierarchy.</li>
+    <li>Don't have empty headings or headings with no associated content.</li>
+    <li>Tag headings using heading elements. In HTML: <code translate="no" dir="ltr">h1</code>,
+      <code translate="no" dir="ltr">h2</code>, and so on. In Markdown: <code translate="no" dir="ltr">#</code>, <code translate="no" dir="ltr">##</code>, and so on.</li>
+    <li>Use a level-1 heading for the page title or main content heading.</li>
+  </ul>
+<p>For more information and examples, see <a href="/style/headings">Headings and titles</a>.</p>
+</section>
+
+<section>
+<h2 id="links" data-text="Links" tabindex="-1">Links</h2>
+<ul>
+  <li>Use <a href="/style/cross-references#descriptive-link-text">meaningful link text</a>.
+    Links should make sense when read out of context.</li>
+  <li>Don't use <i>click here</i> or <i>read this document</i>. Some people who use screen readers
+    jump from link to link to scan a page and need to understand what a link contains.</li>
+  <li>Use <i>see</i> to refer to links and cross-references. For more information, see
+  <a href="/style/word-list#see">see</a>.</li>
+  <li>When a link does anything that the reader might not expect, such as downloading a file,
+    opening in a new tab, or jumping to another section on the same page, explain that behavior when
+    you link. For more information, see
+    <a href="/style/cross-references#explain-behavior">Explain unexpected link behavior</a>.</li>
+  <li>When possible, avoid adjacent links. Instead, put a character in between to separate them.</li>
+</ul>
+</section>
+
+<section>
+  <h2 id="lists" data-text="Lists" tabindex="-1">Lists</h2>
+  <ul>
+    <li>In a
+      <a href="/style/procedures">procedure</a>,
+      make each instruction a
+      <a href="/style/lists">list item</a>.</li>
+    <li>Use lists to make it easier for the reader to follow the steps.</li>
+  </ul>
+</section>
+
+<section>
+<h2 id="images" data-text="Images" tabindex="-1">Images</h2>
+<ul>
+  <li>For every image, provide an alt attribute. For alt attributes that contain
+    <a href="/style/images#alt-text">alt text</a>, use alt text that adequately summarizes the
+    intent of each image. If the image is purely decorative, use empty alt text.</li>
+  <li>Don't present new information in images. Always provide an equivalent text explanation with
+    the image.</li>
+  <li>Don't repeat images unless absolutely necessary.</li>
+  <li>Don't use images of text, code samples, or terminal output. Use actual text.</li>
+  <li>Use SVG instead of PNG if available. SVGs stay sharp when you zoom in on the image.</li>
+</ul>
+<p>For more information, see
+  <a href="/style/images#text-associated-with-images">Text associated with images</a>.</p>
+
+</section>
+
+<section>
+<h2 id="videos,-recordings,-and-gifs" data-text="Videos, recordings, and GIFs" tabindex="-1">Videos, recordings, and GIFs</h2>
+   <ul>
+    <li>Provide captions, transcripts, or descriptions of audio and video content. For example, you
+      can use the
+      <a href="https://support.google.com/youtube/answer/6373554">autocaption feature</a>
+      in YouTube.</li>
+    <li>Ensure that captions can be translated into major languages.</li>
+    <li>Don't use flickering or flashing elements. They can cause anything from motion sickness
+      to a seizure.</li>
+  </ul>
+</section>
+
+<section>
+<h2 id="buttons-and-icons" data-text="Buttons and icons" tabindex="-1">Buttons and icons</h2>
+<ul>
+
+
+
+
+
+  <li>For form-submission buttons, use the native HTML <code translate="no" dir="ltr">button</code> element.</li>
+  <li>An icon is a symbol or image that represents an object or a function. For information
+    about using icons, see the <a href="/style/ui-elements#buttons">Buttons and icons</a> section
+    of the "UI elements and interaction" page.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="ui-navigation" data-text="UI navigation" tabindex="-1">UI navigation</h2>
+
+<p>When you use angle brackets (<code translate="no" dir="ltr">&gt;</code>) to document menu paths, add an
+<a href="https://www.w3.org/TR/WCAG20-TECHS/ARIA14.html"><code translate="no" dir="ltr">aria-label</code> attribute</a>
+to help screen readers interpret the brackets as "and then" instead of as
+"greater than" or "keyboard arrow right". For more information and examples, see
+<a href="/style/ui-elements#term-menus">Menu bar</a>.
+</p>
+</section>
+
+<section>
+<h2 id="tables" data-text="Tables" tabindex="-1">Tables</h2>
+<ul>
+  <li>Introduce tables in the text preceding the table because not all screen readers preannounce
+    tables.</li>
+  <li>Use table headings for the first column and the first row only. Use the
+    <a href="https://www.w3.org/TR/html4/struct/tables.html#edef-TH"><code translate="no" dir="ltr">th</code> element</a>.</li>
+  <li>If your tables include both row and column headings, then mark heading cells with the
+    <a href="https://www.w3.org/WAI/tutorials/tables/two-headers/"><code translate="no" dir="ltr">scope</code>
+    attribute</a>.</li>
+  <li>If your tables have more than one row containing column headings, then use the
+    <a href="https://www.w3.org/WAI/tutorials/tables/multi-level/"><code translate="no" dir="ltr">headers</code>
+    attribute</a> and make sure that the headings have unique IDs.</li>
+  <li>Avoid when possible tables in the middle of a numbered procedure.</li>
+  <li>Don't merge cells. Don't use <code translate="no" dir="ltr">colspan</code> or <code translate="no" dir="ltr">rowspan</code> attributes.</li>
+  <li>Don't use tables unless it's the best method to present your information. Tables are
+    challenging for screen readers. For more information, see
+    <a href="/style/tables#list-or-table">List or table</a>.</li>
+  <li>Don't present new information in tables through images or symbols alone; always provide a
+descriptive <code translate="no" dir="ltr">alt</code> attribute for the image or symbol. For more information, see
+<a href="/style/images#alt-text">Alt text</a>.</li>
+</ul>
+<p>For more information, see <a href="/style/tables">Tables</a>.</p>
+</section>
+
+<section>
+<h2 id="interactive-elements" data-text="Interactive elements" tabindex="-1">Interactive elements</h2>
+<p>Introduce an interactive element (such as a button that expands and collapses) in the text
+preceding the element.</p>
+
+<p class="example"><span class="compare-better">Recommended if practical</span>: To see a list of
+  requirements, expand the <b>Requirements</b> section.</p>
+<p class="example"><span class="compare-better">Recommended</span>: To see a list of requirements,
+  click the <span class="material-icons" aria-hidden="true" translate="no">arrow_right</span> expander arrow.</p>
+
+
+
+</section>
+
+<section>
+<h2 id="forms" data-text="Forms" tabindex="-1">Forms</h2>
+  <ul>
+  <li>Label every input field by using a <code translate="no" dir="ltr">label</code> element.</li>
+  <li>Place labels outside of fields.</li>
+  <li>When you're creating an error message for form validation, clearly state
+what went wrong and how to fix it—for example: "Name is a required field."</li>
+  </ul>
+</section>
+
+<section>
+<h2 id="custom-css-and-javascript" data-text="Custom CSS and JavaScript" tabindex="-1">Custom CSS and JavaScript</h2>
+  <p>Try to use your site's standard styles and standard JavaScript code as much
+as possible. However, if you do use custom styles or code, then follow these guidelines:</p>
+<ul>
+  <li>Pick colors that respect
+    <a href="https://webaim.org/resources/contrastchecker/">accessible color contrast
+ratios</a> (4.5:1 for text).</li>
+  <li>Don't use <code translate="no" dir="ltr">visibility:hidden</code> or <code translate="no" dir="ltr">display:none</code>. Both
+styles hide information from screen readers.</li>
+  <li>Avoid when possible using mouseover events. But if you do use them, then add alternate
+focus and blur events for keyboard users.</li>
+  <li>Ensure that any ordering and positioning defined in styles reflects the
+DOM and the reading order (such as left to right and top to bottom) of your page.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="document-rendering" data-text="Document rendering" tabindex="-1">Document rendering</h2>
+<p>Make sure that your document conveys all the information that you intended when you
+view it in the following contexts:</p>
+<ul>
+  <li>Without sound</li>
+  <li>Using only sound</li>
+  <li>Without images, including animation</li>
+  <li><a href="https://colororacle.org/">Without color</a></li>
+  <li>Using a keyboard</li>
+  <li>With screen magnification</li>
+  <li>Without punctuation</li>
+</ul>
+<p>Don't use color, size, location, or other visual cues as the primary way
+  of communicating information.</p>
+   <ul>
+     <li>If you're using color, an icon, or outline thickness to convey state,
+then also provide a secondary cue, such as a change in the text label.</li>
+     <li><p>Refer to buttons and other elements by their label. For visual elements
+       that have no text, don't try to describe the element. Instead, use the element's
+       <code translate="no" dir="ltr"><a href="https://www.w3.org/TR/WCAG20-TECHS/ARIA14.html">aria-label</a></code>
+       attribute if possible.
+       For example:</p>
+       <p class="example"><span class="compare-better">Recommended</span>: Click <b>Save</b>.</p>
+       <p class="example"><span class="compare-better">Recommended</span>: Click <b>Notifications</b>.</p>
+       <p class="example"><span class="compare-worse">Not recommended</span>: Click the bell icon.</p>
+     </li>
+     <li><p>Don't use directional language to orient the reader, such as <i>above</i>, <i>below</i>,
+      or <i>right-hand side</i>. This type of language doesn't work well for accessibility or for
+      localization reasons. For example, what's on the right side for left-to-right languages
+      appears on the left side for right-to-left languages.</p>
+      <p>Don't use directional language to refer to a position in a document. For example, the text
+      isn't <i>below</i> if it's being read by a screen reader. Instead, use <i>earlier</i>,
+  <i>preceding</i>, or <i>following</i>.</p>
+  <p class="example"><span class="compare-better">Recommended</span>:
+In the preceding diagram, clients run jobs on multi-team or single-team clusters.</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: In the diagram above,
+clients run jobs on multi-team or single-team clusters.</p>
+<p>If a <a href="/style/ui-elements">UI element</a> is hard to find,
+<a href="/style/images">provide a screenshot</a>.</p>
+<p class="example"><span class="compare-better">Recommended</span>:
+Click <span class="material-icons" aria-hidden="true" translate="no">menu</span> <b>Menu</b>.</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: In the left-side
+panel, click the button with three lines.</p>
+    </li>
+
+
+   
+
+
+  </ul>
+</section>
+
+<section>
+<h2 id="more-resources" data-text="More resources" tabindex="-1">More resources</h2>
+
+
+
+<ul>
+  <li><a href="https://www.google.com/accessibility/">Google's main
+    accessibility page</a></li>
+  <li><a href="https://www.w3.org/WAI/WCAG20/glance/">Web Content Accessibility
+    Guidelines (WCAG) 2.0</a></li>
+  <li><a href="https://www.w3.org/WAI/">Web Accessibility Initiative
+    (WAI)</a></li>
+  <li><a href="https://www.w3.org/TR/using-aria/">Using ARIA</a></li>
+  <li><a href="https://www.w3.org/WAI/tutorials/">Web Accessibility
+    Tutorials</a></li>
+</ul>
+</section>
+
+  
+
+  

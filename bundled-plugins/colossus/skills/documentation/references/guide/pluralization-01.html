@@ -1,0 +1,186 @@
+<!-- Source: https://developers.google.com/style/pluralization; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/pluralization">
+<h1>Pluralization</h1>
+
+
+  
+    
+    
+
+  <p>In general, follow the standard rules for pluralization in US English and use the regular
+  plural form of a word in most cases. Avoid using <i>'s</i> to form a plural to avoid confusing
+  a plural with a possessive or contraction.</p>
+
+  <p>For more information, see <a
+  href="/style/contractions">Contractions</a> and <a href="/style/possessives">Possessives</a>.</p>
+
+<section>
+
+  <h2 id="singular-and-plural" data-text="Singular and plural" tabindex="-1">Singular and plural</h2>
+
+  <p>For sentences with long or complex subjects, make sure to use either a plural or singular
+  appropriately.</p>
+
+    <p class="example"><span class="compare-better">Recommended</span>: Confirm that the number of
+    entries listed in the directory is accurate.</p>
+    <p class="example"><span class="compare-better">Recommended</span>: The workloads with the
+    <code translate="no" dir="ltr">app: backend</code> label represent the traffic source.</p>
+    <p class="example"><span class="compare-worse">Not recommended</span>: The efficiency of
+    algorithms that process data sets depend on memory allocation.</p>
+
+  <p>For sentences with more than one subject being connected by <i>and</i> or <i>or</i>, make sure
+  to use either a plural and singular appropriately.</p>
+
+    <p class="example"><span class="compare-better">Recommended</span>: The request payload and
+    header information are logged for debugging.</p>
+    <p class="example"><span class="compare-better">Recommended</span>: Either the API keys or
+    service account wasn't authenticated.</p>
+    <p class="example"><span class="compare-worse">Not recommended</span>: User authentication and
+    authorization is processed and handled by the security module.</p>
+
+  <p>For consistent style, use a plural after <i>one or more</i>, not a singular.</p>
+
+  <p>Because <i>one or more</i> can express the possibility of one or more outcomes, it's sometimes
+  helpful to reword the sentence for clarity.</p>
+
+    <p class="example"><span class="compare-better">Recommended</span>: If one or more tests fail, a
+    system warning is triggered.</p>
+    <p class="example"><span class="compare-better">Recommended</span>: If any one test fails, a
+    system warning is triggered.</p>
+
+  <p>See also <a href="#plurals-in-parentheses">Plurals in parentheses</a>.</p>
+
+  <p>Use a singular after <i>more than one</i>, not a plural.</p>
+
+    <p class="example"><span class="compare-better">Recommended</span>: You can create more than one
+    instance at a time.</p>
+
+</section>
+
+<section>
+
+  <h2 id="making-abbreviations-plural" data-text="Plural abbreviations" tabindex="-1">Plural abbreviations</h2>
+
+  <p>In general, treat acronyms, initialisms, and other abbreviations as regular words when making
+  them plural. Avoid using <i>'s</i> to form the plural to help distinguish the plural form from the
+  possessive. For more information, see <a href="/style/possessives">Possessives</a>.</p>
+
+    <p class="example"><span class="compare-better">Recommended</span>: APIs, SKEs, and IDEs</p>
+    <p class="example"><span class="compare-worse">Not recommended</span>: API's, SKE's, and
+    IDE's</p>
+
+  <p>If the acronym, initialism, or abbreviation ends in <i>s</i>, <i>sh</i>, <i>ch</i>, or
+  <i>x</i>, then add <i>es</i>—for example, <i>OSes</i>, <i>DISHes</i>, <i>DCCHes</i>, and
+  <i>BMXes</i>.</p>
+
+    <aside class="note"><b>Note:</b> Forming a plural using <i>'s</i> can be ambiguous or confusing
+    to readers and might cause issues in translation. For more information, see <a
+    href="/style/translation">Write for a global audience</a>.</aside>
+
+  <p>When spelling out a term, make sure that both the spelled-out term and abbreviation match,
+  with both either being a plural or singular.</p>
+
+    <p class="example"><span class="compare-better">Recommended</span>: virtual machines (VMs)</p>
+    <p class="example"><span class="compare-worse">Not recommended</span>: virtual machines (VM)</p>
+
+  <p>When using numbers with units of measure, use the singular when spelling out the unit if the
+  number is one. Otherwise, use the plural form for all other numbers, including zero,
+  decimal numbers, and numbers greater than one.</p>
+
+    <p class="example"><span class="compare-better">Recommended</span>: 0 degrees</p>
+    <p class="example"><span class="compare-better">Recommended</span>: 0.5 degrees</p>
+    <p class="example"><span class="compare-better">Recommended</span>: 1 degree</p>
+    <p class="example"><span class="compare-better">Recommended</span>: 15 degrees</p>
+
+  <p>Don't make an abbreviation plural when used as a unit with a number.</p>
+
+    <p class="example"><span class="compare-better">Recommended</span>: 64 GB</p>
+    <p class="example"><span class="compare-worse">Not recommended</span>: 64 GBs</p>
+
+    <aside class="note"><b>Note:</b> Sometimes it can be helpful to spell out <i>-bit</i> or
+    <i>-byte</i> terms. However, in general, it's not necessary to spell out a unit when used in
+    combination with a specific number.</aside>
+
+  <p>Make sure to include a space, preferably a nonbreaking space, between the number and
+  abbreviation. For more information, see <a
+  href="/style/units-of-measure#spaces-in-units-of-measurement">Spaces in units of
+  measurement</a>.</p>
+
+  <p>For more information, see <a href="/style/abbreviations">Abbreviations</a>.</p>
+
+</section>
+
+<section>
+
+  <h2 id="plural-product-and-feature-names" data-text="Plural product and feature names" tabindex="-1">Plural product and feature names</h2>
+
+  <p>In general, don't form a plural or possessive for the trademark of a product, feature, or
+  company name. For more information, see <a
+  href="/style/trademarks#use-trademarks-only-as-modifiers">Use trademarks only as modifiers</a> and
+  <a href="/style/possessives#product,-feature,-and-company-names">Product, feature, and company
+  names</a>.</p>
+
+  <p>In general, use singular class names. Don't manually make a singular class name plural. Doing
+  so might cause issues in translation. Instead, add a plural noun after the class name.</p>
+
+    <p class="example"><span class="compare-better">Recommended</span>: <code translate="no" dir="ltr">Intent</code> objects
+    and <code translate="no" dir="ltr">Activity</code> instances</p>
+    <p class="example"><span class="compare-worse">Not recommended</span>: <code translate="no" dir="ltr">Intent</code>s and
+    <code translate="no" dir="ltr">Activity</code>s</p>
+    <p class="example"><span class="compare-worse">Not recommended</span>: <code translate="no" dir="ltr">Intents</code> and
+    <code translate="no" dir="ltr">Activities</code></p>
+
+  <p>For more information, see <a href="/style/api-reference-comments">API reference code
+  comments</a>.</p>
+
+</section>
+
+<section>
+
+  <h2 id="plurals-in-parentheses" data-text="Plurals in parentheses" tabindex="-1">Plurals in parentheses</h2>
+
+  <p>Don't put optional plurals in parentheses. Instead, use either a plural or singular
+  construction and keep things consistent throughout your documentation. Choose what is most
+  appropriate for your documentation and your audience. If it's important in a specific context to
+  indicate both, use <i>one or more</i>.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th width="50%"><span class="compare-better">Recommended</span></th>
+        <th width="50%"><span class="compare-worse">Not recommended</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>To find your API key, visit the <b>Credentials</b> page.</td>
+        <td>To find your API key(s), visit the <b>Credentials</b> page.</td>
+      </tr>
+      <tr>
+        <td>The value of the parent depends on the values of its children.</td>
+        <td>The value of the parent depends on the value(s) of its child(ren).</td>
+      </tr>
+      <tr>
+        <td>You can use a physical linecard, which can contain one or more ports.</td>
+        <td>You can use a physical linecard, which can contain port(s).</td>
+      </tr>
+    </tbody>
+  </table>
+
+</section>
+
+<section>
+
+  <h2 id="plural-pronouns" data-text="Plural pronouns" tabindex="-1">Plural pronouns</h2>
+
+  <p>For information about plural pronouns like <i>we</i>, <i>you</i>, and <i>they</i>, see <a
+  href="/style/pronouns">Pronouns</a> and <a href="/style/person">Second person and first
+  person</a>.</p>
+
+</section>
+
+
+
+  
+
+  

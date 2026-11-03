@@ -1,0 +1,369 @@
+<!-- Source: https://developers.google.com/style/headings; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/headings">
+<h1>Headings and titles</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+<p>Use sentence case for headings and titles. Use descriptive headings and titles because they help
+  a reader navigate their browser and the page. It's easier to jump between pages and sections of a
+  page if the headings and titles are unique.</p>
+
+
+
+<h2 id="heading-and-title-text" data-text="Heading and title text" tabindex="-1">Heading and title text</h2>
+
+<p>Write document titles based on the primary purpose of the document. If a
+document is primarily a tutorial, but it has a conceptual introduction, write a
+task-based title. Write section headings based on the type of content that's in
+the section.</p>
+
+<table>
+<thead>
+  <tr>
+    <th width="50%">Guidance</th>
+    <th width="25%"><span class="compare-better">Recommended</span></th>
+    <th width="25%"><span class="compare-worse">Not recommended</span></th>
+  </tr>
+</thead>
+<tbody>
+  <tr>
+    <td> <p>For a task-based heading, start with a
+    <a href="https://wikipedia.org/wiki/Infinitive#English"><i>bare infinitive</i></a>,
+    also known as a <i>plain form</i> or
+    <a href="https://wikipedia.org/wiki/English_verbs#Base_form"><i>base form</i></a>
+    verb. In English, the <i>imperative mood</i> also uses the base form verb,
+    so it looks the same as the bare infinitive.</p>
+
+    <p>Task-based headings are frequently used in quickstarts, how-to
+    documents, and tutorials.</p></td>
+    <td>Create an instance</td>
+    <td>Creating an instance</td>
+  </tr>
+  <tr>
+    <td><p>For a conceptual or non-task-based heading, use a
+    <a href="https://wikipedia.org/wiki/Noun_phrase"><i>noun phrase</i></a> that
+    doesn't start with an <i>-ing</i> verb.</p>
+
+    <p>Noun-phrase headings are frequently used in concept documentation.</p></td>
+    <td>Migration to Google Cloud</td>
+    <td>Migrating to Google Cloud</td>
+  </tr>
+  <tr>
+    <td><p>If a section is not required for all users or scenarios, use the <em>Optional:</em>
+    prefix in the heading. This prefix signals when the section information applies only to a
+    specific configuration or use case.</p>
+
+    <p>For information about optional steps in a procedure, see <a
+    href="/style/procedures#optional-steps">Optional steps</a>.</p></td>
+    <td>Optional: Customize your alias</td>
+    <td>Customize your alias (optional)</td>
+  </tr>
+</tbody>
+</table>
+
+<h3 id="title-phrasing" data-text="Title phrasing" tabindex="-1">Title phrasing</h3>
+
+<p>Use a unique level-1 heading (<code translate="no" dir="ltr">h1</code>) for each page in a set of documents and only use
+  a level-1 heading once on a page.</p>
+
+<p>Avoid repeating the exact page title in a heading on the page. For example, if you document
+  how to create a virtual machine and how to start a virtual machine on the same task-based
+  page, the page title might be <i>Create and start VM instances</i>, with section headings
+  <i>Create a VM</i> and <i>Start a VM</i>.</p>
+
+<h3 id="mixed-heading-styles" data-text="Mixed heading styles" tabindex="-1">Mixed heading styles</h3>
+
+<p>It's OK to use task-based and conceptual heading styles in the same document.
+If a single document includes both task-based and conceptual sections, then use
+the appropriate phrasing for each section's heading.</p>
+
+<h3 id="use-of--ing-verb-forms" data-text="Use of -ing verb forms" tabindex="-1">Use of <i>-ing</i> verb forms</h3>
+
+<p>When possible, avoid using <i>-ing</i> verb forms as the first word in any heading or
+title.</p>
+<p class="example"><span class="compare-better">Recommended</span>:
+Transfer data sets</p>
+<p class="example"><span class="compare-worse">Not recommended</span>:
+Transferring data sets</p>
+
+<p>An <i>-ing</i> verb form is a present participle or gerund. These verb forms
+are inconsistently translated when they're used as the first word in a title,
+and they increase character count in limited spaces.</p>
+
+<p>Sometimes, there might not be a better alternative to using a gerund, such as the following
+  examples:</p>
+
+<ul>
+<li>Billing</li>
+<li>Pricing</li>
+</ul>
+
+<p>It's OK to use a gerund in these cases.</p>
+
+<p>It's OK to use an <i>-ing</i> verb form later in a heading or title, such as
+<i>Introduction to BigQuery monitoring</i>.</p>
+
+<h3 id="example-headings" data-text="Example headings" tabindex="-1">Example headings</h3>
+
+<p>The following example is a task-based document that includes a conceptual
+heading and a task-based heading.</p>
+
+<p><span class="compare-better">Recommended</span>:</p>
+<devsite-selector>
+  <section>
+    <h3 id="html" data-text="HTML" tabindex="-1">HTML</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+&lt;h1&gt;Log serving requests by using AI Platform Prediction&lt;/h1&gt;
+
+&lt;p&gt;This task-based document shows how to monitor machine learning models. The
+document title starts with a bare infinitive.&lt;/p&gt;
+
+&lt;h2&gt;ML model monitoring overview&lt;/h2&gt;
+
+&lt;p&gt;This section provides a conceptual overview of ML model monitoring. Its title is
+a noun phrase.&lt;/p&gt;
+
+&lt;h2&gt;Configure notebook settings&lt;h2&gt;
+
+&lt;p&gt;This task-based section provides a series of steps to set variables in a
+notebook. Its title starts with a bare infinitive.&lt;/p&gt;
+</pre></devsite-code>
+  </section>
+  <section>
+    <h3 id="markdown" data-text="Markdown" tabindex="-1">Markdown</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+# Log serving requests by using AI Platform Prediction
+
+This task-based document shows how to monitor machine learning models. The
+document title starts with a bare infinitive.
+
+## ML model monitoring overview
+
+This section provides a conceptual overview of ML model monitoring. Its title is
+a noun phrase.
+
+## Configure notebook settings
+
+This task-based section provides a series of steps to set variables in a
+notebook. Its title starts with a bare infinitive.
+
+</pre></devsite-code>
+  </section>
+</devsite-selector>
+<section id="capitalization">
+<h2 id="heading-and-title-format" data-text="Heading and title format" tabindex="-1">Heading and title format</h2>
+
+<p>The following sections list and define our writing standards for capitalization,
+  abbreviations, and technical elements in headings. In general, guidance
+  that applies to standard text also applies to headings&mdash;for example,
+  <a href="/style/contractions">contractions</a> and <a href="/style/articles">articles</a>.</p>
+
+<h3 id="syntax-and-capitalization" data-text="Syntax and capitalization" tabindex="-1">Syntax and capitalization</h3>
+
+<ul>
+<li><b>Use sentence case</b> for all headings and titles. For more information, see
+  <a href="/style/capitalization#capitalization-in-titles-and-headings">Capitalization in titles and
+  headings</a>.</li>
+<li><b>Keep punctuation simple</b>. Punctuation can be a sign that your heading is too complicated. Consider rewriting.</li>
+<li><b>Limit abbreviations</b>. Only use an abbreviation of a word in a page title or heading if it's the more commonly known
+  version of the word. If you do so, define the abbreviation in the first instance of the word in a paragraph.
+  You can define the abbreviation in the page title or heading, but consider if the additional
+  length adds value. For SEO, use the more prominent version of a term in headings. For more information, see
+<a href="/style/abbreviations">Abbreviations</a>.</li>
+
+
+
+</ul>
+
+<h3 id="formatting-and-code" data-text="Formatting and code" tabindex="-1">Formatting and code</h3>
+
+<ul>
+<li><b>Don't use numbers in headings</b> to indicate a sequence of sections.
+  Instead, rely on heading hierarchy and order to indicate sequence.
+
+</li>
+<li><b>Avoid code items in headings</b>. If you must mention a code item in a heading,
+  add a descriptive noun to the item in code font. For more information, see
+  <a href="/style/code-in-text#grammatical-treatment-of-code-elements">Grammatical treatment of code elements</a>.</li>
+<li><b>Don't put links in headings</b>. A link can easily be confused as a style applied to the
+  heading instead of a link.</li>
+</ul>
+
+<h3 id="hierarchy-and-structure" data-text="Hierarchy and structure" tabindex="-1">Hierarchy and structure</h3>
+
+<ul>
+<li><b>Don't use heading tags to change visual formatting</b>. Use CSS rather than a heading level
+  that doesn't fit the hierarchy. Don't make up your own formatting for headings.</li>
+<li><b>Apply proper heading tags</b>. Use heading tags to structure your content hierarchically&mdash;for example,
+<code translate="no" dir="ltr">&lt;h1&gt;</code>, <code translate="no" dir="ltr">&lt;h2&gt;</code>, and <code translate="no" dir="ltr">&lt;h3&gt;</code> in HTML, or
+<code translate="no" dir="ltr">#</code>, <code translate="no" dir="ltr">##</code>, and <code translate="no" dir="ltr">###</code> in Markdown.</li>
+<li><b>Maintain logical order</b>. Don't skip levels of the heading hierarchy. For example, put an <code translate="no" dir="ltr">&lt;h3&gt;</code> tag
+only under an <code translate="no" dir="ltr">&lt;h2&gt;</code> tag.
+<p></p>
+
+
+
+<div class="example">
+<p><span class="compare-better">Recommended</span>:</p>
+<devsite-selector>
+  <section>
+    <h3 id="html_1" data-text="HTML" tabindex="-1">HTML</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+&lt;h1&gt;Transfer data sets&lt;/h1&gt;
+
+&lt;p&gt;This document provides a high-level overview of ways to transfer your data to Google
+Cloud.&lt;/p&gt;
+
+&lt;h2&gt;Estimate costs&lt;/h2&gt;
+</pre></devsite-code>
+  </section>
+  <section>
+    <h3 id="markdown_1" data-text="Markdown" tabindex="-1">Markdown</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+# Transfer data sets
+
+This document provides a high-level overview of ways to transfer your data to Google Cloud.
+
+## Estimate costs
+</pre></devsite-code>
+  </section>
+
+</devsite-selector>
+<p><span class="compare-worse">Not recommended</span>:</p>
+<devsite-selector>
+  <section>
+    <h3 id="html_2" data-text="HTML" tabindex="-1">HTML</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+&lt;h1&gt;Transfer data sets&lt;/h1&gt;
+
+&lt;p&gt;This document provides a high-level overview of ways to transfer your data to Google
+Cloud.&lt;/p&gt;
+
+&lt;h3&gt;Estimate costs&lt;/h3&gt;
+</pre></devsite-code>
+  </section>
+  <section>
+    <h3 id="markdown_2" data-text="Markdown" tabindex="-1">Markdown</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+# Transfer data sets
+
+This document provides a high-level overview of ways to transfer your data to Google Cloud.
+
+### Estimate costs
+</pre></devsite-code>
+  </section>
+</devsite-selector>
+</div></li>
+<li><p><b>Don't use empty headings</b>. Make sure headings are followed by content.</p>
+<div class="example">
+<p><span class="compare-better">Recommended</span>:</p>
+<devsite-selector>
+  <section>
+    <h3 id="html_3" data-text="HTML" tabindex="-1">HTML</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+&lt;h2&gt;Migrate VMs to Compute Engine&lt;/h2&gt;
+
+&lt;p&gt;Migration is not just a single step. The following sections describe the recommended
+steps.&lt;/p&gt;
+
+&lt;h3&gt;Design the migration&lt;/h3&gt;
+</pre></devsite-code>
+  </section>
+  <section>
+    <h3 id="markdown_3" data-text="Markdown" tabindex="-1">Markdown</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+## Migrate VMs to Compute Engine
+
+Migration is not just a single step. The following sections describe the recommended steps.
+
+### Design the migration
+</pre></devsite-code>
+  </section>
+</devsite-selector>
+<p><span class="compare-worse">Not recommended</span>:</p>
+<devsite-selector>
+  <section>
+    <h3 id="html_4" data-text="HTML" tabindex="-1">HTML</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+&lt;h2&gt;Migrate VMs to Compute Engine&lt;/h2&gt;
+
+&lt;h3&gt;Design the migration&lt;/h3&gt;
+</pre></devsite-code>
+  </section>
+  <section>
+    <h3 id="markdown_4" data-text="Markdown" tabindex="-1">Markdown</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+## Migrate VMs to Compute Engine
+
+### Design the migration
+</pre></devsite-code>
+  </section>
+</devsite-selector>
+</div></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="introducing-multiple-sections">
+<h2 id="refer-to-a-group-of-sections" data-text="Refer to a group of sections" tabindex="-1">Refer to a group of sections</h2>
+<p>If you introduce a group of related H3 or lower sections within a larger H2 section, use the
+  phrase <i>the following sections</i>. Don't refer to the group of sections using the phrases
+  <i>this section</i> or <i>these sections</i> because those phrases are ambiguous.</p>
+<p><span class="compare-better">Recommended</span>:</p>
+<devsite-selector>
+  <section>
+    <h3 id="html_5" data-text="HTML" tabindex="-1">HTML</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+&lt;h2&gt;Views in the data preparation editor&lt;/h2&gt;
+
+&lt;p&gt;The following sections describe the views in the data preparation editor.&lt;/p&gt;
+
+&lt;h3&gt;Data view&lt;/h3&gt;
+
+&lt;p&gt;...&lt;/p&gt;
+
+&lt;h3&gt;Graph view&lt;/h3&gt;
+
+&lt;p&gt;...&lt;/p&gt;
+
+&lt;h3&gt;Schema view&lt;/h3&gt;
+
+&lt;p&gt;...&lt;/p&gt;
+</pre></devsite-code>
+  </section>
+  <section>
+    <h3 id="markdown_5" data-text="Markdown" tabindex="-1">Markdown</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+## Views in the data preparation editor
+
+The following sections describe the views in the data preparation editor.
+
+### Data view
+
+...
+
+### Graph view
+
+...
+
+### Schema view
+
+...
+</pre></devsite-code>
+  </section>
+</devsite-selector>
+</section>
+  
+
+  

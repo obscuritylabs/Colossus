@@ -122,6 +122,8 @@ legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' \
     ':(exclude)crates/colossus-darwin-process/tests/audit_events/run.py' \
     ':(exclude)bundled-plugins/colossus/skills/security-review/scripts/init_review.py' \
     ':(exclude)scripts/tests/test_security_review_workspace.py' \
+    ':(exclude)scripts/google_style_guide.py' \
+    ':(exclude)scripts/tests/test_google_style_guide.py' \
     ':(exclude)examples/sdk/integration/server.py' \
     ':(exclude)examples/sdk/provider-failure/server.py')
 if [ -e pyproject.toml ] || [ -n "$legacy_python_sources" ]; then

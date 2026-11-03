@@ -23,7 +23,7 @@ the owning crates and tests.
 | Search and source-backed research | `colossus-search`, `colossus-research`, `colossus-runtime` | [Web search](../use/web-search.md), [Deep research](../use/deep-research.md) | Search adapter, evidence/citation, and CLI research tests |
 | Workflows and triggers | `colossus-workflow`, `colossus-runtime` | [Workflow authoring](../extend/workflows/authoring.md), [Triggers and recovery](../extend/workflows/triggers-recovery.md) | Parser, control-flow, idempotency, compensation, and restart tests |
 | Agent Plugins, integrations, standalone MCP, and release bundles | extension crates and runtime adapters | [Extend Colossus](../extend/index.md) | Upstream schema, confinement, OCI, Sigstore, registry, lifecycle, and live-adapter tests |
-| Conditional documentation guidance | runtime configuration and instruction snapshots, bundled documentation skill | [Skills and plugins](../use/skills-plugins.md), [Plugin configuration](../reference/configuration/extensions.md) | Documentation policy, instruction precedence, bounded resource reads, and sidecar configuration tests |
+| Conditional documentation guidance | runtime configuration and instruction snapshots, bundled unabridged documentation reference | [Skills and plugins](../use/skills-plugins.md), [Plugin configuration](../reference/configuration/extensions.md) | Offline source-fidelity/completeness verification, documentation policy, instruction precedence, bounded multipart resource reads, and sidecar configuration tests |
 | Public API, worker, SDKs, and Desktop | API, gRPC, worker, SDK crates and `apps/desktop` | [Public API and SDKs](application-sdk.md), [Colossus Desktop](../desktop/index.md) | Protocol, enrollment, parity, sidecar, SDK, and Desktop tests |
 | Draft prompt suggestions | Runtime/API prediction service, worker/SDK/gRPC and Cloud adapters, `colossus-presentation`, `colossus-tui`, `apps/ui` | [Terminal UI](../use/terminal-ui.md), [Desktop work](../desktop/work.md), [Public API and SDKs](application-sdk.md) | Audited auxiliary inference, single-attempt settlement and usage isolation tests; capability and transport parity; editable-draft keyboard and lifecycle tests |
 | Human App Shots and Desktop companion | `native/computer`, Desktop `desktop_extras` and renderer | [App Shots](../desktop/work.md#capture-another-windows-app), [Desktop settings](../desktop/settings.md), [ADR 0013](adr/0013-human-app-shots.md) | Synthetic Windows capture example and retained helper cleanup; preview, destination fencing and preference tests; isolated companion window capability |
@@ -96,9 +96,18 @@ Evidence and owned follow-ups:
 - **Companion:** exact capability/caller-label tests, preference/recovery tests and renderer cases. `desktop_owner` and `test_owner`: verify the newly created shadowless Windows companion; `maintenance_coordinator`: retain macOS/Linux native acceptance as unverified until measured.
 
 - **Documentation guidance:** [runtime policy tests](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-runtime/src/documentation_policy_tests.rs),
+  [offline snapshot tests](https://github.com/obscuritylabs/Colossus/blob/main/scripts/tests/test_google_style_guide.py),
   [Desktop settings descriptors](https://github.com/obscuritylabs/Colossus/blob/main/apps/desktop/src/components/ManagedSettingsPane.tsx),
   [generic settings rendering tests](https://github.com/obscuritylabs/Colossus/blob/main/apps/desktop/src/components/ManagedSettingsPane.test.ts),
   and [native policy validation](https://github.com/obscuritylabs/Colossus/blob/main/crates/colossus-sidecar/src/managed.rs).
+  The bundled reference supplies the complete captured guide text through the same
+  host-owned resource reader for CLI, TUI, Desktop, API/SDK, VS Code, and connected
+  Web runtimes. Ordered parts preserve reader limits; external image files retain
+  upstream URLs and alt text. Snapshot tests verify source hashes, navigation/link
+  coverage, lossless article reconstruction, annotations, and JSON output budgets.
+  The existing client-control gaps in the table remain; this content replacement
+  adds no client settings or transport surface. Runtime and rendered acceptance
+  still require their normal gates and do not follow from snapshot verification.
   `desktop_owner` and `test_owner`: add feature-specific browser acceptance for
   guidance settings. `vscode_owner`: expose Managed Local guidance settings and
   explicit skill selection through existing contracts. `maintenance_coordinator`:

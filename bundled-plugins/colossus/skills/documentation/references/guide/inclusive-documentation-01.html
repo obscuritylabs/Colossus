@@ -1,0 +1,401 @@
+<!-- Source: https://developers.google.com/style/inclusive-documentation; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/inclusive-documentation">
+<h1>Write inclusive documentation</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<aside class="note"><b>Note</b>: This document includes references to
+  potentially disrespectful or offensive terms. These terms are listed here to
+  provide usage guidance and alternative terms.</aside>
+
+<p>When you write developer documentation with inclusivity and diversity in mind,
+you help ensure that the content is more precise and clear for all readers.
+Avoid any kind of idiomatic or figurative language that can be misinterpreted or
+distracting.</p>
+
+<p>This page is not an exhaustive reference, but provides some general guidelines
+and examples that illustrate some best practices for writing inclusive
+documentation.</p>
+
+<p>For other writing best practices, see the following resources:</p>
+<ul>
+  <li><a href="/style/translation">Write for a global audience</a></li>
+  <li><a href="/style/accessibility">Write accessible documentation</a></li>
+  <li><a href="/style/tone">Voice and tone</a></li>
+</ul>
+
+
+<section>
+<h2 id="gendered-language" data-text="Avoid unnecessarily gendered language" tabindex="-1">Avoid unnecessarily gendered language</h2>
+<p>Be mindful of the
+<a href="/style/pronouns#gender-neutral-pronouns">pronouns</a>
+that are used in narrative
+examples, and be aware of other possible sources of gendered language.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th width="50%"><span class="compare-better">Recommended</span></th>
+      <th width="50%"><span class="compare-worse">Not recommended</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Equipment installation takes around 16 person-hours to complete.</td>
+      <td>Equipment installation takes around 16 man-hours to complete.</td>
+    </tr>
+    <tr>
+      <td>Build AI that benefits humanity.</td>
+      <td>Build AI that benefits mankind.</td>
+    </tr>
+  </tbody>
+</table>
+</section>
+
+<section>
+<h2 id="figurative-language" data-text="Avoid figurative language" tabindex="-1">Avoid figurative language</h2>
+
+<p>Use simple language and terminology that's precise and clear for all of your
+audiences:</p>
+<ul>
+  <li>Avoid idiomatic or figurative language that can be misunderstood,
+distracting, or difficult for translation.</li>
+  <li>Avoid <a href="/style/jargon">jargon</a>.</li>
+  <li>Use terms that are established industry standards and widely understood by
+    the target audience.</li>
+</ul>
+
+<p>When you try to achieve a <a href="/style/tone">friendly and conversational
+tone</a>, you might mistakenly use figurative language. Figurative language can
+come in the form of figures of speech and other turns of phrase. Be attentive to
+your word choice, especially when you aim for an informal tone.</p>
+
+<p>Don't use metaphors, and don't use a term in a metaphorical sense
+(<a href="/style/translation#use-words-in-their-primary-sense">use words in their primary sense</a>).
+For example, avoid using the metaphor of <i>pets versus cattle</i> when you
+compare on-premises or stateful systems with stateless cloud systems.</p>
+
+<p>For guidance about specific terms, see the
+<a href="/style/word-list">Word list</a>.</p>
+
+<section>
+<h3 id="ableist-language" data-text="Avoid ableist language" tabindex="-1">Avoid ableist language</h3>
+
+<p>Ableist language includes
+words or phrases such as <i>crazy</i>, <i>insane</i>, <i>blind to</i> or
+<i>blind eye to</i>, <i>cripple</i>, <i>dumb</i>, and others. Choose a more
+accurate or alternative word, depending on the context.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th width="50%"><span class="compare-better">Recommended</span></th>
+      <th width="50%"><span class="compare-worse">Not recommended</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Before launch, give everything a final check for completeness and clarity.</td>
+      <td>Before launch, give everything a final sanity-check.</td>
+    </tr>
+    <tr>
+      <td>There are some baffling outliers in the data.</td>
+      <td>There are some crazy outliers in the data.</td>
+    </tr>
+    <tr>
+      <td>It slows down the service, causing a poor user experience until the queue clears.</td>
+      <td>It cripples the service, causing a poor user experience until the queue clears.</td>
+    </tr>
+    <tr>
+      <td>Replace the placeholder in this example with the appropriate value.</td>
+      <td>Replace the <a href="/style/word-list#dummy-variable">dummy variable</a> in this example
+        with the appropriate value.</td>
+    </tr>
+  </tbody>
+</table>
+</section>
+
+<section>
+<h3 id="graphic-language" data-text="Avoid graphic or metaphorical language" tabindex="-1"><span id="violent-language"></span>Avoid graphic or metaphorical language</h3>
+
+<p>Avoid unnecessarily graphic or metaphorical language, when you can use a more
+precise term.</p>
+
+<p>For example, instead of
+<i><a href="/style/word-list#stonith">STONITH</a></i>, use specific terms to
+describe the process that's used to stop an errant node. If you need to mention a term
+such as <i>STONITH</i>, you can mention it once when you first explain the
+relevant feature, and phrase it in a way that de-emphasizes the term.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>:
+  This approach might require you to fence failed nodes.</p>
+<p class="example"><span class="compare-better">Sometimes okay</span>:
+  This approach might require you to fence failed nodes (sometimes referred to
+  as <i>STONITH</i>).</p>
+
+<p>Always use the most precise and well-understood terms for your context.
+In some contexts, an industry-established term has a specific technical meaning
+that doesn't have an accurate synonym or alternative. For examples, see the word
+list entries for <a href="/style/word-list#terminate">terminate</a> and
+<a href="/style/word-list#execute">execute</a>.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th width="50%"><span class="compare-better">Recommended</span></th>
+      <th width="50%"><span class="compare-worse">Not recommended</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>If the connection doesn't respond, check for errors.</td>
+      <td>If the connection hangs, check for errors.</td>
+    </tr>
+    <tr>
+      <td>Point to <b>File</b>, and then click <b>New</b>.</td>
+      <td>Hover over <b>File</b>, and hit <b>New</b>.</td>
+    </tr>
+  </tbody>
+</table>
+<p>For guidance about specific terms, see the
+<a href="/style/word-list">Word list</a>.</p>
+</section>
+
+</section>
+
+<section>
+<h2 id="subjective-language" data-text="Use precise, objective language" tabindex="-1">Use precise, objective language</h2>
+
+<p>Use precise, objective language so that all readers can gather the same information from your
+writing. Don't use vague or subjective language. What's <i>simple</i> or <i>quick</i> for an
+experienced engineer might be complex or time consuming for someone new to the product. To prevent
+introducing subjectivity in your writing, avoid the following:</p>
+
+<ul>
+  <li>Words like <a href="/style/word-list#simple">simple, simply</a>,
+    <a href="/style/word-list#easy">easy, easily</a>, and
+    <a href="/style/word-list#quick">quick, quickly</a>, which introduce an opinion that might not
+    reflect the user's experience.</li>
+  <li>Words like <a href="/style/word-list#careful">careful, carefully</a> or <i>thorough,
+  thoroughly</i>, which provide unclear instruction or imply either that not all tasks require the
+  user's full attention or that the user is usually careless or inattentive.</li>
+  <li>Words like <a href="/style/word-list#proper">proper, properly</a>, which are unclear and can
+    assert opinions of superiority.</li>
+</ul>
+
+<table>
+  <thead>
+    <tr>
+      <th width="50%"><span class="compare-better">Recommended</span></th>
+      <th width="50%"><span class="compare-worse">Not recommended</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Review the audit logs for security issues. For example, ensure that the
+      user accounts have multi-factor authentication enabled.</td>
+      <td>Make sure that you carefully and thoroughly review all of the audit logs for potential
+      security issues.</td>
+    </tr>
+    <tr>
+      <td>To verify that the daemon is running, run <code translate="no" dir="ltr">systemctl status
+        <i>DAEMON_NAME</i></code> and confirm that the output shows
+        <code translate="no" dir="ltr">Active: active (running)</code>.</td>
+      <td>Ensure the daemon is properly installed and running.</td>
+    </tr>
+    <tr>
+      <td>Open the configuration file and add your custom key.</td>
+      <td>Simply open the configuration file to quickly add your custom key.</td>
+    </tr>
+  </tbody>
+</table>
+</section>
+
+<section>
+<h2 id="diverse-examples" data-text="Write diverse and inclusive examples" tabindex="-1">Write diverse and inclusive examples</h2>
+
+<p>Write documentation for a
+<a href="/style/translation#be-inclusive">global audience</a>.
+Use diverse names, genders, ages, and locations in examples. Keep the following
+advice in mind:</p>
+
+<ul>
+  <li>Follow our <a href="/style/pronouns#gender-neutral-pronouns">gender-neutral
+   pronoun</a> guidance.</li>
+   <li>Avoid being too culturally specific to the US. Be mindful when referring
+   to specific holidays (see also the word list entry for <a
+   href="/style/word-list#holiday"><i>the holidays</i></a>), cultural practices,
+   sports, and figures of speech.</li>
+   <li>In examples,
+   <a href="/style/examples#example-person-names">choose a diverse set of names</a>
+   to help reflect our global audience. For guidelines about fictional people,
+   see
+   <a href="/style/examples#further-notes-about-example-people">Further notes about example people</a>.</li>
+   <li>When writing about older adults, avoid terms and figures of speech such
+   as <i>the elderly</i>, <i>the aged</i>, <i>seniors</i>,
+   <i>senior citizens</i>, or <i>80 years young</i>. Instead, use terms such as
+   <i>older adults</i> or <i>aging population</i>, or mention the person's
+   relative age or relationship to the other people in your example when those
+   details are relevant.</li>
+</ul>
+</section>
+
+<section>
+<h2 id="features-and-users" data-text="Write about features and users in inclusive ways" tabindex="-1">Write about features and users in inclusive ways</h2>
+
+<p>Avoid referring to people in divisive ways. For example, instead of referring
+to people as <i>native speakers</i> or <i>non-native speakers</i> of English, consider
+whether your document needs to discuss this at all, and revise it
+to discuss the feature in terms that are relevant to anyone regardless of what
+languages they know.</p>
+
+<p>Avoid using socially charged terms for technical concepts where possible. For
+example, avoid terms such as <a href="/style/word-list#blacklist">blacklist</a> and
+<a href="/style/word-list#native">native</a> feature, and don't use terms like
+<a href="https://wikipedia.org/wiki/First-class_citizen">first-class
+citizen</a>, even though such terms might still be widely used.</p>
+
+<h3 id="replace-or-write-around-non-inclusive-terms" data-text="Replace or write around non-inclusive terms" tabindex="-1">Replace or write around non-inclusive terms</h3>
+
+<p>This section contains guidance about how to replace or write around a non-inclusive term. If a
+term is well established in the industry and replacing it could cause confusion, see
+<a href="#replace">Replace established terms</a>. If a term occurs in code samples or keywords, see
+<a href="#write-around">Write around non-inclusive code terms</a>. For information about avoiding
+non-inclusive jargon, see <a href="/style/jargon">Jargon</a>.</p>
+
+
+
+<h4 id="replace" data-text="Replace established terms" tabindex="-1">Replace established terms</h4>
+
+<p>Many non-inclusive terms are in wide use in the industry, such as <i>whitelist</i>. If replacing
+an established term could cause confusion for readers, you can directly refer to the non-inclusive
+term on the first use, and put it in parentheses. Then use the inclusive, replacement term
+throughout the rest of the document.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: To make sure that administrators
+  get the notification, add them to an allowlist (sometimes called a <i>whitelist</i>). Anyone who
+  isn't on the allowlist is blocked ...</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: In this model, a Jenkins
+  controller (master) handles HTTP requests. The Jenkins controller is designed to ...</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: In cloud architecture, servers
+  are treated as commodities (sometimes described by using the metaphor <i>cattle, not pets</i>).</p>
+
+In many cases, instead of directly replacing a word, you can rewrite to improve the clarity of a
+sentence. For example, instead of replacing the verb <i>whitelist</i> with <i>allowlist</i>, try
+rewriting the sentence.
+
+<p class="example"><span class="compare-better">Recommended</span>: You can allow requests from a
+  range of IP addresses by entering a CIDR block instead of a single address in the field.</p>
+
+<p class="example"><span class="compare-worse">Not recommended</span>: You can allowlist a range of
+  IP addresses by entering a CIDR block instead of a single address in the field.</p>
+
+<h4 id="write-around" data-text="Write around non-inclusive code terms" tabindex="-1">Write around non-inclusive code terms</h4>
+
+<p>In some cases, non-inclusive terms are embedded in code (or similar) as names or keywords, and
+you can't simply ignore those terms and use different terminology. What you can do, however, is
+<em>minimize</em> your use of the term (hence avoid propagating it as a term of art), while still
+providing clear documentation to your readers. Don't use a non-inclusive name or keyword unless it's
+in code font.</p>
+
+<p>Following are scenarios for writing around non-inclusive terms that occur in code and keywords.</p>
+
+<p>One scenario is if you're documenting an existing system in which an entity is already named
+by using a non-inclusive term. For example, there might be a configuration file that includes the
+following cluster name:</p>
+
+<div></div><devsite-code><pre class="devsite-click-to-copy devsite-disable-click-to-copy" translate="no" dir="ltr" is-upgraded syntax="Text only" syntax-guessed>apiVersion: v1
+kind: Config
+preferences: {}
+
+clusters:
+- cluster:
+  name: master
+- cluster:
+  name: replica-1</pre></devsite-code>
+
+<p>Another scenario is if your documentation includes a non-inclusive term that's an established
+keyword, such as the keyword <code translate="no" dir="ltr">SLAVE</code> in dialects of SQL:</p>
+
+<div></div><devsite-code><pre class="devsite-click-to-copy devsite-disable-click-to-copy" translate="no" dir="ltr" is-upgraded syntax="scdoc" syntax-guessed>START SLAVE UNTIL SQL_AFTER_MTS_GAPS;</pre></devsite-code>
+
+<p>The first time that you refer to a code item that uses a non-inclusive term, you can directly
+refer to that term, but format it in code font, and put it in parentheses if possible.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: The configuration file helps you
+  create a parent node (which is named <code translate="no" dir="ltr">master</code> in the file).</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: Start the replica by using the
+  <code translate="no" dir="ltr">START SLAVE</code> statement.</p>
+
+<p>In subsequent mentions, use the preferred term (<i>parent node</i>, <i>replica</i>). If it's
+necessary to refer to the entity name or keyword, continue doing so only with code formatting.
+</p>
+
+
+</section>
+
+<section>
+<h2 id="about-disability-and-accessibility" data-text="Avoid bias and harm when discussing disability and accessibility" tabindex="-1">Avoid bias and harm when discussing
+disability and accessibility</h2>
+
+<p>Many developers create products with accessibility and disability in mind.
+When documenting these features, and when writing about people with
+disabilities or about accessibility, work to eliminate unintentional bias and
+harm. Take the time to educate yourself about the ways that the communities that you're
+writing about prefer to be identified and described before writing about them in
+your documentation.</p>
+
+<p>Some general guidelines in this area include the following:</p>
+
+<ul>
+  <li>Don't describe people without disabilities as <i>normal</i> or <i>healthy</i>. This
+  contributes to othering and alienation of people with disabilities by implying that
+  they are abnormal or sick. Instead, use terms such as <i>nondisabled person</i>,
+  <i>sighted person</i>, <i>hearing person</i>,
+  <i>person without disabilities</i>, or <i>neurotypical person</i>.</li>
+  <li><p>Research the ways that the people in the communities that you're writing about
+  prefer to be identified and use the terms that they prefer. In many cases, avoid
+  terms that remove personhood or that define people by their disability. For
+  example, avoid terms such as <i>the disabled</i> or <i>a quadriplegic</i>.
+  Instead, use terms such as <i>people with disabilities</i> or <i>a quadriplegic person</i>.</p>
+  <p>However, many members of some communities prefer <i>identity-first language</i>&mdash;for
+  example, that preference is common in autistic, blind, and Deaf communities. Capitalization of
+  identities also can vary (for some perspectives, visit
+  <a href="https://autisticadvocacy.org/about-asan/identity-first-language/">Identity-First Language</a>
+  and
+  <a href="https://www.verywellhealth.com/deaf-culture-big-d-small-d-1046233">Self-Identification
+  in the Deaf Community</a>). Whenever possible, research and choose terms
+  that respect the ways that people in the communities identify.</p></li>
+  <li>Use <i>see</i> to refer to links and cross-references. For more information, see
+  <a href="/style/word-list#see">see</a>.</li>
+  <li>Avoid terms that reflect or project feelings and judgments about a person's disability,
+  such as <i>victim of</i>, <i>suffering from</i>, or <i>wheelchair-bound</i>. Instead, use neutral
+  terms such as <i>experiencing</i>, <i>living with</i>, or <i>uses a wheelchair</i>.</li>
+  <li>Avoid euphemisms or patronizing terms such as <i>physically challenged</i>, <i>special</i>,
+  <i>differently abled</i>, or <i>handi-capable</i>.</li>
+</ul>
+
+
+
+</section>
+
+
+
+  
+
+  

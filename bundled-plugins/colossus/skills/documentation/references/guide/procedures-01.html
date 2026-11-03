@@ -1,0 +1,456 @@
+<!-- Source: https://developers.google.com/style/procedures; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/procedures">
+<h1>Procedures</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<p> A procedure is a sequence of numbered steps for accomplishing a task. For information about
+  lists of items that aren't part of a procedure, see the
+  <a href="/style/lists">Lists</a> page.</p>
+
+<section id="introductory-sentences">
+<h2 id="introductory-sentences" data-text="Introductory sentences" tabindex="-1">Introductory sentences</h2>
+<p>In most cases, introduce a procedure with an introductory sentence. This
+introductory sentence should provide context to the reader that isn't part of
+the section heading. Don't simply repeat the heading: if the heading explains
+what the procedure is, and no additional context is needed, then don't
+include an introductory statement.</p>
+<p>The sentence can end with a colon or a period. Use a colon if it immediately
+precedes the procedure. Use a period if there's more material (such as a
+note paragraph) between the introduction and the procedure.</p>
+<p>You can introduce a procedure with an imperative statement. Don't introduce a procedure with
+a partial sentence that's completed by the numbered steps.</p>
+<p class="example"><span class="compare-better">Recommended</span>: To customize the buttons,
+follow these steps:</p>
+<p class="example"><span class="compare-better">Also recommended</span>: Customize the buttons:</p>
+<p class="example"><span class="compare-better">Also recommended</span>: To customize the buttons, do the following:</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: To customize the
+buttons:</p>
+<p>For more information about introducing lists, see  <a href="/style/lists#introductory-sentences-for-lists">Lists</a>.</p>
+</section>
+
+<section id="single-step-procedures">
+<h2 id="single-step-procedures" data-text="Single-step procedures" tabindex="-1">Single-step procedures</h2>
+<p>When a procedure consists of only one step, you can write it as a normal sentence, or you can
+  format it as a single bullet with its own introductory sentence.</p>
+<div class="example">
+  <p><span class="compare-better">Recommended</span>: To clear (flush) the entire log, click
+    <b>Clear logcat</b>.</p>
+  <p><span class="compare-better">Also recommended</span>:</p>
+  <p class="example">To modify a chart, do the following:</p>
+  <ul class="example">
+    <li>Click <b>Edit</b>, and then in the <b>Edit visualization</b> pane, edit the chart.</li>
+  </ul>
+</div>
+</section>
+
+<section id="sublists">
+<h2 id="sub-steps-in-numbered-procedures" data-text="Sub-steps in numbered procedures" tabindex="-1">Sub-steps in numbered procedures</h2>
+<p>In a numbered procedure, sub-steps are labeled with lowercase letters, and
+sub-sub-steps get lowercase Roman numerals.</p>
+
+
+
+<p>When a step has sub-steps, treat the step like an <a
+href="#introductory-sentences">introductory sentence</a>: put a colon or a
+period at the end of the step, as appropriate.</p>
+<p>For more information about lists, see  <a href="/style/lists#introductory-sentences-for-lists">Lists</a>.</p>
+
+<div class="example">
+  <p><span class="compare-better">Recommended</span>:</p>
+  <ol>
+    <li>To add a VM instance, do the following:
+      <ol>
+        <li>Click <b>Create instance</b>.</li>
+        <li>For <b>Name</b>, enter a name for the VM instance, and then do the following:
+          <ol>
+            <li>For <b>Region</b>, specify where you want to deploy the VM instance.</li>
+            <li>For <b>Machine type</b>, select an option.</li>
+          </ol>
+        </li>
+        <li>Click <b>Create</b>.</li>
+      </ol>
+    </li>
+    <li>To connect to the VM instance by using SSH, click <b>SSH</b>.
+  </li>
+  </ol>
+</div>
+</section>
+
+<section id="multiple-components">
+<h2 id="order-of-multiple-components-in-a-step" data-text="Order of multiple components in a step" tabindex="-1">Order of multiple components in a step</h2>
+<p>To document a complex procedural step, use the following order:</p>
+<ol>
+  <li>Describe the action to take.</li>
+  <li>List a command, if necessary.</li>
+  <li><p>Explain any placeholders that are used in the command.</p>
+    <p>For more information, see
+      <a href="/style/placeholders">Formatting placeholders</a>.</p>
+  </li>
+  <li>Explain the command in more detail, if necessary.</li>
+  <li><p>List the output of the command, if necessary.</p>
+  <p>For more information, see
+    <a href="/style/code-syntax#output">Output from commands</a>.</p></li>
+  <li>In a separate paragraph, explain
+    <a href="/style/procedures#steps-with-results-or-justifications">the result of an
+      action</a>, or any output, if necessary.</li>
+  </ol>
+<p>The following example demonstrates the preceding order:</p>
+<ol>
+  <li>
+  <p>Plan the Terraform deployment:</p>
+  <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>terraform plan -out=<var translate="no">NAME</var></pre></devsite-code>
+  <p>Replace <code translate="no" dir="ltr"><var translate="no">NAME</var></code> with the name of your Terraform plan.</p>
+  <p>The <code translate="no" dir="ltr">terraform plan</code> command does the following:</p>
+  <ol>
+  <li>Parses the Terraform configuration, building a list of resources to provision.</li>
+  <li>Refreshes the current state of resources already provisioned in Google Cloud.</li>
+  <li>Creates a plan to make the currently provisioned resources match the parsed
+    configuration.</li>
+  </ol>
+  <p>The output is similar to the following:</p>
+  <div></div><devsite-code><pre class="console" translate="no" dir="ltr" is-upgraded>
+  Plan: 26 to add, 0 to change, 0 to destroy.
+  ------------------------------------------------------------
+  This plan was saved to: <var translate="no">NAME</var></pre></devsite-code>
+  <p>The output shows what resources to add, change, or destroy.</p>
+  </li>
+  </ol>
+</section>
+
+<section id="multi">
+<h2 id="multi-action-procedures" data-text="Multi-action procedures" tabindex="-1">Multi-action procedures</h2>
+<p>In general, use one step for each action. However, you can combine small actions
+into one step <a href="/style/ui-elements#term-menus">by using
+angle brackets</a> (<code translate="no" dir="ltr">></code>) for sequential menu selections.</p>
+<p class="example"><span class="compare-better">Recommended</span>:</p>
+  <ol class="example">
+    <li>Click <b>Next&nbsp;<span aria-label="and then">></span> Finish</b>.</li>
+  </ol>
+<p class="example"><span class="compare-better">Also recommended</span>:</p>
+<ol class="example">
+<li>Click
+<b>File&nbsp;<span aria-label="and then">></span> New&nbsp;<span aria-label="and then">></span> Document</b>.</li>
+</ol>
+<p>Don't make the steps too long. If they feel too long, consider splitting them
+into multiple steps.</p>
+</section>
+
+<section id="same-task">
+<h2 id="multiple-procedures-for-the-same-task" data-text="Multiple procedures for the same task" tabindex="-1">Multiple procedures for the same task</h2>
+<p>In general, if there's more than one way to complete a task, then document
+one procedure that's accessible for all readers. If all methods are accessible, pick the shortest
+and simplest approach if possible. If you need to document multiple ways to complete a
+task, then separate them in different pages, headings, or tabs.</p>
+<p>The following guidelines can help you choose which procedure to document:</p>
+<ul>
+  <li>Choose a procedure that lets readers do all the steps by using only a keyboard.</li>
+  <li>Choose the shortest procedure.</li>
+  <li>Choose a procedure that uses a programming language that most of your
+    audience is familiar with.</li>
+</ul>
+
+
+</section>
+
+<section id="repetitive">
+<h2 id="repetitive-procedures" data-text="Repetitive procedures" tabindex="-1">Repetitive procedures</h2>
+<p>Avoid repeating procedures. Instead, reference those procedures and link to
+them.</p>
+    <p class="example"><span class="compare-better">Recommended</span>:</p>
+      <ol class="example">
+        <li>Create a user as you did in the previous step.</li>
+      </ol>
+    <p class="example"><span class="compare-better">Also recommended</span>:</p>
+      <ol class="example">
+        <li><a href="#">Create a user as you did in the previous step.</a></li>
+      </ol>
+</section>
+
+<section id="optional-steps">
+<h2 id="optional-steps" data-text="Optional steps" tabindex="-1">Optional steps</h2>
+  <p>For an optional step, at the beginning of the step, type <i>Optional</i>
+    followed by a colon.</p>
+<div class="example">
+  <p><span class="compare-better">Recommended</span>:</p>
+    <ol>
+      <li>Optional: Type an arbitrary string ...</li>
+    </ol>
+  <p><span class="compare-worse">Not recommended</span>:</p>
+    <ol>
+      <li>(Optional) Type an arbitrary string ...</li>
+    </ol>
+</div>
+<p>For information about optional sections, see <a
+href="/style/headings#heading-and-title-text">Heading and title text</a>.</p>
+</section>
+
+<section id="specify-context">
+<h2 id="steps-that-say-where-to-complete-a-task" data-text="Steps that say where to complete a task" tabindex="-1">Steps that say where to complete a task</h2>
+<p>Tell the reader where to complete an action&mdash;for example, in a
+  particular tool or UI field&mdash;before you state the action.</p>
+<div class="example">
+<p><span class="compare-better">Recommended</span>:</p>
+  <ol>
+    <li>In Google Docs, click
+      <b>File&nbsp;<span aria-label="and then">></span> New&nbsp;<span aria-label="and then">></span> Document</b>.</li>
+    <li>In the Google Cloud console, go to the <b>Monitoring</b> page.</li>
+  </ol>
+<p><span class="compare-worse">Not recommended</span>:</p>
+  <ol>
+    <li>Click <b>File&nbsp;<span aria-label="and then">></span>
+      New&nbsp;<span aria-label="and then">></span> Document</b> in Google
+      Docs.</li>
+    <li>Go to the <b>Monitoring</b> page in the Google Cloud console.</li>
+  </ol>
+</div>
+<p>If a set of procedures is split across multiple headings, then in each
+  procedure, restate where the reader completes the action. For example, if two
+  procedures in a document take place in the console, then start both
+  procedures with "In the console ..."</p>
+</section>
+
+<section id="steps-with-goals">
+<h2 id="steps-with-goals" data-text="Steps with goals" tabindex="-1">Steps with goals</h2>
+  <p>For some steps, it's useful to state the goal
+    that the step accomplishes.</p>
+  <p>When a step includes a goal, state the goal before the action. This
+    structure helps readers understand and complete the step more easily.</p>
+  <div class="example">
+  <span class="compare-better">Recommended</span>:
+    <ol>
+      <li>To start a new document, click
+        <b>File&nbsp;<span aria-label="and then">></span>
+        New&nbsp;<span aria-label="and then">></span> Document</b>.</li>
+    </ol>
+  <span class="compare-worse">Not recommended</span>:
+    <ol>
+      <li>Click <b>File&nbsp;<span aria-label="and then">></span>
+        New&nbsp;<span aria-label="and then">></span> Document</b> to start a
+        new document.</li>
+    </ol>
+  </div>
+  <p>Sometimes, the preceding format can imply that the required step is
+    optional. In such cases, use the following format:</p>
+  <div class="example">
+  <p><span class="compare-better">Recommended</span>:</p>
+  <ol>
+    <li>Start a new document: click
+      <b>File&nbsp;<span aria-label="and then">></span>
+        New&nbsp;<span aria-label="and then">></span> Document</b>.</li>
+  </ol>
+  </div>
+  <p>It's usually clear within the context of a procedure whether a step is
+    required. In such cases, the "To ..." format is more natural than the colon
+    format.</p>
+  <p>To determine whether you need to use the colon format, consider how the
+    goal of the step relates to the goal of the procedure. For example, in a
+    procedure for creating a bar chart, a step with the goal "To create the
+    chart" is clearly required. A step with the goal "To enhance the chart" is
+    also unlikely to create confusion. But a step with the goal "To sort the
+    data by date" might or might not be necessary. To clarify that the step
+    isn't optional, use "Sort the data by date:" instead.</p>
+</section>
+
+<section id="steps-with-results">
+<h2 id="steps-with-results-or-justifications" data-text="Steps with results or justifications" tabindex="-1">Steps with results or justifications</h2>
+  <p>Some steps consist of an action along with a resulting reaction that helps
+    the reader navigate to the next step. State the action first and the result
+    second. Keep the result in the same paragraph as the action. But also consider whether you
+    can avoid repetitiveness and overwhelming the reader with too much bolding of UI elements.</p>
+
+  <div class="example">
+  <span class="compare-better">Recommended</span>:
+    <ol>
+      <li>Click <b>Run</b>. The query results appear after the query runs.</li>
+    </ol>
+  <span class="compare-better">Recommended</span>:
+    <ol class="example">
+      <li>Click <b>Enter</b>.</li>
+      <li>In the <b>New file</b> dialog that appears, click <b>Next</b>.</li>
+    </ol>
+  <span class="compare-worse">Not recommended</span>:
+    <ol class="example">
+      <li>Click <b>Enter</b>. The <b>New file</b> dialog appears.</li>
+      <li>In the <b>New file</b> dialog, click <b>Next</b>.</li>
+    </ol>
+  </div>
+  <p>For information about describing output, see
+  <a href="/style/code-syntax#output">Output from commands</a>.</p>
+  <p>Other steps benefit from including a justification for why the step is
+    important. State the action first and the justification second.</p>
+  <div class="example">
+  <span class="compare-better">Recommended</span>:
+    <ol>
+      <li>Store the private key in a secure location. You need it later.</li>
+    </ol>
+  </div>
+</section>
+
+<section id="more-guidelines-for-writing-procedures">
+<h2 id="summary-of-guidelines-for-writing-procedures" data-text="Summary of guidelines for writing procedures" tabindex="-1">Summary of guidelines for writing procedures</h2>
+<table>
+  <thead>
+    <tr>
+      <th width="40%">Guidance</th>
+      <th width="30%"><span class="compare-better">Recommended</span></th>
+      <th width="30%"><span class="compare-worse">Not recommended</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Make sure that the first sentence in a procedural step includes an imperative verb.</td>
+      <td>Clone the repository that contains the sample data.</td>
+      <td>You need the project ID later in this document. Retrieve the project ID.</td>
+    </tr>
+    <tr>
+      <td>Use complete sentences.</td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>Use parallel structure and consistent verb form.</td>
+      <td>Download the service account key to
+        your local machine. Click <b>More</b>, and then click <b>Download</b>.</td>
+      <td>Download the service account key to your
+  local machine by clicking <b>More</b> and then clicking <b>Download</b> file.</td>
+    </tr>
+    <tr>
+      <td>For an optional step, type <i>Optional:</i> as the first word of the step.</td>
+      <td>Optional: Type an arbitrary string...</td>
+      <td>(Optional) Type an arbitrary string...</td>
+    </tr>
+    <tr>
+      <td>
+        <p>Set the context (such as a tool or an environment) in which the reader performs a
+          procedure.</p>
+        <p>If there are multiple headings associated with a set of procedures, restate the context
+          of the procedure in the first step, even if the context is the same as in the previous
+          procedure.</p>
+        
+      </td>
+      <td>
+        <p>In Cloud Shell, connect to the development cluster.</p>
+        <p>In the Google Cloud console, go to the <b>BigQuery</b> page.</p>
+      </td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>Write in the order that the reader needs to follow. State the location of the action
+        before stating the action.</td>
+      <td><p>In Google Docs, click <b>File&nbsp;<span aria-label="and then">></span>
+        New&nbsp;<span aria-label="and then">></span> Document</b>.</p>
+          <p>In the Google Cloud console, go to the <b>Monitoring</b> page.</p></td>
+      <td><p>Click <b>File&nbsp;<span aria-label="and then">></span>
+            New&nbsp;<span aria-label="and then">></span> Document</b> in Google Docs.</p>
+          <p>Go to the <b>Monitoring</b> page in the Google Cloud console.</p></td>
+    </tr>
+    <tr>
+      <td>State the purpose or goal of the action before stating the action.</td>
+      <td>To start a new document, click <b>File&nbsp;<span aria-label="and then">></span>
+            New&nbsp;<span aria-label="and then">></span> Document</b>.</td>
+      <td>Click <b>File&nbsp;<span aria-label="and then">></span>
+            New&nbsp;<span aria-label="and then">></span> Document</b>
+            to start a new document.</td>
+    </tr>
+    <tr>
+      <td><p>Don't use directional language to orient the reader, such as <i>above</i>, <i>below</i>,
+        or <i>right-hand side</i>. This type of language doesn't work well for accessibility or for
+        localization. If a UI element is hard to find, provide a screenshot.</p>
+        <p>For information about documenting icons, see
+          <a href="/style/ui-elements#buttons">Buttons and icons</a>.</p></td>
+      <td><p>Click <span class="material-icons" aria-hidden="true" translate="no">menu</span><b>Menu</b>.</p>
+          <p>In the preceding diagram,...</p>
+          <p>In the following diagram,...</p></td>
+      <td><p>Click the button with three lines.</p>
+          <p>In the above diagram, ...</p>
+          <p>In the diagram below, ...</p></td>
+    </tr>
+    <tr>
+      <td>Don't use <i>please</i>.</td>
+      <td>To open a document, click <b>File&nbsp;<span aria-label="and then">></span> Open</b>.</td>
+      <td>To open a document, please click
+            <b>File&nbsp;<span aria-label="and then">></span> Open</b>.</td>
+    </tr>
+    <tr>
+      <td><p>Avoid using <i>run the following command</i> to introduce code. Instead, focus on what
+        the command does.</p>
+        
+      </td>
+      <td>
+        <p>In Cloud Shell, deploy the load generator:...</p>
+        <p>Define a firewall rule to allow internal traffic:...</p>
+      </td>
+      <td>
+        <p>In Cloud Shell, deploy the load generator by running the following command:...</p>
+        <p>Run the following command:...</p>
+      </td>
+    </tr>
+    <tr>
+      <td>If the reader must press <b>Enter</b> after a step, then include that instruction as part
+        of the step.</td>
+      <td>Click the search box, type <code translate="no" dir="ltr">custom function</code>, and then press <b>Enter</b>.</td>
+      <td>
+        <ol>
+          <li>Click the search box and type <code translate="no" dir="ltr">custom function</code>.</li>
+          <li>Press <b>Enter</b>.</li>
+        </ol>
+      </td>
+    </tr>
+    <tr>
+      <td>Don't include keyboard shortcuts.</td>
+      <td>Copy the command, and then paste it...</td>
+      <td>Press Ctrl+C, and then press Ctrl+V...</td>
+    </tr>
+    <tr>
+      <td>When there's more than one way to do something, give only the best way. Giving alternate
+        ways can confuse readers.</td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>If your procedure includes code samples, see how to format <a href="/style/code-samples"> code samples</a>.</td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>If your procedure includes commands, see how to format <a href="/style/code-syntax#formatting-a-command"> commands</a>.</td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>Ensure that the reader has the information that they need in order to prepare for the
+        task ahead of time. Having information in advance supports task management, executive
+        functioning, memory, and emotional regulation.</td>
+      <td>The following hardware and software are required:...</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>Include as few steps as possible to complete the task. Limit interruptions in the path.</td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>Focus on one reader decision at a time. Separate each instruction by making each
+        instruction a separate list item.</td>
+      <td></td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>
+</section>
+  
+
+  

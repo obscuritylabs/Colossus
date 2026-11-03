@@ -1,0 +1,208 @@
+<!-- Source: https://developers.google.com/style/filenames; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/filenames">
+<h1>Filenames and file types</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<section>
+<h2 id="naming-guidelines" data-text="Guidelines for names" tabindex="-1">Guidelines for names</h2>
+
+<p>Make file and directory names lowercase, with the occasional exception for consistency, to make file searches easier and search results more useful. For example, because most Unix-style operating systems are case sensitive, they can't find a file named <code translate="no" dir="ltr">Impersonate-Service-Accounts.html</code> if you search for <code translate="no" dir="ltr">impersonate-service-accounts.html</code>. Linux and macOS interpret these as two distinct files.</p>
+
+<p>Use hyphens, not underscores, to separate words&mdash;for example,
+<code translate="no" dir="ltr">query-data.html</code>. Search engines interpret hyphens in file and directory names as spaces between words. Underscores are generally not recognized, meaning that their presence can negatively affect SEO.</p>
+
+  <p>Use only standard ASCII
+  alphanumeric characters in file and directory names.</p>
+
+<p>Don't use generic page names such as <code translate="no" dir="ltr">document1.html</code>.</p>
+
+
+
+
+<h3 id="exceptions-for-consistency" data-text="Exceptions for consistency" tabindex="-1">Exceptions for consistency</h3>
+<p>If you're adding to a directory where everything else already uses
+underscores, and it's not feasible to change everything to hyphens, it's okay to
+use underscores to stay consistent.</p>
+<p>For example, if the directory already has <code translate="no" dir="ltr">lesson_1.jd</code>,
+<code translate="no" dir="ltr">lesson_2.jd</code>, and <code translate="no" dir="ltr">lesson_3.jd</code>, it's okay to add your
+new file as <code translate="no" dir="ltr">lesson_4.jd</code> instead of <code translate="no" dir="ltr">lesson-4.jd</code>.
+However, in all other situations, use hyphens.</p>
+<div class="example">
+<p><span class="compare-better">Recommended</span>: <code translate="no" dir="ltr">avoiding-cliches.jd</code></p>
+<p><span class="compare-better">Sometimes OK</span>: <code translate="no" dir="ltr">avoiding_cliches.jd</code></p>
+<p><span class="compare-worse">Not recommended</span>: <code translate="no" dir="ltr">avoidingcliches.jd</code></p>
+<p><span class="compare-worse">Not recommended</span>: <code translate="no" dir="ltr">avoidingCliches.jd</code></p>
+<p><span class="compare-worse">Not recommended</span>: <code translate="no" dir="ltr">avoiding-clichés.jd</code></p>
+</div>
+
+<h3 id="other-exceptions" data-text="Other exceptions" tabindex="-1">Other exceptions</h3>
+<p>It's okay to have some inconsistency in filenames if it can't otherwise be
+avoided. For example, sometimes tools that generate reference documentation
+produce filenames based on different style requirements or based on the design
+and naming conventions of the product or API itself. In those cases, it's okay
+to make exceptions for those files.</p>
+</section>
+
+<section>
+<h2 id="referring-files" data-text="Refer to files" tabindex="-1">Refer to files</h2>
+<p>The following sections discuss how to reference files.</p>
+
+<h3 id="referring-filenames" data-text="Refer to filenames" tabindex="-1">Refer to filenames</h3>
+<p>When referring to a specific file, do the following:</p>
+<ul>
+<li>Use <a href="/style/code-in-text">code font</a>.</li>
+<li>Include the word <i>file</i> after the filename. For more information, see
+<a href="/style/code-in-text#grammatical-treatment-of-code-elements">Grammatical treatment of code elements</a>.</li>
+<li>Use the exact spelling of the filename even if it doesn't follow
+<a href="#naming-guidelines">naming guidelines</a>.</li>
+<li>If a sample of the file is included on the page, follow the
+<a href="/style/code-samples">code sample</a>
+guidelines and precede a code sample with an introductory sentence or paragraph that includes the
+filename.</li>
+</ul>
+<p><span class="compare-better">Recommended</span>: In the following
+  <code translate="no" dir="ltr">build.sh</code> file, modify the default values for all parameters:</p>
+
+<h3 id="file-type-interactions" data-text="Refer to file interactions" tabindex="-1">Refer to file interactions</h3>
+<p>When interacting with files and file types, don't use the file types as a verb.</p>
+<p class="example"><span class="compare-better">Recommended</span>: Extract a zip file.</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: Unzip a zip file.</p>
+
+<h3 id="file-type-names" data-text="Refer to file types" tabindex="-1">Refer to file types</h3>
+<p>When you're discussing a file type, use the formal name of the type, not the filename extension.
+(The file type name is often in all caps because many file type names are acronyms
+or initialisms.) Do not use the filename extension to refer generically to the
+file type.</p>
+<p class="example"><span class="compare-better">Recommended</span>: a PNG file</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: a <code translate="no" dir="ltr">.png</code>
+file</p>
+<p class="example"><span class="compare-better">Recommended</span>: a Bash file</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: an <code translate="no" dir="ltr">.sh</code>
+file</p>
+
+<p>The following table lists some examples of filename extensions and the
+corresponding file type names to use.</p>
+<table>
+<tr>
+  <th>Extension</th>
+  <th>File type name</th>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.adoc</code></td>
+  <td>AsciiDoc file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.csv</code></td>
+  <td>CSV file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.exe</code></td>
+  <td>executable file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.gif</code></td>
+  <td>GIF file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.img</code></td>
+  <td>disk image file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.ipynb</code></td>
+  <td>IPYNB file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.jar</code></td>
+  <td>JAR file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.jpg</code>, <code translate="no" dir="ltr">.jpeg</code></td>
+  <td>JPEG file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.json</code></td>
+  <td>JSON file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.md</code></td>
+  <td>Markdown file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.pdf</code></td>
+  <td>PDF file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.png</code></td>
+  <td>PNG file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.ps</code></td>
+  <td>PowerShell file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.py</code></td>
+  <td>Python file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.sh</code></td>
+  <td>Bash file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.sql</code></td>
+  <td>SQL file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.svg</code></td>
+  <td>SVG file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.tar</code></td>
+  <td>tar file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.tf</code></td>
+  <td>Terraform file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.tiff</code></td>
+  <td>TIFF file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.txt</code></td>
+  <td>text file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.wasm</code></td>
+  <td>Wasm file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.yaml</code></td>
+  <td>YAML file</td>
+</tr>
+<tr>
+  <td><code translate="no" dir="ltr">.zip</code></td>
+  <td>zip file</td>
+</tr>
+</table>
+
+
+
+
+
+</section>
+  
+
+  

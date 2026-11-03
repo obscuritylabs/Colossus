@@ -1,0 +1,323 @@
+<!-- Source: https://developers.google.com/style/translation; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/translation">
+<h1>Write for a global audience</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<p>We write our developer documentation in US English, but some of it is
+translated into languages other than English or is read by developers for whom
+English is not their primary language.</p>
+
+<p>Write with localization, translation, and
+internationalization in mind. The following list defines these terms:</p>
+<ul>
+<li><i>Localization:</i> Adapting a product and its associated documentation for a specific country.
+  This process involves more than translation&mdash;for example, using local currencies or units of
+  measurement.</li>
+<li><i>Translation:</i> Translating one language to another language. This process might involve
+  localization, but the two terms aren't synonymous with one another.</li>
+<li><i>Internationalization:</i> Designing a product and its associated documentation to minimize
+  the localization effort&mdash;for example, placing all UI strings in a separate file to simplify
+  translation.</li>
+</ul>
+<p>For more information, see
+<a href="https://wikipedia.org/wiki/Language_localisation">Language localization</a>.</p>
+<p>For other writing best practices, see the following resources:</p>
+<ul>
+  <li><a href="/style/accessibility">Write accessible documentation</a></li>
+  <li><a href="/style/inclusive-documentation">Write inclusive documentation</a></li>
+  <li><a href="/style/tone">Voice and tone</a></li>
+</ul>
+
+
+<h2 id="use-clear,-concise,-and-unambiguous-language" data-text="Use clear, concise, and unambiguous language" tabindex="-1">Use clear, concise, and unambiguous language</h2>
+
+<p>Consider global audiences and translation and write in a way that's clear, concise, and
+unambiguous.</p>
+
+<h3 id="use-simpler-words-and-shorter-sentences" data-text="Use simpler words and shorter sentences" tabindex="-1">Use simpler words and shorter sentences</h3>
+<ul>
+<li>Use a simple word. For example, don't use words like <i>commence</i> when you mean <i>start</i>
+or <i>begin</i>. Don't use <i>consequently</i> when you mean <i>so</i>. Don't use words like
+<i>utilize</i> or <i>leverage</i> when you mean <i>use</i>. (It's fine to use these words when
+you're conveying a special sense—for example, <i>Cloud Spanner utilizes up to 100% of the available
+  CPU resources.</i>)</li>
+<li><p>Use a single word when it conveys the same idea as a phrase. For example, don't
+use a phrase like <i>a number of</i> when you can use <i>some</i> or <i>many</i>.</p>
+</li>
+<li>Write shorter sentences. The shorter the sentence, the easier it is to translate. English sentences can be
+shorter in length than some languages, so an English sentence of average length might result in a
+long sentence when translated. Longer sentences can impair understanding, cause rendering issues
+on the page or product interface, lengthen translation time, and increase translation and
+review costs.</li>
+</ul>
+
+<h3 id="avoid-phrasal-verbs" data-text="Avoid phrasal verbs" tabindex="-1">Avoid phrasal verbs</h3>
+<ul>
+<li><p>Avoid phrasal verbs when possible. A phrasal verb combines multiple words to form a single
+verb phrase. These verbs are also known as compound verbs. Try to substitute a simpler verb first.
+There might not be a better verb; for example, a few exceptions to this rule include <i>set up</i>,
+<i>log in</i>, and <i>sign in</i>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: This document uses the following
+  terms:</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: This document makes use of
+  the following terms:</p></li>
+</ul>
+
+<h3 id="use-modifiers-appropriately" data-text="Use modifiers appropriately" tabindex="-1">Use modifiers appropriately</h3>
+<ul>
+<li><p>Don't use too many modifiers. In particular, don't use more than two nouns as modifiers of
+another noun.</p>
+<p class="example"><span class="compare-better">Recommended</span>: A cloud-native DevSecOps
+  pipeline in a hybrid environment</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: A hybrid cloud-native
+  DevSecOps pipeline</p>
+
+
+
+</li>
+<li><p>Don't misplace modifiers. For example, place a word like <i>only</i> immediately before the
+word or phrase that it relates to. If the meaning is still ambiguous, try rephrasing the sentence.</p>
+<p class="example"><span class="compare-better">Recommended</span>: Request only one token.</p>
+<p class="example"><span class="compare-better">Recommended</span>: Request no more than one token.</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: Only request one token.</p></li>
+<li><p>Describe technical details in precise, technical terms. Avoid subjective modifiers such as
+<i>simply</i>, <i>properly</i>, or <i>carefully</i>. Subjective words can be vague. For more
+information, see <a href="/style/inclusive-documentation#subjective-language">Avoid subjective
+language</a>.</p>
+</li>
+</ul>
+
+<h3 id="use-active-voice-and-present-tense" data-text="Use active voice and present tense" tabindex="-1">Use active voice and present tense</h3>
+<ul>
+<li>Use <a href="/style/tense">present tense</a> and avoid complex or uncommon verb forms.</li>
+<li>Use active voice. The subject of the sentence is the person or thing performing the action.
+With passive voice, it's often hard for readers to figure out who's supposed to do something.
+For more information, see <a href="/style/voice">Active voice</a>.</li>
+<li><p>Avoid participles and gerunds (that is, <i>verbing</i>) when possible. <i>Verbing</i> can be
+less direct and ambiguous. Consider replacing <i>using</i> with <i>by using</i>,
+<i>that use</i> (or <i>that uses</i>), or <i>you use</i> as appropriate. For more information, see
+the word list entry <a href="/style/word-list#using">using</a>.</p>
+<table>
+  <thead>
+    <tr>
+      <th width="50%"><span class="compare-better">Recommended</span></th>
+      <th width="50%"><span class="compare-worse">Not recommended</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>You must configure the VPC firewall rules before you deploy the VM instance.</td>
+      <td>Configuring the VPC firewall rules is required before deploying the VM instance.</td>
+    </tr>
+    <tr>
+      <td>This guide describes how to set up database replication.</td>
+      <td>This guide describes setting up database replication.</td>
+    </tr>
+  </tbody>
+</table>
+</li>
+</ul>
+
+<h3 id="use-words-in-their-primary-sense" data-text="Use words in their primary sense" tabindex="-1">Use words in their primary sense</h3>
+<ul>
+<li>Don't use the same word to mean different things. In particular, avoid using the same word as
+both a noun and a verb in close proximity. For examples of words that have multiple meanings, see the word
+list entries for <a href="/style/word-list#once">once</a>, <a
+href="/style/word-list#while">while</a>, <a href="/style/word-list#as">as</a>, and <a
+href="/style/word-list#since">since</a>.</li>
+<li>Avoid directional language (for example, <i>above</i> or <i>below</i>) in procedural
+documentation. For more information, see
+<a href="/style/ui-elements#buttons">UI elements and interaction</a>.</li>
+</ul>
+
+<h3 id="use-helper-words-and-optional-words" data-text="Use helper words and optional words" tabindex="-1">Use helper words and optional words</h3>
+<ul>
+<li>Use qualifying nouns for technical keywords. For example, when referring to a file called
+  <code translate="no" dir="ltr">example.yaml</code>, call it the <i><code translate="no" dir="ltr">example.yaml</code> file</i> and not
+  <i><code translate="no" dir="ltr">example.yaml</code></i> by itself. For more information, see
+  <a href="/style/code-in-text#keywords">Grammatical treatment of code elements</a>.</li>
+<li><p>Repeat a word if the redundancy improves comprehension.</p>
+<table>
+  <thead>
+    <tr>
+      <th width="50%"><span class="compare-better">Recommended</span></th>
+      <th width="50%"><span class="compare-worse">Not recommended</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>If the VM has started and if you're able to connect...</td>
+      <td>If the VM has started and you're able to connect...</td>
+    </tr>
+    <tr>
+      <td>The resource hierarchy design creates both IAM segmentation and network segmentation by
+        default.</td>
+      <td>The resource hierarchy design creates both IAM and network segmentation by default.</td>
+    </tr>
+    <tr>
+      <td>An egress rule whose action is <code translate="no" dir="ltr">allow</code>, whose destination is
+        <code translate="no" dir="ltr">0.0.0.0/0</code>, and whose priority is the lowest possible (<code translate="no" dir="ltr">65535</code>).</td>
+      <td>An egress rule whose action is <code translate="no" dir="ltr">allow</code>, destination is <code translate="no" dir="ltr">0.0.0.0/0</code>,
+        and priority is the lowest possible (<code translate="no" dir="ltr">65535</code>).</td>
+    </tr>
+  </tbody>
+</table>
+
+<li><p>Use helper words. Helper words such as <i>then</i>, <i>that</i>, and <i>of</i>
+are frequently left out of conversational English. Use these words to avoid ambiguity.</p>
+  <table>
+    <thead>
+      <tr>
+        <th width="50%"><span class="compare-better">Recommended</span></th>
+        <th width="50%"><span class="compare-worse">Not recommended</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>If the attribute key is not found, then the default value is returned.</td>
+        <td>If the attribute key is not found, the default value is returned.</td>
+      </tr>
+      <tr>
+        <td>This document is intended for data engineers and assumes that you have the following
+          knowledge:</td>
+        <td>This document is intended for data engineers and assumes you have the following
+          knowledge:</td>
+      </tr>
+      <tr>
+        <td>Identify all of the datasets.</td>
+        <td>Identify all the datasets.</td>
+      </tr>
+      <tr>
+        <td>Start the profiler, and then run the app.</td>
+        <td>Start the profiler, then run the app.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>See also <a href="/style/pronouns#optional-pronouns">Optional pronouns</a>.</p>
+</li>
+<li><p>Don't omit relative pronouns. To provide clarity and to avoid ambiguity, use relative
+pronouns such as <i>that</i> and <i>which</i>. For more information, see
+<a href="/style/pronouns#relative-pronouns">Relative pronouns</a>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: You can programmatically update
+  the rules that you previously defined.</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: You can programmatically
+  update the rules you previously defined.</p></li>
+</ul>
+
+<h3 id="clarify-abbreviations-and-pronouns" data-text="Clarify abbreviations and pronouns" tabindex="-1">Clarify abbreviations and pronouns</h3>
+<ul>
+<li>Define abbreviations. Abbreviations can be confusing out of context, and they don't translate
+well. Spell things out whenever possible, at least the first time that you use
+a given term. For more information, see <a href="/style/abbreviations">Abbreviations</a>.</li>
+<li><p>Clarify antecedents. Using pronouns can get tricky when translators are working with small,
+unconnected strings of text. Help them out by making things as clear as
+possible. For example, if a pronoun is ambiguous, then replace it with the
+appropriate noun.</p>
+<p class="example"><span class="compare-better">Recommended</span>: If you use the term
+<i>green beer</i> in an ad, then make sure that the ad is targeted.</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: If you use the term
+<i>green beer</i> in an ad, then make sure that it's targeted.</p>
+</li>
+</ul>
+
+<h3 id="use-apostrophes-appropriately" data-text="Use apostrophes appropriately" tabindex="-1">Use apostrophes appropriately</h3>
+
+<p>Be careful with how you use plural and possessive forms. In general, don't form a plural with
+<i>'s</i>, don't use the plural or possessive form with trademarks of company, product, and feature
+names, and don't use uncommon contractions. For more information, see <a
+href="/style/possessives">Possessives</a>, <a href="/style/pluralization">Pluralization</a>, and <a
+href="/style/contractions">Contractions</a>.</p>
+
+<h2 id="address-users-and-their-needs-directly" data-text="Address users and their needs directly" tabindex="-1">Address users and their needs directly</h2>
+
+<p>Address the user and their needs directly and avoid providing unnecessary information.</p>
+
+<ul>
+<li>Address the reader directly. Use <i>you</i>, instead of <i>the user</i> or <i>they</i>, unless
+you're referring to someone who uses the software that the reader is developing. For more
+information, see <a href="/style/person">Second person and first person</a>.</li>
+<li><p>Provide context. Don't assume that the reader already knows what you're talking about.</p>
+</li>
+<li>Avoid negative constructions when possible. Consider whether it's necessary to tell the reader
+what they can't do instead of what they can.</li>
+</ul>
+
+<h2 id="be-consistent" data-text="Be consistent" tabindex="-1">Be consistent</h2>
+
+<p>Use standard sentence structures, consistent terminology, and appropriate punctuation to avoid
+creating barriers to understanding, ambiguity, and mistranslations.</p>
+
+<h3 id="use-consistent-terminology" data-text="Use consistent terminology" tabindex="-1">Use consistent terminology</h3>
+
+<p>If you use a particular term for a concept in one place, then use that exact same term
+elsewhere, including the same capitalization. If you use different names for the same thing,
+translators might think you're referring to different concepts, and thus might use different
+translations. Inconsistency in terminology and phrasing can increase translation costs,
+particularly when translation memory and machine translations are used as first steps in
+translation.</p>
+
+<h3 id="use-standard-sentence-structures-and-formatting" data-text="Use standard sentence structures and formatting" tabindex="-1">Use standard sentence structures and formatting</h3>
+<ul>
+<li><p>Use standardized phrases for frequently used sentences, introductory phrases, and other common
+tasks. For examples, read about <a href="/style/cross-references#link-introductions">introducing links</a>,
+<a href="/style/placeholders#placeholders-in-output">introducing output</a>, and
+<a href="/style/code-samples#introductions">introducing code samples</a>.</p>
+</li>
+<li>Use standard English word order. Sentences follow the <i>subject + verb + object</i> order.</li>
+<li>Try to keep the main subject and verb as close to the beginning of the sentence as possible.</li>
+<li>Use the conditional clause first. If you want to tell the audience to do something in a
+particular circumstance, mention the circumstance before you provide the instruction. For more
+information, see <a href="/style/sentence-structure">Sentence structure</a>.</li>
+<li>Make list items consistent. Make list items parallel in structure. Be consistent in your
+capitalization and punctuation. For more information, see <a href="/style/lists">Lists</a>.</li>
+</ul>
+
+<h3 id="use-consistent-text-formatting" data-text="Use consistent text formatting" tabindex="-1">Use consistent text formatting</h3>
+<ul>
+<li>Use consistent typographic formats. Use bold and italics consistently. Don't switch from
+using italics for emphasis to underlining. For more information, see
+<a href="/style/text-formatting">Text-formatting summary</a>.</li>
+<li>Use consistent capitalization. For more information, see
+<a href="/style/capitalization">Capitalization</a>.</li>
+</ul>
+
+<h2 id="be-inclusive" data-text="Be inclusive" tabindex="-1">Be inclusive</h2>
+
+<p>You're not writing for your culture. Write with inclusivity in mind. For more information, see <a
+href="/style/inclusive-documentation">Writing inclusive documentation</a>.</p> <ul> <li>Write <a
+href="/style/dates-times">dates and times</a> in unambiguous and clear ways.</li> <li>Don't be too
+culturally specific. In particular, don't refer to specific holidays, cultural practices, or sports
+unless you're certain they're known worldwide.</li> <li>Use a diverse set of example names. If you
+need to use people's names (for example, as email addresses), use a diverse set of names. For more
+information, see <a href="/style/examples">Example domains and names</a>.</li> <li>Avoid
+colloquialisms, idioms, or slang. Phrases like <i>ballpark figure</i>, <i>back burner</i>, or
+<i>hang in there</i> can be confusing and difficult to translate.</li> <li>Avoid humor. Most humor
+is difficult to translate, and much humor is culturally specific.</li> <li>Avoid geographically
+specific references, like the seasons. Remember that August isn't summer in the southern hemisphere.
+For more information, see <a href="/style/dates-times#divisions-year">Expressing divisions of the
+year</a>.</li> </ul>
+
+<h2 id="consider-accessibility-for-images" data-text="Consider accessibility for images" tabindex="-1">Consider accessibility for images</h2>
+
+<p>Use screenshots and text in figures sparingly. Images don't get translated. Any new information
+should be conveyed through text and not introduced in a figure or image. For more information, see
+<a href="/style/images">Figures and other images</a>.</p>
+
+
+
+  
+
+  

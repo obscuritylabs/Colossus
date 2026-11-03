@@ -1,0 +1,126 @@
+<!-- Source: https://developers.google.com/style/prescriptive-documentation; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/prescriptive-documentation">
+<h1>Prescriptive documentation</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<p>Write prescriptive documentation.</p>
+
+<p><i>Prescriptive</i> (or <i>opinionated</i>) documentation recommends a way to achieve tasks
+and accomplish goals. It tells the reader what to do instead of giving them a list of options to
+choose from. When a goal or task is complex and involves multiple approaches or products,
+prescriptive documentation recommends a path.</p>
+
+<p>Prescriptive writing affects several aspects of documentation:</p>
+
+<ul>
+  <li><b>The purpose and structure of a document</b>. Prescriptive documentation states a clear,
+  specific purpose. Headings and content are written with that purpose in mind.</li>
+  <li><b>Example scenarios and procedures</b>. Scenarios and procedures reflect the use cases that
+  are most likely relevant to the readers.</li>
+  <li><b>Sample commands</b>. Prescriptive documentation provides commands and arguments that
+  accomplish the task for the most common use case. For more information about documenting
+  command-line options, see
+  <a href="/style/code-syntax#click-to-copy-commands">Optional arguments in click-to-copy commands</a>.</li>
+</ul>
+
+<p>For instance, best practice documents are typically prescriptive documents. For an example, see
+<a href="https://cloud.google.com/architecture/security-foundations/operation-best-practices">Operations best practices</a>.</p>
+
+
+
+
+
+<h2 id="word-choice" data-text="Word choice for recommendations and requirements" tabindex="-1">Word choice for recommendations and requirements</h2>
+
+<p>To indicate required or optional user actions or the outcomes of a process, select an appropriate
+auxiliary verb—for example, <i>must</i>, <i>can</i>, or <i>might</i>. Generally avoid the word
+<i>should</i>. The word can create ambiguity and uncertainty for readers and is thus problematic for
+prescriptive documentation. For example, if you're telling the reader what to do, <i>should</i>
+implies that the action is recommended but optional, which can leave the reader unsure about what to
+do.</p>
+
+<p>To clarify what you mean, determine if an action is <i>required</i> versus <i>optional</i>, an
+outcome is <i>expected</i> versus <i>possible</i>, or a state is <i>actual</i> versus
+<i>recommended</i>.</p>
+
+<ul>
+  <li>
+    <b>If an action is required</b>: use <i>must</i>, or rephrase
+    the sentence so that it's a clear imperative instruction such as
+    "Do the following before you continue."
+  </li>
+  <li>
+    <b>If an action is recommended</b>: use <i>We recommend ...</i> or
+    <i>Google recommends ...</i>. You can use <i>should</i> if a
+    recommended action is generally recognized. For example, "You should
+    use a strong password ..." or "You should follow the principle of
+    least privilege ...."
+  </li>
+  <li>
+    <b>If an action is optional</b>: use <i>can</i>. For example,
+    "You can also use approach B to solve the same problem."
+  </li>
+  <li>
+    <b>If an outcome is expected</b>: describe the outcome in terms of
+    what is expected. For example: "The process returns 10 items."
+  </li>
+  <li>
+    <b>If an outcome is possible</b>: use <i>might</i> or <i>can</i>.
+    For example, "The process can take about 30 minutes."
+  </li>
+  <li>
+    <b>If a state is actual</b>: when you're describing the state of
+    something, such as the value of a variable, avoid writing "The value
+    should be true." Instead, clarify which of the following you mean:
+    <ul>
+      <li>"You must set the value to true."</li>
+      <li>"The server sets the value to true."</li>
+      <li>"If the value is false, follow these steps to change it to true."</li>
+    </ul>
+    <p>For information about clarifying who's performing an action, see
+    <a href="/style/voice">Active voice</a>.</p>
+  </li>
+</ul>
+
+<div class="example">
+  <p><span class="compare-better">Recommended</span>: Ensure that the
+  Classroom Share Button conforms to our min-max size guidelines and related
+  color/button templates.</p>
+  <p><span class="compare-better">Recommended</span>: The column of the data
+  table that the filter operates on.</p>
+  <p><span class="compare-better">Recommended</span>: Whether it's a brand new
+  project or an existing one, perform the following steps.</p>
+  <p><span class="compare-worse">Not recommended</span>: The Classroom Share
+  Button should conform to our min-max size guidelines and related color and
+  button templates.</p>
+  <p><span class="compare-worse">Not recommended</span>: The column of the
+  data table that the filter should operate on.</p>
+  <p><span class="compare-worse">Not recommended</span>: Whether it's a brand
+  new project or an existing one, here's what you should do.</p>
+</div>
+
+<h2 id="more-resources" data-text="More resources" tabindex="-1">More resources</h2>
+
+<ul>
+  <li>See also <a href="/style/word-list#can">can</a>, <a href="/style/word-list#could">could</a>,
+    <a href="/style/word-list#may">may</a>, <a href="/style/word-list#might">might</a>,
+    <a href="/style/word-list#must">must</a>, and <a href="/style/word-list#would">would</a> in the
+    word list.</li>
+</ul>
+
+  
+
+  
