@@ -3379,6 +3379,7 @@ mod tests {
                     provider_profile: "test".into(),
                     reasoning_effort: Some("high".into()),
                     default_roles: vec!["assistant".into()],
+                    document_media_types: Vec::new(),
                 }]
             }
         }

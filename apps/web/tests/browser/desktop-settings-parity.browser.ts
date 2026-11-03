@@ -273,7 +273,7 @@ test("provider inventory uses the full Desktop picker and persists provider disp
 
 test("Desktop model cards preserve automatic capabilities and the shared model editor layout", async ({
   page,
-}) => {
+}, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 1000 });
   const fixture = await browserFixture(page, {
     administer: true,
@@ -316,6 +316,17 @@ test("Desktop model cards preserve automatic capabilities and the shared model e
       editor.getByRole("slider", { name: label, exact: true }),
     ).toHaveAttribute("aria-valuetext", "Auto");
   }
+  const documents = editor.getByRole("slider", {
+    name: "Document inputs",
+    exact: true,
+  });
+  await expect(documents).toHaveAttribute("aria-valuetext", "Off");
+  await expect(
+    page.getByText(/web chat file picker currently accepts text files only/u),
+  ).toBeVisible();
+  await documents.focus();
+  await documents.press("End");
+  await expect(documents).toHaveAttribute("aria-valuetext", "On");
   await editor
     .getByRole("button", { name: "Load models", exact: true })
     .click();
@@ -352,8 +363,14 @@ test("Desktop model cards preserve automatic capabilities and the shared model e
       control.getByRole("slider", { name: label, exact: true }),
     ).toHaveAttribute("aria-valuetext", "Auto");
   }
+  await expect(documents).toHaveAttribute("aria-valuetext", "On");
+  await editor
+    .getByRole("group", { name: "Document inputs", exact: true })
+    .screenshot({
+      path: testInfo.outputPath("document-preference-web.png"),
+    });
   await page.screenshot({
-    path: "output/playwright/desktop-model-editor-web.png",
+    path: testInfo.outputPath("desktop-model-editor-web.png"),
   });
   await editor
     .getByRole("button", { name: "Save changes", exact: true })
@@ -370,6 +387,7 @@ test("Desktop model cards preserve automatic capabilities and the shared model e
             toolCalls: "auto",
             streaming: "auto",
             imageInputs: "auto",
+            documentInputs: "on",
             serverCompaction: "auto",
             declared: {
               toolCalls: true,

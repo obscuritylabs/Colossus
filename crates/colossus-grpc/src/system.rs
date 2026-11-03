@@ -294,6 +294,13 @@ impl SystemService for SystemServiceAdapter {
                 && caller.principal().has_scope(scopes::RUNS_EXECUTE),
             detail: String::new(),
         }))
+        .chain(std::iter::once(Capability {
+            name: "attachments.document_input".into(),
+            enabled: caller.principal().has_scope(scopes::ARTIFACTS_READ)
+                && caller.principal().has_scope(scopes::ARTIFACTS_WRITE)
+                && caller.principal().has_scope(scopes::RUNS_EXECUTE),
+            detail: "Native document formats require explicit per-model enablement.".into(),
+        }))
         .collect();
         let mut limits = self.application_limits.clone();
         limits.extend([
@@ -804,6 +811,7 @@ mod tests {
                             .allowed_roles()
                             .map(str::to_owned)
                             .collect(),
+                        document_media_types: Vec::new(),
                     };
                     257
                 ]

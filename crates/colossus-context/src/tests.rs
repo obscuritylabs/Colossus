@@ -13,6 +13,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+mod documents;
+
 struct SummaryProvider {
     output: Option<String>,
     calls: AtomicUsize,
@@ -142,6 +144,7 @@ fn model_route(role: &str) -> ProviderRoute {
             tool_calls: true,
             streaming: true,
             image_inputs: false,
+            document_inputs: false,
         },
         reasoning_effort: None,
     }

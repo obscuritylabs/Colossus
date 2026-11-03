@@ -15,6 +15,17 @@ pub(super) fn payload(
     streaming: bool,
     projection: ProviderProjection<'_>,
 ) -> Result<Value, ProviderError> {
+    crate::documents::validate_document_request(ProviderKind::AnthropicMessages, request)?;
+    if projection.continuation.is_some_and(|state| {
+        state
+            .hidden_reasoning
+            .iter()
+            .any(crate::documents::contains_private_document_data)
+    }) {
+        return Err(invalid(
+            "private Messages replay contains a transient document source",
+        ));
+    }
     validate_model_transcript(&request.messages)
         .map_err(|_| invalid("invalid Messages transcript"))?;
     let mut system = vec![json!({"type":"text", "text":request.instructions})];
@@ -88,6 +99,15 @@ pub(super) fn payload(
                                     .and_then(|s| s.split_once(";base64,"))
                                     .ok_or_else(|| invalid("invalid verified image source"))?;
                                 content.push(json!({"type":"image", "source":{"type":"base64", "media_type":mime, "data":data}}));
+                            }
+                            ModelContentPart::File { file } => {
+                                let url = projection.images.file_data_url(file)?;
+                                let (mime, data) = url
+                                    .strip_prefix("data:")
+                                    .and_then(|value| value.split_once(";base64,"))
+                                    .ok_or_else(|| invalid("invalid verified document source"))?;
+                                content.push(json!({"type":"document", "title":file.file_name,
+                                    "source":{"type":"base64", "media_type":mime, "data":data}}));
                             }
                         }
                     }

@@ -509,6 +509,7 @@ pub struct SafetyKernel {
     post_effect_policy_input_limit: usize,
     browser_upload_policy_input_limit: usize,
     computer_screenshot_policy_input_limit: usize,
+    media_read_policy_input_limit: usize,
     sandbox_boundary_gate: Option<Arc<SandboxBoundaryGate>>,
 }
 
@@ -521,6 +522,7 @@ impl SafetyKernel {
             post_effect_policy_input_limit: DEFAULT_POST_EFFECT_POLICY_INPUT_LIMIT,
             browser_upload_policy_input_limit: DEFAULT_POST_EFFECT_POLICY_INPUT_LIMIT,
             computer_screenshot_policy_input_limit: 24 * 1024 * 1024,
+            media_read_policy_input_limit: 24 * 1024 * 1024,
             sandbox_boundary_gate: None,
         }
     }
@@ -531,6 +533,7 @@ impl SafetyKernel {
         self.post_effect_policy_input_limit = bytes;
         self.browser_upload_policy_input_limit = bytes;
         self.computer_screenshot_policy_input_limit = bytes;
+        self.media_read_policy_input_limit = bytes;
         self
     }
 
@@ -608,6 +611,15 @@ impl SafetyKernel {
             // The fixed 16 MiB PNG ceiling expands under complete base64 policy disclosure.
             // Other post-effect content and explicitly stricter deployments retain their caps.
             self.computer_screenshot_policy_input_limit
+        } else if request.phase == EffectPhase::PostEffect
+            && matches!(
+                request.action.as_str(),
+                "filesystem.read_run_input" | "filesystem.read_image"
+            )
+        {
+            // Dedicated media reads enforce a 16 MiB adapter ceiling. Preserve
+            // complete base64 disclosure for release policy within a bounded lane.
+            self.media_read_policy_input_limit
         } else if request.phase == EffectPhase::PostEffect {
             self.post_effect_policy_input_limit
         } else if request.action == "browser.upload" {

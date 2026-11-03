@@ -12,10 +12,10 @@ use colossus_codex_auth::{
 };
 use colossus_contracts::{
     CredentialReference, EffectRequest, ModelCapabilities, ModelContent, ModelContentPart,
-    ModelImageReference, ModelLimits, ModelMessage, ModelMessageRole, ModelRequest, ModelRoute,
-    ModelToolCall, ModelToolDefinition, ProviderEvent, ProviderModelInfo, ProviderReadiness,
-    ProviderReadinessCheck, ProviderResponseDiagnostic, ProviderStreamItem, ProviderTurn,
-    ProviderUsage, QuarantinedEffectResult, ReasoningEffort, ResourceAuthority,
+    ModelFileReference, ModelImageReference, ModelLimits, ModelMessage, ModelMessageRole,
+    ModelRequest, ModelRoute, ModelToolCall, ModelToolDefinition, ProviderEvent, ProviderModelInfo,
+    ProviderReadiness, ProviderReadinessCheck, ProviderResponseDiagnostic, ProviderStreamItem,
+    ProviderTurn, ProviderUsage, QuarantinedEffectResult, ReasoningEffort, ResourceAuthority,
     validate_model_message_content, validate_model_transcript,
 };
 use colossus_network::{AdditionalRootCertificates, parse_host_ip};
@@ -40,6 +40,7 @@ use tokio::net::lookup_host;
 
 const MAX_PROVIDER_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_PROVIDER_REQUEST_WITH_IMAGES_BYTES: usize = 44 * 1024 * 1024;
+const MAX_PROVIDER_REQUEST_WITH_DOCUMENTS_BYTES: usize = 88 * 1024 * 1024;
 const MAX_PROVIDER_ADDRESSES: usize = 16;
 const MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES: usize = 16 * 1024;
 const MAX_CODEX_REFRESH_RESPONSE_BYTES: usize = 256 * 1024;
@@ -51,6 +52,7 @@ use error::{chat_finish_error, terminal_provider_error};
 mod anthropic;
 mod normalization;
 use normalization::*;
+mod documents;
 
 mod model_catalog;
 use model_catalog::*;

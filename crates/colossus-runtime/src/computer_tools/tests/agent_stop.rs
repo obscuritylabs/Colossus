@@ -30,6 +30,7 @@ impl ModelProvider for StopProvider {
                 tool_calls: true,
                 streaming: false,
                 image_inputs: false,
+                document_inputs: false,
             },
             reasoning_effort: None,
         })

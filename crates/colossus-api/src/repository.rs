@@ -248,6 +248,35 @@ pub trait RunRepository: Send + Sync {
         kind: RunUpdateKind,
     ) -> ApiResult<RunUpdate>;
 
+    /// Coordinator write after a verified canonical user message commit. Exact
+    /// replay reconciles ambiguous acknowledgement without granting feed reads.
+    fn append_user_message_once(
+        &self,
+        _caller: &CallerContext,
+        _run_id: &str,
+        _expected_sequence: u64,
+        _message: crate::ReleasedSessionMessage,
+    ) -> ApiResult<Idempotent<RunUpdate>> {
+        Err(ApiError::failed_precondition(
+            ApiErrorReason::InvalidRunTransition,
+            "the repository does not support canonical user message writes",
+        ))
+    }
+
+    /// Owner-bound acknowledgement of an initial publication, without releasing
+    /// feed contents or requiring a caller feed-read grant.
+    fn user_message_published(
+        &self,
+        _caller: &CallerContext,
+        _run_id: &str,
+        _accepted_input: &[crate::ContentPart],
+    ) -> ApiResult<bool> {
+        Err(ApiError::failed_precondition(
+            ApiErrorReason::InvalidRunTransition,
+            "the repository does not support canonical user message writes",
+        ))
+    }
+
     /// Atomically claim cancellation idempotency and persist the cancelling state.
     fn request_cancellation(
         &self,
@@ -956,6 +985,38 @@ impl EventSourcedRunRepository {
         Ok(Some((run, released_bytes)))
     }
 
+    fn existing_user_message(
+        &self,
+        caller: &CallerContext,
+        run_id: &str,
+        message: &crate::ReleasedSessionMessage,
+    ) -> ApiResult<Option<RunUpdate>> {
+        // The owning write path has already authenticated this run. Keep the
+        // repository's private format and bounded feed reconciliation here.
+        let mut found = None;
+        for event in self.read_bounded_run_stream(caller, run_id)? {
+            if event.event_type != RUN_UPDATE_EVENT {
+                continue;
+            }
+            let update = update_from_event(self.journal.as_ref(), caller, run_id, &event)?;
+            if let RunUpdateKind::Message { message: existing } = &update.kind
+                && existing.role == crate::ReleasedMessageRole::User
+                && existing.session_id == message.session_id
+                && existing.run_id == message.run_id
+                && existing.sequence == message.sequence
+            {
+                if existing != message || found.is_some() {
+                    return Err(invariant(
+                        caller,
+                        "the canonical user message release could not be verified",
+                    ));
+                }
+                found = Some(update);
+            }
+        }
+        Ok(found)
+    }
+
     fn append_unchecked(
         &self,
         caller: &CallerContext,
@@ -1642,6 +1703,153 @@ impl RunRepository for EventSourcedRunRepository {
             }
         }
         self.append_unchecked(caller, &run, released_bytes, kind)
+    }
+
+    fn user_message_published(
+        &self,
+        caller: &CallerContext,
+        run_id: &str,
+        accepted_input: &[crate::ContentPart],
+    ) -> ApiResult<bool> {
+        caller.require_scope(scopes::RUNS_EXECUTE)?;
+        token(run_id, "run_id", MAX_IDENTIFIER_BYTES)?;
+        let (run, _) = self.load_append_state(caller, run_id)?.ok_or_else(|| {
+            ApiError::not_found(
+                ApiErrorReason::RunNotFound,
+                "the requested run was not found",
+            )
+            .with_correlation_id(caller.request_id().clone())
+        })?;
+        let events = self.read_bounded_run_stream(caller, run_id)?;
+        let first = events.first().ok_or_else(|| {
+            invariant(
+                caller,
+                "the canonical user input identity could not be verified",
+            )
+        })?;
+        let created = decode_created(self.journal.as_ref(), caller, run_id, first)?;
+        if created.execution.request.input.as_slice() != accepted_input {
+            return Err(invariant(
+                caller,
+                "the canonical user input identity could not be verified",
+            ));
+        }
+        let mut found = false;
+        for event in events
+            .iter()
+            .filter(|event| event.event_type == RUN_UPDATE_EVENT)
+        {
+            let update = update_from_event(self.journal.as_ref(), caller, run_id, event)?;
+            if let RunUpdateKind::Message { message } = update.kind
+                && message.role == crate::ReleasedMessageRole::User
+            {
+                let input = message
+                    .content
+                    .into_iter()
+                    .map(|part| match part {
+                        crate::ReleasedContentPart::Text { text } => {
+                            crate::ContentPart::Text { text }
+                        }
+                        crate::ReleasedContentPart::Artifact { artifact } => {
+                            crate::ContentPart::Artifact {
+                                artifact_id: artifact.artifact_id,
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if found
+                    || message.session_id != run.session_id
+                    || message.run_id != run.id
+                    || input.as_slice() != accepted_input
+                {
+                    return Err(invariant(
+                        caller,
+                        "the canonical user input publication could not be verified",
+                    ));
+                }
+                found = true;
+            }
+        }
+        Ok(found)
+    }
+
+    fn append_user_message_once(
+        &self,
+        caller: &CallerContext,
+        run_id: &str,
+        expected_sequence: u64,
+        message: crate::ReleasedSessionMessage,
+    ) -> ApiResult<Idempotent<RunUpdate>> {
+        caller.require_scope(scopes::RUNS_EXECUTE)?;
+        token(run_id, "run_id", MAX_IDENTIFIER_BYTES)
+            .map_err(|error| error.with_correlation_id(caller.request_id().clone()))?;
+        let (run, _) = self.load_append_state(caller, run_id)?.ok_or_else(|| {
+            ApiError::not_found(
+                ApiErrorReason::RunNotFound,
+                "the requested run was not found",
+            )
+            .with_correlation_id(caller.request_id().clone())
+        })?;
+        if message.role != crate::ReleasedMessageRole::User
+            || message.run_id != run.id
+            || message.session_id != run.session_id
+        {
+            return Err(invariant(
+                caller,
+                "the canonical user message release identity is invalid",
+            ));
+        }
+        validate_released_message(&message)?;
+        let accepted_input = message
+            .content
+            .iter()
+            .map(|part| match part {
+                crate::ReleasedContentPart::Text { text } => {
+                    crate::ContentPart::Text { text: text.clone() }
+                }
+                crate::ReleasedContentPart::Artifact { artifact } => crate::ContentPart::Artifact {
+                    artifact_id: artifact.artifact_id.clone(),
+                },
+            })
+            .collect::<Vec<_>>();
+        let published = self.user_message_published(caller, run_id, &accepted_input)?;
+        // Reconcile before expected-head and terminal checks: a committed message
+        // remains an exact replay after subsequent updates, including completion.
+        if let Some(value) = self.existing_user_message(caller, run_id, &message)? {
+            return Ok(Idempotent {
+                value,
+                replayed: true,
+            });
+        }
+        if published {
+            return Err(invariant(
+                caller,
+                "the canonical user message release identity could not be verified",
+            ));
+        }
+        match self.append_update(
+            caller,
+            run_id,
+            expected_sequence,
+            RunUpdateKind::Message {
+                message: message.clone(),
+            },
+        ) {
+            Ok(value) => Ok(Idempotent {
+                value,
+                replayed: false,
+            }),
+            Err(error) if error.reason == ApiErrorReason::OutcomeUnknown => {
+                match self.existing_user_message(caller, run_id, &message)? {
+                    Some(value) => Ok(Idempotent {
+                        value,
+                        replayed: true,
+                    }),
+                    None => Err(error),
+                }
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn request_cancellation(

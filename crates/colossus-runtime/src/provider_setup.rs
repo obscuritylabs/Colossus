@@ -41,6 +41,8 @@ pub struct ProviderSetupModel {
     pub streaming: Option<colossus_contracts::ModelFeatureMode>,
     /// Explicit image-input support.
     pub image_inputs: Option<colossus_contracts::ModelFeatureMode>,
+    /// Explicit native document preference; omission stays Off.
+    pub document_inputs: Option<colossus_contracts::ModelFeatureMode>,
     /// Explicit Responses compaction preference.
     pub server_compaction: Option<colossus_contracts::ModelFeatureMode>,
 }
@@ -198,7 +200,11 @@ impl RuntimeConfig {
                 streaming: card.and_then(|card| card.streaming),
                 image_inputs: card.and_then(|card| card.image_inputs),
                 server_compaction: card.and_then(|card| card.server_compaction),
+                document_inputs: card.and_then(|card| card.document_inputs),
             },
+            document_inputs: request
+                .document_inputs
+                .unwrap_or(colossus_contracts::ModelFeatureMode::Off),
         };
         let model = ModelProfileConfig {
             provider_profile: SETUP_PROVIDER_PROFILE.into(),
@@ -440,11 +446,13 @@ mod tests {
             context_window_tokens: Some(64_000),
             max_output_tokens: Some(8_000),
             tool_calls: Some(true),
+            document_inputs: Some(true),
             ..Default::default()
         };
         let request = ProviderSetupModel {
             id: card.id.clone(),
             max_output_tokens: Some(2_000),
+            document_inputs: Some(colossus_contracts::ModelFeatureMode::On),
             ..Default::default()
         };
         let result = config.with_setup_model(&request, Some(&card)).unwrap();
@@ -455,6 +463,11 @@ mod tests {
         );
         assert!(model.capabilities.capabilities().tool_calls);
         assert_eq!(model.capabilities.declared.tool_calls, Some(true));
+        assert_eq!(model.capabilities.declared.document_inputs, Some(true));
+        assert_eq!(
+            model.capabilities.document_inputs,
+            colossus_contracts::ModelFeatureMode::On
+        );
         assert_eq!(model.capabilities.declared.image_inputs, None);
         assert_eq!(model.capabilities.declared.streaming, None);
         assert_eq!(result.models.roles["primary"], SETUP_MODEL_PROFILE);

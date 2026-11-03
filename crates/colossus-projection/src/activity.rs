@@ -4,7 +4,7 @@ use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
 
 /// Stable rebuildable projection containing policy-released session activity.
-pub const SESSION_ACTIVITY_PROJECTION: &str = "session-activity-v5";
+pub const SESSION_ACTIVITY_PROJECTION: &str = "session-activity-v6";
 
 const MAX_TEXT_BYTES: usize = 65_536;
 const MAX_SUMMARY_BYTES: usize = 2_048;
@@ -100,7 +100,9 @@ impl ProjectionHandler for SessionActivityProjection {
             return Ok(Vec::new());
         };
         match event.event_type.as_str() {
-            "session.message.appended.v1" => project_session_message(session_id, event, payload),
+            "session.message.appended.v1" => {
+                project_session_message(store, session_id, event, payload)
+            }
             "api.run.update.v1" => project_released_update(store, session_id, event, payload),
             "context.prepared.v1" => project_context(session_id, event, payload),
             "model.request.prepared.v1" => project_model_request(store, session_id, event, payload),
@@ -277,6 +279,7 @@ fn project_released_update(
 }
 
 fn project_session_message(
+    store: &dyn ProjectionStore,
     session_id: &str,
     event: &EventEnvelope,
     payload: &Value,
@@ -290,24 +293,69 @@ fn project_session_message(
     let Some(text) = message.get("content").and_then(Value::as_str) else {
         return Ok(Vec::new());
     };
-    let logical_id = payload.get("sequence").and_then(Value::as_u64).map_or_else(
-        || format!("message:{}", event.event_id),
-        |sequence| format!("message:{sequence}"),
-    );
-    upsert_new(
+    project_user_message(
+        store,
         session_id,
         event,
-        logical_id,
-        "agent",
-        "user",
-        "User message",
-        &preview(text),
-        "User",
-        Some("completed"),
+        user_message_id(payload.get("sequence"), event),
+        text,
         None,
-        Some(content("text", bounded(text, MAX_TEXT_BYTES))),
-        None,
-        BTreeMap::new(),
+        false,
+    )
+}
+
+fn user_message_id(sequence: Option<&Value>, event: &EventEnvelope) -> String {
+    sequence
+        .and_then(Value::as_u64)
+        .filter(|sequence| *sequence > 0)
+        .map_or_else(
+            || format!("message:{}", event.event_id),
+            |sequence| format!("message:{sequence}"),
+        )
+}
+
+fn project_user_message(
+    store: &dyn ProjectionStore,
+    session_id: &str,
+    event: &EventEnvelope,
+    logical_id: String,
+    text: &str,
+    created_at: Option<&str>,
+    released: bool,
+) -> Result<Vec<ProjectionMutation>, StoreError> {
+    update_logical_with_order(
+        store,
+        session_id,
+        event,
+        &logical_id,
+        ActivityOrder::First,
+        |record| {
+            if record.source_event_types.is_empty() {
+                if let Some(created_at) = created_at.filter(|value| !value.is_empty()) {
+                    record.started_at = bounded(created_at, MAX_ATTRIBUTE_BYTES);
+                }
+                record.completed_at = Some(record.started_at.clone());
+            }
+            // A released message carries the original ordered attachment labels.
+            // Replaying the scalar fallback must not replace that richer view.
+            if released
+                || !record
+                    .source_event_types
+                    .iter()
+                    .any(|kind| kind == "api.run.update.v1")
+            {
+                record.summary = preview(text);
+                record.input = Some(content("text", bounded(text, MAX_TEXT_BYTES)));
+            }
+            if record.run_id.is_none() {
+                record.run_id = event.context.run_id.clone();
+            }
+            record.lane = "agent".into();
+            record.kind = "user".into();
+            record.title = "User message".into();
+            record.actor = "User".into();
+            record.status = Some("completed".into());
+        },
     )
 }
 
@@ -375,6 +423,17 @@ fn project_released_message(
     if matches!(role, "tool" | "tool_observation") {
         return Ok(Vec::new());
     }
+    if role == "user" {
+        return project_user_message(
+            store,
+            session_id,
+            event,
+            user_message_id(message.get("sequence"), event),
+            &text,
+            message.get("created_at").and_then(Value::as_str),
+            true,
+        );
+    }
     if role == "assistant"
         && let Some(run_id) = event.context.run_id.as_deref()
         && let Some(logical_id) = lookup_value(store, &model_lookup(session_id, run_id))?
@@ -392,14 +451,6 @@ fn project_released_message(
         });
     }
     let (lane, kind_name, title, actor, input, result) = match role {
-        "user" => (
-            "agent",
-            "user",
-            "User message",
-            "User",
-            Some(content("text", text.clone())),
-            None,
-        ),
         "assistant" => (
             "agent",
             "assistant",
@@ -1214,11 +1265,35 @@ fn upsert_new(
     }])
 }
 
+#[derive(Clone, Copy)]
+enum ActivityOrder {
+    Latest,
+    First,
+}
+
 fn update_logical(
     store: &dyn ProjectionStore,
     session_id: &str,
     event: &EventEnvelope,
     logical_id: &str,
+    update: impl FnOnce(&mut ProjectedSessionActivity),
+) -> Result<Vec<ProjectionMutation>, StoreError> {
+    update_logical_with_order(
+        store,
+        session_id,
+        event,
+        logical_id,
+        ActivityOrder::Latest,
+        update,
+    )
+}
+
+fn update_logical_with_order(
+    store: &dyn ProjectionStore,
+    session_id: &str,
+    event: &EventEnvelope,
+    logical_id: &str,
+    order: ActivityOrder,
     update: impl FnOnce(&mut ProjectedSessionActivity),
 ) -> Result<Vec<ProjectionMutation>, StoreError> {
     let lookup = logical_lookup(session_id, logical_id);
@@ -1257,12 +1332,19 @@ fn update_logical(
     if record.actor == "Assistant" && is_subagent_event(event) {
         record.actor = "Subagent".into();
     }
-    record.last_sequence = event.global_sequence;
+    record.last_sequence = match order {
+        ActivityOrder::Latest => event.global_sequence,
+        ActivityOrder::First => record.last_sequence.max(event.global_sequence),
+    };
     push_source_event(&mut record, &event.event_type);
     if record.started_at.is_empty() {
         record.started_at.clone_from(&event.occurred_at);
     }
-    let next_key = record_key(session_id, event.global_sequence, logical_id);
+    let sequence = match order {
+        ActivityOrder::Latest => event.global_sequence,
+        ActivityOrder::First => record.first_sequence,
+    };
+    let next_key = record_key(session_id, sequence, logical_id);
     let mut mutations = Vec::new();
     if key != next_key {
         mutations.push(ProjectionMutation::Delete { key });
@@ -2025,6 +2107,135 @@ mod tests {
             !serde_json::to_string(activity)
                 .expect("encode")
                 .contains("raw provider output")
+        );
+    }
+
+    #[test]
+    fn released_user_metadata_replaces_scalar_fallback_once_without_moving_the_turn() {
+        let store = Arc::new(InMemoryProjectionStore::default());
+        let canonical = event(10, "session.message.appended.v1", "run-a");
+        let canonical_payload = json!({"sequence": 7, "message": {
+            "role": "user", "content": "before\nPRIVATE_EXPANDED_TEXT_ATTACHMENT\nafter"
+        }});
+        let later = event(11, "session.message.appended.v1", "run-b");
+        let later_payload = json!({"sequence": 8, "message": {
+            "role": "user", "content": "later request"
+        }});
+        let released_payload = json!({"kind": {"type": "message", "message": {
+            "session_id": "session-a", "run_id": "run-a", "sequence": 7,
+            "role": "user", "created_at": canonical.occurred_at,
+            "content": [
+                {"type": "text", "text": "before"},
+                {"type": "artifact", "artifact": {"file_name": "notes.txt"}},
+                {"type": "text", "text": "between"},
+                {"type": "artifact", "artifact": {"file_name": "data.csv"}},
+                {"type": "text", "text": "after"}
+            ]
+        }}});
+        let reader = ProjectedSessionActivityReader::new(store.clone());
+        let mut original = None;
+        for _ in 0..2 {
+            store.reset(SESSION_ACTIVITY_PROJECTION).unwrap();
+            let mut position = 0;
+            apply(&store, &mut position, &canonical, canonical_payload.clone());
+            let first_key = reader.list_page("session-a", None, 10).unwrap().records[0]
+                .0
+                .clone();
+            apply(&store, &mut position, &later, later_payload.clone());
+            for sequence in [12, 13] {
+                apply(
+                    &store,
+                    &mut position,
+                    &event(sequence, "api.run.update.v1", "run-a"),
+                    released_payload.clone(),
+                );
+            }
+            let page = reader.list_page("session-a", None, 10).unwrap();
+            assert_eq!(page.records.len(), 2);
+            assert_eq!(page.records[0].1.activity_id, "message:8");
+            let (key, message) = &page.records[1];
+            assert_eq!(key, &first_key);
+            assert_eq!(message.activity_id, "message:7");
+            assert_eq!(message.first_sequence, 10);
+            assert_eq!(message.last_sequence, 13);
+            assert_eq!(message.started_at, canonical.occurred_at);
+            assert_eq!(message.completed_at.as_ref(), Some(&canonical.occurred_at));
+            assert_eq!(message.duration_ms, None);
+            assert_eq!(
+                message.input.as_ref().unwrap().value,
+                "before\n[Attachment: notes.txt]\nbetween\n[Attachment: data.csv]\nafter"
+            );
+            assert_eq!(
+                message.source_event_types,
+                ["session.message.appended.v1", "api.run.update.v1"]
+            );
+            assert!(
+                !serde_json::to_string(message)
+                    .unwrap()
+                    .contains("PRIVATE_EXPANDED")
+            );
+            if let Some(original) = &original {
+                assert_eq!(
+                    &page.records, original,
+                    "rebuild must preserve identities and ordering"
+                );
+            } else {
+                original = Some(page.records);
+            }
+        }
+    }
+
+    #[test]
+    fn released_only_document_row_retains_canonical_time_and_ordered_labels() {
+        let store = Arc::new(InMemoryProjectionStore::default());
+        let mut position = 0;
+        apply(
+            &store,
+            &mut position,
+            &event(1, "session.message.appended.v1", "run-a"),
+            json!({"sequence": 4, "message": {"role": "user", "content": [
+                {"type": "file", "file": {"artifact_id": "PRIVATE_CANONICAL_REFERENCE"}}
+            ]}}),
+        );
+        let reader = ProjectedSessionActivityReader::new(store.clone());
+        assert!(
+            reader
+                .list_page("session-a", None, 10)
+                .unwrap()
+                .records
+                .is_empty()
+        );
+        let released = json!({"kind": {"type": "message", "message": {
+            "sequence": 4, "role": "user", "created_at": "2026-08-21T09:14:01Z",
+            "content": [
+                {"type": "artifact", "artifact": {"file_name": "report.pdf"}},
+                {"type": "text", "text": "compare against"},
+                {"type": "artifact", "artifact": {"file_name": "workbook.xlsx"}}
+            ]
+        }}});
+        for sequence in [2, 3] {
+            apply(
+                &store,
+                &mut position,
+                &event(sequence, "api.run.update.v1", "run-a"),
+                released.clone(),
+            );
+        }
+        let page = reader.list_page("session-a", None, 10).unwrap();
+        assert_eq!(page.records.len(), 1);
+        let record = &page.records[0].1;
+        assert_eq!(record.activity_id, "message:4");
+        assert_eq!(record.first_sequence, 2);
+        assert_eq!(record.last_sequence, 3);
+        assert_eq!(record.started_at, "2026-08-21T09:14:01Z");
+        assert_eq!(
+            record.input.as_ref().unwrap().value,
+            "[Attachment: report.pdf]\ncompare against\n[Attachment: workbook.xlsx]"
+        );
+        assert!(
+            !serde_json::to_string(record)
+                .unwrap()
+                .contains("PRIVATE_CANONICAL_REFERENCE")
         );
     }
 

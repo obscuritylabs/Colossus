@@ -1,6 +1,7 @@
 use super::*;
 
 mod command_approval;
+mod documents;
 mod event_mode;
 mod layout;
 mod model_picker;

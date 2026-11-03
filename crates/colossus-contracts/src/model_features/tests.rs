@@ -9,11 +9,45 @@ fn legacy_boolean_modes_preserve_explicit_choices_and_missing_images() {
     assert_eq!(value.tool_calls, ModelFeatureMode::On);
     assert_eq!(value.streaming, ModelFeatureMode::Off);
     assert_eq!(value.image_inputs, ModelFeatureMode::Off);
+    assert_eq!(value.document_inputs, ModelFeatureMode::Off);
     assert_eq!(value.server_compaction, ModelFeatureMode::Auto);
     assert_eq!(
         serde_json::to_value(value).expect("migrated settings")["toolCalls"],
         "on"
     );
+}
+
+#[test]
+fn disabled_documents_preserve_legacy_serialization_and_explicit_modes_round_trip() {
+    let legacy = serde_json::json!({
+        "toolCalls": "auto", "streaming": "auto", "imageInputs": "auto",
+        "serverCompaction": "auto",
+        "declared": {"toolCalls": null, "streaming": null, "imageInputs": null, "serverCompaction": null}
+    });
+    let settings: ModelFeatureSettings = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(settings.document_inputs, ModelFeatureMode::Off);
+    assert_eq!(serde_json::to_value(settings).unwrap(), legacy);
+    let legacy_capabilities =
+        serde_json::json!({"toolCalls": true, "streaming": true, "imageInputs": false});
+    let capabilities: ModelCapabilities =
+        serde_json::from_value(legacy_capabilities.clone()).unwrap();
+    assert!(!capabilities.document_inputs);
+    assert_eq!(
+        serde_json::to_value(capabilities).unwrap(),
+        legacy_capabilities
+    );
+    for mode in [ModelFeatureMode::On, ModelFeatureMode::Auto] {
+        let settings = ModelFeatureSettings {
+            document_inputs: mode,
+            ..settings
+        };
+        let json = serde_json::to_value(settings).unwrap();
+        assert!(json.get("documentInputs").is_some());
+        assert_eq!(
+            serde_json::from_value::<ModelFeatureSettings>(json).unwrap(),
+            settings
+        );
+    }
 }
 
 #[test]

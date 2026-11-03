@@ -22,7 +22,11 @@ pub(super) fn capture(
     secrets.redact_value(&mut event);
     // Error metadata is enough to diagnose the rejection. A terminal response
     // may also repeat earlier output or private reasoning; never retain those.
-    let error_event = bounded_terminal_event(&event, usize::MAX);
+    let error_event = if secrets.document_sensitive {
+        crate::documents::redacted_document_error(Some(&event))
+    } else {
+        bounded_terminal_event(&event, usize::MAX)
+    };
     let mut body = serde_json::to_string(&error_event)
         .map_err(|_| ProviderError::Malformed("invalid terminal diagnostic JSON".into()))?;
     let body_truncated = error_event != event || body.len() > MAX_PROVIDER_DIAGNOSTIC_BODY_BYTES;

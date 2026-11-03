@@ -767,6 +767,14 @@ impl GatewayModelProvider {
             self.providers
                 .observe_feature(resolved, ProviderFeature::Images, "accepted");
         }
+        if request
+            .messages
+            .iter()
+            .any(|message| message.content.files().next().is_some())
+        {
+            self.providers
+                .observe_feature(resolved, ProviderFeature::Documents, "accepted");
+        }
         if streamed {
             self.providers
                 .observe_feature(resolved, ProviderFeature::Streaming, "verified");

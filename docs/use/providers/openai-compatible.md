@@ -88,6 +88,12 @@ fields or retries a generation with a different field. Set `toolCalls` and `stre
 for the exact server and model. Provider profiles support bearer authentication and
 do not expose arbitrary custom request headers.
 
+PDF attachment support must be verified for the exact gateway and model. It requires
+an explicitly enabled `capabilities.documentInputs` preference and native Chat
+Completions file input; an OpenAI-compatible label or image support is insufficient.
+DOCX, XLSX and PPTX are limited to the Responses adapter. See
+[native document inputs](../../reference/configuration/providers-models.md#native-document-inputs).
+
 ## Check the connection
 
 ```bash

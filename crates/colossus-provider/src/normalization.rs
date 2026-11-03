@@ -3,6 +3,7 @@ use super::*;
 #[derive(Default)]
 pub(super) struct ProviderResolvedImages {
     by_artifact: BTreeMap<String, (ModelImageReference, String)>,
+    files: BTreeMap<String, (ModelFileReference, String)>,
 }
 
 impl ProviderResolvedImages {
@@ -32,6 +33,39 @@ impl ProviderResolvedImages {
             .ok_or_else(|| {
                 ProviderError::Configuration(
                     "verified image bytes are unavailable for provider projection".into(),
+                )
+            })
+    }
+
+    pub(super) fn insert_file(
+        &mut self,
+        reference: &ModelFileReference,
+        data_url: String,
+    ) -> Result<(), ProviderError> {
+        if let Some((existing, _)) = self.files.get(&reference.artifact_id) {
+            if existing != reference {
+                return Err(ProviderError::Configuration(
+                    "one document artifact ID has conflicting verified metadata".into(),
+                ));
+            }
+            return Ok(());
+        }
+        self.files
+            .insert(reference.artifact_id.clone(), (reference.clone(), data_url));
+        Ok(())
+    }
+
+    pub(super) fn file_data_url(
+        &self,
+        reference: &ModelFileReference,
+    ) -> Result<&str, ProviderError> {
+        self.files
+            .get(&reference.artifact_id)
+            .filter(|(resolved, _)| resolved == reference)
+            .map(|(_, data_url)| data_url.as_str())
+            .ok_or_else(|| {
+                ProviderError::Configuration(
+                    "verified document bytes are unavailable for provider projection".into(),
                 )
             })
     }
@@ -143,6 +177,15 @@ pub(super) fn validate_model_request(
     request: &ModelRequest,
     resolved_max_output_tokens: u64,
 ) -> Result<(), ProviderError> {
+    if serde_json::to_vec(request)
+        .map_err(|error| ProviderError::Malformed(error.to_string()))?
+        .len()
+        > MAX_PROVIDER_REQUEST_BYTES
+    {
+        return Err(ProviderError::Configuration(
+            "logical provider request exceeds its metadata and text bound".into(),
+        ));
+    }
     if request.messages.is_empty()
         || request.messages.len() > 512
         || request.tools.len() > 128
@@ -284,6 +327,17 @@ pub(super) fn responses_payload_with_images(
     streaming: bool,
     projection: ProviderProjection<'_>,
 ) -> Result<Value, ProviderError> {
+    crate::documents::validate_document_request(provider_kind, request)?;
+    if projection.continuation.is_some_and(|state| {
+        state
+            .hidden_reasoning
+            .iter()
+            .any(crate::documents::contains_private_document_data)
+    }) {
+        return Err(ProviderError::Configuration(
+            "private provider state contains a transient document source".into(),
+        ));
+    }
     if let Some(state) = projection.continuation {
         let mut paired = request.clone();
         if !state.assistant.tool_calls.is_empty() {
@@ -417,6 +471,10 @@ fn responses_user_content(
                         "image_url": images.data_url(image)?,
                         "detail": "auto",
                     })),
+                    ModelContentPart::File { file } => Ok(json!({
+                        "type": "input_file", "filename": file.file_name,
+                        "file_data": images.file_data_url(file)?,
+                    })),
                 })
                 .collect::<Result<Vec<_>, ProviderError>>()?,
         )),
@@ -466,6 +524,7 @@ pub(super) fn chat_payload_with_images(
     streaming: bool,
     projection: ProviderProjection<'_>,
 ) -> Result<Value, ProviderError> {
+    crate::documents::validate_document_request(ProviderKind::OpenAiCompatible, request)?;
     validate_request_transcript(request)?;
     let mut messages = Vec::new();
     if !request.instructions.is_empty() {
@@ -595,6 +654,12 @@ fn chat_user_content(
                         "image_url": {
                             "url": images.data_url(image)?,
                             "detail": "auto",
+                        },
+                    })),
+                    ModelContentPart::File { file } => Ok(json!({
+                        "type": "file", "file": {
+                            "filename": file.file_name,
+                            "file_data": images.file_data_url(file)?,
                         },
                     })),
                 })

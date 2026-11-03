@@ -87,6 +87,9 @@ message ConfiguredModelProfile {
 
   // default_roles lists only caller-authorized roles resolving to this profile.
   repeated string default_roles = 6;
+  // document_media_types intersects explicit model intent with this provider API's formats.
+  // Older servers omit it; an empty list never enables native document attachments.
+  repeated string document_media_types = 7;
 }
 
 // ServerInfo contains credential-free compatibility information.

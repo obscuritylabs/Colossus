@@ -923,6 +923,82 @@ async fn threads_order_human_turns_and_conflicting_writers_leave_no_orphan() {
 }
 
 #[tokio::test]
+async fn runtime_user_message_replay_does_not_duplicate_the_submitted_human_turn() {
+    let (repo, caller, node) = fixture().await;
+    let mut input = request();
+    input.input = vec![InputContentPart::Text("Show this human turn once".into())];
+    let (thread, task) = repo
+        .create_thread(&caller, &node.node_id, None, input)
+        .await
+        .unwrap();
+    assert_ne!(task.subject, "runtime");
+    assert!(!task.source_read_only);
+    let before = repo.get_thread(&caller, &thread.thread_id).await.unwrap();
+    let original = before
+        .messages
+        .iter()
+        .find(|message| message.role == "user")
+        .unwrap();
+    repo.record_receipt(
+        &node,
+        &task.task_id,
+        &task.task_id,
+        CloudReply::Run {
+            run: Box::new(snapshot()),
+        },
+    )
+    .await
+    .unwrap();
+    let update = RunUpdate {
+        run_id: "run-a".into(),
+        sequence: 1,
+        created_at: thread.created_at.clone(),
+        update: RunUpdateKind::Message(SessionMessage {
+            session_id: "session-a".into(),
+            run_id: "run-a".into(),
+            sequence: 37,
+            role: MessageRole::User,
+            content: vec![MessageContentPart::Text(original.text.clone())],
+            created_at: thread.created_at.clone(),
+        }),
+    };
+    for _ in 0..2 {
+        assert_eq!(
+            repo.record_update(&node, &task.task_id, update.clone())
+                .await
+                .unwrap(),
+            1
+        );
+    }
+    let reloaded = CloudRepository::new(repo.storage()).unwrap();
+    for _ in 0..2 {
+        let detail = reloaded
+            .get_thread(&caller, &thread.thread_id)
+            .await
+            .unwrap();
+        let human = detail
+            .messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .collect::<Vec<_>>();
+        assert_eq!(human.len(), 1);
+        assert_eq!(human[0].message_id, original.message_id);
+        assert_eq!(human[0].text, "Show this human turn once");
+        assert_eq!(human[0].created_at, original.created_at);
+    }
+    let events = reloaded
+        .thread_updates(&caller, &thread.thread_id, 0, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        events.len(),
+        1,
+        "the exact runtime frame remains replayable once"
+    );
+    assert_eq!(events[0].value["update"]["message"]["role"], "user");
+}
+
+#[tokio::test]
 async fn saved_thread_messages_and_replay_survive_native_disconnect() {
     let (repo, caller, node) = fixture().await;
     let (thread, task) = repo

@@ -54,6 +54,7 @@ mod replay_admission {
                     tool_calls: true,
                     streaming: false,
                     image_inputs: false,
+                    document_inputs: false,
                 },
                 Some(ReasoningEffort::Low),
             )

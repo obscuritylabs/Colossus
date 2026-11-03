@@ -286,6 +286,24 @@ if $script_dir/require-success.sh eligibility=skipped >/dev/null 2>&1; then
     exit 1
 fi
 
+# Python 3.10.18 has Ubuntu 24.04 builds, but none for the newer floating image.
+"${NODE:-node}" --input-type=module - "$script_dir/../../.github/workflows/pr.yml" "$script_dir/../../.github/workflows/premerge.yml" <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+for (const [path, job] of [[process.argv[2], 'sdk'], [process.argv[3], 'vscode-sdk']]) {
+  const lines = readFileSync(path, 'utf8').replaceAll('\r\n', '\n').split('\n');
+  const start = lines.indexOf('  ' + job + ':');
+  assert.ok(start >= 0, 'Missing SDK workflow job: ' + job);
+  const end = lines.findIndex((line, index) => index > start && /^  [\w-]+:$/u.test(line));
+  const scope = lines.slice(start, end < 0 ? lines.length : end).join('\n');
+  if (/^          python-version: 3\.10\.18$/mu.test(scope)) {
+    assert.match(scope, /^    runs-on: ubuntu-24\.04$/mu,
+      job + ' must use an image with the pinned Python 3.10.18 distribution');
+  }
+}
+NODE
+
 # rust-cache uses shared-key instead of key, so the bundle recipe must be part
 # of the effective shared namespace in the trusted producer and every consumer.
 "${NODE:-node}" --input-type=module - "$script_dir/../../.github/workflows/cache-warm.yml" "$script_dir/../../.github/workflows/premerge.yml" "$script_dir/../../.github/workflows/release.yml" <<'NODE'

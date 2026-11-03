@@ -6,6 +6,33 @@ fn normalize(value: Value) -> Vec<ProviderModelInfo> {
 }
 
 #[test]
+fn document_support_requires_explicit_boolean_catalog_evidence() {
+    let models = normalize(json!({"data":[
+        {"id":"declared","document_inputs":true},
+        {"id":"explicit-no","supports_document_inputs":false},
+        {"id":"nested","capabilities":{"document_inputs":true}},
+        {"id":"pdf-looking-name","input_modalities":["text","image","file"]},
+        {"id":"malformed","document_inputs":"true"}
+    ]}));
+    for (id, expected) in [
+        ("declared", Some(true)),
+        ("explicit-no", Some(false)),
+        ("nested", Some(true)),
+        ("pdf-looking-name", None),
+        ("malformed", None),
+    ] {
+        assert_eq!(
+            models
+                .iter()
+                .find(|model| model.id == id)
+                .unwrap()
+                .document_inputs,
+            expected
+        );
+    }
+}
+
+#[test]
 fn openrouter_cards_preserve_declared_limits_and_capabilities() {
     let models = normalize(json!({"data": [{
         "id": "author/model", "name": "Useful model", "description": "A catalog description.",

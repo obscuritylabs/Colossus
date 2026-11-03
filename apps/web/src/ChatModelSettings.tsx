@@ -54,6 +54,8 @@ export function ChatModelSettings({
       "auto") as ModelSettingsDraft["streaming"],
     imageInputs: (original?.capabilities?.imageInputs ??
       "auto") as ModelSettingsDraft["imageInputs"],
+    documentInputs: (original?.capabilities?.documentInputs ??
+      "off") as NonNullable<ModelSettingsDraft["documentInputs"]>,
     serverCompaction: (original?.capabilities?.serverCompaction ??
       "auto") as ModelSettingsDraft["toolCalls"],
     declared: original?.capabilities
@@ -174,6 +176,7 @@ export function ChatModelSettings({
         toolCalls: value.toolCalls,
         streaming: value.streaming,
         imageInputs: value.imageInputs,
+        documentInputs: value.documentInputs ?? "off",
         serverCompaction: value.serverCompaction ?? "auto",
         declared: value.declared,
       },
@@ -192,6 +195,10 @@ export function ChatModelSettings({
   return (
     <>
       {error ? <p role="alert">{error}</p> : null}
+      <p>
+        This model preference applies where document uploads are supported. The
+        web chat file picker currently accepts text files only.
+      </p>
       <ModelSettingsEditor
         draft={value}
         providers={Object.keys(draft.providers.profiles).map((profile) => ({
@@ -275,6 +282,7 @@ export function ChatModelSettings({
               toolCalls: entry.tool_calls ?? null,
               streaming: entry.streaming ?? null,
               imageInputs: entry.image_inputs ?? null,
+              documentInputs: entry.document_inputs ?? null,
               serverCompaction: entry.server_compaction ?? null,
             },
             label: value.label || entry.display_name || entry.id,

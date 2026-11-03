@@ -37,6 +37,9 @@ mod redaction_tests;
 #[path = "browser_tests.rs"]
 mod browser_tests;
 
+#[path = "media_read_tests.rs"]
+mod media_read_tests;
+
 #[tokio::test(flavor = "current_thread")]
 async fn disclosure_summary_preserves_the_bounded_audit_contract() {
     let request = effect_request(

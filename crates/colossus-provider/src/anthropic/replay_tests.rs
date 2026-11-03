@@ -52,6 +52,23 @@ fn native_replay_accepts_only_the_exact_preceding_wire_prefix() {
 }
 
 #[test]
+fn document_bytes_are_bound_to_the_protected_prefix_without_becoming_replay_blocks() {
+    let (mut wire, mut replay) = signed_request();
+    wire["messages"][0]["content"] = json!([{"type":"document","source":{
+        "type":"base64","media_type":"application/pdf","data":"exact-private-document"
+    }}]);
+    replay[1]["prefix_hash"] = json!(request_prefix_hash(&wire, 3).unwrap());
+    validate_prefixes(&wire, &replay).unwrap();
+    assert!(
+        !serde_json::to_string(&replay)
+            .unwrap()
+            .contains("exact-private-document")
+    );
+    wire["messages"][0]["content"][0]["source"]["data"] = json!("different-private-document");
+    assert!(validate_prefixes(&wire, &replay).is_err());
+}
+
+#[test]
 fn appending_new_results_does_not_change_an_earlier_signed_prefix() {
     let (mut wire, replay) = signed_request();
     wire["messages"]
@@ -81,5 +98,14 @@ fn unsigned_legacy_tool_replay_remains_compatible() {
     wire["messages"][3]["content"] = content.clone();
     replay[1]["content"] = content;
     replay[1].as_object_mut().unwrap().remove("prefix_hash");
+    validate_prefixes(&wire, &replay).unwrap();
+}
+
+#[test]
+fn ordinary_file_handle_tool_arguments_remain_replayable() {
+    let (mut wire, mut replay) = signed_request();
+    wire["messages"][1]["content"][0]["input"] = json!({"file_id":"business-record-id"});
+    replay[1]["prefix_hash"] = json!(request_prefix_hash(&wire, 3).unwrap());
+    assert!(!crate::documents::contains_private_document_data(&wire));
     validate_prefixes(&wire, &replay).unwrap();
 }

@@ -135,11 +135,13 @@ describe("provider catalog selection", () => {
         toolCalls: "off",
         streaming: "auto",
         imageInputs: "on",
+        documentInputs: "on",
         serverCompaction: "off",
         declared: {
           toolCalls: false,
           streaming: false,
           imageInputs: true,
+          documentInputs: true,
           serverCompaction: true,
         },
       },
@@ -152,11 +154,13 @@ describe("provider catalog selection", () => {
       toolCalls: "off",
       streaming: "auto",
       imageInputs: "on",
+      documentInputs: "on",
       serverCompaction: "off",
       declared: {
         toolCalls: true,
         streaming: null,
         imageInputs: null,
+        documentInputs: null,
         serverCompaction: null,
       },
     });
@@ -166,6 +170,7 @@ describe("provider catalog selection", () => {
         toolCalls: null,
         streaming: null,
         imageInputs: null,
+        documentInputs: null,
         serverCompaction: null,
       },
     });

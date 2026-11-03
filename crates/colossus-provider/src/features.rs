@@ -11,6 +11,8 @@ pub enum ProviderFeature {
     Streaming,
     /// Verified image inputs.
     Images,
+    /// Verified native document inputs.
+    Documents,
     /// Responses context management.
     ServerCompaction,
 }
@@ -22,6 +24,7 @@ impl ProviderFeature {
             Self::Tools => settings.declared.tool_calls,
             Self::Streaming => settings.declared.streaming,
             Self::Images => settings.declared.image_inputs,
+            Self::Documents => settings.declared.document_inputs,
             Self::ServerCompaction => settings.declared.server_compaction,
         }
     }
@@ -32,6 +35,7 @@ impl ProviderFeature {
             Self::Tools => settings.tool_calls,
             Self::Streaming => settings.streaming,
             Self::Images => settings.image_inputs,
+            Self::Documents => settings.document_inputs,
             Self::ServerCompaction => settings.server_compaction,
         }
     }
@@ -91,12 +95,35 @@ pub(super) fn feature_rejection(
         {
             ProviderFeature::Images
         }
+        (
+            "unsupported_file"
+            | "file_inputs_not_supported"
+            | "unsupported_document"
+            | "document_inputs_not_supported",
+            _,
+        ) if payload_contains_document(payload) => ProviderFeature::Documents,
         _ => return None,
     };
     Some(ProviderFeatureRejection {
         provider_feature_rejected: feature,
         status: diagnostic.status,
     })
+}
+
+fn payload_contains_document(value: &Value) -> bool {
+    match value {
+        Value::Object(object)
+            if matches!(
+                object.get("type").and_then(Value::as_str),
+                Some("input_file" | "file" | "document")
+            ) =>
+        {
+            true
+        }
+        Value::Array(values) => values.iter().any(payload_contains_document),
+        Value::Object(values) => values.values().any(payload_contains_document),
+        _ => false,
+    }
 }
 
 fn payload_contains_image(value: &Value) -> bool {

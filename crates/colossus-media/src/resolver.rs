@@ -1,9 +1,10 @@
 use crate::validation::{ValidatedImage, normalize_media_type, validate_image_bytes};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use colossus_contracts::{ModelImageDetail, ModelImageReference};
+use colossus_contracts::{ModelFileReference, ModelImageDetail, ModelImageReference};
 use colossus_ports::{
-    EventJournal, ResolvedRunInputImage, RunInputMediaError, RunInputMediaResolver,
+    EventJournal, ResolvedRunInputFile, ResolvedRunInputImage, RunInputMediaError,
+    RunInputMediaResolver,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -19,6 +20,16 @@ impl JournalRunInputMediaResolver {
     /// Bind the authoritative encrypted event journal.
     pub fn new(journal: Arc<dyn EventJournal>) -> Self {
         Self { journal }
+    }
+
+    /// Admit an owner-authorized, unchanged run-input native document.
+    pub fn file_reference(
+        &self,
+        owner_id: &str,
+        artifact_id: &str,
+    ) -> Result<ModelFileReference, RunInputMediaError> {
+        let stored = self.stored(owner_id, artifact_id)?;
+        file_reference_from(&stored)
     }
 
     /// Authorize ownership and derive a durable metadata-only image reference.
@@ -116,6 +127,21 @@ impl JournalRunInputMediaResolver {
 
 #[async_trait]
 impl RunInputMediaResolver for JournalRunInputMediaResolver {
+    async fn resolve_file(
+        &self,
+        reference: &ModelFileReference,
+    ) -> Result<ResolvedRunInputFile, RunInputMediaError> {
+        let stored = self.stored_without_owner(&reference.artifact_id)?;
+        let exact = file_reference_from(&stored)?;
+        if &exact != reference {
+            return Err(RunInputMediaError::Unavailable);
+        }
+        Ok(ResolvedRunInputFile {
+            reference: exact,
+            bytes: stored.bytes,
+        })
+    }
+
     async fn resolve_image(
         &self,
         reference: &ModelImageReference,
@@ -136,6 +162,31 @@ impl RunInputMediaResolver for JournalRunInputMediaResolver {
             bytes: stored.bytes,
         })
     }
+}
+
+fn file_reference_from(
+    stored: &DecodedStoredArtifact,
+) -> Result<ModelFileReference, RunInputMediaError> {
+    if stored.artifact.purpose != "run_input" {
+        return Err(RunInputMediaError::Unavailable);
+    }
+    let validated = crate::validate_document_bytes(
+        &stored.artifact.file_name,
+        Some(&stored.artifact.media_type),
+        &stored.bytes,
+    )?;
+    if stored.artifact.size_bytes != validated.size_bytes
+        || stored.artifact.sha256 != validated.sha256
+    {
+        return Err(RunInputMediaError::Unavailable);
+    }
+    Ok(ModelFileReference {
+        artifact_id: stored.artifact.artifact_id.clone(),
+        file_name: stored.artifact.file_name.clone(),
+        media_type: validated.media_type,
+        size_bytes: validated.size_bytes,
+        sha256: validated.sha256,
+    })
 }
 
 fn reference_from(

@@ -249,6 +249,7 @@ it("preserves model feature declarations and role routing when editing model lim
           maxOutputTokens: 8192,
           capabilities: {
             serverCompaction: "auto",
+            documentInputs: "off",
             declared: { toolCalls: true },
           },
         },
@@ -258,6 +259,42 @@ it("preserves model feature declarations and role routing when editing model lim
   });
   await act(() => pendingSave!(json({ revision: 8 })));
 });
+
+it.each(["on", "auto"] as const)(
+  "preserves the explicit %s document preference and declaration in web model settings",
+  async (mode) => {
+    settings.models.profiles.careful!.capabilities = {
+      ...settings.models.profiles.careful!.capabilities,
+      documentInputs: mode,
+      declared: { toolCalls: true, documentInputs: true },
+    };
+    await render(true, "admin", "models");
+    await act(() => button("Edit careful").click());
+    expect(
+      container
+        .querySelector('[aria-label="Document inputs"]')
+        ?.getAttribute("aria-valuetext"),
+    ).toBe(mode === "on" ? "On" : "Auto");
+    expect(container.textContent).toContain(
+      "web chat file picker currently accepts text files only",
+    );
+    await input("Maximum output (tokens)", "8192");
+    await apply();
+    expect(writes[0]!.body).toMatchObject({
+      models: {
+        profiles: {
+          careful: {
+            capabilities: {
+              documentInputs: mode,
+              declared: { documentInputs: true },
+            },
+          },
+        },
+      },
+    });
+    await act(() => pendingSave!(json({ revision: 8 })));
+  },
+);
 
 it("locks new edits until the saved revision is read back and then saves against that revision", async () => {
   await render();
@@ -659,6 +696,7 @@ it.each([
               display_name: "Catalog reasoner",
               context_window_tokens: 128000,
               max_output_tokens: 16000,
+              document_inputs: true,
             },
           ],
         }),
@@ -677,7 +715,14 @@ it.each([
     expect(updates[0]!.body).toMatchObject({
       models: {
         profiles: {
-          [profile]: { providerProfile: "company", model },
+          [profile]: {
+            providerProfile: "company",
+            model,
+            capabilities: {
+              documentInputs: "off",
+              declared: { documentInputs: true },
+            },
+          },
         },
       },
     });

@@ -207,6 +207,13 @@ fn user_content_document(content: &ModelContent) -> PresentationDocument {
                         image_index += 1;
                         document.push(image_metadata_block(image_index, image));
                     }
+                    ModelContentPart::File { file } => {
+                        document.push(PresentationBlock::KeyValue(vec![
+                            ("Document".into(), file.file_name.clone()),
+                            ("Media type".into(), file.media_type.clone()),
+                            ("Size".into(), format!("{} bytes", file.size_bytes)),
+                        ]));
+                    }
                     ModelContentPart::Text { .. } => {}
                 }
             }

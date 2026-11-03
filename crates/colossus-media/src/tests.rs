@@ -12,6 +12,8 @@ use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use std::{io::Cursor, sync::Arc};
 
+#[path = "tests/documents.rs"]
+mod documents;
 #[path = "tests/import_failure.rs"]
 mod import_failure;
 

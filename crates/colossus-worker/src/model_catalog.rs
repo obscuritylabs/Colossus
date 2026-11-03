@@ -25,6 +25,10 @@ impl ModelCatalogProvider for RuntimeModelCatalog {
             .filter(|route| !route.model_profile.is_empty() && route.model_profile.len() <= 128)
             .take(256)
             .map(|route| ConfiguredModelProfile {
+                document_media_types: self
+                    .0
+                    .configured_model_document_media_types(&route.model_profile)
+                    .unwrap_or_default(),
                 default_roles: defaults
                     .iter()
                     .filter(|(_, profile)| *profile == route.model_profile)

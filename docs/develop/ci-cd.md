@@ -19,6 +19,8 @@ See [Contributing](contributing.md) for the local development and review sequenc
 | Release | Annotated stable or approved prerelease tag | Six CLI targets, signed Windows packages, Control Plane/VSIX artifacts, stable SDK or macOS preview | `Colossus release gate` |
 
 Every hosted job needs a timeout. Routine PR jobs use standard public Linux runners.
+Public SDK PR validation and pre-merge VS Code SDK generation use `ubuntu-24.04`
+to match the available build of pinned Python 3.10.18.
 Complete Linux integration, OCI/OPA acceptance, release readiness and x86_64 Linux
 release jobs use `ubuntu-24.04`. Windows Desktop acceptance, x86_64 CLI packaging and
 signed Desktop releases use `windows-2025`. Stable SDK builds and publication retain

@@ -149,6 +149,7 @@ ratatui = { version = "0.30.2", default-features = false, features = ["crossterm
 ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
 tachyonfx = { version = "=0.25.2", default-features = false, features = ["std", "sendable"] }
 image = { version = "0.25.9", default-features = false, features = ["jpeg", "png", "webp"] }
+zip = { version = "=9.0.5", default-features = false }
 rcgen = { version = "0.14.8", default-features = false, features = ["crypto", "pem", "ring", "zeroize"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustix = { version = "1.1.4", features = ["mount", "process"] }

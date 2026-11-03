@@ -259,6 +259,7 @@ model metadata Colossus needs to shape requests safely:
 | `capabilities.toolCalls` | Off/Auto/On preference for tool definitions and history |
 | `capabilities.streaming` | Off/Auto/On preference for streamed transport |
 | `capabilities.imageInputs` | Off/Auto/On preference for verified images |
+| `capabilities.documentInputs` | Off/Auto/On preference for verified native document inputs; defaults to Off |
 | `capabilities.serverCompaction` | Off/Auto/On preference for Responses compaction |
 | `capabilities.declared` | Optional boolean model-card declarations, separate from saved modes |
 
@@ -281,6 +282,7 @@ metadata maps into these shared fields:
 | `max_output_tokens` | `max_output_tokens`, `max_completion_tokens`, then `top_provider.max_completion_tokens` |
 | `tool_calls` | `tool_calls`, `supports_tool_calls`, `tooling_support`; then the same keys inside `capabilities`; then `tools` in `supported_parameters` |
 | `image_inputs` | `image_inputs`, `supports_image_inputs`; then the same keys inside `capabilities`; then `image` in `input_modalities` or `architecture.input_modalities` |
+| `document_inputs` | `document_inputs`, `supports_document_inputs`; then the same keys inside `capabilities`; image declarations do not imply document support |
 | `streaming` | `streaming`, `supports_streaming`; then the same keys inside `capabilities` |
 | `server_compaction` | `server_compaction`, `supports_server_compaction`; then the same keys inside `capabilities` |
 
@@ -369,7 +371,8 @@ but is not a portable level across providers.
 ### Capabilities
 
 Each capability accepts `off`, `auto`, or `on`. New Desktop/setup profiles default to
-`auto`. Legacy YAML and saved booleans remain accepted: `false` means Off and `true`
+`auto` for the existing image, tool, streaming and compaction features; document
+inputs default to `off`. Legacy YAML and saved booleans remain accepted: `false` means Off and `true`
 means On. Missing legacy image settings preserve Off. The saved mode is user intent;
 Colossus does not rewrite it after a failed request.
 
@@ -378,6 +381,7 @@ capabilities:
   toolCalls: auto
   streaming: auto
   imageInputs: auto
+  documentInputs: off
   serverCompaction: auto
   declared:
     toolCalls: true
@@ -390,14 +394,59 @@ capabilities:
 | `auto` | Use advertised support, attempt unknown support, suppress advertised false or definitive unsupported evidence |
 | `on` | Attempt despite negative metadata; adapter compatibility and runtime policy still apply |
 
-`declared` contains optional model-card booleans for these four fields. Missing values
+`declared` contains optional model-card booleans for these fields. Missing values
 mean unknown. OpenAI's public `/models` endpoint is not a universal capability oracle.
 Only exact structured unsupported-feature errors establish negative runtime evidence;
 timeouts, 5xx responses, rate limits, malformed output and context overflow do not.
 Evidence is scoped to the provider, canonical endpoint and model, lasts 15 minutes, and
 resets with runtime configuration reload. No failed generation is automatically replayed.
-Images and tools are never silently removed from a failed request.
+Images, documents and tools are never silently removed from a failed request.
 `colossus model doctor` reports feature modes and observations separately from its probe.
+
+### Native document inputs
+
+Enable `capabilities.documentInputs: on` only for a provider endpoint and model that
+accept the required format. This setting is independent of `imageInputs`; enabling
+images does not enable document attachments. Missing document settings retain Off.
+During initial CLI setup, pass `--document-inputs on` to `colossus provider setup`
+to enable this preference. The flag also accepts `off` and `auto`; omission keeps
+Off. Edit `capabilities.documentInputs` for an existing model profile.
+
+| Provider kind | Native document formats |
+| --- | --- |
+| `open_ai_responses` | PDF, DOCX, XLSX and PPTX |
+| `open_ai_codex` | PDF, DOCX, XLSX and PPTX, when the selected signed-in Codex model accepts file input |
+| `open_ai_compatible` | PDF, when the exact Chat Completions endpoint and model implement file input |
+| `anthropic_messages` | PDF, when the selected model supports PDF input |
+| `echo` | Unsupported; enabling the preference does not add protocol support |
+
+Codex documents use the existing sign-in and fixed subscription backend; no API key
+or different authorization endpoint is required. Format support remains specific
+to the selected model and account.
+
+Colossus sends verified bytes inline in the existing generation request. It does not
+upload a separate provider Files resource, fetch a document URL or run a local PDF
+or Office document parser. Document contents remain user input and grant no tool,
+filesystem or network authority.
+
+At most four documents, each no larger than 16 MiB and 32 MiB combined, may remain
+in the provider-visible context. Older document parts may become metadata markers
+during context preparation; the newest user turn is rejected if it exceeds these
+bounds. A provider can impose smaller format, page, sheet or context limits. Local
+token estimates reserve at least 2,048 tokens per retained document, or one token
+per three document bytes when larger, in addition to message metadata. This
+conservative allowance is not an upper bound on parsed tokens: compressed Office
+content and PDF page images can cost more. Provider context-limit errors remain
+explicit and do not trigger a retry without the document.
+
+PDF input can include page images. Non-PDF documents use the provider's extraction
+path, which can omit embedded images, charts or other layout information; see
+[OpenAI file inputs](https://developers.openai.com/api/docs/guides/file-inputs).
+Use a suitable PDF when visual page interpretation matters. Unsupported input fails
+explicitly rather than being converted to text or retried without the attachment.
+Public API document inputs are supported for ordinary execution and Plan creation
+or refinement. Research, standalone Goal and approved-plan execution reject newly
+attached native documents; approved-plan execution uses its saved revision.
 
 ### Responses server compaction
 
@@ -418,7 +467,7 @@ bounded process memory. Restart then rebuilds from canonical history.
 A changed model, endpoint, instructions, tools, active decision or retrieved memory,
 branch, local snapshot activation or
 incomplete turn invalidates reuse. Retained state is limited to 512 items and 512 KiB;
-resolved image bytes are not retained. Conservative opaque-byte and suffix-token
+resolved image or document bytes are not retained. Conservative opaque-byte and suffix-token
 accounting can trigger local fallback earlier than the provider's tokenizer predicts.
 Local summarization stays enabled by default at 85% of the **same effective input
 budget**, with hard token and request-byte ceilings always enforced. Previously saved

@@ -399,6 +399,7 @@ export interface ModelEditorDraft {
   toolCalls: ModelFeatureMode;
   streaming: ModelFeatureMode;
   imageInputs: ModelFeatureMode;
+  documentInputs?: ModelFeatureMode;
   serverCompaction?: ModelFeatureMode;
   declared?: ManagedModelCapabilities["declared"];
   reasoningEffort: ReasoningEffort | null;
@@ -549,6 +550,7 @@ const EMPTY_MODEL_DRAFT: ModelEditorDraft = {
   toolCalls: "auto",
   streaming: "auto",
   imageInputs: "auto",
+  documentInputs: "off",
   serverCompaction: "auto",
   reasoningEffort: null,
 };
@@ -4142,6 +4144,10 @@ function GlobalSettingsBody({
                 : null,
               model.capabilities.imageInputs !== "off"
                 ? `Images (${model.capabilities.imageInputs})`
+                : null,
+              model.capabilities.documentInputs &&
+              model.capabilities.documentInputs !== "off"
+                ? `Documents (${model.capabilities.documentInputs})`
                 : null,
               model.capabilities.serverCompaction !== "off"
                 ? `Compaction (${model.capabilities.serverCompaction ?? "auto"})`
@@ -7989,6 +7995,7 @@ export function managedModel(
       toolCalls: draft.toolCalls,
       streaming: draft.streaming,
       imageInputs: draft.imageInputs,
+      documentInputs: draft.documentInputs ?? "off",
       serverCompaction: draft.serverCompaction ?? "auto",
       ...(draft.declared ? { declared: draft.declared } : {}),
     },
@@ -8100,6 +8107,7 @@ export function modelDraft(
     toolCalls: model.capabilities.toolCalls,
     streaming: model.capabilities.streaming,
     imageInputs: model.capabilities.imageInputs,
+    documentInputs: model.capabilities.documentInputs ?? "off",
     serverCompaction: model.capabilities.serverCompaction ?? "auto",
     declared: model.capabilities.declared,
     reasoningEffort: model.reasoningEffort,

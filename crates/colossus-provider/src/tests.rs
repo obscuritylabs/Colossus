@@ -38,6 +38,8 @@ use tokio_rustls::TlsAcceptor;
 mod anthropic_gateway_tests;
 #[path = "codex_catalog_tests.rs"]
 mod codex_catalog_tests;
+#[path = "document_tests.rs"]
+mod document_tests;
 #[path = "error/gateway_tests.rs"]
 mod failure_tests;
 #[path = "image_view_tests.rs"]
@@ -523,6 +525,7 @@ fn model_profiles_derive_effective_input_budget_and_reject_exhausted_windows() {
             tool_calls: false,
             streaming: false,
             image_inputs: false,
+            document_inputs: false,
         },
         Some(ReasoningEffort::XHigh),
     )
@@ -544,6 +547,7 @@ fn model_profiles_derive_effective_input_budget_and_reject_exhausted_windows() {
                 tool_calls: true,
                 streaming: true,
                 image_inputs: false,
+                document_inputs: false,
             },
             None,
         )

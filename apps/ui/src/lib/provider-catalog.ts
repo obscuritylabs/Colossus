@@ -8,6 +8,7 @@ export interface ProviderCatalogModel {
   max_output_tokens?: number;
   tool_calls?: boolean;
   image_inputs?: boolean;
+  document_inputs?: boolean;
   streaming?: boolean;
   server_compaction?: boolean;
   supported_reasoning_efforts?: string[];

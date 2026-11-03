@@ -159,6 +159,7 @@ function WorkspaceOnboardingForm({
       toolCalls: "auto",
       streaming: "auto",
       imageInputs: "auto",
+      documentInputs: "off",
       serverCompaction: "auto",
     },
   });
@@ -971,6 +972,7 @@ function WorkspaceOnboardingForm({
                           ["toolCalls", "Tools"],
                           ["streaming", "Streaming"],
                           ["imageInputs", "Images"],
+                          ["documentInputs", "Document inputs"],
                           ["serverCompaction", "Server compaction"],
                         ] as const
                       ).map(([feature, label]) => (
@@ -981,7 +983,8 @@ function WorkspaceOnboardingForm({
                             modelConfiguration.capabilities.declared?.[feature]
                           }
                           value={
-                            modelConfiguration.capabilities[feature] ?? "auto"
+                            modelConfiguration.capabilities[feature] ??
+                            (feature === "documentInputs" ? "off" : "auto")
                           }
                           disabled={busy}
                           onChange={(mode) =>

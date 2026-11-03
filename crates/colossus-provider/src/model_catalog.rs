@@ -145,6 +145,7 @@ fn model_card(id: &str, model: &Map<String, Value>) -> ProviderModelInfo {
                 )
             },
         ),
+        document_inputs: declared_boolean(model, &["document_inputs", "supports_document_inputs"]),
         streaming: declared_boolean(model, &["streaming", "supports_streaming"]),
         server_compaction: declared_boolean(
             model,

@@ -801,6 +801,7 @@ fn test_route(role: &str, profile: &str) -> ProviderRoute {
             tool_calls: true,
             streaming: true,
             image_inputs: false,
+            document_inputs: false,
         },
         reasoning_effort: None,
     }

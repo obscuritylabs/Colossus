@@ -433,6 +433,7 @@ pub(crate) fn setup_configuration(
                         tool_calls: metadata.tool_calls,
                         streaming: metadata.streaming,
                         image_inputs: metadata.image_inputs,
+                        document_inputs: None,
                         server_compaction: None,
                     },
                     ..Default::default()

@@ -55,6 +55,7 @@ impl ModelProvider for OneTurnProvider {
                 tool_calls: true,
                 streaming: true,
                 image_inputs: false,
+                document_inputs: false,
             },
             reasoning_effort: None,
         })

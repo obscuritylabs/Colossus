@@ -456,7 +456,7 @@ impl GatewayModelProvider {
         let session_id = context.session_id.clone();
         let run_id = context.run_id.clone();
         let provider = resolved.provider();
-        validate_route_image_inputs(&route, provider.profile().kind, &request)?;
+        validate_route_media_inputs(&route, provider.profile().kind, &request)?;
         let max_output_tokens = resolved_output_limit(&route, &request)?;
         let endpoint = provider
             .profile()
@@ -714,7 +714,7 @@ impl ModelProvider for GatewayModelProvider {
         let session_id = context.session_id.clone();
         let run_id = context.run_id.clone();
         let provider = resolved.provider();
-        validate_route_image_inputs(&route, provider.profile().kind, &request)?;
+        validate_route_media_inputs(&route, provider.profile().kind, &request)?;
         let max_output_tokens = resolved_output_limit(&route, &request)?;
         let endpoint = provider
             .profile()
@@ -773,11 +773,32 @@ impl ModelProvider for GatewayModelProvider {
     }
 }
 
-pub(super) fn validate_route_image_inputs(
+pub(super) fn validate_route_media_inputs(
     route: &ModelRoute,
     provider_kind: ProviderKind,
     request: &ModelRequest,
 ) -> Result<(), ModelProviderError> {
+    let files = request
+        .messages
+        .iter()
+        .flat_map(|message| message.content.files())
+        .collect::<Vec<_>>();
+    if !files.is_empty() && !route.capabilities.document_inputs {
+        return Err(ModelProviderError::Configuration(
+            "selected model does not enable document inputs".into(),
+        ));
+    }
+    colossus_media::validate_document_references(files.iter().copied())
+        .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
+    if files.iter().any(|file| {
+        !provider_kind
+            .document_media_types()
+            .contains(&file.media_type.as_str())
+    }) {
+        return Err(ModelProviderError::Configuration(
+            "selected provider API does not support this document format".into(),
+        ));
+    }
     let mut images = Vec::new();
     for message in &request.messages {
         colossus_contracts::validate_model_message_content(message).map_err(|error| {

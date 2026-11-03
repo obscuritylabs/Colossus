@@ -1416,7 +1416,11 @@ describe("ManagedSettingsPane", () => {
     };
     expect(managedModel(modelDraft(modelEntry))).toEqual({
       ...model,
-      capabilities: { ...model.capabilities, serverCompaction: "auto" },
+      capabilities: {
+        ...model.capabilities,
+        documentInputs: "off",
+        serverCompaction: "auto",
+      },
     });
 
     const telemetry: ManagedTelemetryProfile = {

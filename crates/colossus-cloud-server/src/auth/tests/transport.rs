@@ -460,6 +460,7 @@ async fn acceptance(postgres: bool) {
                 provider_profile: "acceptance".into(),
                 reasoning_effort: Some("medium".into()),
                 default_roles: vec!["primary".into()],
+                document_media_types: Vec::new(),
             }],
             capabilities: vec![
                 "agent_runs.model_selection".into(),

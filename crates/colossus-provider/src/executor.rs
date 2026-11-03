@@ -49,22 +49,30 @@ enum ProviderJsonResponse {
     FeatureRejected(crate::ProviderFeatureRejection),
 }
 
+struct CapturedProviderError {
+    diagnostic: ProviderResponseDiagnostic,
+    document_rejection: Option<crate::ProviderFeatureRejection>,
+}
+
 #[derive(Default)]
-pub(super) struct RequestSecrets(Vec<zeroize::Zeroizing<String>>);
+pub(super) struct RequestSecrets {
+    values: Vec<zeroize::Zeroizing<String>>,
+    pub(super) document_sensitive: bool,
+}
 
 impl RequestSecrets {
     pub(super) fn retain(&mut self, secret: &str) {
-        self.0.push(zeroize::Zeroizing::new(secret.to_owned()));
+        self.values.push(zeroize::Zeroizing::new(secret.to_owned()));
     }
 
     pub(super) fn redact_bytes(&self, bytes: &mut Vec<u8>) {
-        for secret in &self.0 {
+        for secret in &self.values {
             redact_exact_bytes(bytes, Some(secret.as_str()));
         }
     }
 
     pub(super) fn redact_value(&self, value: &mut Value) {
-        for secret in &self.0 {
+        for secret in &self.values {
             redact_value_exact(value, Some(secret.as_str()));
         }
     }
@@ -326,6 +334,10 @@ impl ProviderExecutor {
     pub fn with_run_input_media(mut self, media: Arc<dyn RunInputMediaResolver>) -> Self {
         self.media = Some(media);
         self
+    }
+
+    pub(super) fn run_input_media(&self) -> Option<&dyn RunInputMediaResolver> {
+        self.media.as_deref()
     }
 
     /// Resolve private provider state within the permit-bearing adapter.
@@ -1049,13 +1061,15 @@ impl ProviderExecutor {
         &self,
         request: &ModelRequest,
     ) -> Result<ProviderResolvedImages, ProviderError> {
+        let mut resolved = ProviderResolvedImages::default();
+        self.resolve_files(request, &mut resolved).await?;
         let references = request
             .messages
             .iter()
             .flat_map(|message| message.content.images())
             .collect::<Vec<_>>();
         if references.is_empty() {
-            return Ok(ProviderResolvedImages::default());
+            return Ok(resolved);
         }
         if references.len() > 16 {
             return Err(ProviderError::Configuration(
@@ -1066,7 +1080,6 @@ impl ProviderExecutor {
             ProviderError::Configuration("run-input image resolver is unavailable".into())
         })?;
         let mut combined = 0_u64;
-        let mut resolved = ProviderResolvedImages::default();
         for reference in references {
             let image = resolver
                 .resolve_image(reference)
@@ -1109,7 +1122,10 @@ impl ProviderExecutor {
         .map_err(|_| ProviderError::Transport("provider request exceeded its deadline".into()))??;
         if !response.status().is_success() {
             let error = provider_status_error(&response);
-            let diagnostic = self
+            let CapturedProviderError {
+                diagnostic,
+                document_rejection,
+            } = self
                 .capture_http_error(
                     endpoint,
                     payload.as_ref().map(redacted_image_payload),
@@ -1117,8 +1133,8 @@ impl ProviderExecutor {
                     secret,
                 )
                 .await?;
-            if let Some(rejection) =
-                crate::features::feature_rejection(&diagnostic, payload.as_ref())
+            if let Some(rejection) = document_rejection
+                .or_else(|| crate::features::feature_rejection(&diagnostic, payload.as_ref()))
             {
                 return Ok(ProviderJsonResponse::FeatureRejected(rejection));
             }
@@ -1282,9 +1298,10 @@ impl ProviderExecutor {
             } else {
                 builder.bearer_auth(secret.as_str())
             };
-            secrets.0.push(secret);
+            secrets.values.push(secret);
         }
         if let Some(payload) = payload {
+            secrets.document_sensitive = crate::documents::contains_private_document_data(payload);
             retain_opaque_redactions(payload, &mut secrets);
             let body = serde_json::to_vec(payload)
                 .map_err(|error| ProviderError::Malformed(error.to_string()))?;
@@ -1415,7 +1432,8 @@ impl ProviderExecutor {
         request_body: Option<Value>,
         response: reqwest::Response,
         secret: RequestSecrets,
-    ) -> Result<ProviderResponseDiagnostic, ProviderError> {
+    ) -> Result<CapturedProviderError, ProviderError> {
+        let request_body = request_body.as_ref().map(redacted_image_payload);
         let status = response.status().as_u16();
         let content_type = response
             .headers()
@@ -1436,7 +1454,20 @@ impl ProviderExecutor {
             body.extend_from_slice(&chunk);
         }
         secret.redact_bytes(&mut body);
-        if let Ok(mut value) = serde_json::from_slice::<Value>(&body) {
+        let mut document_rejection = None;
+        if secret.document_sensitive {
+            let value = (!body_truncated)
+                .then(|| serde_json::from_slice::<Value>(&body).ok())
+                .flatten();
+            document_rejection = value
+                .as_ref()
+                .and_then(|value| crate::documents::document_rejection(value, status));
+            body = serde_json::to_vec(&crate::documents::redacted_document_error(value.as_ref()))
+                .map_err(|_| {
+                ProviderError::Malformed("invalid document diagnostic JSON".into())
+            })?;
+            body_truncated = true;
+        } else if let Ok(mut value) = serde_json::from_slice::<Value>(&body) {
             secret.redact_value(&mut value);
             body = serde_json::to_vec(&redacted_image_payload(&value))
                 .map_err(|_| ProviderError::Malformed("invalid diagnostic JSON".into()))?;
@@ -1450,19 +1481,22 @@ impl ProviderExecutor {
         } else {
             "utf8_lossy"
         };
-        Ok(ProviderResponseDiagnostic {
-            request_method: if request_body.is_some() {
-                "POST".into()
-            } else {
-                "GET".into()
+        Ok(CapturedProviderError {
+            diagnostic: ProviderResponseDiagnostic {
+                request_method: if request_body.is_some() {
+                    "POST".into()
+                } else {
+                    "GET".into()
+                },
+                request_url: endpoint.into(),
+                request_body,
+                status,
+                content_type,
+                body: String::from_utf8_lossy(&body).into_owned(),
+                body_encoding: body_encoding.into(),
+                body_truncated,
             },
-            request_url: endpoint.into(),
-            request_body,
-            status,
-            content_type,
-            body: String::from_utf8_lossy(&body).into_owned(),
-            body_encoding: body_encoding.into(),
-            body_truncated,
+            document_rejection,
         })
     }
 
@@ -1611,7 +1645,10 @@ impl ProviderExecutor {
         .map_err(provider_execution_error)?;
         if !response.status().is_success() {
             let error = provider_status_error(&response);
-            let diagnostic = tokio::time::timeout_at(
+            let CapturedProviderError {
+                diagnostic,
+                document_rejection,
+            } = tokio::time::timeout_at(
                 generation_deadline,
                 self.capture_http_error(
                     endpoint,
@@ -1623,7 +1660,8 @@ impl ProviderExecutor {
             .await
             .map_err(|_| generation_deadline_error())?
             .map_err(provider_execution_error)?;
-            if let Some(rejection) = crate::features::feature_rejection(&diagnostic, Some(&payload))
+            if let Some(rejection) = document_rejection
+                .or_else(|| crate::features::feature_rejection(&diagnostic, Some(&payload)))
             {
                 return emit_stream_item(rejection, permit, observer).await;
             }
@@ -1669,7 +1707,7 @@ impl ProviderExecutor {
             self.profile.kind == ProviderKind::OpenAiCodex && content_type_header.is_none();
         if !is_event_stream && !is_untyped_codex_stream {
             if metadata.include_response_diagnostics {
-                let diagnostic = tokio::time::timeout_at(
+                let CapturedProviderError { diagnostic, .. } = tokio::time::timeout_at(
                     generation_deadline,
                     self.capture_http_error(endpoint, Some(payload), response, secret),
                 )
@@ -1873,7 +1911,9 @@ pub(super) fn validate_serialized_provider_request(
         .map_err(|error| ProviderError::Malformed(error.to_string()))?
         .len();
     let contains_images = payload_contains_image_data_url(payload);
-    let body_limit = if contains_images {
+    let body_limit = if crate::documents::contains_private_document_data(payload) {
+        MAX_PROVIDER_REQUEST_WITH_DOCUMENTS_BYTES
+    } else if contains_images {
         MAX_PROVIDER_REQUEST_WITH_IMAGES_BYTES
     } else {
         MAX_PROVIDER_REQUEST_BYTES
@@ -1908,7 +1948,23 @@ fn payload_contains_image_data_url(value: &Value) -> bool {
 }
 
 pub(super) fn redacted_image_payload(value: &Value) -> Value {
+    redacted_provider_payload(value, true)
+}
+
+fn redacted_provider_payload(value: &Value, document_sources: bool) -> Value {
+    if document_sources && let Some(redacted) = crate::documents::redacted_native_document(value) {
+        return redacted;
+    }
     match value {
+        Value::Object(object) if document_sources && object.get("type").and_then(Value::as_str) == Some("base64")
+            && object.get("media_type").and_then(Value::as_str)
+                .is_some_and(|mime| matches!(mime, "application/pdf"
+                    | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    | "application/vnd.openxmlformats-officedocument.presentationml.presentation")) =>
+        {
+            json!({"type":"base64", "media_type":object.get("media_type"), "data":"[REDACTED_DOCUMENT_DATA]"})
+        }
         Value::Object(object)
             if matches!(
                 object.get("type").and_then(Value::as_str),
@@ -1918,7 +1974,7 @@ pub(super) fn redacted_image_payload(value: &Value) -> Value {
             json!({"type":"private_reasoning_omitted"})
         }
         Value::Object(object)
-            if object.get("type").and_then(Value::as_str) == Some("base64")
+            if document_sources && object.get("type").and_then(Value::as_str) == Some("base64")
                 && object
                     .get("media_type")
                     .and_then(Value::as_str)
@@ -1929,7 +1985,10 @@ pub(super) fn redacted_image_payload(value: &Value) -> Value {
         Value::String(text) if text.starts_with("data:image/") => {
             Value::String("[REDACTED_IMAGE_DATA_URL]".into())
         }
-        Value::Array(values) => Value::Array(values.iter().map(redacted_image_payload).collect()),
+        Value::String(text) if crate::documents::is_document_data_url(text) => {
+            Value::String("[REDACTED_DOCUMENT_DATA_URL]".into())
+        }
+        Value::Array(values) => Value::Array(values.iter().map(|value| redacted_provider_payload(value, document_sources)).collect()),
         Value::Object(object) => Value::Object(
             object
                 .iter()
@@ -1939,7 +1998,7 @@ pub(super) fn redacted_image_payload(value: &Value) -> Value {
                         if key == "encrypted_content" {
                             Value::String("[REDACTED_PROVIDER_STATE]".into())
                         } else {
-                            redacted_image_payload(value)
+                            redacted_provider_payload(value, document_sources && !crate::documents::tool_metadata_field(object,key))
                         },
                     )
                 })

@@ -98,6 +98,19 @@ colossus -w . run "Reply with exactly: connected"
 Check `colossus -w . config show`: it should contain
 `credentialReference: codex:default`, without a token or ChatGPT account identifier.
 
+## Attach native documents
+
+For a file-capable Codex model, set `models.profiles.codex.capabilities.documentInputs`
+to `on`. The preference defaults to Off and is separate from image support.
+PDF, DOCX, XLSX and PPTX use the same signed-in subscription route; no API key is
+needed. Colossus sends verified document bytes inline, and the provider handles
+their contents without a local document parser or a separate Files upload.
+
+Attach files with CLI `--attach` or Desktop's composer attachment control. Support
+depends on the exact selected model and account. See
+[native document inputs](../../reference/configuration/providers-models.md#native-document-inputs)
+for the format matrix, limits and context behavior.
+
 ## Troubleshoot sign-in and model access
 
 - **Missing or expired sign-in:** run `colossus codex status`, then sign in again.

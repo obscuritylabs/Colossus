@@ -514,6 +514,7 @@ impl Default for ModelsConfig {
                         tool_calls: true,
                         streaming: true,
                         image_inputs: false,
+                        document_inputs: false,
                     }),
                     reasoning_effort: None,
                 },

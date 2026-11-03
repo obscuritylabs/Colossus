@@ -163,6 +163,7 @@ function initialModels(desktop: DesktopStatus): ManagedModelConfiguration[] {
           toolCalls: "auto",
           streaming: "auto",
           imageInputs: "auto",
+          documentInputs: "off",
           serverCompaction: "auto",
         },
       },
@@ -826,6 +827,7 @@ export function ModelConfigurationEditor({
               ["toolCalls", "Tool use"],
               ["streaming", "Streaming"],
               ["imageInputs", "Images"],
+              ["documentInputs", "Document inputs"],
               ["serverCompaction", "Server compaction"],
             ] as const
           ).map(([feature, label]) => (
@@ -833,7 +835,10 @@ export function ModelConfigurationEditor({
               key={feature}
               label={label}
               declared={model.capabilities.declared?.[feature]}
-              value={model.capabilities[feature] ?? "auto"}
+              value={
+                model.capabilities[feature] ??
+                (feature === "documentInputs" ? "off" : "auto")
+              }
               disabled={busy}
               onChange={(mode) =>
                 updateModel(index, {
@@ -844,8 +849,9 @@ export function ModelConfigurationEditor({
           ))}
           <p className="provider-wide-field">
             Auto uses advertised support and learns from provider responses. On
-            forces an attempt. Local summarization remains available when server
-            compaction is off or unsupported.
+            forces an attempt. Document inputs start Off and only accept formats
+            supported by the selected provider API. Local summarization remains
+            available when server compaction is off or unsupported.
           </p>
           {models.length > 1 ? (
             <>
@@ -892,6 +898,7 @@ export function ModelConfigurationEditor({
                   toolCalls: "auto",
                   streaming: "auto",
                   imageInputs: "auto",
+                  documentInputs: "off",
                   serverCompaction: "auto",
                 },
               },

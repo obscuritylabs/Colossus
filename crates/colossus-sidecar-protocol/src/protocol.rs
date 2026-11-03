@@ -498,6 +498,9 @@ pub struct ManagedModelCapabilities {
     /// Whether the model receives verified encrypted run-input images.
     #[serde(default = "legacy_image_mode")]
     pub image_inputs: colossus_contracts::ModelFeatureMode,
+    /// Native document inputs require explicit operator intent.
+    #[serde(default = "legacy_image_mode")]
+    pub document_inputs: colossus_contracts::ModelFeatureMode,
     /// Optional Responses server compaction preference.
     pub server_compaction: colossus_contracts::ModelFeatureMode,
     /// Advertised model-card metadata, independent of the saved preference.
@@ -520,6 +523,7 @@ impl From<colossus_contracts::ModelFeatureSettings> for ManagedModelCapabilities
             tool_calls: value.tool_calls,
             streaming: value.streaming,
             image_inputs: value.image_inputs,
+            document_inputs: value.document_inputs,
             server_compaction: value.server_compaction,
             declared: value.declared,
         }
@@ -532,6 +536,7 @@ impl From<ManagedModelCapabilities> for colossus_contracts::ModelFeatureSettings
             tool_calls: value.tool_calls,
             streaming: value.streaming,
             image_inputs: value.image_inputs,
+            document_inputs: value.document_inputs,
             server_compaction: value.server_compaction,
             declared: value.declared,
         }
@@ -2086,6 +2091,30 @@ fn absolute_non_root(path: &Path) -> bool {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn managed_documents_default_off_and_preserve_explicit_intent() {
+        use colossus_contracts::{ModelFeatureMode, ModelFeatureSettings};
+        let legacy: ManagedModelCapabilities = serde_json::from_value(serde_json::json!({
+            "tool_calls": "auto", "streaming": "auto", "image_inputs": "off"
+        }))
+        .unwrap();
+        assert_eq!(legacy.document_inputs, ModelFeatureMode::Off);
+        for mode in [
+            ModelFeatureMode::Off,
+            ModelFeatureMode::Auto,
+            ModelFeatureMode::On,
+        ] {
+            let settings = ModelFeatureSettings {
+                document_inputs: mode,
+                ..Default::default()
+            };
+            let managed = ManagedModelCapabilities::from(settings);
+            let wire = serde_json::to_vec(&managed).unwrap();
+            let received: ManagedModelCapabilities = serde_json::from_slice(&wire).unwrap();
+            assert_eq!(ModelFeatureSettings::from(received), settings);
+        }
+    }
 
     fn absolute_test_path(name: &str) -> String {
         if cfg!(windows) {

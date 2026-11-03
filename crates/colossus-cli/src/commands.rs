@@ -116,7 +116,7 @@ pub(super) enum Command {
         /// Explicitly activate one qualified `<plugin>/<skill>` Agent Skill. Repeat as needed.
         #[arg(long = "skill")]
         skills: Vec<String>,
-        /// Attach one bounded UTF-8 file as private CLI run input. Repeat as needed.
+        /// Attach one bounded text, image, or document file. Repeat as needed.
         #[arg(long = "attach", value_name = "PATH")]
         attachments: Vec<PathBuf>,
         /// Render policy-released text deltas to stderr while preserving JSON on stdout.

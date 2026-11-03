@@ -1610,7 +1610,7 @@ impl CreateRunInput {
     }
 
     pub(crate) fn into_sdk(self) -> Result<CreateRunRequest, CommandErrorDto> {
-        validate_text(&self.prompt, "prompt", false)?;
+        validate_text(&self.prompt, "prompt", !self.artifact_ids.is_empty())?;
         if let Some(session_id) = self.session_id.as_deref() {
             validate_identifier(session_id, "sessionId")?;
         }
@@ -2063,6 +2063,59 @@ mod tests {
                 "{field}"
             );
         }
+    }
+
+    #[test]
+    fn attachment_only_create_input_preserves_native_validation_gates() {
+        let base = json!({
+            "prompt": "", "artifactIds": ["artifact:test"], "role": "primary",
+            "mode": "execute", "maxTurns": 1, "idempotencyKey": "attachment-only"
+        });
+        for prompt in ["", " \n\t"] {
+            let mut value = base.clone();
+            value["prompt"] = json!(prompt);
+            let request = serde_json::from_value::<CreateRunInput>(value.clone())
+                .unwrap()
+                .into_sdk()
+                .expect("attachment-only request");
+            assert_eq!(
+                request.input,
+                vec![
+                    InputContentPart::Text(prompt.into()),
+                    InputContentPart::Artifact("artifact:test".into()),
+                ]
+            );
+            value["artifactIds"] = json!([]);
+            assert!(
+                serde_json::from_value::<CreateRunInput>(value)
+                    .unwrap()
+                    .into_sdk()
+                    .is_err(),
+                "empty input remains invalid"
+            );
+        }
+        for (field, invalid) in [
+            ("prompt", json!("x".repeat(MAX_TEXT_BYTES + 1))),
+            ("artifactIds", json!(["invalid\nartifact"])),
+            ("artifactIds", json!(vec!["artifact:test"; 17])),
+            ("mode", json!("goal")),
+        ] {
+            let mut value = base.clone();
+            value[field] = invalid;
+            if field == "mode" {
+                value["goalMaxIterations"] = json!(5);
+            }
+            assert!(
+                serde_json::from_value::<CreateRunInput>(value)
+                    .unwrap()
+                    .into_sdk()
+                    .is_err(),
+                "{field}"
+            );
+        }
+        let mut unknown_authority = base;
+        unknown_authority["applicationId"] = json!("another-application");
+        assert!(serde_json::from_value::<CreateRunInput>(unknown_authority).is_err());
     }
 
     #[test]

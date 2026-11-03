@@ -88,6 +88,7 @@ impl ModelProvider for Model {
                 tool_calls: self.supports_tools,
                 streaming: false,
                 image_inputs: false,
+                document_inputs: false,
             },
             reasoning_effort: None,
         })
