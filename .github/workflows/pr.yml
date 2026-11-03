@@ -183,7 +183,7 @@ jobs:
     name: Public SDK PR validation
     if: needs.classify.outputs.sdk_required == 'true'
     needs: classify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
       SCCACHE_GHA_ENABLED: "true"
