@@ -506,11 +506,11 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         );
         assert_eq!(field(job(jobs, name), "needs").as_str(), Some("classify"));
     }
-    for (name, selector) in [("sdk", "sdk_required"), ("desktop", "desktop_required")] {
-        assert_eq!(
-            field(job(jobs, name), "runs-on").as_str(),
-            Some("ubuntu-latest")
-        );
+    for (name, selector, runner) in [
+        ("sdk", "sdk_required", "ubuntu-24.04"),
+        ("desktop", "desktop_required", "ubuntu-latest"),
+    ] {
+        assert_eq!(field(job(jobs, name), "runs-on").as_str(), Some(runner));
         assert_eq!(
             field(job(jobs, name), "if").as_str(),
             Some(format!("needs.classify.outputs.{selector} == 'true'").as_str())
