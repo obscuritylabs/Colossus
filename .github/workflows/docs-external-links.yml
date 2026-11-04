@@ -29,7 +29,7 @@ jobs:
             --max-concurrency 4
             --max-retries 2
             --timeout 20
-            --exclude-mail
+            --include-mail=false
             --exclude '^http://127\.0\.0\.1'
             --exclude '^https://([^/]+\.)?example\.com'
             --exclude '^https://[^/]+\.example(?:/|$)'
