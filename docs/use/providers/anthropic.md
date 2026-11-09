@@ -52,19 +52,23 @@ budgets are not configured by this adapter.
 Thinking blocks and signatures are replayed privately during tool exchanges and do
 not enter visible conversation history or ordinary diagnostics. With protected
 storage, replay state is encrypted; keyless development storage retains it only in
-bounded process memory. Missing or oversized required state stops the tool exchange
-explicitly. Local compaction cannot replace required replay state in an active tool
-exchange.
+bounded process memory. Exact tool replay still requires the original checkpoint and
+its context to fit the configured limits.
 
 After a provider failure, continue in the same session with **Continue** or new
 guidance. Colossus preserves the unfinished exchange's original context and sends
 its recorded tool results back to the provider. Completed tools do not execute again.
-Protected storage retains this checkpoint across runtime restarts; keyless storage
-can continue only while its process still holds the private state. A changed provider,
-model, reasoning effort, tool catalog, or restored context snapshot can prevent exact
-continuation; the checkpoint is retained when those checks fail. Older affected
-protected sessions recover only when retained private state still matches their
-original context. Missing signatures cannot be recreated from visible history.
+Protected storage retains this checkpoint across runtime restarts. If a keyless
+runtime loses it, an ordinary Execute continuation can use the saved tool results
+to generate a fresh reply in the same conversation. Tools are paused for that
+recovery response and become available on the next ordinary turn. Plan, Goal,
+workflow, and delegated runs still require exact replay for an unfinished exchange.
+Pending tool effects require reconciliation before either recovery path.
+
+A changed provider, model, reasoning effort, tool catalog, or restored context
+snapshot can prevent exact continuation. Colossus retains the checkpoint when
+those checks fail. Older affected protected sessions recover only when retained
+private state still matches their original context.
 
 ## Connection failures and limits
 

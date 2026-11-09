@@ -66,6 +66,7 @@ Their pending native checks remain separate from implementation and historical t
 | Capability | Public API / SDK | CLI / TUI | Desktop | VS Code | Web |
 | --- | --- | --- | --- | --- | --- |
 | Standalone Goal creation | Supported; bounded iterations and caller tool ceiling | Supported; CLI and full-screen TUI `/goal` creation/completion acceptance in embedded and worker hosts | Supported; composer and native request validation evidence | Missing; composer exposes Plan, Execute, and Research | Supported on connected runtimes; capability and budget-bound composer |
+| Keyless Anthropic tool recovery | Existing ordinary Execute continuation on a keyless runtime | Existing CLI resume and TUI continuation on keyless runtimes | Managed release uses protected replay. Keyless attached workers use the shared recovery path | Existing managed or connected continuation inherits runtime recovery | Connected runtimes inherit recovery. Protected Hosted deployments use exact replay |
 | Revision-bound Plan workflow | Supported; source-run-bound Draft continuation | Supported; revision-bound refinement, approval, and execution | Supported; exact-revision Plan continuation | Partial; canonical Plan inspection exists, continuation controls missing | Supported; source-run and revision-bound continuation |
 | Human managed-shell discovery, read, and Stop | Supported; scoped process-session requests | Unverified; dedicated human controls not evidenced by agent-tool tests | Supported; active-shell inspection and Stop | Missing; process-supervision controls unimplemented | Unverified; Fleet human terminals are a distinct workflow |
 | Conditional documentation guidance | Partial; explicit skill selection and bounded reads; policy configuration belongs to the host, without a public editor | Supported through YAML policy and existing `@` / `/plugin` selection | Supported; advanced Plugins controls and validated native overrides; feature-specific browser acceptance unverified | Partial; inherits host policy; guidance settings and skill selection controls absent | Partial; connected runtimes inherit policy; discovery-only plugin UI and no composer skill selections; Hosted-specific acceptance unverified |
@@ -78,6 +79,12 @@ Their pending native checks remain separate from implementation and historical t
 
 Evidence and owned follow-ups:
 
+- **Keyless Anthropic recovery:** Runtime restart coverage in
+  `crates/colossus-runtime/src/anthropic_recovery_tests.rs` exercises JSON and SSE,
+  saved results, tool-free recovery, and a later ordinary turn. Existing Execute
+  entry points share this behavior. Plan, Goal, workflow, and delegated runs keep
+  their exact replay requirements. The client owners and `test_owner` own rendered
+  and connected client acceptance for this behavior.
 - **Compose:** Hosted Chat is the web workflow. `deploy/compose/test-init.ps1`,
   `deploy/compose/smoke.cjs` and `.github/workflows/compose-smoke.yml` own
   initialization and smoke checks. Acceptance uses published `v0.11.11-preview.5`
