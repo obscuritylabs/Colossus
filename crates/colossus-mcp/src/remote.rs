@@ -114,10 +114,7 @@ where
                         "MCP tool returned an unsupported task or client-input continuation".into(),
                     ))
                 }
-                Ok(_) => Err(remote_call_failure(
-                    ServiceError::UnexpectedResponse,
-                    operation,
-                )),
+                Ok(_) => remote_call_failure(ServiceError::UnexpectedResponse, operation),
                 Err(error) => remote_call_failure(error, operation),
             };
         }
