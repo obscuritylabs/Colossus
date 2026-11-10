@@ -49,6 +49,8 @@ include breaking changes while the public API is still settling.
 - correct Anthropic replay accounting and move TUI usage to sidebar ([#355](https://github.com/obscuritylabs/Colossus/pull/355))
 - **docs:** preserve Docker paths under Git Bash ([0b36852](https://github.com/obscuritylabs/Colossus/commit/0b368527df1ec9dc636c8f7188bf5f5367bf9d90))
 - **a2a:** enforce admission before reading RPC bodies ([b2ce40d](https://github.com/obscuritylabs/Colossus/commit/b2ce40d0eb51f3eda3bc57b45a3b127e3969067d))
+- **mcp:** return the existing unexpected-response result ([42e32c1](https://github.com/obscuritylabs/Colossus/commit/42e32c12dd2cee5e5aa33144d670c1964c9eb468))
+- **provider:** recover keyless Anthropic tool exchanges ([#373](https://github.com/obscuritylabs/Colossus/pull/373))
 
 #### Security
 
@@ -109,8 +111,9 @@ include breaking changes while the public API is still settling.
 - **vscode:** record bounded native completion diagnostics ([b2d59b5](https://github.com/obscuritylabs/Colossus/commit/b2d59b58b4128724109d6bf612a414025842f5ca))
 - **docs:** restore scheduled external link auditing ([922c3d8](https://github.com/obscuritylabs/Colossus/commit/922c3d89570cb5fe9c71b9e9e536414d068e1efd))
 - **release:** use a Python-compatible VSIX runner ([5672174](https://github.com/obscuritylabs/Colossus/commit/56721744473b0feb8d23d869057b5e2ad3b162ec))
+- **release:** prepare 0.11.11-preview.7 ([6440254](https://github.com/obscuritylabs/Colossus/commit/6440254d734d49022887767b03913c10a73a99d9))
 
-**Source:** [5672174](https://github.com/obscuritylabs/Colossus/commit/56721744473b0feb8d23d869057b5e2ad3b162ec)
+**Source:** [34fbb16](https://github.com/obscuritylabs/Colossus/commit/34fbb161f950a28864aa68de1c6626a852b610fb)
 
 **Full changelog:** [v0.11.10...v0.11.11-preview.7](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.11.11-preview.7)
 
