@@ -1,4 +1,97 @@
 use super::*;
+use std::time::Duration;
+
+#[tokio::test]
+async fn abandoned_legacy_requests_only_close_the_session() {
+    for (method, operation) in [
+        ("tools/call", call_operation(Some(output_schema()))),
+        (
+            "tools/list",
+            McpOperation::ListTools {
+                server: "fixture".into(),
+                cursor: None,
+            },
+        ),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let (seen, dispatched) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut seen = Some(seen);
+            let mut pending = None;
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let (headers, message) = request(&mut stream).await;
+                match headers[":method"].as_str() {
+                    "GET" => {
+                        write_http_response(&mut stream, "405 Method Not Allowed", "", "").await
+                    }
+                    "DELETE" => {
+                        assert_eq!(headers["mcp-session-id"], "deadline-session");
+                        assert!(pending.is_some(), "session closed before the operation");
+                        write_http_response(&mut stream, "200 OK", "", "").await;
+                        break;
+                    }
+                    "POST" => match message["method"].as_str().unwrap() {
+                        "initialize" => {
+                            let body = json!({"jsonrpc":"2.0", "id":message["id"], "result":{
+                                "protocolVersion":"2025-11-25", "capabilities":{"tools":{}},
+                                "serverInfo":{"name":"fixture", "version":"1"}
+                            }});
+                            write_http_response(
+                                &mut stream,
+                                "200 OK",
+                                "Content-Type: application/json\r\nMcp-Session-Id: deadline-session\r\n",
+                                &body.to_string(),
+                            )
+                            .await;
+                        }
+                        "notifications/initialized" => {
+                            write_http_response(&mut stream, "202 Accepted", "", "").await;
+                        }
+                        request_method if request_method == method => {
+                            pending = Some(stream);
+                            seen.take()
+                                .expect("single operation POST")
+                                .send(())
+                                .unwrap();
+                        }
+                        request_method => panic!("unexpected POST {request_method}"),
+                    },
+                    verb => panic!("unexpected HTTP method {verb}"),
+                }
+            }
+        });
+        let http = HardenedStreamableHttpClient::for_test(
+            endpoint.clone(),
+            reqwest::Client::builder().no_proxy().build().unwrap(),
+            1024 * 1024,
+        );
+        let server = configured_http_server(endpoint);
+        let call_dispatched = AtomicBool::new(false);
+        {
+            let response = execute_remote_operation(
+                http,
+                &server,
+                &operation,
+                HashMap::new(),
+                &call_dispatched,
+            );
+            tokio::pin!(response);
+            tokio::select! {
+                _ = &mut response => panic!("operation completed before the response was sent"),
+                seen = tokio::time::timeout(Duration::from_secs(5), dispatched) => {
+                    seen.expect("operation dispatched before deadline").unwrap();
+                }
+            }
+            // The operation's future is dropped with the POST still pending.
+        }
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("legacy session cleanup completes")
+            .unwrap();
+    }
+}
 
 #[tokio::test]
 async fn legacy_cleanup_does_not_delay_confirmed_results_or_repeat_operations() {
