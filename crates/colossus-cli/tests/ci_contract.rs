@@ -951,6 +951,10 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
         Some("ubuntu-24.04")
     );
     assert_eq!(
+        field(job(release_jobs, "vscode"), "runs-on").as_str(),
+        Some("ubuntu-24.04")
+    );
+    assert_eq!(
         field(job(release_jobs, "desktop_windows_signed"), "runs-on").as_str(),
         Some("windows-2025")
     );

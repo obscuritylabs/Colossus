@@ -163,6 +163,29 @@ async fn rpc(Extract(state): Extract<Arc<State>>, incoming: Request) -> Response
     {
         return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "JSON content required").into_response();
     }
+    // Admission covers body collection and decoding as well as dispatch and streaming.
+    let global = match state.permits.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(header::CACHE_CONTROL, "no-store")],
+                "Agent admission limit reached",
+            )
+                .into_response();
+        }
+    };
+    let local = match profile.permits.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::CACHE_CONTROL, "no-store")],
+                "Peer admission limit reached",
+            )
+                .into_response();
+        }
+    };
     let body = match tokio::time::timeout(
         Duration::from_secs(5),
         axum::body::to_bytes(incoming.into_body(), 64 * 1024),
@@ -191,34 +214,6 @@ async fn rpc(Extract(state): Extract<Arc<State>>, incoming: Request) -> Response
                     data: None,
                 }
                 .value(Value::Null),
-            )
-            .into_response();
-        }
-    };
-    let global = match state.permits.clone().try_acquire_owned() {
-        Ok(permit) => permit,
-        Err(_) => {
-            return Json(
-                RpcError {
-                    code: -32000,
-                    message: "Agent admission limit reached",
-                    data: None,
-                }
-                .value(request.id),
-            )
-            .into_response();
-        }
-    };
-    let local = match profile.permits.clone().try_acquire_owned() {
-        Ok(permit) => permit,
-        Err(_) => {
-            return Json(
-                RpcError {
-                    code: -32000,
-                    message: "Peer admission limit reached",
-                    data: None,
-                }
-                .value(request.id),
             )
             .into_response();
         }

@@ -1414,7 +1414,7 @@ jobs:
     name: VSIX ${{ matrix.target }}
     if: ${{ !cancelled() && needs.artifacts.result == 'success' && (needs.windows_cli_sign.result == 'success' || needs.validate.outputs.publish_draft != 'true') }}
     needs: [validate, artifacts, windows_cli_sign]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
