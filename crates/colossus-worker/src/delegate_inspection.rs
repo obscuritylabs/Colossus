@@ -476,18 +476,18 @@ mod tests {
         let activities = released_activities(&journal, "agent-child", "session-child", "run-child")
             .expect("released activities");
         assert_eq!(activities.len(), 2);
+        assert_eq!(activities[0].call_id, "call-failed");
         assert_eq!(activities[0].state, WorkerDelegateActivityState::Failed);
         assert_eq!(
             activities[0].summary,
             "Map repository · src · Reason: Tool reported failure · failed"
         );
+        assert_eq!(activities[0].input.as_deref(), Some(r#"{"root":"src"}"#));
         assert_eq!(activities[0].preview, None);
+        assert_eq!(activities[1].call_id, "call-cancelled");
         assert_eq!(activities[1].state, WorkerDelegateActivityState::Cancelled);
         assert_eq!(activities[1].summary, "Map repository · cancelled");
         assert_eq!(activities[1].input, None);
         assert_eq!(activities[1].preview, None);
-        let released = format!("{activities:?}");
-        assert!(!released.contains("WITHHELD_"));
-        assert!(!released.contains("9001"));
     }
 }

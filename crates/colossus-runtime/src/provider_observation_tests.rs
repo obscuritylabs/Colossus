@@ -508,6 +508,7 @@ fn fixture_with_screenshots(
         sessions: sessions.clone(),
         snapshots: snapshots.clone(),
         continuations: continuations.clone(),
+        keyless: false,
         pending: StdMutex::default(),
     });
     let context = ContextService::new(

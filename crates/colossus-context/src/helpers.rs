@@ -131,6 +131,57 @@ pub(super) fn apply_snapshot(
     prepared
 }
 
+pub(super) fn last_tool_evidence(messages: &[ModelMessage]) -> Option<usize> {
+    messages.iter().rposition(|message| {
+        matches!(
+            message.role,
+            ModelMessageRole::Tool | ModelMessageRole::ToolObservation
+        )
+    })
+}
+
+/// Preserve the last saved tool observations even when new user guidance follows them.
+pub(super) fn project_recovery_observations(messages: &[ModelMessage]) -> Vec<ModelMessage> {
+    let evidence_end = last_tool_evidence(messages).map_or(0, |index| index + 1);
+    let mut projected = colossus_tools::project_model_tool_observations_preserving_current_turn(
+        &messages[..evidence_end],
+    );
+    projected.extend_from_slice(&messages[evidence_end..]);
+    projected
+}
+
+/// Present released tool traffic as untrusted context rather than native tool blocks.
+pub(super) fn quote_tool_evidence(mut messages: Vec<ModelMessage>) -> Vec<ModelMessage> {
+    for message in &mut messages {
+        let record = match message.role {
+            ModelMessageRole::Assistant if !message.tool_calls.is_empty() => json!({
+                "record": "assistant_tool_calls",
+                "text": message.content.plain_text(),
+                "calls": message.tool_calls,
+            }),
+            ModelMessageRole::Tool | ModelMessageRole::ToolObservation => json!({
+                "record": "tool_observation",
+                "call_id": message.tool_call_id,
+                "text": message.content.plain_text(),
+                "images_omitted": message.content.images().count(),
+            }),
+            _ => continue,
+        };
+        *message = ModelMessage {
+            agent_message_origin: None,
+            role: ModelMessageRole::User,
+            content: format!(
+                "[Colossus saved tool evidence]
+{record}"
+            )
+            .into(),
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+        };
+    }
+    messages
+}
+
 pub(super) fn prepend_bindings(
     mut bindings: Vec<ModelMessage>,
     messages: Vec<ModelMessage>,

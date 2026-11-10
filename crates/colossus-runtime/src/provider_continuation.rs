@@ -1,5 +1,6 @@
 use super::*;
 use colossus_contracts::{ProviderContinuation, ProviderContinuationPlan, ReasoningEffort};
+use colossus_ports::ProviderContinuationRequest;
 use colossus_provider::{ProviderFeature, ProviderFeatureRejection};
 
 fn fingerprint(value: &impl Serialize) -> Result<String, ModelProviderError> {
@@ -239,13 +240,14 @@ impl GatewayModelProvider {
         self.remember_candidate(session, run_id, id)
     }
 
-    pub(super) fn replay_request(
+    pub(super) fn continuation_request(
         &self,
         role: &str,
         request: &ModelRequest,
         context: &ExecutionContext,
         options: &colossus_contracts::WorkflowAgentOptions,
-    ) -> Result<Option<(ModelRequest, ProviderContinuationPlan)>, ModelProviderError> {
+        allow_tool_evidence: bool,
+    ) -> Result<Option<ProviderContinuationRequest>, ModelProviderError> {
         let resolved = self.resolve_workflow_model(role, options)?;
         if resolved.provider().profile().kind != colossus_provider::ProviderKind::AnthropicMessages
         {
@@ -324,6 +326,13 @@ impl GatewayModelProvider {
                 ModelProviderError::Failed("unable to inspect retired Messages replay".into())
             })?,
         };
+        if state.is_none()
+            && self.keyless
+            && allow_tool_evidence
+            && validate_model_transcript(&canonical).is_ok()
+        {
+            return Ok(Some(ProviderContinuationRequest::ToolEvidence));
+        }
         let Some(state) = state.filter(|state| state.view.replay) else {
             return Err(ModelProviderError::Configuration("Messages continuation has no recoverable private replay; its tool evidence is retained".into()));
         };
@@ -434,7 +443,10 @@ impl GatewayModelProvider {
             snapshot_epoch: epoch,
             selected: Some(state.view),
         };
-        Ok(Some((replay, plan)))
+        Ok(Some(ProviderContinuationRequest::Exact {
+            request: replay,
+            plan: Box::new(plan),
+        }))
     }
 
     pub(super) fn replay_request_overhead(

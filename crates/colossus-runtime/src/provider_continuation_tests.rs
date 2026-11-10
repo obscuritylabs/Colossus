@@ -17,6 +17,7 @@ mod replay_admission {
         ProviderContinuationView, ReasoningEffort, WorkflowAgentOptions,
     };
     use colossus_ports::ProviderContinuationRepository;
+    use colossus_ports::ProviderContinuationRequest;
     use colossus_testkit::InMemoryEventJournal;
 
     pub(super) struct Fixture {
@@ -109,6 +110,7 @@ mod replay_admission {
             sessions,
             snapshots,
             continuations,
+            keyless: false,
             pending: StdMutex::default(),
         };
         let actor = system_actor("replay-test");
@@ -465,11 +467,12 @@ mod replay_admission {
         ];
         for options in attempts {
             assert!(matches!(
-                fixture.provider.replay_request_with_options(
+                fixture.provider.continuation_request_with_options(
                     "primary",
                     &fixture.request,
                     &fixture.context,
-                    &options
+                    &options,
+                    true,
                 ),
                 Err(ModelProviderError::Configuration(_))
             ));
@@ -506,59 +509,79 @@ mod replay_admission {
             assert!(
                 fixture
                     .provider
-                    .replay_request_with_options(
+                    .continuation_request_with_options(
                         "primary",
                         &narrowed,
                         &fixture.context,
-                        &Default::default()
+                        &Default::default(),
+                        true,
                     )
                     .is_err()
             );
         }
-        let (replayed, _) = fixture
+        let ProviderContinuationRequest::Exact {
+            request: replayed, ..
+        } = fixture
             .provider
-            .replay_request_with_options(
+            .continuation_request_with_options(
                 "primary",
                 &fixture.request,
                 &fixture.context,
                 &Default::default(),
+                true,
             )
             .unwrap()
-            .unwrap();
+            .unwrap()
+        else {
+            panic!("expected exact replay");
+        };
         assert_eq!(replayed.messages, fixture.request.messages);
         assert_eq!(replayed.instructions, "original instructions");
         assert!(replayed.messages[2].content.contains("already completed"));
         let mut changed_instructions = fixture.request.clone();
         changed_instructions.instructions = "new run no longer has the initial title cue".into();
-        let frozen = fixture
+        let ProviderContinuationRequest::Exact {
+            request: frozen, ..
+        } = fixture
             .provider
-            .replay_request_with_options(
+            .continuation_request_with_options(
                 "primary",
                 &changed_instructions,
                 &fixture.context,
                 &Default::default(),
+                true,
             )
             .unwrap()
-            .unwrap();
-        assert_eq!(frozen.0.instructions, "original instructions");
+            .unwrap()
+        else {
+            panic!("expected exact replay");
+        };
+        assert_eq!(frozen.instructions, "original instructions");
         let mut broader_catalog = fixture.request.clone();
         broader_catalog.tools.push(ModelToolDefinition {
             name: "another.authorized_tool".into(),
             description: "unused by this frozen exchange".into(),
             input_schema: json!({"type":"object"}),
         });
-        let frozen_subset = fixture
+        let ProviderContinuationRequest::Exact {
+            request: frozen_subset,
+            ..
+        } = fixture
             .provider
-            .replay_request_with_options(
+            .continuation_request_with_options(
                 "primary",
                 &broader_catalog,
                 &fixture.context,
                 &Default::default(),
+                true,
             )
             .unwrap()
-            .unwrap();
+            .unwrap()
+        else {
+            panic!("expected exact replay");
+        };
         assert_eq!(
-            frozen_subset.0.tools, fixture.request.tools,
+            frozen_subset.tools, fixture.request.tools,
             "only the originally offered subset may be replayed"
         );
     }
@@ -589,11 +612,12 @@ mod replay_admission {
         assert!(
             fixture
                 .provider
-                .replay_request_with_options(
+                .continuation_request_with_options(
                     "primary",
                     &fixture.request,
                     &fixture.context,
-                    &Default::default()
+                    &Default::default(),
+                    true,
                 )
                 .is_err()
         );
@@ -649,17 +673,20 @@ mod replay_admission {
                     .unwrap()
                     .is_none()
             );
-            let recovered = fixture.provider.replay_request_with_options(
+            let recovered = fixture.provider.continuation_request_with_options(
                 "primary",
                 &fixture.request,
                 &fixture.context,
                 &Default::default(),
+                true,
             );
             if matching {
-                assert_eq!(
-                    recovered.unwrap().unwrap().0.messages,
-                    fixture.request.messages
-                );
+                let ProviderContinuationRequest::Exact { request, .. } =
+                    recovered.unwrap().unwrap()
+                else {
+                    panic!("expected exact replay");
+                };
+                assert_eq!(request.messages, fixture.request.messages);
                 assert!(
                     fixture
                         .provider

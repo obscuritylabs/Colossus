@@ -79,8 +79,13 @@ never resolved image bytes. Same-session continuation keeps that exact prefix an
 appends human guidance without retrieving a new memory prefix or archiving its tool
 observations. Route, tool, canonical-history and snapshot bindings remain checked.
 Protected journals retain both admitted and settled candidates across restart;
-keyless custody remains bounded process memory. A pending tool turn still requires
-reconciliation from effect evidence before provider dispatch.
+keyless custody remains bounded process memory. When a keyless runtime has lost its
+checkpoint, an ordinary Execute continuation with a valid committed transcript can
+prepare a fresh response from saved evidence. Tool calls and results appear as
+untrusted text in the recovery request. The request offers no tools, and recovery
+context compaction is transient. The canonical transcript and any active snapshot
+retain their original authority. A pending tool turn still requires reconciliation
+from effect evidence before provider dispatch.
 
 Normal loads respect replay retirement. Recovery of an unfinished legacy exchange
 may inspect the immediately preceding protected settled record and restore it only

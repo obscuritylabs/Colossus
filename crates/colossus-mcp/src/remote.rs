@@ -98,12 +98,12 @@ where
                 .as_object()
                 .cloned()
                 .ok_or_else(|| failed("MCP tool arguments must be an object"))?;
-            call_dispatched.store(true, Ordering::Release);
-            // The convenience methods can send a legacy cancellation POST when the
-            // operation deadline drops this future. Keep effects inside the permit.
+            // The SDK's convenience methods can send a cancellation after
+            // the operation deadline drops the future.
             let request = CallToolRequest::new(
                 CallToolRequestParams::new(tool.clone()).with_arguments(arguments),
             );
+            call_dispatched.store(true, Ordering::Release);
             return match service
                 .send_request(ClientRequest::CallToolRequest(request))
                 .await
@@ -137,7 +137,7 @@ where
             let request = ListToolsRequest::with_param(
                 PaginatedRequestParams::default().with_cursor(cursor.clone()),
             );
-            let Ok(ServerResult::ListToolsResult(page)) = service
+            let Ok(ServerResult::ListToolsResult(mut page)) = service
                 .send_request(ClientRequest::ListToolsRequest(request))
                 .await
             else {
@@ -147,6 +147,17 @@ where
                 inventory_bytes.saturating_add(serde_json::to_vec(&page).map_err(failed)?.len());
             if inventory_bytes > server.max_output_bytes.unwrap_or(1024 * 1024) as usize {
                 return Err(failed("MCP discovery exceeded its output bound"));
+            }
+            if info.protocol_version >= ProtocolVersion::STANDARD_HEADERS {
+                // Discovery offers only schemas the permit-bound header adapter can use.
+                page.tools.retain(|tool| {
+                    tool.input_schema
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .is_none_or(|properties| {
+                            crate::param_headers::validate_annotation_depth(properties).is_ok()
+                        })
+                });
             }
             for tool in &page.tools {
                 if !names.insert(tool.name.to_string()) || names.len() > MAX_MCP_TOOLS {

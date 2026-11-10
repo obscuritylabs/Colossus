@@ -1531,6 +1531,116 @@ async fn frozen_replay_keeps_images_bindings_and_observations_across_human_turns
 }
 
 #[tokio::test]
+async fn tool_evidence_recovery_keeps_latest_results_with_transient_compaction() {
+    let provider = Arc::new(SummaryProvider {
+        output: None,
+        calls: AtomicUsize::new(0),
+    });
+    let config = ContextConfig {
+        compact_at_percent: 50,
+        target_percent: 30,
+        preserve_recent_messages: 0,
+        ..ContextConfig::default()
+    };
+    let (_, _, snapshots, service) = fixture(config, provider.clone());
+    let service = service.with_memory_retriever(Arc::new(UnexpectedReplayRetrieval));
+    let mut assistant = message(ModelMessageRole::Assistant, "original tool request");
+    assistant.tool_calls.push(ModelToolCall {
+        call_id: "saved-call".into(),
+        name: "filesystem.read".into(),
+        arguments: json!({"path": "saved"}),
+    });
+    let result = ModelMessage {
+        tool_call_id: Some("saved-call".into()),
+        ..message(
+            ModelMessageRole::Tool,
+            json!({"error":{"outcome_certainty":"unknown","message":"LATEST_SAVED_RESULT"}})
+                .to_string(),
+        )
+    };
+    let request = preparation_request(
+        vec![
+            message(
+                ModelMessageRole::User,
+                format!("old raw content {}", "x".repeat(6_000)),
+            ),
+            message(ModelMessageRole::Assistant, "old response"),
+            message(ModelMessageRole::User, "read the saved file"),
+            assistant,
+            result,
+            message(ModelMessageRole::User, "continue"),
+        ],
+        false,
+    );
+    let prepared = service
+        .prepare_tool_evidence(request.clone())
+        .await
+        .unwrap();
+    assert!(prepared.compacted);
+    assert!(!prepared.snapshot_created);
+    assert_eq!(prepared.strategy.as_deref(), Some("tool_evidence_recovery"));
+    assert!(
+        prepared.messages[0]
+            .content
+            .starts_with("[Colossus context snapshot]")
+    );
+    assert!(
+        prepared
+            .messages
+            .iter()
+            .all(|message| message.tool_calls.is_empty())
+    );
+    assert_eq!(prepared.messages.last().unwrap().content, "continue");
+    assert!(prepared.messages.iter().any(|message| {
+        message.role == ModelMessageRole::User
+            && message
+                .content
+                .starts_with("[Colossus saved tool evidence]")
+            && message.content.contains("LATEST_SAVED_RESULT")
+            && message.content.contains("outcome_certainty")
+            && message.content.contains("unknown")
+    }));
+    assert!(snapshots.list("session-1").unwrap().is_empty());
+
+    let snapshot = snapshots
+        .create(
+            ContextSnapshot {
+                id: "existing-snapshot".into(),
+                session_id: "session-1".into(),
+                source_start_sequence: 1,
+                source_end_sequence: 2,
+                summary: "bound older context".into(),
+                pinned_facts: Vec::new(),
+                open_tasks: Vec::new(),
+                files_touched: Vec::new(),
+                notable_tool_results: Vec::new(),
+                strategy: "deterministic".into(),
+                created_at: String::new(),
+            },
+            user_actor(),
+        )
+        .unwrap();
+    let prepared = service.prepare_tool_evidence(request).await.unwrap();
+    assert_eq!(prepared.snapshot_id.as_deref(), Some(snapshot.id.as_str()));
+    assert_eq!(prepared.messages[0].role, ModelMessageRole::User);
+    assert!(prepared.messages[0].content.contains("bound older context"));
+    assert!(
+        prepared
+            .messages
+            .iter()
+            .all(|message| !message.content.contains("old raw content"))
+    );
+    assert!(
+        prepared
+            .messages
+            .iter()
+            .any(|message| message.content.contains("LATEST_SAVED_RESULT"))
+    );
+    assert_eq!(snapshots.list("session-1").unwrap().len(), 1);
+    assert_eq!(provider.calls.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test]
 async fn frozen_replay_enforces_both_budgets_without_retrieval_or_compaction() {
     let provider = Arc::new(SummaryProvider {
         output: None,
