@@ -558,10 +558,11 @@ impl Runtime {
         let run_input_media = Arc::new(JournalRunInputMediaResolver::new(Arc::clone(&journal)));
         let context_repository: Arc<dyn ContextRepository> =
             Arc::new(EventSourcedContextRepository::new(Arc::clone(&journal)));
+        let keyless = matches!(config.storage.keys, KeyConfig::None);
         let continuations: Arc<dyn colossus_ports::ProviderContinuationRepository> =
             Arc::new(colossus_context::EventSourcedProviderContinuations::new(
                 Arc::clone(&journal),
-                !matches!(config.storage.keys, KeyConfig::None),
+                !keyless,
             ));
         let providers = Arc::new(
             provider_registry(
@@ -938,6 +939,7 @@ impl Runtime {
             sessions: Arc::clone(&sessions),
             snapshots: Arc::clone(&context_repository),
             continuations,
+            keyless,
             pending: StdMutex::default(),
         });
         let risk_evaluator: Arc<dyn RiskEvaluator> = Arc::new(GatewayRiskEvaluator {

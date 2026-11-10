@@ -5,7 +5,8 @@ use crate::executor::{RemoteOperationResult, failed, remote_call_failure};
 use colossus_contracts::McpDiagnosticStage;
 use http::{HeaderName, HeaderValue};
 use rmcp::{
-    model::CallToolResponse,
+    ServiceError,
+    model::{CallToolRequest, ClientRequest, ListToolsRequest, ServerResult},
     service::{ClientLifecycleMode, ClientServiceExt as _},
     transport::{
         common::client_side_sse::NeverRetry,
@@ -97,15 +98,23 @@ where
                 .as_object()
                 .cloned()
                 .ok_or_else(|| failed("MCP tool arguments must be an object"))?;
+            // The SDK's convenience methods can send a cancellation after
+            // the operation deadline drops the future.
+            let request = CallToolRequest::new(
+                CallToolRequestParams::new(tool.clone()).with_arguments(arguments),
+            );
             call_dispatched.store(true, Ordering::Release);
             return match service
-                .call_tool_once(CallToolRequestParams::new(tool.clone()).with_arguments(arguments))
+                .send_request(ClientRequest::CallToolRequest(request))
                 .await
             {
-                Ok(CallToolResponse::Complete(result)) => Ok(RemoteOperationResult::Call(result)),
-                Ok(_) => Err(ExecutionError::OutcomeUnknown(
-                    "MCP tool returned an unsupported task or client-input continuation".into(),
-                )),
+                Ok(ServerResult::CallToolResult(result)) => Ok(RemoteOperationResult::Call(result)),
+                Ok(ServerResult::InputRequiredResult(_) | ServerResult::CreateTaskResult(_)) => {
+                    Err(ExecutionError::OutcomeUnknown(
+                        "MCP tool returned an unsupported task or client-input continuation".into(),
+                    ))
+                }
+                Ok(_) => remote_call_failure(ServiceError::UnexpectedResponse, operation),
                 Err(error) => remote_call_failure(error, operation),
             };
         }
@@ -125,16 +134,30 @@ where
         let mut names = BTreeSet::new();
         let mut inventory_bytes = 0_usize;
         for page_number in 0..MAX_MCP_PAGES {
-            let page = service
-                .list_tools(Some(
-                    PaginatedRequestParams::default().with_cursor(cursor.clone()),
-                ))
+            let request = ListToolsRequest::with_param(
+                PaginatedRequestParams::default().with_cursor(cursor.clone()),
+            );
+            let Ok(ServerResult::ListToolsResult(mut page)) = service
+                .send_request(ClientRequest::ListToolsRequest(request))
                 .await
-                .map_err(|_| failed("MCP HTTP tool discovery failed"))?;
+            else {
+                return Err(failed("MCP HTTP tool discovery failed"));
+            };
             inventory_bytes =
                 inventory_bytes.saturating_add(serde_json::to_vec(&page).map_err(failed)?.len());
             if inventory_bytes > server.max_output_bytes.unwrap_or(1024 * 1024) as usize {
                 return Err(failed("MCP discovery exceeded its output bound"));
+            }
+            if info.protocol_version >= ProtocolVersion::STANDARD_HEADERS {
+                // Discovery offers only schemas the permit-bound header adapter can use.
+                page.tools.retain(|tool| {
+                    tool.input_schema
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .is_none_or(|properties| {
+                            crate::param_headers::validate_annotation_depth(properties).is_ok()
+                        })
+                });
             }
             for tool in &page.tools {
                 if !names.insert(tool.name.to_string()) || names.len() > MAX_MCP_TOOLS {

@@ -141,7 +141,7 @@ protoc-bin-vendored = "=3.2.0"
 rappct = "=0.13.3"
 redb = "4.1.0"
 regex = "1.13.0"
-rmcp = { version = "=3.5.1", default-features = false }
+rmcp = { version = "=3.9.0", default-features = false }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls", "stream"] }
 # OTLP 0.32's public HttpClient implementations use reqwest 0.13.
 reqwest-otel = { package = "reqwest", version = "0.13.1", default-features = false, features = ["blocking"] }

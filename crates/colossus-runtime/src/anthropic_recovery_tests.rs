@@ -83,63 +83,73 @@ fn response_body(step: usize, content: &[Value], stop: &str, streamed: bool) -> 
         .collect()
 }
 
-async fn scripted_server(
-    streamed: bool,
-    malformed: bool,
+async fn scripted_messages_server(
+    steps: usize,
+    response: impl Fn(usize) -> (u16, &'static str, String) + Send + 'static,
 ) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}/v1", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
         let mut requests = Vec::new();
-        for step in 0..if malformed { 5 } else { 7 } {
+        for step in 0..steps {
             let (mut socket, _) = tokio::time::timeout(Duration::from_secs(20), listener.accept())
                 .await
                 .expect("expected the next bounded provider request")
                 .unwrap();
             requests.push(read_request(&mut socket).await);
-            let (status, mime, body) = if !malformed && matches!(step, 2 | 3) {
-                (
-                    404,
-                    "application/json",
-                    json!({"error":"fixture unavailable"}).to_string(),
-                )
-            } else {
-                let invalid = malformed && matches!(step, 0 | 2);
-                let tools = if malformed {
-                    step < 4
-                } else {
-                    matches!(step, 0 | 1 | 4)
-                };
-                let content = if invalid {
-                    vec![json!({"type":"tool_use","id":format!("invalid-{step}"),
-                        "name":"session_set_title","input":"PRIVATE_INVALID_ARGUMENT"})]
-                } else if tools {
-                    signed_title(step)
-                } else {
-                    vec![
-                        json!({"type":"text","text":if step == 5 || malformed {"recovered"} else {"normal turn"}}),
-                    ]
-                };
-                (
-                    200,
-                    if streamed {
-                        "text/event-stream"
-                    } else {
-                        "application/json"
-                    },
-                    response_body(
-                        step,
-                        &content,
-                        if tools { "tool_use" } else { "end_turn" },
-                        streamed,
-                    ),
-                )
-            };
+            let (status, mime, body) = response(step);
             socket.write_all(format!("HTTP/1.1 {status} Response\r\ncontent-type: {mime}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
         }
         requests
     });
     (base, server)
+}
+
+async fn scripted_server(
+    streamed: bool,
+    malformed: bool,
+) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
+    scripted_messages_server(if malformed { 5 } else { 7 }, move |step| {
+        if !malformed && matches!(step, 2 | 3) {
+            (
+                404,
+                "application/json",
+                json!({"error":"fixture unavailable"}).to_string(),
+            )
+        } else {
+            let invalid = malformed && matches!(step, 0 | 2);
+            let tools = if malformed {
+                step < 4
+            } else {
+                matches!(step, 0 | 1 | 4)
+            };
+            let content = if invalid {
+                vec![json!({"type":"tool_use","id":format!("invalid-{step}"),
+                    "name":"session_set_title","input":"PRIVATE_INVALID_ARGUMENT"})]
+            } else if tools {
+                signed_title(step)
+            } else {
+                vec![
+                    json!({"type":"text","text":if step == 5 || malformed {"recovered"} else {"normal turn"}}),
+                ]
+            };
+            (
+                200,
+                if streamed {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                },
+                response_body(
+                    step,
+                    &content,
+                    if tools { "tool_use" } else { "end_turn" },
+                    streamed,
+                ),
+            )
+        }
+    })
+    .await
 }
 
 fn recovery_config(
@@ -409,6 +419,170 @@ async fn anthropic_recovery_repeated_http_failures_keep_keyless_signed_replay() 
 async fn anthropic_recovery_repeated_http_failures_keep_protected_signed_replay_after_restart() {
     for streamed in [false, true] {
         repeated_failure_round_trip(streamed, true).await;
+    }
+}
+
+async fn keyless_restart_round_trip(streamed: bool) {
+    let (base, server) = scripted_messages_server(6, move |step| {
+        if step == 2 {
+            return (
+                404,
+                "application/json",
+                json!({"error":"fixture unavailable"}).to_string(),
+            );
+        }
+        let calls_tools = matches!(step, 0 | 1 | 3);
+        let content = if calls_tools {
+            // Step 3 deliberately requests an unoffered tool during recovery.
+            signed_title(step)
+        } else {
+            let text = if step == 4 {
+                "Recovered from saved results."
+            } else {
+                "Normal next turn."
+            };
+            vec![json!({"type":"text","text":text})]
+        };
+        (
+            200,
+            if streamed {
+                "text/event-stream"
+            } else {
+                "application/json"
+            },
+            response_body(
+                step,
+                &content,
+                if calls_tools { "tool_use" } else { "end_turn" },
+                streamed,
+            ),
+        )
+    })
+    .await;
+    let workspace = crate::test_support::private_tempdir();
+    let mut config = recovery_config(workspace.path(), base, streamed, false);
+    config.storage.adapter = StorageAdapter::Redb;
+    let runtime = open_runtime(&config, workspace.path(), None);
+    let error = runtime
+        .run_model_with_max_turns("primary", "test instructions", "Set up this session", 5)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("404"), "{error}");
+    let session = runtime.latest_session().unwrap().id;
+    let before = runtime.session_messages(&session).unwrap();
+    assert_private_blocks_absent(&runtime, &session, 2);
+    drop(runtime);
+
+    let runtime = open_runtime(&config, workspace.path(), None);
+    let error = runtime
+        .run_model_in_session(
+            "primary",
+            "test instructions",
+            &"g".repeat(896 * 1024),
+            Some(5),
+            &session,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("input budget"), "{error}");
+    assert_eq!(runtime.session_messages(&session).unwrap(), before);
+
+    let error = runtime
+        .run_model_in_session(
+            "primary",
+            "test instructions",
+            "Continue",
+            Some(5),
+            &session,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("private replay storage"),
+        "{error}"
+    );
+    assert_private_blocks_absent(&runtime, &session, 2);
+    let recovered = runtime
+        .run_model_in_session(
+            "primary",
+            "test instructions",
+            "Continue using saved results",
+            Some(5),
+            &session,
+        )
+        .await
+        .unwrap();
+    assert_eq!(recovered.output, "Recovered from saved results.");
+    assert!(
+        runtime
+            .session_messages(&session)
+            .unwrap()
+            .starts_with(&before)
+    );
+    let prepared = runtime
+        .journal
+        .read_stream(&format!("run:{}", recovered.run_id))
+        .unwrap()
+        .into_iter()
+        .find(|event| event.event_type == "model.request.prepared.v1")
+        .unwrap();
+    let prepared = runtime.journal.decrypt_payload(&prepared).unwrap();
+    assert_eq!(prepared["tool_count"], 0);
+    assert_eq!(prepared["tool_evidence_recovery"], true);
+
+    let next = runtime
+        .run_model_in_session(
+            "primary",
+            "test instructions",
+            "Normal follow-up",
+            Some(5),
+            &session,
+        )
+        .await
+        .unwrap();
+    assert_eq!(next.output, "Normal next turn.");
+    assert_private_blocks_absent(&runtime, &session, 2);
+
+    let requests = server.await.unwrap();
+    assert!(
+        requests[2]
+            .to_string()
+            .contains("EXACT_RECOVERY_SIGNATURE_1")
+    );
+    for request in &requests[3..5] {
+        assert!(request.get("tools").is_none());
+        let blocks = flattened_blocks(request);
+        assert!(blocks.iter().all(|(_, block)| block["type"] == "text"));
+        for title in ["Recovery title 0", "Recovery title 1"] {
+            assert!(blocks.iter().any(|(role, block)| {
+                role == "user"
+                    && block["text"].as_str().is_some_and(|text| {
+                        text.starts_with("[Colossus saved tool evidence]")
+                            && text.contains("tool_observation")
+                            && text.contains(title)
+                    })
+            }));
+        }
+        assert!(!request["system"].to_string().contains("Recovery title"));
+        assert!(!request.to_string().contains("PRIVATE_RECOVERY_THOUGHT"));
+        assert!(!request.to_string().contains("EXACT_RECOVERY_SIGNATURE"));
+    }
+    assert!(
+        requests[5]["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty())
+    );
+    assert!(
+        flattened_blocks(&requests[5])
+            .iter()
+            .any(|(_, block)| block["type"] == "tool_result")
+    );
+}
+
+#[tokio::test]
+async fn anthropic_recovery_keyless_restart_uses_saved_results_without_tools() {
+    for streamed in [false, true] {
+        keyless_restart_round_trip(streamed).await;
     }
 }
 

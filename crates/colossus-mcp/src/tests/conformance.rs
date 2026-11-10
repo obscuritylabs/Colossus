@@ -103,7 +103,16 @@ async fn modern_server(listener: TcpListener, calls: bool, sse: bool, continuati
                 } else {
                     assert_eq!(lists, 2);
                     assert_eq!(message["params"]["cursor"], "same-connection");
-                    json!({"tools":[{"name":"probe", "inputSchema":input_schema(), "outputSchema":output_schema()}]})
+                    json!({"tools":[
+                        {"name":"probe", "inputSchema":input_schema(), "outputSchema":output_schema()},
+                        {"name":"nested_header", "inputSchema":{
+                            "type":"object",
+                            "properties":{"scope":{
+                                "type":"object",
+                                "properties":{"tenant":{"type":"string", "x-mcp-header":"Tenant"}}
+                            }}
+                        }}
+                    ]})
                 }
             }
             "tools/call" => {
@@ -142,7 +151,7 @@ async fn modern_server(listener: TcpListener, calls: bool, sse: bool, continuati
 }
 
 #[tokio::test]
-async fn modern_http_discovers_all_pages_and_filters_task_only_tools_in_json_and_sse() {
+async fn modern_http_discovers_all_pages_and_filters_unsupported_tools_in_json_and_sse() {
     for sse in [false, true] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());

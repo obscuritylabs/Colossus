@@ -284,6 +284,18 @@ pub trait ContextPreparer: Send + Sync {
         ))
     }
 
+    /// Prepare a fresh, tool-free turn from recorded tool evidence.
+    ///
+    /// This must budget the actual projection without mutating canonical context.
+    async fn prepare_tool_evidence(
+        &self,
+        _request: ContextPreparationRequest,
+    ) -> Result<PreparedContext, ContextError> {
+        Err(ContextError::Configuration(
+            "this context service cannot recover from recorded tool evidence".into(),
+        ))
+    }
+
     /// Apply an active snapshot or create one when the configured budget requires it.
     async fn prepare(
         &self,

@@ -41,6 +41,22 @@ pub trait RunInputMediaResolver: Send + Sync {
     ) -> Result<ResolvedRunInputImage, RunInputMediaError>;
 }
 
+/// How a provider can continue a session whose last assistant message called tools.
+#[derive(Debug)]
+pub enum ProviderContinuationRequest {
+    /// Replay the frozen request using its verified private state.
+    Exact {
+        /// Prepared request with the original signed prefix.
+        request: ModelRequest,
+        /// Bound reference to the retained private state.
+        plan: Box<colossus_contracts::ProviderContinuationPlan>,
+    },
+    /// A keyless runtime lost its checkpoint for a settled tool exchange.
+    ///
+    /// The agent must use a fresh, tool-free request containing only released evidence.
+    ToolEvidence,
+}
+
 /// Role-routed, policy-bound model provider used by the application loop.
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
@@ -113,17 +129,15 @@ pub trait ModelProvider: Send + Sync {
     /// Release only process-local candidates owned by a finished or dropped run.
     /// Durable admitted effects and canonical continuation state remain intact.
     fn finish_run_candidates(&self, _run_id: &str) {}
-    /// Rebuild an unfinished provider exchange with newly appended human guidance.
-    fn replay_request_with_options(
+    /// Select exact replay or an eligible recovery from committed tool evidence.
+    fn continuation_request_with_options(
         &self,
         _role: &str,
         _request: &ModelRequest,
         _context: &ExecutionContext,
         _options: &colossus_contracts::WorkflowAgentOptions,
-    ) -> Result<
-        Option<(ModelRequest, colossus_contracts::ProviderContinuationPlan)>,
-        ModelProviderError,
-    > {
+        _allow_tool_evidence: bool,
+    ) -> Result<Option<ProviderContinuationRequest>, ModelProviderError> {
         Ok(None)
     }
     /// Conservatively budget private continuation bytes absent from this exact request.

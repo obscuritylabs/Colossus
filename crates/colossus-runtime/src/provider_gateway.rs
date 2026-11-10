@@ -1,4 +1,5 @@
 use super::*;
+use colossus_ports::ProviderContinuationRequest;
 #[cfg(test)]
 #[path = "provider_gateway_tests.rs"]
 mod tests;
@@ -9,6 +10,7 @@ pub(super) struct GatewayModelProvider {
     pub(super) sessions: Arc<dyn SessionRepository>,
     pub(super) snapshots: Arc<dyn ContextRepository>,
     pub(super) continuations: Arc<dyn colossus_ports::ProviderContinuationRepository>,
+    pub(super) keyless: bool,
     pub(super) pending: StdMutex<BTreeMap<(String, Option<String>), String>>,
 }
 
@@ -565,17 +567,15 @@ impl ModelProvider for GatewayModelProvider {
     ) -> Result<Vec<NewEvent>, ModelProviderError> {
         self.settlement_events(context, canonical_after)
     }
-    fn replay_request_with_options(
+    fn continuation_request_with_options(
         &self,
         role: &str,
         request: &ModelRequest,
         context: &ExecutionContext,
         options: &colossus_contracts::WorkflowAgentOptions,
-    ) -> Result<
-        Option<(ModelRequest, colossus_contracts::ProviderContinuationPlan)>,
-        ModelProviderError,
-    > {
-        self.replay_request(role, request, context, options)
+        allow_tool_evidence: bool,
+    ) -> Result<Option<ProviderContinuationRequest>, ModelProviderError> {
+        self.continuation_request(role, request, context, options, allow_tool_evidence)
     }
     fn continuation_request_overhead(
         &self,
