@@ -125,7 +125,7 @@ where
         let mut names = BTreeSet::new();
         let mut inventory_bytes = 0_usize;
         for page_number in 0..MAX_MCP_PAGES {
-            let page = service
+            let mut page = service
                 .list_tools(Some(
                     PaginatedRequestParams::default().with_cursor(cursor.clone()),
                 ))
@@ -135,6 +135,17 @@ where
                 inventory_bytes.saturating_add(serde_json::to_vec(&page).map_err(failed)?.len());
             if inventory_bytes > server.max_output_bytes.unwrap_or(1024 * 1024) as usize {
                 return Err(failed("MCP discovery exceeded its output bound"));
+            }
+            if info.protocol_version >= ProtocolVersion::STANDARD_HEADERS {
+                // Discovery offers only schemas the permit-bound header adapter can use.
+                page.tools.retain(|tool| {
+                    tool.input_schema
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .is_none_or(|properties| {
+                            crate::param_headers::validate_annotation_depth(properties).is_ok()
+                        })
+                });
             }
             for tool in &page.tools {
                 if !names.insert(tool.name.to_string()) || names.len() > MAX_MCP_TOOLS {
