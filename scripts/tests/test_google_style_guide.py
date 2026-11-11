@@ -72,12 +72,13 @@ class GuideTests(unittest.TestCase):
     def test_shipped_snapshot_is_complete_offline_and_fits_real_tool_envelopes(self):
         with patch.object(guide, "urlopen", side_effect=AssertionError("network forbidden")):
             with contextlib.redirect_stdout(io.StringIO()):
-                guide.check(guide.SKILL)
+                guide.check(guide.SKILL, guide.SOURCE_ROOT)
+        self.assertFalse((guide.SKILL / "upstream").exists())
         manifest = json.loads((guide.SKILL / "snapshot.json").read_text(encoding="utf-8"))
         self.assertGreaterEqual(len(manifest["pages"]), 70)
         for entry in manifest["pages"]:
             parts = [(guide.SKILL / path).read_text(encoding="utf-8") for path in entry["resources"]]
-            source = gzip.decompress((guide.SKILL / entry["source"]).read_bytes()).decode("utf-8")
+            source = gzip.decompress((guide.SOURCE_ROOT / entry["source"]).read_bytes()).decode("utf-8")
             original = guide.Page(source).article()
             # Remove only the mechanical scope labels and provenance/title wrapper.
             reconstructed = "".join(parts).split("</h1>\n", 1)[1]
@@ -97,27 +98,29 @@ class GuideTests(unittest.TestCase):
 
     def test_missing_modified_or_truncated_material_fails_verification(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "snapshot"
-            shutil.copytree(guide.SKILL, root)
-            manifest_path = root / "snapshot.json"
+            skill = Path(temporary) / "skill"
+            source_root = Path(temporary) / "sources"
+            shutil.copytree(guide.SKILL, skill)
+            shutil.copytree(guide.SOURCE_ROOT / "upstream", source_root / "upstream")
+            manifest_path = skill / "snapshot.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            part = root / manifest["pages"][0]["resources"][0]
+            part = skill / manifest["pages"][0]["resources"][0]
             original = part.read_bytes()
             part.write_bytes(original[:-1])
             with self.assertRaisesRegex(ValueError, "differs from source"):
-                guide.check(root)
+                guide.check(skill, source_root)
             part.write_bytes(original)
             removed = manifest["pages"].pop()
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "missing page|missing navigation"):
-                guide.check(root)
+                guide.check(skill, source_root)
             manifest["pages"].append(removed)
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-            source_path = root / removed["source"]
+            source_path = source_root / removed["source"]
             data = gzip.decompress(source_path.read_bytes())
             source_path.write_bytes(gzip.compress(data.replace(b"<html", b"<HTML", 1), mtime=0))
             with self.assertRaisesRegex(ValueError, "digest mismatch"):
-                guide.check(root)
+                guide.check(skill, source_root)
 
 
 if __name__ == "__main__":

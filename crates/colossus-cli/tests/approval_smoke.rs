@@ -27,6 +27,9 @@ use std::{
 const JOURNAL_KEY: &str = "7777777777777777777777777777777777777777777777777777777777777777";
 const SIGNING_KEY: &str = "8888888888888888888888888888888888888888888888888888888888888888";
 const MCP_SECRET: &str = "risk-auto-mcp-secret-value";
+// The CLI initializes a fresh home before it contacts the provider.
+const PROVIDER_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
+const PROVIDER_SEQUENCE_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn command(binary: &Path, config: &Path) -> process_support::IsolatedCommand {
     let mut command = Command::new(binary);
@@ -150,7 +153,7 @@ fn tool_server(
         })
     );
     let task = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut deadline = Instant::now() + PROVIDER_STARTUP_TIMEOUT;
         let mut requests = Vec::new();
         while requests.len() < expected_requests && Instant::now() < deadline {
             let (mut stream, _) = match listener.accept() {
@@ -161,6 +164,9 @@ fn tool_server(
                 }
                 Err(error) => panic!("provider accept: {error}"),
             };
+            if requests.is_empty() {
+                deadline = Instant::now() + PROVIDER_SEQUENCE_TIMEOUT;
+            }
             stream
                 .set_nonblocking(false)
                 .expect("blocking provider stream");
@@ -240,7 +246,7 @@ fn risk_auto_network_server(invalid_assessment: bool) -> (String, thread::JoinHa
     );
     let task = thread::spawn(move || {
         let expected_requests = if invalid_assessment { 2 } else { 4 };
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut deadline = Instant::now() + PROVIDER_STARTUP_TIMEOUT;
         let mut requests = Vec::new();
         while requests.len() < expected_requests && Instant::now() < deadline {
             let (mut stream, _) = match listener.accept() {
@@ -251,6 +257,9 @@ fn risk_auto_network_server(invalid_assessment: bool) -> (String, thread::JoinHa
                 }
                 Err(error) => panic!("provider accept: {error}"),
             };
+            if requests.is_empty() {
+                deadline = Instant::now() + PROVIDER_SEQUENCE_TIMEOUT;
+            }
             stream
                 .set_nonblocking(false)
                 .expect("blocking provider stream");

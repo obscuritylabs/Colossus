@@ -5,7 +5,10 @@ The bundled reference reproduces the complete article text of the English
 by Google. It is not a condensed adaptation or an official Google distribution.
 `snapshot.json` records the capture time, all source URLs, upstream revision dates,
 original response SHA-256 hashes, navigation, redirects, resource parts, and media
-references. The compressed original HTML responses are retained in `upstream/`.
+references. The manifest's source paths are relative to
+`scripts/fixtures/google-style-guide/` in the source checkout. That directory retains
+the compressed original HTML responses for offline verification. Installations include
+the extracted articles and their provenance manifest.
 
 The initial full snapshot contains all 70 pages in Google's navigation and follows
 in-guide links to their canonical destinations. One malformed upstream link,
@@ -59,9 +62,10 @@ source checkout, not this runtime skill. It uses Python's standard library.
 2. Review the source/page inventory diff, licensing and media changes, broken links,
    and generated article changes. Verify that upstream examples and scope annotations
    remain intact. New navigation pages or separately licensed content require review.
-3. Replace only this skill's `upstream/`, `references/guide/`, generated
-   `references/index.md`, and `snapshot.json` with the validated staging files.
-   Remove superseded generated files; do not overlay a new snapshot on stale parts.
+3. Copy the staged `upstream/` to `scripts/fixtures/google-style-guide/upstream/`.
+   Replace the skill's `references/guide/`, generated `references/index.md`, and
+   `snapshot.json` with the corresponding staging files. Remove superseded files
+   from both destinations so they match the staged snapshot.
 4. Run `python3 scripts/google_style_guide.py --check` and
    `python3 -B -m unittest discover -s scripts/tests -p 'test_google_style_guide.py'`.
    Run the bundled-plugin/runtime policy tests and the repository completion gates.

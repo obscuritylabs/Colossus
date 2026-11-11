@@ -24,6 +24,7 @@ ORIGIN = "https://developers.google.com"
 START = ORIGIN + "/style"
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "bundled-plugins/colossus/skills/documentation"
+SOURCE_ROOT = ROOT / "scripts/fixtures/google-style-guide"
 CHUNK_BYTES = 24_000  # Leave room for JSON escaping and the tool observation envelope.
 ICONS = {"icon-android": "Android", "icon-cloud": "Google Cloud",
          "icon-workspace": "Google Workspace"}
@@ -320,17 +321,17 @@ def fetch(destination):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
     (destination / "snapshot.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    check(destination)
+    check(destination, destination)
 
 
-def check(destination):
-    manifest = json.loads((destination / "snapshot.json").read_text(encoding="utf-8"))
+def check(skill, source_root):
+    manifest = json.loads((skill / "snapshot.json").read_text(encoding="utf-8"))
     expected = json.loads(json.dumps(manifest))
     sources = {}
     for entry in manifest["pages"]:
         if entry["source"] != f"upstream/{slug(entry['url'])}.html.gz":
             raise ValueError("unexpected source path")
-        data = gzip.decompress((destination / entry["source"]).read_bytes())
+        data = gzip.decompress((source_root / entry["source"]).read_bytes())
         if digest(data) != entry["sha256"]:
             raise ValueError(f"source digest mismatch: {entry['url']}")
         sources[entry["url"]] = data.decode("utf-8")
@@ -353,15 +354,15 @@ def check(destination):
     if expected != manifest:
         raise ValueError("snapshot metadata differs from original sources")
     for path, data in output.items():
-        actual = (destination / path).read_bytes()
+        actual = (skill / path).read_bytes()
         if actual != data:
             raise ValueError(f"generated content differs from source: {path}")
         if len(actual) > CHUNK_BYTES:
             raise ValueError(f"resource exceeds read budget: {path}")
-    actual = {p.relative_to(destination).as_posix() for p in (destination / "references/guide").glob("*")}
+    actual = {p.relative_to(skill).as_posix() for p in (skill / "references/guide").glob("*")}
     if actual != {p for p in output if p.startswith("references/guide/")}:
         raise ValueError("unexpected or missing guide resources")
-    originals = {p.relative_to(destination).as_posix() for p in (destination / "upstream").glob("*")}
+    originals = {p.relative_to(source_root).as_posix() for p in (source_root / "upstream").glob("*")}
     if originals != {entry["source"] for entry in manifest["pages"]}:
         raise ValueError("unexpected or missing original responses")
     print(f"Verified {len(sources)} complete pages, {len(output)-1} readable parts, original hashes and internal links.")
@@ -376,7 +377,7 @@ def main():
     if args.fetch:
         fetch(args.fetch)
     else:
-        check(SKILL)
+        check(SKILL, SOURCE_ROOT)
 
 
 if __name__ == "__main__":

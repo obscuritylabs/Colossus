@@ -6,4 +6,4 @@ native/browser/component/patches/macos-owned-process/chromium.patch whitespace=-
 
 # Preserve original Google article bytes, including source whitespace.
 bundled-plugins/colossus/skills/documentation/references/guide/** -text -whitespace
-bundled-plugins/colossus/skills/documentation/upstream/** -text
+scripts/fixtures/google-style-guide/upstream/** -text
