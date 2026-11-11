@@ -82,9 +82,15 @@ read-only recovery and blocks new effects. Preserve the journal, key identity, s
 anchor, and diagnostic output. Do not delete or rewrite events to make verification
 pass.
 
-An exporter `outcome_unknown` blocks implicit delivery replay. Investigate the
-destination and use the operator-authorized reset only after establishing whether the
-object exists.
+The exporter checkpoints each delivered or deliberately skipped record before
+processing the next one. When a delivery returns `outcome_unknown`,
+`audit exporter-status` identifies the failed sequence and event, and further
+drains are blocked.
+
+Check the configured destination to establish whether the object exists before
+authorizing `audit exporter-reset`. Reset clears retry state and returns the
+export position to the start of the journal. The next drain replays all eligible
+audit evidence to the configured destination.
 
 ## Next step
 
