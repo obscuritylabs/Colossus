@@ -73,10 +73,14 @@ target/debug/colossus-a2a-server /absolute/path/listener.json
 ```
 
 Startup verifies each authenticated daemon's message capabilities before accepting
-requests. At most 32 peer profiles are configured. Concurrent requests and streams
-are bounded to 32 globally and eight per peer, with bounded TLS handshakes and bodies.
-Shutting down the listener releases its SDK connections; accepted daemon tasks retain
-their durable execution lifecycle.
+requests. At most 32 peer profiles are configured. Authenticated JSON-RPC requests
+share a limit of 32 globally and eight per peer, from body collection through dispatch
+and any response stream. If either limit is reached, the RPC handler refuses the
+request before reading its body. It returns HTTP 503 for the global limit or HTTP
+429 for the peer limit, without a JSON-RPC request ID. A body can be at most 64 KiB
+and must arrive within five seconds.
+TLS handshakes have separate limits. Shutting down the listener releases its SDK
+connections. Accepted daemon tasks retain their durable execution lifecycle.
 
 ## Verify discovery and task submission
 

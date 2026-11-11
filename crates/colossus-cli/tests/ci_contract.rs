@@ -506,11 +506,11 @@ fn pr_workflow_selects_only_the_required_validation_tier() {
         );
         assert_eq!(field(job(jobs, name), "needs").as_str(), Some("classify"));
     }
-    for (name, selector) in [("sdk", "sdk_required"), ("desktop", "desktop_required")] {
-        assert_eq!(
-            field(job(jobs, name), "runs-on").as_str(),
-            Some("ubuntu-latest")
-        );
+    for (name, selector, runner) in [
+        ("sdk", "sdk_required", "ubuntu-24.04"),
+        ("desktop", "desktop_required", "ubuntu-latest"),
+    ] {
+        assert_eq!(field(job(jobs, name), "runs-on").as_str(), Some(runner));
         assert_eq!(
             field(job(jobs, name), "if").as_str(),
             Some(format!("needs.classify.outputs.{selector} == 'true'").as_str())
@@ -726,6 +726,7 @@ fn premerge_requires_an_authorized_label_and_representative_platforms() {
     assert!(gate_needs.contains("vscode-sdk"));
     assert!(gate_needs.contains("vscode-native"));
     let bindings = job(jobs, "vscode-sdk");
+    assert_eq!(field(bindings, "runs-on").as_str(), Some("ubuntu-24.04"));
     assert_eq!(field(bindings, "needs").as_str(), Some("eligibility"));
     let bindings_source = serde_json::to_string(bindings).expect("serialize VSIX SDK generation");
     for required in [
@@ -947,6 +948,10 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
     let release_jobs = jobs(&workflow);
     assert_eq!(
         field(job(release_jobs, "validate"), "runs-on").as_str(),
+        Some("ubuntu-24.04")
+    );
+    assert_eq!(
+        field(job(release_jobs, "vscode"), "runs-on").as_str(),
         Some("ubuntu-24.04")
     );
     assert_eq!(

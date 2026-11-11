@@ -45,6 +45,19 @@ The coordinator owns ready-work intake, bounded work in progress, independent
 security/architecture review for relevant changes, and exact-source integration
 receipts with the next owner/action. Local passes do not establish release readiness.
 
+Completed maintenance fixes must reach a GitHub pull request. After required local
+checks and independent review pass, the coordinator has standing authorization to
+commit the scoped changes, push the reviewed commit on a focused branch, and open
+or reuse its PR in `obscuritylabs/Colossus` without asking again. Deliver existing
+validated local fixes before starting new work, including when intake capacity is
+full. Record and verify the PR URL and exact head in the shared receipt/ledger;
+opening a PR does not mark the change integrated or free its pending-integration
+slot. If delivery fails or is uncertain, retain a `publication_pending` item with
+the saved source, blocker and next action, reconcile GitHub before retrying, and
+report the blocker. See [PR delivery](docs/develop/agent-maintenance.md#deliver-validated-fixes-as-pull-requests).
+Explicit hosted acceptance requests, merges, releases and deployments retain their
+separate authorization and repository prerequisites.
+
 Nightly competitive research follows `.codex/research/competitive-watchlist.toml`.
 Verify upstream evidence and current Colossus support, deduplicate open/closed
 issues and active/recent PRs, and independently review qualified proposals before

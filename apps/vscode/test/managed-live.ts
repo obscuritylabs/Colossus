@@ -6,7 +6,7 @@ import { resolve, join } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { ManagedRuntime, type ManagedSetup } from "../src/managed.js";
-import { connectManaged } from "../src/connection.js";
+import { connectManaged, type WorkerClient } from "../src/connection.js";
 import { WorkController } from "../src/controller.js";
 import { removeManagedFixture } from "./managed-fixture.js";
 
@@ -21,7 +21,155 @@ const providerRequests: {
   apiKey: string | string[] | undefined;
   authorization: string | undefined;
 }[] = [];
+type SelectionPhase = {
+  iteration: number;
+  model: "deep" | "fast";
+  reasoning: "xhigh" | "low";
+};
+type DiagnosticEvent =
+  | "view"
+  | "get-start"
+  | "get-completed"
+  | "get-failed"
+  | "provider-request"
+  | "provider-body-read"
+  | "provider-response-finished"
+  | "provider-aborted";
+const diagnosticStarted = performance.now();
+let selectionPhase: SelectionPhase | undefined;
+let observedRunId = "";
+let readCount = 0;
+let requestCount = 0;
+let responseCount = 0;
+let abortCount = 0;
+const diagnosticEvents: Record<string, string | number | boolean>[] = [];
+const statusNames = new Set([
+  "ready",
+  "starting run",
+  "working",
+  "queued",
+  "running",
+  "waiting",
+  "cancelling",
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "outcome_unknown",
+  "outcome unknown",
+]);
+const statusName = (value: string) =>
+  typeof value === "string" && statusNames.has(value.toLowerCase())
+    ? value.toLowerCase()
+    : "other";
+const opaqueId = (value: string) =>
+  typeof value === "string" &&
+  /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(value)
+    ? value
+    : "unrecognized";
+function diagnostic(action: () => void) {
+  try {
+    action();
+  } catch {
+    // Observability must never change the native acceptance outcome.
+  }
+}
+function recordDiagnostic(
+  phase: SelectionPhase | undefined,
+  event: DiagnosticEvent,
+  fields: Record<string, string | number | boolean> = {},
+) {
+  diagnostic(() => {
+    if (!phase) return;
+    diagnosticEvents.push({
+      ...fields,
+      ...phase,
+      event,
+      atMs: Math.round(performance.now() - diagnosticStarted),
+    });
+    if (diagnosticEvents.length > 64) diagnosticEvents.shift();
+  });
+}
+function observeReads(client: WorkerClient) {
+  const get = client.get.bind(client);
+  client.get = (id) => {
+    const phase = selectionPhase;
+    const read = ++readCount;
+    observedRunId = id;
+    recordDiagnostic(phase, "get-start", { read, runId: opaqueId(id) });
+    const operation = get(id);
+    void operation.then(
+      (response) =>
+        diagnostic(() => {
+          const run = response.run;
+          recordDiagnostic(phase, "get-completed", {
+            read,
+            runStatus:
+              run &&
+              Number.isInteger(run.status) &&
+              run.status >= 0 &&
+              run.status <= 9
+                ? run.status
+                : "unrecognized",
+            terminal: !!run?.terminal,
+            sequence:
+              typeof run?.lastSequence === "bigint" &&
+              run.lastSequence >= 0n &&
+              run.lastSequence <= 18446744073709551615n
+                ? run.lastSequence.toString()
+                : "unrecognized",
+          });
+        }),
+      (error: unknown) =>
+        diagnostic(() => {
+          const code =
+            error && typeof error === "object" && "code" in error
+              ? error.code
+              : undefined;
+          recordDiagnostic(phase, "get-failed", {
+            read,
+            rpcCode:
+              typeof code === "number" &&
+              Number.isInteger(code) &&
+              code >= 0 &&
+              code <= 16
+                ? code
+                : "other",
+          });
+        }),
+    );
+    // Observe the real read, including SDK reconciliation, without replacing its
+    // promise, arguments, result/error, deadline, or watch/abort behavior.
+    return operation;
+  };
+  return client;
+}
 const provider = createServer(async (request, response) => {
+  const phase = selectionPhase;
+  const requestId = ++requestCount;
+  recordDiagnostic(phase, "provider-request", { request: requestId });
+  request.once("aborted", () => {
+    abortCount++;
+    recordDiagnostic(phase, "provider-aborted", {
+      request: requestId,
+      side: "request",
+    });
+  });
+  response.once("finish", () => {
+    responseCount++;
+    recordDiagnostic(phase, "provider-response-finished", {
+      request: requestId,
+    });
+  });
+  response.once("close", () => {
+    if (!response.writableFinished) {
+      abortCount++;
+      recordDiagnostic(phase, "provider-aborted", {
+        request: requestId,
+        side: "response",
+      });
+    }
+  });
   let body = "";
   for await (const bytes of request) {
     body += bytes;
@@ -37,6 +185,21 @@ const provider = createServer(async (request, response) => {
     output_config?: { effort: string };
     thinking?: { type: string };
   };
+  diagnostic(() =>
+    recordDiagnostic(phase, "provider-body-read", {
+      request: requestId,
+      requestModel:
+        input.model === "live-deep" || input.model === "live-fast"
+          ? input.model
+          : "other",
+      requestReasoning:
+        input.reasoning_effort === "low" ||
+        input.reasoning_effort === "high" ||
+        input.reasoning_effort === "xhigh"
+          ? input.reasoning_effort
+          : "other",
+    }),
+  );
   providerRequests.push({
     ...input,
     path: request.url,
@@ -142,7 +305,22 @@ const options = {
 };
 let remembered = "";
 const controller = new WorkController("Managed fixture", {
-  publish() {},
+  publish(view) {
+    diagnostic(() => {
+      const run = view.runs.find(({ id }) => id === observedRunId);
+      recordDiagnostic(selectionPhase, "view", {
+        busy: view.busy,
+        watching: view.watching,
+        reconnectable: !!view.reconnectable,
+        status: statusName(view.status),
+        runStatus: run ? statusName(run.status) : "unrecognized",
+        sequence:
+          run && /^[0-9]{1,20}$/u.test(run.sequence)
+            ? run.sequence
+            : "unrecognized",
+      });
+    });
+  },
   async remember(id) {
     remembered = id;
   },
@@ -150,6 +328,41 @@ const controller = new WorkController("Managed fixture", {
     throw new Error("Unexpected interaction");
   },
 });
+function completionSnapshot(
+  waitedMs: number,
+  polls: number,
+  maxPollGapMs: number,
+) {
+  // Freeze the original assertion values before diagnostic output can delay exit.
+  const observed = { error: controller.view.error, busy: controller.view.busy };
+  if (observed.error || observed.busy)
+    diagnostic(() =>
+      console.log(
+        "Managed Local completion diagnostics: " +
+          JSON.stringify({
+            version: 1,
+            phase: selectionPhase,
+            waitBudgetMs: 20000,
+            waitedMs,
+            polls,
+            maxPollGapMs,
+            observed: {
+              busy: observed.busy,
+              errorPresent: !!observed.error,
+              watching: controller.view.watching,
+              status: statusName(controller.view.status),
+            },
+            provider: {
+              started: requestCount,
+              finished: responseCount,
+              abortEvents: abortCount,
+            },
+            events: diagnosticEvents,
+          }),
+      ),
+    );
+  return observed;
+}
 try {
   console.log("Managed Local E2E: initial native startup");
   const first = await runtime.start(options);
@@ -270,7 +483,7 @@ try {
     ],
   });
   await controller.attach(
-    await connectManaged(providerConnection, runtime.pid),
+    observeReads(await connectManaged(providerConnection, runtime.pid)),
     "primary",
   );
   assert.equal(controller.view.modelProfiles.length, 2);
@@ -278,6 +491,18 @@ try {
     ["deep", "xhigh"],
     ["fast", "low"],
   ] as const) {
+    selectionPhase = {
+      iteration: (selectionPhase?.iteration ?? 0) + 1,
+      model: modelProfile,
+      reasoning: reasoningEffort,
+    };
+    console.log(
+      "Managed Local E2E: model " +
+        modelProfile +
+        ", reasoning " +
+        reasoningEffort +
+        ", begin",
+    );
     controller.setModelSelection({ modelProfile, reasoningEffort });
     await controller.send(
       "Verify managed provider selection",
@@ -286,10 +511,32 @@ try {
       controller.view.modelSelection,
     );
     const deadline = Date.now() + 20000;
-    while (controller.view.busy && Date.now() < deadline)
+    const waitStarted = performance.now();
+    let polls = 0;
+    let maxPollGapMs = 0;
+    while (controller.view.busy && Date.now() < deadline) {
+      const pollStarted = performance.now();
       await new Promise((resolve) => setTimeout(resolve, 25));
-    assert.equal(controller.view.error, "");
-    assert.equal(controller.view.busy, false);
+      polls++;
+      maxPollGapMs = Math.max(
+        maxPollGapMs,
+        Math.round(performance.now() - pollStarted),
+      );
+    }
+    const observed = completionSnapshot(
+      Math.round(performance.now() - waitStarted),
+      polls,
+      maxPollGapMs,
+    );
+    assert.equal(observed.error, "");
+    assert.equal(observed.busy, false);
+    console.log(
+      "Managed Local E2E: model " +
+        modelProfile +
+        ", reasoning " +
+        reasoningEffort +
+        ", completed",
+    );
   }
   assert.deepEqual(
     providerRequests.map(({ model, reasoning_effort }) => ({
@@ -307,6 +554,7 @@ try {
         request.authorization === "Bearer managed-test-private-provider-key",
     ),
   );
+  selectionPhase = undefined;
   controller.detach();
   await runtime.stop();
   console.log(

@@ -477,9 +477,31 @@ impl ContextPreparer for ContextService {
         })
     }
 
+    async fn prepare_tool_evidence(
+        &self,
+        request: ContextPreparationRequest,
+    ) -> Result<PreparedContext, ContextError> {
+        if request.continuation.is_some() || !request.tools.is_empty() || request.force {
+            return Err(ContextError::Configuration(
+                "tool evidence recovery requires a fresh tool-free request".into(),
+            ));
+        }
+        self.prepare_context(request, true).await
+    }
+
     async fn prepare(
         &self,
         request: ContextPreparationRequest,
+    ) -> Result<PreparedContext, ContextError> {
+        self.prepare_context(request, false).await
+    }
+}
+
+impl ContextService {
+    async fn prepare_context(
+        &self,
+        request: ContextPreparationRequest,
+        tool_evidence: bool,
     ) -> Result<PreparedContext, ContextError> {
         let ContextPreparationRequest {
             continuation,
@@ -505,20 +527,44 @@ impl ContextPreparer for ContextService {
         }
         validate_newest_image_turn(&messages)?;
         let messages = compact_excess_images(&messages);
-        let messages = if continuation.as_ref().is_some_and(|view| view.replay) {
+        let messages = if tool_evidence {
+            project_recovery_observations(&messages)
+        } else if continuation.as_ref().is_some_and(|view| view.replay) {
             colossus_tools::project_model_tool_observations_preserving_current_turn(&messages)
         } else {
             project_model_tool_observations(&messages)
         };
-        let bindings = self
-            .binding_messages(&session_id, &messages, context.clone())
-            .await?;
+        let bindings = if tool_evidence {
+            // Recovery can also run as preflight, before accepting human input.
+            // Bind decisions without starting a journaled memory retrieval effect.
+            self.decision_message()?.into_iter().collect()
+        } else {
+            self.binding_messages(&session_id, &messages, context.clone())
+                .await?
+        };
         let context_binding_hash = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
             serde_json::to_vec(&bindings).map_err(|_| {
                 ContextError::Configuration("unable to bind context messages".into())
             })?,
         ));
-        let original_messages = prepend_bindings(bindings.clone(), messages.clone());
+        // Apply snapshots to the original slots before changing the provider-facing roles.
+        let with_snapshot = |snapshot: &ContextSnapshot| {
+            let mut prepared = apply_snapshot(snapshot, &messages);
+            if tool_evidence {
+                prepared[0].role = ModelMessageRole::User;
+            }
+            prepared
+        };
+        let bind_request = |bindings, messages| {
+            let messages = if tool_evidence {
+                quote_tool_evidence(messages)
+            } else {
+                messages
+            };
+            prepend_bindings(bindings, messages)
+        };
+        let recovery_strategy = tool_evidence.then(|| "tool_evidence_recovery".to_owned());
+        let original_messages = bind_request(bindings.clone(), messages.clone());
         let original =
             estimate_tokens_for_model(&budget.model, &instructions, &original_messages, &tools);
         let original_bytes = model_request_bytes(&instructions, &original_messages, &tools);
@@ -527,11 +573,10 @@ impl ContextPreparer for ContextService {
             .threshold_tokens(budget.limits.input_budget_tokens);
         let target = self.config.target_tokens(budget.limits.input_budget_tokens);
         let active = self.snapshots.active(&session_id)?;
-        let active_messages = active.as_ref().map_or_else(
-            || messages.clone(),
-            |snapshot| apply_snapshot(snapshot, &messages),
-        );
-        let mut active_messages = prepend_bindings(bindings.clone(), active_messages);
+        let active_messages = active
+            .as_ref()
+            .map_or_else(|| messages.clone(), with_snapshot);
+        let mut active_messages = bind_request(bindings.clone(), active_messages);
         if active.is_some() {
             bound_summary_to_target(
                 &budget.model,
@@ -631,6 +676,8 @@ impl ContextPreparer for ContextService {
         }
         let should_create = force
             || (self.config.auto_compaction
+                // A recovery request must honor a retained snapshot's cutoff.
+                && (!tool_evidence || active.is_none())
                 && (original > threshold || original_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES)
                 && (active.is_none()
                     || active_estimate > threshold
@@ -668,7 +715,7 @@ impl ContextPreparer for ContextService {
                 snapshot_id: active.as_ref().map(|snapshot| snapshot.id.clone()),
                 compacted: active.is_some(),
                 snapshot_created: false,
-                strategy: active.map(|snapshot| snapshot.strategy),
+                strategy: recovery_strategy.or_else(|| active.map(|snapshot| snapshot.strategy)),
             });
         }
         let preserve = self.config.preserve_recent_messages.min(messages.len());
@@ -680,6 +727,13 @@ impl ContextPreparer for ContextService {
         }
         if force && source_end == 0 {
             source_end = messages.len();
+        }
+        if tool_evidence && let Some(last_result) = last_tool_evidence(&messages) {
+            let evidence_start = messages[..last_result]
+                .iter()
+                .rposition(ModelMessage::begins_user_turn)
+                .unwrap_or(0);
+            source_end = source_end.min(evidence_start);
         }
         if source_end == 0 {
             if original_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
@@ -714,10 +768,10 @@ impl ContextPreparer for ContextService {
                 snapshot_id: active.as_ref().map(|snapshot| snapshot.id.clone()),
                 compacted: false,
                 snapshot_created: false,
-                strategy: None,
+                strategy: recovery_strategy,
             });
         }
-        let preserved = prepend_bindings(bindings.clone(), messages[source_end..].to_vec());
+        let preserved = bind_request(bindings.clone(), messages[source_end..].to_vec());
         let preserved_bytes = model_request_bytes(&instructions, &preserved, &tools);
         if preserved_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
             return Err(ContextBudgetExceeded::request_bytes(
@@ -740,10 +794,7 @@ impl ContextPreparer for ContextService {
         let draft_snapshot = deterministic_snapshot(&session_id, &messages[..source_end]);
         let mut minimum_snapshot = draft_snapshot.clone();
         minimum_snapshot.summary = "...".into();
-        let minimum_prepared = prepend_bindings(
-            bindings.clone(),
-            apply_snapshot(&minimum_snapshot, &messages),
-        );
+        let minimum_prepared = bind_request(bindings.clone(), with_snapshot(&minimum_snapshot));
         let minimum_bytes = model_request_bytes(&instructions, &minimum_prepared, &tools);
         if minimum_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
             return Err(ContextBudgetExceeded::request_bytes(
@@ -764,11 +815,15 @@ impl ContextPreparer for ContextService {
             .into());
         }
         let actor = context_actor(&context);
-        let snapshot = self
-            .draft_snapshot(draft_snapshot, &messages[..source_end], context)
-            .await?;
-        let mut prepared = apply_snapshot(&snapshot, &messages);
-        prepared = prepend_bindings(bindings, prepared);
+        let snapshot = if tool_evidence {
+            // This projection is only for the recovery request. Keep the snapshot
+            // transient and use deterministic compaction without auxiliary inference.
+            draft_snapshot
+        } else {
+            self.draft_snapshot(draft_snapshot, &messages[..source_end], context)
+                .await?
+        };
+        let mut prepared = bind_request(bindings, with_snapshot(&snapshot));
         bound_summary_to_target(&budget.model, &instructions, &mut prepared, &tools, target);
         bound_summary_to_byte_limit(
             &instructions,
@@ -794,10 +849,12 @@ impl ContextPreparer for ContextService {
             )
             .into());
         }
-        let snapshot = self
-            .snapshots
-            .create(snapshot, actor)
-            .map_err(ContextError::from)?;
+        let (snapshot_id, strategy) = if tool_evidence {
+            (None, recovery_strategy)
+        } else {
+            let snapshot = self.snapshots.create(snapshot, actor)?;
+            (Some(snapshot.id), Some(snapshot.strategy))
+        };
         Ok(PreparedContext {
             context_binding_hash,
             continuation_id: None,
@@ -811,10 +868,10 @@ impl ContextPreparer for ContextService {
             input_budget_tokens: budget.limits.input_budget_tokens,
             threshold_tokens: threshold,
             target_tokens: target,
-            snapshot_id: Some(snapshot.id),
+            snapshot_id,
             compacted: true,
-            snapshot_created: true,
-            strategy: Some(snapshot.strategy),
+            snapshot_created: !tool_evidence,
+            strategy,
         })
     }
 }

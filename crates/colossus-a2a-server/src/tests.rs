@@ -1,16 +1,22 @@
 use super::*;
 use async_trait::async_trait;
 use axum::{
-    body::{Body, to_bytes},
-    http::{Request, StatusCode},
+    body::{Body, Bytes, to_bytes},
+    http::{Request, StatusCode, header},
 };
 use colossus_sdk::*;
+use futures::StreamExt;
 use serde_json::{Value, json};
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    convert::Infallible,
+    pin::Pin,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    task::Poll,
 };
-use tower::ServiceExt;
+use tower::{ServiceExt, util::Oneshot};
 
 const TOKEN: &str = "test-peer-secret-with-at-least-32-bytes";
 const OTHER: &str = "other-peer-secret-with-at-least-32-bytes";
@@ -225,6 +231,15 @@ async fn call(
     method: &str,
     params: Value,
 ) -> (StatusCode, String) {
+    let request = rpc_request(token, version, rpc_body(method, params));
+    let response = router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .unwrap();
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
+}
+fn rpc_request(token: Option<&str>, version: Option<&str>, body: Body) -> Request<Body> {
     let mut request = Request::builder()
         .method("POST")
         .uri("/")
@@ -235,18 +250,157 @@ async fn call(
     if let Some(version) = version {
         request = request.header("A2A-Version", version);
     }
-    let response = router.clone().oneshot(request.body(Body::from(json!({"jsonrpc": "2.0", "id": "request-1", "method": method, "params": params}).to_string())).unwrap()).await.unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
-        .await
-        .unwrap();
-    (status, String::from_utf8(bytes.to_vec()).unwrap())
+    request.body(body).unwrap()
+}
+fn rpc_body(method: &str, params: Value) -> Body {
+    Body::from(
+        json!({"jsonrpc": "2.0", "id": "request-1", "method": method, "params": params})
+            .to_string(),
+    )
 }
 fn message() -> Value {
     json!({"message": {"messageId": "message-1", "role": "ROLE_USER", "parts": [{"text": "Review this code"}]}})
 }
 fn value(text: &str) -> Value {
     serde_json::from_str(text).unwrap()
+}
+
+type InFlightRequest = Pin<Box<Oneshot<axum::Router, Request<Body>>>>;
+
+fn pending_request(router: &axum::Router, token: &str) -> (InFlightRequest, Arc<AtomicUsize>) {
+    let polls = Arc::new(AtomicUsize::new(0));
+    let body = Body::from_stream(futures::stream::poll_fn({
+        let polls = polls.clone();
+        move |_| {
+            polls.fetch_add(1, Ordering::Relaxed);
+            Poll::<Option<Result<Bytes, Infallible>>>::Pending
+        }
+    }));
+    let request = rpc_request(Some(token), Some("1.0"), body);
+    (Box::pin(router.clone().oneshot(request)), polls)
+}
+
+async fn park_requests(router: &axum::Router, token: &str, count: usize) -> Vec<InFlightRequest> {
+    let mut pending = Vec::with_capacity(count);
+    for _ in 0..count {
+        let (mut request, polls) = pending_request(router, token);
+        assert!(futures::poll!(&mut request).is_pending());
+        assert_ne!(polls.load(Ordering::Relaxed), 0);
+        pending.push(request);
+    }
+    pending
+}
+
+async fn assert_overloaded(router: &axum::Router, token: &str, expected_status: StatusCode) {
+    let (mut request, polls) = pending_request(router, token);
+    let Poll::Ready(response) = futures::poll!(&mut request) else {
+        panic!("overload response waited for the request body");
+    };
+    let response = response.unwrap();
+    assert_eq!(response.status(), expected_status);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(polls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn peer_limit_covers_pending_bodies_and_releases_failed_requests() {
+    let client = Arc::new(Client::new("task-1", false));
+    let router = router(client.clone());
+    let mut pending = park_requests(&router, TOKEN, 8).await;
+    assert_overloaded(&router, TOKEN, StatusCode::TOO_MANY_REQUESTS).await;
+    assert!(client.queries.lock().unwrap().is_empty());
+    let (_, body) = call(&router, Some(OTHER), Some("1.0"), "ListTasks", json!({})).await;
+    assert_eq!(value(&body)["result"]["tasks"][0]["id"], "other-task");
+
+    drop(pending.pop().unwrap());
+    let request = rpc_request(
+        Some(TOKEN),
+        Some("1.0"),
+        Body::from(vec![b'x'; 64 * 1024 + 1]),
+    );
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let request = rpc_request(Some(TOKEN), Some("1.0"), Body::from("{"));
+    let response = router.clone().oneshot(request).await.unwrap();
+    let body = to_bytes(response.into_body(), 1024).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["error"]["code"],
+        -32600
+    );
+
+    let (request, _) = pending_request(&router, TOKEN);
+    assert_eq!(request.await.unwrap().status(), StatusCode::REQUEST_TIMEOUT);
+    let (_, body) = call(&router, Some(TOKEN), Some("1.0"), "ListTasks", json!({})).await;
+    assert_eq!(value(&body)["result"]["tasks"][0]["id"], "task-1");
+    assert_eq!(client.queries.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn global_limit_covers_pending_bodies_across_peers() {
+    let client = Arc::new(Client::new("task-1", false));
+    let tokens = (0..5)
+        .map(|index| format!("test-peer-{index}-secret-with-at-least-32-bytes"))
+        .collect::<Vec<_>>();
+    let peers = tokens
+        .iter()
+        .map(|token| {
+            (
+                crate::service::credential_digest(token),
+                PeerProfile::new(client.clone(), "primary".into(), 2).unwrap(),
+            )
+        })
+        .collect();
+    let router = A2aListener::new("https://agent.example".into(), peers)
+        .unwrap()
+        .router();
+    let mut pending = Vec::new();
+    for token in &tokens[..4] {
+        pending.extend(park_requests(&router, token, 8).await);
+    }
+    assert_overloaded(&router, &tokens[4], StatusCode::SERVICE_UNAVAILABLE).await;
+    assert!(client.queries.lock().unwrap().is_empty());
+    drop(pending.pop().unwrap());
+    let (_, body) = call(
+        &router,
+        Some(&tokens[4]),
+        Some("1.0"),
+        "ListTasks",
+        json!({}),
+    )
+    .await;
+    assert_eq!(value(&body)["result"]["totalSize"], 1);
+    assert_eq!(client.queries.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn stream_holds_admission_until_its_response_body_is_dropped() {
+    let client = Arc::new(Client::new("task-1", false));
+    let router = router(client.clone());
+    let _pending = park_requests(&router, TOKEN, 7).await;
+    let request = rpc_request(
+        Some(TOKEN),
+        Some("1.0"),
+        rpc_body("SendStreamingMessage", message()),
+    );
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "text/event-stream"
+    );
+    let mut stream = response.into_body().into_data_stream();
+    let first_event = stream.next().await.unwrap().unwrap();
+    assert!(
+        str::from_utf8(&first_event)
+            .unwrap()
+            .contains("TASK_STATE_SUBMITTED")
+    );
+    assert_overloaded(&router, TOKEN, StatusCode::TOO_MANY_REQUESTS).await;
+
+    drop(stream);
+    let (_, body) = call(&router, Some(TOKEN), Some("1.0"), "ListTasks", json!({})).await;
+    assert_eq!(value(&body)["result"]["totalSize"], 1);
+    assert_eq!(client.inputs.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

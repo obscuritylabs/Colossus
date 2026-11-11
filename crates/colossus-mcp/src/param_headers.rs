@@ -3,7 +3,7 @@
 use crate::McpOperation;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use http::{HeaderName, HeaderValue};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
 pub(super) fn call_headers(
@@ -20,10 +20,10 @@ pub(super) fn call_headers(
     let Some(properties) = input_schema.get("properties").and_then(Value::as_object) else {
         return Ok(HashMap::new());
     };
+    validate_annotation_depth(properties)?;
     let mut headers = HashMap::new();
     let mut names = HashSet::new();
     for (property, schema) in properties {
-        reject_nested_annotations(schema)?;
         let Some(annotation) = schema.get("x-mcp-header") else {
             continue;
         };
@@ -67,8 +67,8 @@ pub(super) fn call_headers(
     Ok(headers)
 }
 
-fn reject_nested_annotations(schema: &Value) -> Result<(), String> {
-    let mut pending = vec![schema];
+pub(super) fn validate_annotation_depth(properties: &Map<String, Value>) -> Result<(), String> {
+    let mut pending: Vec<_> = properties.values().collect();
     while let Some(schema) = pending.pop() {
         if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
             for child in properties.values() {
