@@ -43,6 +43,9 @@ test("browser → production native adapter → authenticated worker: offline co
   page,
 }) => {
   test.setTimeout(180_000);
+  // Native mutations finish before the renderer's separate inventory refresh.
+  // Wait for the new rendered state within the acceptance subprocess budget.
+  const inventoryRefreshTimeout = 45_000;
   const repository = resolve("../..");
   const suffix = process.platform === "win32" ? ".exe" : "";
   const bridge =
@@ -287,7 +290,7 @@ test("browser → production native adapter → authenticated worker: offline co
     await continueOperation("disable");
     await expect(
       detail.getByRole("button", { name: "Activate this digest" }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: inventoryRefreshTimeout });
     // Reopening the same binary must retain the user's disabled preference.
     const listed = await execute(
       binary,
@@ -298,11 +301,9 @@ test("browser → production native adapter → authenticated worker: offline co
     expect(listed).toContain("disabled");
     await detail.getByRole("button", { name: "Activate this digest" }).click();
     await continueOperation("enable");
-    // Native activation completes before the renderer's separate inventory
-    // refresh. Allow that command's bounded budget for the enabled state.
     await expect(
       detail.getByRole("button", { name: "Disable", exact: true }),
-    ).toBeVisible({ timeout: 45_000 });
+    ).toBeVisible({ timeout: inventoryRefreshTimeout });
     await expect(detail.locator(".plugin-icon img")).toHaveJSProperty(
       "naturalWidth",
       128,
@@ -337,7 +338,7 @@ test("browser → production native adapter → authenticated worker: offline co
     );
     await expect(
       local.getByRole("button", { name: "Disable workspace source" }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: inventoryRefreshTimeout });
     await local.getByRole("button", { name: "Preview instructions" }).click();
     await expect(local.locator("pre")).toContainText(
       "Review the workspace changes carefully.",
@@ -355,7 +356,7 @@ test("browser → production native adapter → authenticated worker: offline co
     await page.getByRole("button", { name: "Refresh plugins" }).click();
     await expect(
       page.getByRole("button", { name: "Refresh plugins" }),
-    ).toBeEnabled();
+    ).toBeEnabled({ timeout: inventoryRefreshTimeout });
     await page.getByRole("button", { name: /local-review 1\.0/u }).click();
     await expect(
       local.getByRole("button", { name: "Disable workspace source" }),
@@ -394,7 +395,7 @@ test("browser → production native adapter → authenticated worker: offline co
     );
     await expect(
       local.getByRole("button", { name: "Preview instructions" }),
-    ).toBeDisabled();
+    ).toBeDisabled({ timeout: inventoryRefreshTimeout });
     nativePaths = [localSource];
     await page.getByRole("button", { name: "Add plugin", exact: true }).click();
     await page.getByRole("combobox", { name: "Plugin source" }).click();
@@ -404,7 +405,7 @@ test("browser → production native adapter → authenticated worker: offline co
     await continueOperation("add");
     await expect(
       local.getByRole("button", { name: "Disable workspace source" }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: inventoryRefreshTimeout });
     consent = false;
     await page.getByText("Developer tools", { exact: true }).click();
     nativePaths = [source];
@@ -427,7 +428,11 @@ test("browser → production native adapter → authenticated worker: offline co
       .click();
     await page.getByLabel("Trust profile", { exact: true }).fill("offline");
     await continueOperation("install");
-    await page.getByRole("button", { name: /example 1\.0/u }).click();
+    const importedCard = page.getByRole("button", { name: /example 1\.0/u });
+    await expect(importedCard).toBeVisible({
+      timeout: inventoryRefreshTimeout,
+    });
+    await importedCard.click();
     const imported = page.getByRole("article", { name: "example details" });
     await expect(imported.locator(".plugin-icon img")).toHaveJSProperty(
       "naturalWidth",
@@ -447,7 +452,7 @@ test("browser → production native adapter → authenticated worker: offline co
     await continueOperation("enable");
     await expect(
       imported.getByRole("button", { name: "Disable", exact: true }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: inventoryRefreshTimeout });
     await expect(imported.locator(".plugin-icon img")).toHaveJSProperty(
       "naturalWidth",
       128,
