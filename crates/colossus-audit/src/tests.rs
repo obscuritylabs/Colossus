@@ -1,11 +1,11 @@
 use super::{
-    AUDIT_EXPORT_ACTOR, AuditExportService, GatewayDirectoryAuditExporter,
+    AUDIT_EXPORT_ACTOR, AUDIT_EXPORT_CONSUMER, AuditExportService, GatewayDirectoryAuditExporter,
     GatewayWormAuditExporter, evidence,
 };
 use async_trait::async_trait;
 use colossus_contracts::{
     Actor, ActorType, AuditEvidence, DecisionOutcome, EffectRequest, EventClassification,
-    ExecutionContext, NewEvent, QuarantinedEffectResult,
+    EventEnvelope, ExecutionContext, NewEvent, QuarantinedEffectResult,
 };
 use colossus_journal_redb::{Ed25519CheckpointSigner, RedbEventJournal, StaticKeyProvider};
 use colossus_policy::{
@@ -26,6 +26,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 fn event(actor: Actor, stream: &str) -> NewEvent {
     NewEvent {
@@ -62,17 +63,22 @@ fn persistent_journal(path: &std::path::Path) -> Arc<RedbEventJournal> {
     )
 }
 
+fn persistent_queue(journal: &Arc<RedbEventJournal>) -> Arc<dyn ExternalWorkQueue> {
+    let journal_port: Arc<dyn EventJournal> = journal.clone();
+    let projection_store: Arc<dyn ProjectionStore> = journal.clone();
+    Arc::new(JournalExternalWorkQueue::new(
+        journal_port,
+        projection_store,
+    ))
+}
+
 fn persistent_service(
     state: &std::path::Path,
     exports: &std::path::Path,
 ) -> (Arc<RedbEventJournal>, AuditExportService) {
     let journal = persistent_journal(state);
     let journal_port: Arc<dyn EventJournal> = journal.clone();
-    let projection_store: Arc<dyn ProjectionStore> = journal.clone();
-    let queue: Arc<dyn ExternalWorkQueue> = Arc::new(JournalExternalWorkQueue::new(
-        Arc::clone(&journal_port),
-        projection_store,
-    ));
+    let queue = persistent_queue(&journal);
     let policy = BuiltInPolicy::offline_default()
         .with_action("audit.export.write", DecisionOutcome::Allow)
         .with_filesystem_root(exports.display().to_string(), "write");
@@ -176,6 +182,25 @@ async fn crash_after_delivery_replays_idempotently_before_acknowledging_queue() 
 #[derive(Default)]
 struct RecordingExporter {
     evidence: Mutex<Vec<AuditEvidence>>,
+    failure: Mutex<Option<(u64, StoreError)>>,
+}
+
+impl RecordingExporter {
+    fn fail_once_at(sequence: u64, error: StoreError) -> Self {
+        Self {
+            failure: Mutex::new(Some((sequence, error))),
+            ..Self::default()
+        }
+    }
+
+    fn attempted_sequences(&self) -> Vec<u64> {
+        self.evidence
+            .lock()
+            .expect("records")
+            .iter()
+            .map(|record| record.global_sequence)
+            .collect()
+    }
 }
 
 #[derive(Default)]
@@ -325,6 +350,14 @@ impl AuditExporter for RecordingExporter {
             .lock()
             .map_err(|error| StoreError::Adapter(error.to_string()))?
             .push(evidence.clone());
+        let mut failure = self.failure.lock().expect("failure");
+        if failure
+            .as_ref()
+            .is_some_and(|(sequence, _)| *sequence == evidence.global_sequence)
+        {
+            let (_, error) = failure.take().expect("matching failure");
+            return Err(error);
+        }
         Ok(())
     }
 }
@@ -476,6 +509,159 @@ async fn transient_failure_defers_immediate_retry_without_duplicate_delivery() {
         Err(StoreError::Adapter(message)) if message.contains("retry is deferred")
     ));
     assert_eq!(exporter.calls.load(Ordering::Acquire), 1);
+}
+
+fn later_batch_fixture(journal: &dyn EventJournal) -> [EventEnvelope; 4] {
+    [
+        ("fixture:first", ActorType::User, "operator"),
+        (
+            "fixture:exporter-lifecycle",
+            ActorType::System,
+            AUDIT_EXPORT_ACTOR,
+        ),
+        ("fixture:failed", ActorType::User, "operator"),
+        ("fixture:remaining", ActorType::User, "operator"),
+    ]
+    .map(|(stream, actor_type, id)| {
+        journal
+            .append(event(
+                Actor {
+                    actor_type,
+                    id: id.into(),
+                },
+                stream,
+            ))
+            .expect("source event")
+    })
+}
+
+#[tokio::test]
+async fn later_batch_unknown_outcome_blocks_delivery_after_reopen() {
+    const ERROR: &str = "fixture later export outcome is unknown";
+    let directory = tempfile::tempdir().expect("directory");
+    let state = directory.path().join("state.redb");
+    let journal = persistent_journal(&state);
+    let [first, skipped, failed, remaining] = later_batch_fixture(journal.as_ref());
+    let exporter = Arc::new(RecordingExporter::fail_once_at(
+        failed.global_sequence,
+        StoreError::OutcomeUnknown(ERROR.into()),
+    ));
+    let exporter_port: Arc<dyn AuditExporter> = exporter.clone();
+    let service = AuditExportService::new(
+        journal.clone(),
+        persistent_queue(&journal),
+        Some(Arc::clone(&exporter_port)),
+    );
+
+    assert!(matches!(
+        service.run_once(8).await,
+        Err(StoreError::OutcomeUnknown(message)) if message == ERROR
+    ));
+    let status = service.status().expect("failed status");
+    assert_eq!(status.position, skipped.global_sequence);
+    assert_eq!(status.journal_head, remaining.global_sequence);
+    assert!(!status.ready);
+    let retry = status.retry.expect("durable retry");
+    assert_eq!(retry.global_sequence, failed.global_sequence);
+    assert_eq!(retry.event_id.as_deref(), Some(failed.event_id.as_str()));
+    assert_eq!(retry.attempts, 1);
+    assert!(!retry.retryable);
+    assert!(retry.next_retry_at.is_none());
+    assert_eq!(retry.error_code, "audit_export.outcome_unknown");
+    assert_eq!(
+        retry.error,
+        StoreError::OutcomeUnknown(ERROR.into()).to_string()
+    );
+    let attempted = [first.global_sequence, failed.global_sequence];
+    assert_eq!(exporter.attempted_sequences(), attempted);
+
+    drop(service);
+    drop(journal);
+    let reopened = persistent_journal(&state);
+    let service = AuditExportService::new(
+        reopened.clone(),
+        persistent_queue(&reopened),
+        Some(exporter_port),
+    );
+    let status = service.status().expect("reopened status");
+    assert_eq!(status.position, skipped.global_sequence);
+    assert_eq!(status.retry, Some(retry));
+    assert!(matches!(
+        service.drain(8, 8).await,
+        Err(StoreError::OutcomeUnknown(message)) if message.contains("operator reset required")
+    ));
+    assert_eq!(exporter.attempted_sequences(), attempted);
+}
+
+#[tokio::test]
+async fn later_batch_transient_failure_defers_then_resumes_at_failed_item() {
+    const ERROR: &str = "fixture later exporter is temporarily unavailable";
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let [first, skipped, failed, remaining] = later_batch_fixture(journal.as_ref());
+    let queue = queue(Arc::clone(&journal));
+    let exporter = Arc::new(RecordingExporter::fail_once_at(
+        failed.global_sequence,
+        StoreError::Adapter(ERROR.into()),
+    ));
+    let exporter_port: Arc<dyn AuditExporter> = exporter.clone();
+    let service = AuditExportService::new(journal, Arc::clone(&queue), Some(exporter_port));
+
+    assert!(matches!(
+        service.run_once(8).await,
+        Err(StoreError::Adapter(message)) if message == ERROR
+    ));
+    let status = service.status().expect("failed status");
+    assert_eq!(status.position, skipped.global_sequence);
+    let retry = status.retry.expect("durable retry");
+    assert_eq!(retry.global_sequence, failed.global_sequence);
+    assert_eq!(retry.event_id.as_deref(), Some(failed.event_id.as_str()));
+    assert_eq!(retry.attempts, 1);
+    assert!(retry.retryable);
+    assert_eq!(retry.error_code, "audit_export.adapter");
+    let failed_at = OffsetDateTime::parse(&retry.last_failed_at, &Rfc3339).expect("failure time");
+    let retry_at = OffsetDateTime::parse(
+        retry.next_retry_at.as_deref().expect("retry time"),
+        &Rfc3339,
+    )
+    .expect("parse retry time");
+    assert_eq!(retry_at - failed_at, Duration::seconds(1));
+    assert_eq!(
+        exporter.attempted_sequences(),
+        [first.global_sequence, failed.global_sequence]
+    );
+
+    // Seed the same retry with a past timestamp to exercise resumption without sleeping.
+    let pending = queue
+        .pending(AUDIT_EXPORT_CONSUMER, 8)
+        .expect("pending work");
+    assert_eq!(pending[0].event_id, failed.event_id);
+    queue
+        .clear_failure(AUDIT_EXPORT_CONSUMER)
+        .expect("clear fixture retry");
+    queue
+        .record_failure(
+            AUDIT_EXPORT_CONSUMER,
+            Some(&pending[0]),
+            "2000-01-01T00:00:00Z",
+            true,
+            &retry.error_code,
+            &retry.error,
+        )
+        .expect("seed expired retry");
+    let report = service.run_once(8).await.expect("resume later batch");
+    assert_eq!(report.exported, 2);
+    assert!(report.status.ready);
+    assert_eq!(report.status.position, remaining.global_sequence);
+    assert!(report.status.retry.is_none());
+    assert_eq!(
+        exporter.attempted_sequences(),
+        [
+            first.global_sequence,
+            failed.global_sequence,
+            failed.global_sequence,
+            remaining.global_sequence,
+        ]
+    );
 }
 
 #[tokio::test]
