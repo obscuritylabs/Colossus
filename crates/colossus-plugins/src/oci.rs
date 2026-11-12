@@ -369,6 +369,27 @@ pub fn extract_plugin_artifact(
     artifact: &BuiltPluginArtifact,
     destination: &Path,
 ) -> Result<PathBuf, StoreError> {
+    extract_plugin_artifact_with_durability(artifact, destination, ExtractionDurability::Durable)
+}
+
+/// Extract into scratch space that will be discarded after comparison.
+pub(super) fn extract_plugin_artifact_for_comparison(
+    artifact: &BuiltPluginArtifact,
+    destination: &Path,
+) -> Result<PathBuf, StoreError> {
+    extract_plugin_artifact_with_durability(artifact, destination, ExtractionDurability::Scratch)
+}
+
+enum ExtractionDurability {
+    Durable,
+    Scratch,
+}
+
+fn extract_plugin_artifact_with_durability(
+    artifact: &BuiltPluginArtifact,
+    destination: &Path,
+    durability: ExtractionDurability,
+) -> Result<PathBuf, StoreError> {
     validate_artifact_bytes(artifact)?;
     if destination.exists() {
         return Err(StoreError::Adapter(format!(
@@ -455,7 +476,9 @@ pub fn extract_plugin_artifact(
                     .set_permissions(fs::Permissions::from_mode(mode))
                     .map_err(adapter)?;
             }
-            output.sync_all().map_err(adapter)?;
+            if matches!(durability, ExtractionDurability::Durable) {
+                output.sync_all().map_err(adapter)?;
+            }
         }
     }
     // Extraction verifies component structure and identity; display normalization
