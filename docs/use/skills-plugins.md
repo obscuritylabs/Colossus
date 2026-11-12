@@ -11,8 +11,8 @@ icon: lucide/puzzle
 A **skill** gives Colossus instructions for a particular kind of work. A **plugin**
 packages skills and may also include resources or MCP server declarations. The CLI
 includes the `colossus` plugin with `coding`, `plugin-authoring`, `schedule-task`, and
-`security-review` skills. It also includes `documentation`, a curated adaptation of
-the Google Developer Documentation Style Guide.
+`security-review` skills. It also includes `documentation`, with an unabridged,
+offline snapshot of the Google Developer Documentation Style Guide's article text.
 
 When a verified browser is enabled, the bundled plugin also provides
 `colossus/browser`. In Desktop, type `@browser` and choose **Browser** to insert
@@ -82,9 +82,11 @@ several skills; selecting its name in plugin inventory does not select them all.
 When automatic documentation guidance is enabled (the default), Colossus instructs
 agents to read `colossus/documentation` for documentation writing and editing tasks.
 The short instruction applies to READMEs, API documentation, tutorials, and how-to
-guides. The agent chooses relevant topic references through the read-only plugin
-reader; the full guide is not added to every prompt. Unrelated tasks receive only
-skill metadata and the conditional instruction, without the guide's reference text.
+guides. The agent reads an index and relevant original pages through the read-only
+plugin reader; the full guide is shipped locally but is not added to every prompt.
+Large pages, including the word list, have ordered parts within the reader's limits.
+Unrelated tasks receive only skill metadata and the conditional instruction, without
+the guide's reference text.
 
 To choose the skill explicitly:
 
@@ -119,11 +121,15 @@ plugin name takes precedence only in that workspace. Neither installation nor re
 these references enables execution, workspace writes, or network access.
 
 User instructions and repository documentation requirements take precedence over the
-style recommendations. The references are a condensed adaptation attributed to Google
-and licensed under CC BY 4.0, with source links, change notices, and the license included.
-They contain no upstream code samples. Maintainers review upstream changes deliberately;
-there are no runtime downloads or automatic reference updates. See the skill's
-`references/sources.md` for the reviewed sources, date, and maintenance procedure.
+style recommendations. The complete original article text, examples, tables, and
+exceptions are retained as HTML reference text, with explicit text labels for
+platform-specific annotations. An inventory records original source hashes, URLs,
+capture and revision dates, redirects, and ordered parts. Prose uses CC BY 4.0;
+code samples use Apache 2.0. Both licenses and attribution are included. External
+image files remain upstream references, with their original URLs and alt text;
+those files are not bundled under the prose license. Maintainers review upstream
+changes deliberately; there are no runtime downloads or automatic reference updates.
+See the skill's `references/sources.md` for provenance and the maintenance procedure.
 Update Colossus for bundled revisions, or use the normal plugin lifecycle for a separate
 copy. Active runs keep their captured policy and reference snapshots.
 

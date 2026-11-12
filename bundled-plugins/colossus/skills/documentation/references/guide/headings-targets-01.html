@@ -1,0 +1,146 @@
+<!-- Source: https://developers.google.com/style/headings-targets; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/headings-targets">
+<h1>Make headings into link targets</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+  <p>This page discusses how to turn a heading into a link target by using an
+    <code translate="no" dir="ltr">id</code> attribute. For more information about how to format headings, see
+    <a href="/style/headings">Headings and titles</a>.</p>
+
+<p>In some content management systems, anchors are automatically created for headings. However, you
+  might want to add a <i>custom</i> anchor to a heading for several reasons:</p>
+  <ul>
+    <li>You want to use an anchor that's shorter than the automatically generated anchor.</li>
+    <li>You want to use an anchor for content that might be frequently linked to. Adding a custom
+  anchor reduces the likelihood of breaking existing links if the heading text changes later.</li>
+    <li>You want to <a href=#changing-an-anchor>revise a heading</a>. If the
+      anchor for the heading is generated automatically, then the anchor changes when you revise
+      the heading, breaking existing links.</li>
+
+    
+  </ul>
+<p>
+
+<section id="adding-an-anchor">
+<h2 id="add-a-custom-anchor" data-text="Add a custom anchor" tabindex="-1">Add a custom anchor</h2>
+<devsite-selector>
+<section>
+  <h3 id="html" data-text="HTML" tabindex="-1">HTML</h3>
+  <p>To add an anchor to a heading in HTML, add a <code translate="no" dir="ltr">section</code> element
+    with an <code translate="no" dir="ltr">id</code> attribute, or use an <code translate="no" dir="ltr">a</code> element with
+    a <code translate="no" dir="ltr">name</code> attribute. For anchor text, use lowercase letters, and
+    put hyphens between words. In the following, replace
+    <code translate="no" dir="ltr"><var translate="no">ID_OF_ANCHOR</var></code> with your anchor text—for example,
+    <code translate="no" dir="ltr">introduction-to-everything</code>.</p>
+  <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>
+    &lt;section id="<var translate="no">ID_OF_ANCHOR</var>"&gt;&lt;/section&gt;
+  </pre></devsite-code>
+
+  <div class="example">
+  <p><span class="compare-better">Recommended</span>:</p>
+  <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+  &lt;section id="introduction-to-everything"&gt;
+  &lt;h2&gt;Introduction to everything&lt;/h2&gt;
+  ...
+  &lt;/section&gt;
+  </pre></devsite-code>
+
+  <p><span class="compare-better">Recommended</span>:</p>
+  <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+  &lt;h2&gt;&lt;a name="introduction-to-everything"&gt;Introduction to everything&lt;/a&gt;&lt;/h2&gt;
+  </pre></devsite-code>
+
+  <p><span class="compare-better">Recommended</span>:</p>
+  <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+  &lt;a name="introduction-to-everything"&gt;&lt;/a&gt;
+  &lt;h2&gt;Introduction to everything&lt;/h2&gt;
+  </pre></devsite-code>
+
+  <p><span class="compare-better">Acceptable</span>:</p>
+  <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+  &lt;h2 id="introduction-to-everything"&gt;Introduction to everything&lt;/h2&gt;
+  </pre></devsite-code>
+</div>
+</section>
+
+<section>
+  <h3 id="markdown" data-text="Markdown" tabindex="-1">Markdown</h3>
+  <p>To add an anchor to a heading in Markdown, add the following code to the
+    end of the line that the heading is on. For anchor text, use lowercase
+    letters, and put hyphens between words. In the following, replace
+    <code translate="no" dir="ltr"><var translate="no">ID_OF_ANCHOR</var></code> with your anchor text—for example,
+    <code translate="no" dir="ltr">conserve-habitat</code>.</p>
+  <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>{: #<var translate="no">ID_OF_ANCHOR</var> }</pre></devsite-code>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:</p>
+    <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>## Help conserve habitat for pollinators {: #help-conserve-habitat-for-pollinators }</pre></devsite-code>
+    <p><span class="compare-better">Also recommended</span>:</p>
+    <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>## Help conserve habitat for pollinators {: #conserve-habitat }</pre></devsite-code>
+    <p><span class="compare-better">Acceptable</span>:</p>
+    <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>## Help conserve habitat for pollinators {: id='conserve-habitat' }</pre></devsite-code>
+    <p><span class="compare-better">Acceptable</span>:</p>
+    <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>## Help conserve habitat for pollinators {: id="conserve-habitat" }</pre></devsite-code>
+
+
+
+  </div>
+    </section>
+  </devsite-selector>
+</section>
+
+<section id="changing-an-anchor">
+<h2 id="revise-a-heading" data-text="Revise a heading" tabindex="-1">Revise a heading</h2>
+<p>If you revise a heading in a content management system where anchors are automatically created,
+  you can create a custom anchor to avoid breaking existing links. If the heading already has a
+  custom anchor, don't change the anchor unless it contains a term that you want to remove (such as
+  a disrespectful term).</p>
+
+<p>To create the custom anchor, use the older ID string for the heading. You can find the ID
+  string by inspecting the heading on the published page. For example, if you change a heading from
+  <i>Introduction to some things</i> to <i>Introduction to everything</i>, then add a custom anchor
+  that uses the older ID string and formatting.</p>
+
+<devsite-selector>
+<section>
+<h3 id="html_1" data-text="HTML" tabindex="-1">HTML</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+&lt;section id="introduction-to-some-things"&gt;
+&lt;h2&gt;Introduction to everything&lt;/h2&gt;
+...
+&lt;/section&gt;
+</pre></devsite-code>
+
+</section>
+<section>
+<h3 id="markdown_1" data-text="Markdown" tabindex="-1">Markdown</h3>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+## Introduction to everything {: #introduction-to-some-things }
+</pre></devsite-code>
+
+</section>
+</devsite-selector>
+
+
+
+<p>If you need to change an existing custom anchor, you should check your content management
+  system to update any links that use the old anchor. Inbound links that use the old anchor still
+  reach the page but not the specific section or heading.</p>
+
+  </section>
+  
+
+  

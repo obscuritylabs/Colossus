@@ -77,7 +77,9 @@ OCI registry profiles for the workspace.
 `plugins.documentation` controls default developer documentation guidance. With
 `autoActivate: true`, an available skill receives a short conditional activation
 instruction. The agent reads the entry point for documentation writing or editing,
-then loads only relevant Markdown references. This does not eagerly select the skill,
+then reads its index and relevant complete reference sections. The bundled guide
+ships its unabridged article text locally, with large pages split into ordered
+HTML text resources. This does not eagerly select the skill,
 load its full reference material, install it, or make it available when plugins are
 disabled, excluded, or unaccepted. Explicit selection remains available when
 `autoActivate` is false.

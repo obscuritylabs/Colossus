@@ -1,0 +1,177 @@
+<!-- Source: https://developers.google.com/style/dates-times; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/dates-times">
+<h1>Dates and times</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<p>Expressing dates and times in a clear and unambiguous way helps support
+<a href="/style/translation">writing for a global audience</a> and reduces
+confusion.</p>
+
+<section id="expressing-times">
+<h2 id="expressing-times" data-text="Express times" tabindex="-1">Express times</h2>
+
+<p>In general, use the following guidelines to format expressions of time:</p>
+
+<ul>
+   <li>Use the 12-hour clock, except if required to use a 24-hour time, such as
+   when documenting features that use 24-hour time. If the UI, a command, or a code sample uses the
+   24-hour format, use that format throughout the page for consistency.</li>
+  <li>Use exact times when possible, but <i>noon</i> and <i>midnight</i> are OK.</li>
+   <li><p>Use hyphens in time ranges. Don't add spaces before or after the hyphens.</p>
+     <p class="example"><span class="compare-better">Recommended</span>: 5-10 minutes ago.</p></li>
+   <li><p>Capitalize AM and PM, and leave one space between it and the time.</p>
+     <p class="example"><span class="compare-better">Recommended</span>: 3:45 PM.</p></li>
+   <li><p>Remove the minutes from round hours.</p>
+     <p class="example"><span class="compare-better">Recommended</span>: 3 PM.</p></li>
+</ul>
+
+
+
+<h3 id="expressing-time-zones" data-text="Express time zones" tabindex="-1">Express time zones</h3>
+
+<p>Avoid using time zones unless absolutely necessary. In cases where you need to use a time
+  zone—such as describing real events at real times—use the following guidelines:</p>
+<ul>
+<li>Let the reader know if the time is local to their time&mdash;for example, <i>10 AM your local
+time</i>.</li>
+<li>If a time zone is necessary, use the timestamp format as seen in the user interface (if
+available).</li>
+<li>If using a specific time zone, spell out the region and include the
+<a href="https://www.worldtimeserver.com/learn/utc-vs-gmt/">UTC or GMT label</a>
+as a parenthetical. For example:
+  <ul>
+    <li>US and Canadian Pacific Standard Time (UTC-8)</li>
+    <li>US and Canadian Pacific Daylight Time (UTC-7)</li>
+  </ul>
+</li>
+<li>Don't abbreviate the name of the time zone.</li>
+<li>In the rare event where the time of an event doesn't change for daylight saving time, use the
+specific time zone, without reference to UTC.</li>
+</ul>
+</section>
+
+<section id="expressing-dates">
+<h2 id="expressing-dates" data-text="Express dates" tabindex="-1">Express dates</h2>
+<p>In general, spell out the names of months and days of the week in full. Give
+the full four-digit year, not a two-digit abbreviation.</p>
+<p class="example"><span class="compare-better">Recommended</span>: January 19, 2017</p>
+
+<p>If including the day of the week, add it before the month as follows:
+  <code translate="no" dir="ltr"><var translate="no">DAY_OF_WEEK</var></code>, <code translate="no" dir="ltr"><var translate="no">MONTH</var></code> <code translate="no" dir="ltr"><var translate="no">DAY</var></code>,
+  <code translate="no" dir="ltr"><var translate="no">YEAR</var></code>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: Tuesday, April 27, 2021</p>
+
+<h3 id="partial-dates-abbreviations" data-text="Partial dates and abbreviations" tabindex="-1">Partial dates and abbreviations</h3>
+<p>When giving only the month and year, don't use a comma.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: She was hired in January
+2017.</p>
+
+<p>In most cases, don't abbreviate the day of the week or the month. However,
+when conserving space, such as in a heading or table, it's okay to abbreviate
+the month and the day of the week to their three-letter abbreviations.
+Capitalize the first letter and do not add a period at the end of the abbreviation.</p>
+<p>If you abbreviate, do so for the entire date. Don't mix written-out forms with
+abbreviated forms in the same date.<p>
+<p>Be consistent in where you apply abbreviations throughout your documentation. For
+example, if you choose to abbreviate in table cells, do so in all table cells.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: Mon, Sep 3, 2018</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: Mon, September 3, 2018</p>
+
+<h3 id="dates-mid-sentence" data-text="Dates in the middle of a sentence" tabindex="-1">Dates in the middle of a sentence</h3>
+<p>When a <code translate="no" dir="ltr"><var translate="no">MONTH</var></code> <code translate="no" dir="ltr"><var translate="no">DAY</var></code>, <code translate="no" dir="ltr"><var translate="no">YEAR</var></code>
+  date appears in the middle of a sentence, add a comma after the year.</p>
+<p class="example"><span class="compare-better">Recommended</span>: The January 19, 2017,
+release of ...</p>
+<p>However, if the date in the middle of the sentence consists of the
+month and year only, don't use a comma.</p>
+<p class="example"><span class="compare-better">Recommended</span>: The January 2017 release
+of ...</p>
+
+<h3 id="why-dates-written-out" data-text="Why we prefer dates written out" tabindex="-1">Why we prefer dates written out</h3>
+<p>In general, don't express months as numbers unless you don't have the option
+(in which case, see <a href="#numeric-only-date-format">numeric-only date
+format</a>). Different regions of the world put parts of the date in a different
+order for numeric dates. For example, a date written as 04/05/09 means different
+things in different regions:</p>
+<ul>
+  <li>In the UK, 04/05/09 means May 4, 2009, where the order is usually day,
+  month, and then year.</li>
+  <li>In the US, 04/05/09 means April 5, 2009, where the order is usually month,
+  day, and then year.</li>
+  <li>In some other parts of the world, 04/05/09 means May 9, 2004. Some
+  regions write the year first, followed by the month and day.</li>
+</ul>
+<p>For this reason, we recommend always using words to express dates. Expressing
+dates in numbers only (using slashes, periods, or hyphens as separators) can be
+confusing.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: February 12, 2017</p>
+<p class="example"><span class="compare-better">Recommended</span>: Sunday, February 12, 2017</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: 02.12.2017</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: 12/02/2017</p>
+
+<h3 id="numeric-only-date-format" data-text="Numeric-only date format" tabindex="-1">Numeric-only date format</h3>
+<p>If you must express a date in numerical date format, use the format
+<code translate="no" dir="ltr"><var translate="no">YYYY-MM-DD</var></code>, and separate the elements by using hyphens. This conforms
+to <a href="https://wikipedia.org/wiki/ISO_8601">ISO 8601 international
+standards</a> for numerical date format.</p>
+<p>Additionally, if you have a choice of what date to write (such as in a
+fictional example), then choose a calendar day greater than 12 to differentiate
+it from the month.</p>
+<p class="example"><span class="compare-better">Recommended</span>: 2017-04-15</p>
+<p class="example"><span class="compare-worse">Not recommended</span>: 04/06/2017</p>
+
+<h3 id="express-dates-and-times-together" data-text="Express dates and times together" tabindex="-1">Express dates and times together</h3>
+  <p>If you must express a date and a time together, then mention the date first and then the time.
+    <p class="example"><span class="compare-better">Recommended</span>: 2017-04-15 at 3 PM</p>
+    <p class="example"><span class="compare-better">Recommended</span>: May 4, 2009, at 6 PM</p>
+</section>
+
+<section>
+<h2 id="divisions-year" data-text="Express divisions of the year" tabindex="-1">Express divisions of the year</h2>
+<p>Avoid referring to seasons. Spring in the northern hemisphere is fall (autumn) in the
+southern hemisphere. Instead, use the month, quarter, or temperature (if relevant).</p>
+
+<table>
+  <thead>
+    <tr>
+      <th width="50%"><span class="compare-better">Recommended</span></th>
+      <th width="50%"><span class="compare-worse">Not recommended</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>During warmer months, data centers face a higher risk of cooling failures.</td>
+      <td>During summer months, data centers face a higher risk of cooling failures.</td>
+    </tr>
+    <tr>
+      <td>In November and December, data centers experience higher traffic volume.</td>
+      <td>In winter, data centers experience higher traffic volume.</td>
+    </tr>
+    <tr>
+      <td>Changes are released in October of each year.</td>
+      <td>Changes are released in the Fall of each year.</td>
+    </tr>
+  </tbody>
+</table>
+
+</section>
+
+  
+
+  

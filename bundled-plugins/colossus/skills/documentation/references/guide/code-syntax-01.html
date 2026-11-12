@@ -1,0 +1,401 @@
+<!-- Source: https://developers.google.com/style/code-syntax; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/code-syntax">
+<h1>Document command-line syntax</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<section id="command-line-syntax">
+<p>This page shows how to document command-line commands and their arguments. For more
+information about formatting code that appears in text, placeholders, and code samples, see the
+following links:</p>
+<ul>
+<li><a href="/style/code-in-text">Code in text</a></li>
+<li><a href="/style/placeholders">Formatting placeholders</a></li>
+<li><a href="/style/code-samples">Code samples</a></li>
+</ul>
+</section>
+
+<section id="best-practices">
+<h2 id="best-practices" data-text="Best practices" tabindex="-1">Best practices</h2>
+<p>When you write procedural or conceptual documentation for a command-line command, apply the
+  following best practices:</p>
+<ul>
+  <li><p><b>Provide an inline link to the command reference</b>. A good place for that link is in
+    the text that introduces the command or a series of steps.</p>
+    <div class="example">
+    <p><span class="compare-better">Recommended</span>:</p>
+    <p>To connect to the instance, use the
+    <a href="https://cloud.google.com/sdk/gcloud/reference/compute/ssh">
+    <code translate="no" dir="ltr">gcloud compute ssh</code> command</a>:</p>
+    <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>gcloud compute ssh</pre></devsite-code>
+    </div>
+  </li>
+  <li><b>Determine which arguments are needed to complete each task in the recommended way</b>.
+    To minimize the number of options that you need to document in non-reference content, use as
+    few optional arguments as possible. Rely on the command reference for the complete list of
+    arguments.
+  </li>
+  <li><p><b>Provide a click-to-copy command example that the reader doesn't need to edit after they
+    copy it</b>. If possible, include only runnable code and placeholder variables in the
+    click-to-copy example.</p>
+
+  
+
+    <p>Some command examples contain
+      <a href="#optional-arguments">optional arguments</a>,
+      <a href="#set-of-two-arguments">mutually exclusive arguments</a>, or
+      <a href="#arguments-that-can-repeat">repeated arguments</a>
+      that are indicated by square brackets (<code translate="no" dir="ltr">[]</code>), pipes (<code translate="no" dir="ltr">|</code>),
+      braces (<code translate="no" dir="ltr">{}</code>), and ellipses (<code translate="no" dir="ltr">...</code>). These characters can break
+      commands if they're not first removed. For that reason, avoid using these
+      arguments in click-to-copy examples.</p>
+    <p>For more information, see the
+      <a href="#click-to-copy-commands">Optional arguments in click-to-copy commands</a>
+      section of this document.</p>
+  </li>
+</ul>
+</section>
+
+<section id="formatting-a-command">
+<h2 id="format-a-command" data-text="Format a command" tabindex="-1">Format a command</h2>
+<p>To mark a block of code such as a lengthy command or a code sample, use the
+following formatting:</p>
+<ul>
+  <li>In HTML, use the <code translate="no" dir="ltr">pre</code> element.</li>
+  <li>In Markdown, use a code fence (<code translate="no" dir="ltr">```</code>).</li>
+</ul>
+<p>To format a command with multiple elements, do the following:</p>
+<ul>
+  <li>When a line exceeds 80 characters, you can safely add a line break before
+some characters, such as a single hyphen, double hyphen, underscore, or
+quotation marks. After the first line, indent each line by four spaces to vertically align each line
+that follows a line break.</li>
+  <li><p>When you split a command line with a line break, each line except the
+last line must end with the command-continuation character. Commands that don't
+have the command-continuation character don't work.</p>
+    <ul>
+      <li>Linux or Cloud Shell: A backslash typically preceded with a space
+(<code translate="no" dir="ltr"> \</code>)</li>
+      <li>Windows: A caret preceded with a space (<code translate="no" dir="ltr"> ^</code>)</li>
+    </ul>
+  </li>
+  <li>Format placeholder text with <a href="/style/placeholders">placeholders</a>.</li>
+  <li>Follow the command line with a descriptive list of the placeholders
+used in the command line. For more information, see <a
+href="/style/placeholders#explain-placeholders">Explaining placeholders</a>.</li>
+<li>When documenting a command-line option or argument, use end puctuation for complete
+  sentences. Don't use end punctuation for single words or noun phrases, unless there is a mix of
+  sentences and noun phrases. This guidance is similar to <a href="/style/lists#capitalization-and-end-punctuation">end punctuation in lists</a>.
+  For more information, see <a
+  href="https://google.aip.dev/192#style">Google AIP guidelines for documentation</a>.</li>
+</ul>
+<p>When you're documenting a <code translate="no" dir="ltr">bash</code> or <code translate="no" dir="ltr">sh</code> command, follow the
+  <a href="https://google.github.io/styleguide/shellguide.html#s5.7-quoting">quotation mark style</a>
+  in Google's shell style guide.</p>
+</section>
+
+<h2 id="prompt" data-text="Command prompt" tabindex="-1">Command prompt</h2>
+<p>If your command-line instructions show multiple lines of input in one block, then start each line
+  of input with the prompt symbol. If you don't want users to copy the prompt symbol when they copy
+the command, you might be able to turn off text selection for the symbol—for example, by using
+CSS.</p>
+
+
+
+<p>Don't show the current directory path before the prompt, even if
+part of the instruction includes changing directories. However, if the overall
+context of the command interface changes—such as from the local machine
+to a remote machine—then add an additional prompt indicator, as appropriate, for
+the new context.</p>
+<div class="example">
+<p><span class="compare-better">Recommended</span>:</p>
+<p>Enter the following code into the terminal:</p>
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>
+<span class="no-select">$ </span>adb devices
+</pre></devsite-code>
+<p>The output is the following:</p>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+List of devices attached
+emulator-5554  device
+emulator-5556  device
+</pre></devsite-code>
+<p><span class="compare-better">Recommended</span>:</p>
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>
+<span class="no-select">$ </span>adb shell
+<span class="no-select">shell@ $ </span>screencap /sdcard/screen.png
+<span class="no-select">shell@ $ </span>exit
+<span class="no-select">$ </span>adb pull /sdcard/screen.png
+</pre></devsite-code>
+</div>
+
+<p>When you're showing a one-line command, the command prompt
+(the <code translate="no" dir="ltr">$</code> symbol) is optional. However, if your document includes both
+multi-line and one-line commands, then we recommend using the command prompt
+for all of the commands in the document for consistency.</p>
+<p>If your command-line instructions include a combination of input and output
+lines, we recommend using separate code blocks for input and output.</p>
+
+<div class="example">
+<p><span class="compare-better">Recommended</span>:</p>
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>
+<span class="no-select">$ </span>cat ~/.ssh/my-ssh-key.pub
+</pre></devsite-code>
+<p>The output is similar to the following:</p>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+ssh-rsa <var translate="no">KEY_VALUE</var> <var translate="no">USERNAME</var>
+</pre></devsite-code>
+</div>
+
+<h2 id="optional-arguments" data-text="Optional arguments" tabindex="-1">Optional arguments</h2>
+<p>Use square brackets around an argument to indicate that it's optional. If there's more than one
+  optional argument, enclose each item in its own set of square brackets.</p>
+<p>Avoid using optional arguments in click-to-copy code examples. For best practices on documenting
+  optional arguments with click-to-copy commands, see the
+  <a href="#best-practices">Best practices</a> and
+  <a href="#click-to-copy-commands">Optional arguments in click-to-copy commands</a>
+  sections of this document.</p>
+<p>In the following example, <code translate="no" dir="ltr"><var translate="no">GROUP</var></code> is required, but
+  <code translate="no" dir="ltr"><var translate="no">GLOBAL_FLAG</var></code> and <code translate="no" dir="ltr"><var translate="no">FILENAME</var></code> are optional:</p>
+<div class="example">
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>gcloud dns <var translate="no">GROUP</var> [<var translate="no">GLOBAL_FLAG</var>] [<var translate="no">FILENAME</var>]</pre></devsite-code>
+</div>
+
+<h2 id="set-of-two-arguments" data-text="Mutually exclusive arguments" tabindex="-1">Mutually exclusive arguments</h2>
+<p>Use curly braces to indicate that the reader must choose one&mdash;and only one&mdash;of the
+  items inside the braces. There can be more than two mutually exclusive choices. To separate each
+  choice, use a pipe (<code translate="no" dir="ltr">|</code>).</p>
+<p>Avoid using mutually exclusive arguments in click-to-copy code examples. For best practices on
+  documenting mutually exclusive arguments with click-to-copy commands, see the
+  <a href="#best-practices">Best practices</a> and
+  <a href="#click-to-copy-commands">Optional arguments in click-to-copy commands</a>
+  sections of this document.</p>
+
+<p>In the following example, choose either <code translate="no" dir="ltr"><var translate="no">FILE_1</var></code> or <code translate="no" dir="ltr"><var translate="no">FILE_2</var></code>:</p>
+<div class="example">
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>{<var translate="no">FILE_1</var>|<var translate="no">FILE_2</var>}</pre></devsite-code>
+</div>
+
+<p>In the following example, there are also two options:
+    <ul>
+      <li>Left side of pipe: If the source code is deployed from a cloud
+        repository, the following is required:<br>
+        <code translate="no" dir="ltr">--source=<var translate="no">CLOUD_SOURCE</var> --source-url=<var translate="no">SOURCE_URL</var></code></li>
+      <li>Right side of pipe: If the source code is in a local directory:
+        <ul>
+          <li><code translate="no" dir="ltr">--bucket=<var translate="no">BUCKET</var></code> is required.</li>
+          <li><code translate="no" dir="ltr">--source=<var translate="no">LOCAL_SOURCE</var></code> is optional, as specified by the square
+            brackets.</li>
+        </ul>
+      </li>
+    </ul>
+<div class="example">
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>{--source=<var translate="no">CLOUD_SOURCE</var> --source-url=<var translate="no">SOURCE_URL</var> | --bucket=<var translate="no">BUCKET</var> [--source=<var translate="no">LOCAL_SOURCE</var>]}</pre></devsite-code>
+</div>
+
+<h2 id="arguments-that-can-repeat" data-text="Arguments that can repeat" tabindex="-1">Arguments that can repeat</h2>
+<p>Use three dots and no spaces (<code translate="no" dir="ltr">...</code>) to indicate that the reader can specify multiple
+  values for the argument.</p>
+<p>Avoid using an ellipsis in click-to-copy code examples. For best practices on documenting optional
+  arguments with click-to-copy commands, see the
+  <a href="#best-practices">Best practices</a> and
+  <a href="#click-to-copy-commands">Optional arguments in click-to-copy commands</a>
+  sections of this document.</p>
+<p>In this example, the reader can specify multiple instances of the optional
+parameter <code translate="no" dir="ltr"><var translate="no">GLOBAL_FLAG</var></code>:</p>
+
+<div class="example">
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>gcloud dns <var translate="no">GROUP</var> [<var translate="no">GLOBAL_FLAG</var> ...]</pre></devsite-code>
+</div>
+
+<h2 id="click-to-copy-commands" data-text="Optional arguments in click-to-copy commands" tabindex="-1">Optional arguments in click-to-copy commands</h2>
+<p><a href="#optional-arguments">Optional arguments</a>,
+  <a href="#set-of-two-arguments">mutually exclusive arguments</a>, and
+  <a href="#arguments-that-can-repeat">repeated arguments</a>
+  contain characters (such as square brackets, curly braces, pipes, and ellipses) that can break
+  commands if the reader doesn't remove them. Avoid using these types of arguments in click-to-copy
+  commands. Instead, choose one of the following approaches:</p>
+<ul>
+  <li><p><b>Remove the optional arguments</b>. As a best practice,
+    <a href="#best-practices">use only the necessary arguments</a>
+    to complete the task for the most common use case. If possible, remove optional arguments from
+    the command; always provide a link to the command reference for the command, where readers can
+    find the full list of options. For more information, check with product management or a
+    technical support specialist for the most relevant arguments.</p>
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:</p>
+    <p>To get an aggregate list of all virtual machine (VM) instances in all zones for a project,
+      use the
+      <a href="https://cloud.google.com/sdk/gcloud/reference/compute/instances/list">
+        <code translate="no" dir="ltr">gcloud compute instances list</code> command</a>:</p>
+    <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>gcloud compute instances list</pre></devsite-code>
+    <p>If you want to narrow the list of VMs to a specific zone, use the previous command with the
+      <code translate="no" dir="ltr">--zones</code> flag.</p>
+  </div>
+  </li>
+  <li><p><b>Use separate code blocks for each option</b>. In some cases, it might be ideal to
+    provide more than one click-to-copy code block within the same section.</p>
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:</p>
+    <p>To create a bootable Compute Engine image, use the
+      <a href="https://cloud.google.com/sdk/gcloud/reference/compute/images/import">
+        <code translate="no" dir="ltr">gcloud compute images import</code> command</a>:</p>
+    <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>gcloud compute images import <var translate="no">IMAGE_NAME</var> \
+    --source-file=<var translate="no">SOURCE_FILE</var></pre></devsite-code>
+    <p>If you're importing an image with an existing license, specify the
+      <code translate="no" dir="ltr">--byol</code> flag:</p>
+    <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>gcloud compute images import <var translate="no">IMAGE_NAME</var> \
+    --source-file=<var translate="no">SOURCE_FILE</var> \
+    --byol</pre></devsite-code>
+  </div>
+  </li>
+  <li><p><b>Document optional arguments in separate tasks</b>. In some cases, it might be best to
+    treat different options in separate sections.</p>
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:</p>
+    <p>To create a bootable or non-bootable Compute Engine image based on an existing virtual
+      disk, use the
+      <a href="https://cloud.google.com/sdk/gcloud/reference/compute/images/import"><code translate="no" dir="ltr">gcloud compute images import</code> command</a>.</p>
+    <h3 class="hide-from-toc" id="import-a-bootable-virtual-disk" data-text="Import a bootable virtual disk" tabindex="-1">Import a bootable virtual disk</h3>
+    <p>If your virtual disk has a bootable operating system installed on it, run the following
+      command:</p>
+    <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>gcloud compute images import <var translate="no">IMAGE_NAME</var> \
+    --source-file=<var translate="no">SOURCE_FILE</var></pre></devsite-code>
+    <h3 class="hide-from-toc" id="import-a-non-bootable-virtual-disk" data-text="Import a non-bootable virtual disk" tabindex="-1">Import a non-bootable virtual disk</h3>
+    <p>If your virtual disk doesn't have a bootable operating system installed on it, include the
+      <code translate="no" dir="ltr">--data-disk</code> flag:</p>
+    <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>gcloud compute images import <var translate="no">IMAGE_NAME</var> \
+    --source-file=<var translate="no">SOURCE_FILE</var> \
+    --data-disk</pre></devsite-code>
+  </div>
+  </li>
+  <li><p><b>Let the reader know that the command contains optional arguments</b>. If you must
+    include special characters to indicate optional arguments, indicate that fact when you
+    introduce the command.</p>
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:</p>
+    <p>To create a VM with a custom name and attach one or more existing stateful disks to that VM,
+      use the
+      <a href="https://cloud.google.com/sdk/gcloud/reference/compute/instance-groups/managed/create-instance"><code translate="no" dir="ltr">gcloud compute instance-groups managed create-instance</code> command</a>
+      with one or multiple <code translate="no" dir="ltr">--stateful-disk</code> flags. In the following example, you
+      optionally specify the <code translate="no" dir="ltr">auto-delete</code> subflag to keep or discard each disk when the
+      VM is permanently deleted:
+    </p>
+    <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>gcloud compute instance-groups managed create-instance <var translate="no">NAME</var> \
+    --instance=<var translate="no">VM_NAME</var> \
+    --stateful-disk=device-name=<var translate="no">DEVICE_NAME</var>,source=<var translate="no">DISK</var>[,auto-delete=<var translate="no">DELETE_RULE</var>]</pre></devsite-code>
+    <p>For example, the following command creates a managed instance that's named
+      <code translate="no" dir="ltr">db-instance</code> and attaches the persistent disk <code translate="no" dir="ltr">db-data-disk-1</code> as a
+      stateful disk that is detached and preserved if its VM is deleted:</p>
+    <div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>gcloud compute instance-groups managed create-instance example-database-mig \
+    --instance=db-instance \
+    --stateful-disk=device-name=data-disk,source=projects/example-project/zones/us-east1-c/disks/db-data-disk-1,auto-delete=never</pre></devsite-code>
+  </div>
+  </li>
+</ul>
+<h2 id="output" data-text="Output from commands" tabindex="-1">Output from commands</h2>
+<p>You don't have to show output for every command. Add output only if it adds value&mdash;for
+  example, if the reader needs to copy a value from the output or if they need to verify a value
+  in the output.</p>
+
+<p>If you are showing output, use one of the following introductory phrases to separate the command
+from the output.</p>
+<p class="example"><span class="compare-better">Recommended</span>: The output is similar to the following:</p>
+<p class="example"><span class="compare-better">Recommended</span>: The output is the following:</p>
+
+<p>If you want to explicitly call out something about the output, you can customize the introductory
+phrase.</p>
+<p class="example"><span class="compare-better">Recommended</span>: The output is similar to the
+following, in which the <code translate="no" dir="ltr">IP</code> column shows the IP address for each resource:</p>
+
+
+
+<p>To indicate that one or more lines of output are omitted from sample output, use three dots and
+no spaces (<code translate="no" dir="ltr">...</code>) on a separate line. Do not use the ellipsis character (<code translate="no" dir="ltr">&#8230;</code>).
+For example:</p>
+
+<div class="example">
+<div></div><devsite-code><pre class="console" translate="no" dir="ltr" is-upgraded>
+Reading file status
+Upload done, resetting board...
+...
+Wakeup reason: 0
+</pre></devsite-code>
+</div>
+
+For more information about presenting output, also see the following:
+<ul>
+<li>For more information about how to present output in procedures, see <a href="/style/procedures#order-of-multiple-components-in-a-step">Order of multiple
+    components in a step</a>.</li>
+<li>For more information about using placeholders in output, see <a href="/style/placeholders#placeholders-in-output">Placeholders in output</a>.</li>
+<li>For more information about using examples such as domain names and IP addresses in output, see <a href="/style/examples">Example domains and names</a>.</li>
+</ul>
+
+<section id="command-line-terminology">
+<h2 id="command-line-terminology" data-text="Command-line terminology" tabindex="-1">Command-line terminology</h2>
+<p>When discussing commands and their constituent parts in the <code translate="no" dir="ltr">gcloud</code> CLI
+and in Linux commands, follow this guidance:</p>
+<ul>
+<li>Avoid mapping nomenclature of the <code translate="no" dir="ltr">gcloud</code> CLI's commands to
+Linux commands.</li>
+<li>Linux commands can be complicated. It's wise to describe what the entire
+command does rather than what its individual elements are called.</li>
+<li>For Linux commands or commands in the <code translate="no" dir="ltr">gcloud</code> CLI, ask yourself if the reader must
+  know the name of the command-line element or if explaining the command is sufficient.</ul>
+</section>
+
+<section id="gcloud-commands">
+<h3 id="gcloud-commands" data-text="gcloud commands" tabindex="-1">gcloud commands</h3>
+
+<div></div><devsite-code><pre class="devsite-disable-click-to-copy" translate="no" dir="ltr" is-upgraded>
+gcloud <var translate="no">GROUP</var> | <var translate="no">COMMAND</var> [--account=<var translate="no">ACCOUNT</var>] [--configuration=<var translate="no">CONFIGURATION</var>] \
+    [--flatten=[<var translate="no">KEY</var>,...]][--format=<var translate="no">FORMAT</var>] [--help] [--project=<var translate="no">PROJECT_ID</var>] \
+    [--quiet, -q][--verbosity=<var translate="no">VERBOSITY</var>; default="warning"] [--version, -v] \
+    [-h] [--log-http][--trace-token=<var translate="no">TRACE_TOKEN</var>] [--no-user-output-enabled]
+</pre></devsite-code>
+
+<p>For the sake of accurate classification, the <code translate="no" dir="ltr">gcloud</code> CLI's
+syntax distinguishes between a <i>command</i> and a <i>command group</i>. In
+docs, however, command-line contents are generally referred to as commands.</p>
+
+<p>You can use commands (and groups) alone or with one or more flags. A
+<i>flag</i> is a Google Cloud-specific term for any element
+other than the command or group name itself. A command or flag might also
+take an <i>argument</i>, for example, a region value.</p>
+
+<h4 id="example-command" data-text="Example command" tabindex="-1">Example command</h4>
+
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>gcloud init</pre></devsite-code>
+
+<h4 id="example-command-with-a-flag" data-text="Example command with a flag" tabindex="-1">Example command with a flag</h4>
+
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>gcloud init --skip-diagnostics</pre></devsite-code>
+
+<h4 id="example-command-with-multiple-elements" data-text="Example command with multiple elements" tabindex="-1">Example command with multiple elements</h4>
+
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>
+gcloud ml-engine jobs submit training ${JOB_NAME} \
+    --package-path=trainer \
+    --module-name=trainer.task \
+    --staging-bucket=gs://${BUCKET} \
+    --job-dir=gs://${BUCKET}/${JOB_NAME} \
+    --runtime-version=1.2 \
+    --region=us-central1 \
+    --config=config/config.yaml \
+    -- \
+    --data_dir=gs://${BUCKET}/data \
+    --output_dir=gs://${BUCKET}/${JOB_NAME} \
+    --train_steps=10000
+</pre></devsite-code>
+

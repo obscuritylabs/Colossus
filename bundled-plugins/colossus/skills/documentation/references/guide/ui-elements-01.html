@@ -1,0 +1,492 @@
+<!-- Source: https://developers.google.com/style/ui-elements; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/ui-elements">
+<h1>UI elements and interaction</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<h2 id="task-focus" data-text="Focus on the task" tabindex="-1">Focus on the task</h2>
+
+<p>When practical, state instructions in terms of what the reader
+should accomplish, rather than focusing on the widgets and gestures.
+By avoiding reference to UI elements, you help the reader understand
+the purpose of an instruction, and it can help future-proof
+procedures.</p>
+
+<div class="example">
+  <p><span class="compare-better">Recommended</span>: Refresh the page.</p>
+  <p><span class="compare-better">Recommended</span>: Expand the <b>Advanced options</b>
+    section.</p>
+</div>
+
+<p>However, know the audience and understand the context. In some cases, the point
+of a procedure is to guide the reader through elements on the page. Or the UI might not be obvious,
+and it's helpful to explain the gestures for completing a step. Provide the level of detail
+that seems useful for the intended audience.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>: Click <b>Refresh</b>.</p>
+    <p><span class="compare-better">Recommended</span>: To expand the <b>Advanced
+    options</b> section, click the
+    <span class="material-icons" aria-hidden="true" translate="no">arrow_right</span>expander arrow.</p>
+  </div>
+
+<p>The rest of this page focuses on scenarios where you've decided it's
+useful to explicitly discuss UI elements.</p>
+
+<p>For information about writing procedures, see <a href="/style/procedures">Procedures</a>.</p>
+
+<h2 id="formatting" data-text="Format names of UI elements" tabindex="-1">Format names of UI elements</h2>
+<p>When referring to any UI element by name, put its name in bold, using the
+<code translate="no" dir="ltr">b</code> element in HTML or <code translate="no" dir="ltr">**</code> in Markdown. This
+includes names for buttons, menus, dialogs, windows, list items, or any other
+feature on the page that has a visible name. Don't use code font for UI elements,
+unless it's an element that meets the <a href="/style/code-in-text">requirements for code font</a>.
+In that case, use both code font and bold.</p>
+
+<aside class="note"><b>Note</b>: The reason for using the <a
+href="https://html.spec.whatwg.org/multipage/semantics.html#the-b-element"><code translate="no" dir="ltr">b</code>
+element</a> is that in modern HTML, <code translate="no" dir="ltr">b</code> connotes text to which
+you want to draw visual attention, whereas the <a
+href="https://html.spec.whatwg.org/multipage/semantics.html#the-strong-element"><code translate="no" dir="ltr">strong</code>
+element</a> indicates strong importance.</aside>
+
+<p>Don't make an official feature name or product name bold, except when it
+directly refers to an element on the page that uses the name (such as a window
+title or button name).</p>
+
+<div class="example">
+  <p><span class="compare-better">Recommended</span>:
+    In the <b>New project</b> window, select the <b>New activity</b>
+    checkbox, and then click <b>Next</b>.</p>
+  <p><span class="compare-worse">Not recommended</span>:
+    In the New Project window, select "New Activity", and then click the
+    "Next" button.</p>
+</div>
+
+
+
+<p>If you document a UI element outside the context of a procedure, try to provide context for the
+element.</p>
+
+<div class="example">
+  <p><span class="compare-better">Recommended</span>: The service lets you check the status of all
+    jobs in the <b>Current jobs</b> section of the service console.</p>
+  <p><span class="compare-worse">Not recommended</span>: The service lets you check the status of
+    all jobs in the <b>Current jobs</b> section.</p>
+</div>
+
+<h2 id="capitalization" data-text="Use appropriate capitalization" tabindex="-1">Use appropriate capitalization</h2>
+
+<p>In most cases, follow the capitalization as it appears on the page. However,
+if labels are inconsistent or they're all uppercase, use sentence case.</p>
+
+<table>
+<thead>
+  <tr>
+    <th width="34%">Guidance</th>
+    <th width="33%"><span class="compare-better">Recommended</span></th>
+    <th width="33%"><span class="compare-worse">Not recommended</span></th>
+  </tr>
+</thead>
+<tbody>
+  <tr>
+    <td>When a label is all uppercase, use sentence case.</td>
+    <td>Click <span class="material-icons" aria-hidden="true" translate="no">refresh</span> <b>Refresh</b>.</td>
+    <td>Click <b>REFRESH</b>.</td>
+  </tr>
+  <tr>
+    <td>When referring to multiple labels that are inconsistently cased, use
+    sentence case for all of the labels.</td>
+    <td>Click <b>New project</b>, and then click <b>New activity</b>.</td>
+    <td>Click <b>NEW PROJECT</b>, and then click <b>New Activity</b>.</td>
+  </tr>
+</tbody>
+</table>
+
+<section id="referring-to-ui">
+<h2 id="refer-to-ui-elements" data-text="Refer to UI elements" tabindex="-1">Refer to UI elements</h2>
+<p>Don't use UI elements as if they were English verbs or nouns.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th width="50%"><span class="compare-better">Recommended</span></th>
+      <th width="50%"><span class="compare-worse">Not recommended</span></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>In the <b>Name</b> field, enter an account name.</td>
+      <td><b>Name</b> the account.</td>
+    </tr>
+    <tr>
+      <td>To save the settings, click <b>Save</b>.</td>
+      <td><b>Save</b> the settings.</td>
+    </tr>
+    <tr>
+      <td>
+        <p>In the <b>Service account ID</b> field, enter a name.</p>
+        <p>For <b>Service account ID</b>, enter a name.</p>
+      </td>
+      <td>Specify a <b>Service account ID</b>.</td>
+    </tr>
+  </tbody>
+</table>
+</section>
+
+<section>
+<h2 id="ui-terms" data-text="Terminology and usage" tabindex="-1">Terminology and usage</h2>
+<p>A user interface can contain a variety of UI elements. In general, focus on
+the feature and its functionality, not the UI element. If you think it adds
+clarity for the reader, use the name of the UI element. For example, both of the
+following sentences are valid:</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:
+    Go to <b>File&nbsp;<span aria-label="and then">></span> Tools</b>.</p>
+    <p><span class="compare-better">Recommended</span>:
+    In the <b>File</b> menu, click <b>Tools</b>.</p>
+  </div>
+
+<p>Don't use slang terms for UI elements—for example,
+  <i>hamburger icon</i> or <i>zippy</i>. For more information, see
+  <a href="#buttons">Buttons and icons</a>.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:
+    To expand the <b>Advanced options</b> section, click the
+    <span class="material-icons" aria-hidden="true" translate="no">arrow_right</span>expander arrow.</p>
+    <p><span class="compare-better">Recommended</span>:
+    Expand <b>Advanced options</b>.</p>
+    <p><span class="compare-worse">Not recommended</span>:
+    To expand the <b>Advanced options</b> section, click the zippy.</p>
+  </div>
+
+<p>The following sections define some terms to use when referring to UI
+elements.</p>
+<p>For prepositions to use with these elements, see the
+  <a href="#prepositions">Prepositions</a> table.</p>
+
+<h3 id="term-windows" data-text="Windows, pages, dialogs, panes, and sections" tabindex="-1">Windows, pages, dialogs, panes, and sections</h3>
+<p>Most often, a <i>window</i> is the entire application window in a desktop
+environment. However, it can also refer to modular application elements that you
+can open and close. For example, in Android Studio, several windows are
+available in the <b>View&nbsp;<span aria-label="and then">></span> Tool Windows</b> menu.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:
+    In the <b>MyApp</b> window, click <b>Edit</b>.</p>
+    <p><span class="compare-worse">Not recommended</span>:
+    In the <b>MyApp</b> page, click <b>Edit</b>.</p>
+  </div>
+
+<p><i>Page</i> is the preferred term when referring to a web page in general and to a subpage
+of a console in particular. For more information, see
+<a href="/style/word-list#console">console</a>.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:
+    In the Google Cloud console, go to the <b>Deployments</b> page.</p>
+    <p><span class="compare-worse">Not recommended</span>:
+    In the Google Cloud console, go to the <b>Deployments</b> window.</p>
+  </div>
+
+<p>A <i>dialog</i> is a smaller window that is usually detached from the
+main application window and appears in front of the window.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:
+    In the <b>Welcome</b> dialog, click <b>OK</b>.</p>
+    <p><span class="compare-worse">Not recommended</span>:
+    In the <b>Welcome</b> pop-up window, click <b>OK</b>.</p>
+  </div>
+
+<p>A <i>pane</i> (or <i>panel</i>) is typically a distinct rectangular region within a larger
+browser or application window. A pane or panel can often be tightly coupled to surrounding UI
+regions, whereas a window is distinctly separate and can be hidden. Do not use terms such as
+<i>window</i>, <i>section</i>, <i>area</i>, or <i>column</i> to refer to a pane or panel.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:
+    In the <b>Create service account</b> pane, click <b>New</b>.</p>
+    <p><span class="compare-worse">Not recommended</span>:
+    In the <b>Create service account</b> section, click <b>New</b>.</p>
+  </div>
+
+A <i>section</i> is a labeled grouping of options and controls, usually within a window, pane, or
+panel. Do not use terms such as <i>area</i> or <i>column</i> to refer to a section.
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>: In the <b>Create metric</b> pane, do the
+      following:</p>
+      <ul>
+        <li>In the <b>Metric type</b> section, select <b>Counter</b>.</li>
+        <li>In the <b>Labels</b> section, click <b>Add label</b>.</li>
+      </ul>
+  </div>
+
+<h3 id="term-menus" data-text="Menus and menu bars" tabindex="-1">Menus and menu bars</h3>
+<p>In a desktop application, the <i>menu bar</i> appears at the top of the
+window or at the top of the screen; it's a set of <i>menus</i> (such as
+<b>File</b> or <b>Edit</b>), each of which is a set of related
+<i>commands</i> and/or nested submenus.</p>
+<p>To refer to an item in a menu, use the term <i>command</i>, not <i>choice</i>, <i>menu item</i>,
+or <i>option</i>. Exception: if you're documenting how to build an interface,
+you can use <i>menu item</i>.</p>
+<p>To refer to a menu, use the form <i>the <b><var translate="no">LABEL_NAME</var></b> menu.</i></p>
+<p>To tell the reader where to find a command in a menu or submenu, use a phrase like
+<i>In the <b>File</b> menu, select <b>Open</b>.</i></p>
+<p>Don't use <i>drop-down</i> as a synonym for <i>menu</i>. See
+<a href="/style/word-list#drop-down">drop-down</a>.
+</p>
+<h4 id="angle-brackets" data-text="Use angle brackets" tabindex="-1">Use angle brackets</h4>
+<p>Another option is to use angle brackets (&gt;). If you use angle brackets, follow these
+  guidelines:</p>
+<ul>
+<li>Put a nonbreaking space (<code translate="no" dir="ltr">&#x26;nbsp;</code>) before each angle bracket.</li>
+<li>Don't bold each menu name separately; instead, enclose the entire sequence in a single bold
+tag (<code translate="no" dir="ltr">&lt;b&gt;...&lt;/b&gt;</code> or <code translate="no" dir="ltr">**...**</code>).</li>
+<li>Wrap the angle bracket with a span tag and add an <code translate="no" dir="ltr">aria-label</code> attribute with
+<i>and then</i> text
+(for example, <code translate="no" dir="ltr">&lt;span aria-label="and then"&gt;&gt;&lt;/span&gt;</code>).
+Otherwise, some screen readers might read <code translate="no" dir="ltr">></code> as "greater than."</li>
+</ul>
+<p>In the following example, the text renders as <i>Select <b>View&nbsp;<span aria-label="and then">></span>
+      Tools&nbsp;<span aria-label="and then">></span> Developer Tools</b></i>. A screen reader
+  interprets this as <i>Select View and then Tools and then Developer Tools</i>.</p>
+
+      <devsite-selector>
+        <section>
+          <h3 id="html" data-text="HTML" tabindex="-1">HTML</h3>
+          <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>Select &lt;b&gt;View&ampnbsp;&lt;span aria-label="and then"&gt;&gt;&lt;/span&gt; Tools&ampnbsp;&lt;span aria-label="and then"&gt;&gt;&lt;/span&gt; Developer Tools&lt;/b&gt;.</pre></devsite-code>
+        </section>
+        <section>
+          <h3 id="markdown" data-text="Markdown" tabindex="-1">Markdown</h3>
+          <div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>Select **View&ampnbsp;&lt;span aria-label="and then"&gt;&gt;&lt;/span&gt; Tools&nbsp;&lt;span aria-label="and then"&gt;&gt;&lt;/span&gt; Developer Tools**.</pre></devsite-code>
+        </section>
+      </devsite-selector>
+
+
+
+<p>This notation is useful for abbreviating a longer phrase like <i>In the
+<b>File</b> menu, select <b>Open</b>.</i> However, this notation applies only to
+menu items. Don't use it to describe a combination of different UI elements.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>: Select
+    <b>MyApp&nbsp;<span aria-label="and then">&gt;</span> Preferences</b>, and then select the
+    <b>Languages</b> preference pane.</p>
+    <p><span class="compare-worse">Not recommended</span>:
+    Select <b>MyApp</b>&nbsp;> <b>Preferences</b>&nbsp;> <b>Languages</b>&nbsp;>
+    <b>+</b>&nbsp;> <b>CSS</b>.</p>
+  </div>
+
+<h3 id="term-navigation-menu" data-text="Navigation menu" tabindex="-1">Navigation menu</h3>
+<p>A <i>navigation menu</i> is a control—usually a pane or window—that contains a list of items
+that the user can click to go to pages in an application or website. Don't use the terms
+<i>navigation bar</i>, <i>navigation pane</i>, <i>navigation panel</i>, or
+<i>navigation window</i> for such a control.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:
+    In the BigQuery navigation menu, click <b>Scheduled queries</b>.</p>
+  </div>
+
+<h3 id="term-toolbars" data-text="Toolbar" tabindex="-1">Toolbar</h3>
+<p>A <i>toolbar</i> is a set of buttons for common user actions. A toolbar
+button that includes a menu is called a <i>menu button</i>. Refer to the
+toolbar by name if you think that the user needs help finding a button.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>:
+    On the Google Cloud console toolbar, click
+    <span class="material-icons" aria-hidden="true" translate="no">notifications_none</span> <b>Notifications</b>.</p>
+    <p><span class="compare-better">Recommended</span>: Click
+    <span class="material-icons" aria-hidden="true" translate="no">notifications_none</span> <b>Notifications</b>.</p>
+  </div>
+
+<h3 id="buttons" data-text="Buttons and icons" tabindex="-1">Buttons and icons</h3>
+<p>A <i>button</i> initiates an action when clicked (or tapped, in the case
+  of a touchscreen). To refer to a button, use the button's label.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>: Click <b>OK</b>.</p>
+    <p><span class="compare-worse">Not recommended</span>: Click the "OK"
+    button.</p>
+  </div>
+
+<p>An icon is a symbol or image that represents an object or a function. An icon
+can be a button as well. If the button includes an icon, write the name of the
+button as shown in the tooltip, and add the button icon before the
+name. If you need to use a space between the icon and the name for readability,
+use a nonbreaking space.</p>
+
+<div class="example">
+  <p><span class="compare-better">Recommended</span>: Click
+  <span class="material-icons" aria-hidden="true" translate="no">more_vert</span> <b>Settings and utilities</b>.</p>
+  <p><span class="compare-worse">Not recommended</span>: Click
+  <span class="material-icons" aria-hidden="true" translate="no">more_vert</span>.</p>
+</div>
+
+<p>If the icon tooltip is identical to the name of the icon, use an
+<a href="/style/images#alt-text">empty <code translate="no" dir="ltr">alt</code> attribute</a>.</p>
+
+<p>If you're unsure of the name of the icon, inspect the element using browser
+tools. In many cases, a visual element like an icon has an ARIA attribute
+that provides a textual description of the element for use by screen readers.
+To inspect an element, right-click the element and select
+<b>Inspect</b> or <b>Inspect element</b>, depending on your browser. Look for one of the following
+types of labels: <code translate="no" dir="ltr">aria-labelledby</code>, <code translate="no" dir="ltr">aria-label</code>,
+<code translate="no" dir="ltr">aria-describedby</code>, <code translate="no" dir="ltr">label</code>, <code translate="no" dir="ltr">placeholder</code>, or <code translate="no" dir="ltr">title</code>.
+For more information, see
+<a href="https://www.w3.org/TR/WCAG20-TECHS/ARIA14.html">Using aria-label</a>
+and
+<a href="https://www.w3.org/TR/html-aapi/#accessible-name-and-description-calculation">Accessible Name and Description calculation</a>.</p>
+
+
+
+
+
+<p>If a button with an icon doesn't include a tooltip, submit a bug report
+requesting that a tooltip be added. Tooltips are crucial for accessibility, and
+for documentation and discoverability in general.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>: Click <img
+    class="inline-icon" src="/static/style/images/icon-add.png" alt=""> <b>Add</b>.</p>
+    <p><span class="compare-worse">Not recommended</span>: Click the <img
+    class="inline-icon" src="/static/style/images/icon-add.png" alt="hammer icon"> icon.
+  </div>
+
+<p>If a UI element name ends with an ellipsis (...), leave out the ellipsis.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>: Click <b>Browse</b>.</p>
+    <p><span class="compare-worse">Not recommended</span>: Click
+    <b>Browse&nbsp;...</b>.</p>
+  </div>
+
+<p>Don't use directional language to orient the reader, such as <i>above</i>,
+<i>below</i>, or <i>right-hand side</i>. Phrases like those don't work well for
+accessibility or for localization. If a UI element is hard to find, provide a
+screenshot.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>: Click <span
+    class="material-icons" aria-hidden="true" translate="no">menu</span> <b>Menu</b>.</p>
+    <p><span class="compare-worse">Not recommended</span>: In the left-side panel,
+    click the button with three lines.</p>
+  </div>
+
+<h4 id="difficult-to-find-ui-elements" data-text="Difficult-to-find UI elements" tabindex="-1">Difficult-to-find UI elements</h4>
+
+<p>If you have UI elements that are difficult to find, consider one of the following options
+  as an alternative to using directional language, which can be problematic for
+  accessibility and localization reasons.</p>
+
+  <ul>
+    <li>Use the button icon along with its name as shown in the button tooltip.
+
+      <div class="example">
+        <p><span class="compare-better">Recommended</span>: Click
+          <span class="material-icons" aria-hidden="true" translate="no">refresh</span> <b>Refresh</b>.</p>
+      </div></li>
+
+    <li>Add context to help the user find the element.
+
+      <div class="example">
+        <p><span class="compare-better">Recommended</span>: On the Cloud Run toolbar, click
+          <span class="material-icons" aria-hidden="true" translate="no">refresh</span> <b>Refresh</b>.</p>
+      </div></li>
+
+    <li><p>Use a screenshot.</p>
+
+      <div class="example">
+        <p><span class="compare-better">Recommended</span>: In the list of services, click
+          <span class="material-icons" aria-hidden="true" translate="no">view_column</span> <b>Column display options</b>.</p>
+
+          <img class="screenshot" src="/static/style/images/list-of-services.png" alt="List of services." width="50%"></img>
+      </div>
+
+      <p>For more information about when and how to use screenshots, see
+      <a href="/style/images">Diagrams, figures, and other images</a>.</p></li>
+  </ul>
+
+<h3 id="term-tab" data-text="Tab" tabindex="-1">Tab</h3>
+<p>A <i>tab</i> is a navigation element that looks like a file tab. To refer
+to a tab, use the form <i>the <b><var translate="no">LABEL_NAME</var></b> tab</i>.</p>
+
+<p class="example"><span class="compare-better">Recommended</span>: Select
+<b>Tools&nbsp;<span aria-label="and then">></span> Options</b>, and then click the <b>Edit</b>
+tab.</p>
+
+
+
+<h3 id="term-textbox" data-text="Text box" tabindex="-1">Text box</h3>
+<p>A <i>text box</i> is a box that the user can type in. Use
+  <i>box</i> and the form <i>the <b><var translate="no">LABEL_NAME</var></b> box</i>. Format the text
+  that the user types by using the <code translate="no" dir="ltr">code</code> element in HTML, or by using code
+  formatting (monospace) in other markup.</p>
+
+  <div class="example">
+    <p><span class="compare-better">Recommended</span>: In the <b>Owner</b> box,
+    enter your name.</p>
+    <p><span class="compare-better">Recommended</span>: In the <b>Name</b> box,
+    enter <code translate="no" dir="ltr">wsfc-1</code>.</p>
+  </div>
+<p><span class="icon-cloud" class="icon-workspace">[Google Workspace only]</span> In Google Cloud, use
+<i>field</i> instead of <i>box</i>.</p>
+<p><span class="icon-workspace">[Google Workspace only]</span> In Google Workspace documentation, use
+<i>field</i> instead of <i>box</i>.</p>
+<div class="example">
+    <p><span class="compare-better">Recommended</span>: In the <b>Instance</b> field,
+    specify a value less than 64 characters long.</p>
+</div>
+
+<h3 id="term-listbox" data-text="List box, combo box, and spin box" tabindex="-1">List box, combo box, and spin box</h3>
+<p>A <i>list box</i> is a box that offers the user a list of items. To refer to a list box, use
+the form <i>the <b><var translate="no">LABEL_NAME</var></b> list</i> or
+<i>the <b><var translate="no">LABEL_NAME</var></b> box</i>, whichever is clearer.</p>
+<p class="example"><span class="compare-better">Recommended</span>: In the <b>Item</b> list, select
+<b>Desktop</b>.</p>
+
+<p>A <i>combo box</i> is a combination of a text box and a list box. To
+refer to a combo box, use the form <i>the <b><var translate="no">LABEL_NAME</var></b> box</i>. To refer to
+entering a value into a combo box, use the verbs <i>type or select</i> or <i>enter</i>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: In the <b>Font</b> box, type
+or select the font that you want to use.</p>
+
+<p>A <i>spin box</i> is a box that lets the user choose a value by clicking
+arrows or by typing. To refer to a spin box, use the form <i>the
+<b><var translate="no">LABEL_NAME</var></b> box</i>. To refer to entering a value into a spin
+box, use the verb <i>enter</i>.</p>
+<p class="example"><span class="compare-better">Recommended</span>: In the <b>Font Size</b> box,
+enter a font size.</p>
+
+<h3 id="term-checkbox" data-text="Checkbox" tabindex="-1">Checkbox</h3>
+<p>A <i>checkbox</i> is a small box that indicates whether an option is
+on or off. To refer to a checkbox, use the form <i>the
+<b><var translate="no">LABEL_NAME</var></b> checkbox</i>.</p>
+<p>Be wary of using the verbs <i>check</i> and <i>uncheck</i>, which can be ambiguous; it's often
+  best to use <i>select</i> and <i>clear</i> instead.</p>
+<p class="example"><span class="compare-better">Recommended</span>: Select the <b>Automatically
+check for updates</b> checkbox.</p>
+<p class="example"><span class="compare-better">Recommended</span>: Clear the
+<b>Bookmarks</b> checkbox.</p>
+<p>If you need to refer to the state of the checkbox, it's often best to refer to it as
+  <i>selected</i> or <i>not selected</i>.
+<p class="example"><span class="compare-better">Recommended</span>: Make sure that the
+<b>Bookmarks</b> checkbox is selected.</p>
+<p class="example"><span class="compare-better">Recommended</span>: Make sure that the

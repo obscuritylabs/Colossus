@@ -659,9 +659,16 @@ impl PluginStore {
             .root
             .join("staging")
             .join(format!("install-{}", uuid::Uuid::now_v7()));
-        extract_plugin_artifact(artifact, &staging)
+        let comparison_only = destination.exists();
+        let extraction = if comparison_only {
+            oci::extract_plugin_artifact_for_comparison(artifact, &staging)
+        } else {
+            extract_plugin_artifact(artifact, &staging)
+        };
+        extraction
             .map_err(|error| StoreError::Adapter(format!("plugin extraction failed: {error}")))?;
-        if destination.exists() {
+        // Never publish a comparison copy, even if the live tree disappeared.
+        if comparison_only || destination.exists() {
             let result = verify_content_trees(&staging, &destination);
             remove_tree_if_present(&staging)?;
             result?;

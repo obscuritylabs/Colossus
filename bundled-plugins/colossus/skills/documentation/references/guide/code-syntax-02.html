@@ -1,0 +1,136 @@
+<p>The preceding command consists of the following elements:</p>
+
+<ul>
+<li><code translate="no" dir="ltr">ml-engine</code> is a <code translate="no" dir="ltr">gcloud</code> command group.</li>
+<li><code translate="no" dir="ltr">jobs</code> is an <code translate="no" dir="ltr">ml-engine</code> command group.</li>
+<li><code translate="no" dir="ltr">submit</code> is a <code translate="no" dir="ltr">jobs</code> command group.</li>
+<li><code translate="no" dir="ltr">training</code> is a <code translate="no" dir="ltr">submit</code> command.</li>
+<li><code translate="no" dir="ltr">${JOB_NAME}</code> is an argument that refers to an environment
+variable called <code translate="no" dir="ltr">JOB_NAME</code> that was set earlier.</li>
+<li><code translate="no" dir="ltr">--package-path</code> is a flag set to a path to a Python package to build.</li>
+<li><code translate="no" dir="ltr">--</code> in isolation separates the <code translate="no" dir="ltr">gcloud</code> arguments that precede it from
+  the <a href="https://cloud.google.com/sdk/gcloud/reference/ml-engine/jobs/submit/training#USER_ARGS">user arguments</a>
+  that follow it.</li>
+</ul>
+
+<p>In addition to the term flag, <i>option</i> is often used as a
+catchall term when you don't want to mire the reader in specialized
+nomenclature.</p>
+
+<p>For more information, see the
+<a href="https://cloud.google.com/sdk/gcloud/reference/">Cloud SDK: gcloud</a>
+topic.</p>
+</section>
+
+<section id="linux-commands">
+<h3 id="linux-commands" data-text="Linux commands" tabindex="-1">Linux commands</h3>
+
+<aside class="caution"><b>Caution</b>: Linux command syntax is notoriously complex.
+This section covers only the most common elements. For a more detailed reference,
+see <a href="http://wiki.lib.sun.ac.za/images/c/ca/TLCL-13.07.pdf">The Linux Command Line</a>.</aside>
+
+<p>Where the <code translate="no" dir="ltr">gcloud</code> CLI uses the catchall terms
+flag and option, Linux commands use <i>options</i>, <i>parameters</i>,
+<i>arguments</i>, and a host of specialized syntax elements. The following is an
+example:</p>
+<div class="example">
+<div></div><devsite-code><pre class="devsite-click-to-copy" translate="no" dir="ltr" is-upgraded>
+find /usr/src/linux -follow -type f -name '*.[ch]' | xargs grep -iHn pcnet
+</pre></devsite-code>
+</div>
+<p>The preceding command consists of the following elements:</p>
+
+<ul>
+<li><code translate="no" dir="ltr">find</code> is the command name.</li>
+<li><code translate="no" dir="ltr">/usr/src/linux</code> is an argument that specifies the path to look
+in. Easier to refer to as only a path.</li>
+<li><code translate="no" dir="ltr">-follow</code> is an option. The hyphen (<code translate="no" dir="ltr">-</code>), often called a <i>dash</i> in
+  this context, is part of the option.</li>
+<li><code translate="no" dir="ltr">-type</code> is an option with a value of <code translate="no" dir="ltr">f</code>.</li>
+<li><code translate="no" dir="ltr">-name</code> is an option with a value of <code translate="no" dir="ltr">'*.[ch]'</code>, where
+the asterisk (<code translate="no" dir="ltr">*</code>) is a <i>metacharacter</i> signifying a wildcard.
+Metacharacters are used in Linux shell commands for <i>globbing</i>, or filename
+expansion. In addition to the asterisk, metacharacters include the question mark
+(<code translate="no" dir="ltr">?</code>) and caret (<code translate="no" dir="ltr">^</code>).</li>
+</ul>
+
+<p>The results of the first command are redirected by using a <i>pipe</i>
+(<code translate="no" dir="ltr">|</code>) to the <code translate="no" dir="ltr">xargs grep -iHn pcnet</code> command. Other
+redirection symbols include the greater than symbol (<code translate="no" dir="ltr">&gt;</code>), less than symbol
+(<code translate="no" dir="ltr">&lt;</code>), left double angle quotation mark (<code translate="no" dir="ltr">&lt;&lt;</code>), and right double
+angle quotation mark (<code translate="no" dir="ltr">&gt;&gt;</code>). Redirection means capturing
+output from a file, command, program, script, or even code block within a script
+and sending it as input to another file, command, program, or script.</p>
+</section>
+
+<section id="linux-signals">
+<h3 id="linux-signals" data-text="Linux signals" tabindex="-1">Linux signals</h3>
+<p>Linux signals require vocabulary choices that
+are generally discouraged elsewhere in documentation. We recommend using the terms in the
+  following table <em>only</em> in the context of process control:</p>
+<table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code translate="no" dir="ltr">SIGKILL</code></td>
+<td>Signal sent to <i>kill</i> a specified process, all members of a
+specified process group, or all processes on the system. <code translate="no" dir="ltr">SIGKILL</code>
+cannot be caught, blocked, or ignored. Do not substitute <i>cancel</i>,
+<i>end</i>, <i>exit</i>, <i>quit</i>, <i>stop</i>, or <i>terminate</i>.</td>
+</tr>
+<tr>
+<td><code translate="no" dir="ltr">SIGTERM</code></td>
+<td>Signal sent as a request to <i>terminate</i> a process. Although
+similar to <code translate="no" dir="ltr">SIGKILL</code>, this signal gives the process a chance to
+clean up any child processes that might be running. Do not substitute
+<i>cancel</i>, <i>end</i>, <i>exit</i>, <i>quit</i>, or <i>stop</i>.</td>
+</tr>
+<tr>
+<td><code translate="no" dir="ltr">SIGQUIT</code></td>
+<td>Signal sent from a keyboard to <i>quit</i> a process. Some
+processes can catch, block, or ignore a quit signal. Do not substitute
+<i>cancel</i>, <i>end</i>, <i>exit</i>, <i>quit</i>, or <i>stop</i>.</td>
+</tr>
+<tr>
+<td><code translate="no" dir="ltr">SIGINT</code></td>
+<td>Signal sent to <i>interrupt</i> a process immediately. The default action
+of this signal is to terminate a process gracefully. It can be handled,
+ignored, or caught. It can be sent from a terminal&mdash;for example, when a
+user presses <kbd>Control+C</kbd>. Do not substitute <i>suspend</i>,
+<i>end</i>, <i>exit</i>, <i>pause</i>, or <i>terminate</i>.</td>
+</tr>
+<tr>
+<td><code translate="no" dir="ltr">SIGPAUSE</code></td>
+<td>Signal that tells a process to <i>pause</i>, or <i>sleep</i>, until any
+signal is delivered that either terminates the process or invokes a
+signal-catching function. Do not substitute <i>cancel</i> or
+<i>interrupt</i>.</td>
+</tr>
+<tr>
+<td><code translate="no" dir="ltr">SIGSUSPEND</code></td>
+<td>Signal sent to temporarily <i>suspend</i> execution of a process.
+Used to prevent delivery of a particular signal during the execution of a
+critical code section. Do not substitute <i>pause</i> or <i>exit</i>.</td>
+</tr>
+<tr>
+<td><code translate="no" dir="ltr">SIGSTOP</code></td>
+<td>Signal sent to <i>stop</i> execution of a process for later
+continuation (upon receiving a <code translate="no" dir="ltr">SIGCONT</code> signal).
+<code translate="no" dir="ltr">SIGSTOP</code> cannot be caught, blocked, or ignored. Do not substitute
+<i>cancel</i>, <i>end</i>, <i>exit</i>, <i>interrupt</i>, <i>quit</i>, or
+<i>terminate</i>.</td>
+</tr>
+</tbody>
+</table>
+</section>
+
+
+
+  
+
+  

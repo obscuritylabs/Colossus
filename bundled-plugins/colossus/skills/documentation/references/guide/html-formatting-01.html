@@ -1,0 +1,60 @@
+<!-- Source: https://developers.google.com/style/html-formatting; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/html-formatting">
+<h1>HTML formatting</h1>
+
+
+  
+    
+      
+    
+    
+
+<section id="formatting">
+<p>Follow Google's <a
+href="https://google.github.io/styleguide/htmlcssguide.html">HTML/CSS
+Style Guide</a>. Exception: don't leave out optional elements.</p>
+<p>In particular, following are some basic guidelines from that style guide,
+which generally apply to other documentation source files, too (such as YAML and Markdown):</p>
+<ul>
+  <li><b>Don't use tabs</b> to indent text; use spaces only. Different text
+editors interpret tabs differently, and some Markdown features expect spaces
+and not tabs.</li>
+  <li><b>Indent by two spaces</b> per indentation level.</li>
+  <li><b>Use all-lowercase</b> for elements and attributes.</li>
+  <li><b>Don't leave trailing spaces</b> at the end of a line (except as
+needed for Markdown).</li>
+</ul>
+</section>
+
+<section id="line-length">
+<h2 id="line-length" data-text="Line length" tabindex="-1">Line length</h2>
+<p>Break lines at 80 characters except in the following cases:</p>
+<ul>
+<li>Information in a <code translate="no" dir="ltr">meta</code> element at the beginning of a file must be on a single line,
+  so those lines can be as long as needed.</li>
+<li>If a URL in a link has a line break, the link won't work.
+If a URL is longer than 80 characters (quite common), you're stuck with it. In that case,
+put the URL on its own line with the <code translate="no" dir="ltr">href</code> attribute to make it
+easier to review the text before and after, as the following example shows:</li>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>You can find more information in
+&lt;a href="https://example.com/long-url/johan-gambolputty-de-von-ausfern-…-von-hautkopf-of-ulm.html"
+&gt;his biography.&lt;/a&gt;</pre></devsite-code>
+</ul>
+
+<p>Break code snippets (in <code translate="no" dir="ltr">&lt;pre&gt;</code> blocks) at 80 characters:</p>
+
+<ul>
+  <li>Older files might use different line lengths. If you're making small changes to a file that
+    has a consistent line length other than 80 characters, then make your changes conform to that
+    file's line length rather than reformatting the whole file.</li>
+  <li> When adding line breaks, make sure that you don't change the meaning of the code! If you're
+    not familiar with the programming language, ask for help from someone who is. But sometimes you
+    just can't avoid a long line.</li>
+</ul>
+
+</section>
+
+
+  
+
+  

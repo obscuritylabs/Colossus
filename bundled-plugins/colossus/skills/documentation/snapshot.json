@@ -1,0 +1,1050 @@
+{
+  "schema": 1,
+  "captured_at": "2026-11-03T14:51:55.942158+00:00",
+  "navigation": [
+    "https://developers.google.com/style",
+    "https://developers.google.com/style/highlights",
+    "https://developers.google.com/style/whats-new",
+    "https://developers.google.com/style/philosophy",
+    "https://developers.google.com/style/word-list",
+    "https://developers.google.com/style/product-names",
+    "https://developers.google.com/style/text-formatting",
+    "https://developers.google.com/style/accessibility",
+    "https://developers.google.com/style/excessive-claims",
+    "https://developers.google.com/style/future",
+    "https://developers.google.com/style/translation",
+    "https://developers.google.com/style/inclusive-documentation",
+    "https://developers.google.com/style/jargon",
+    "https://developers.google.com/style/prescriptive-documentation",
+    "https://developers.google.com/style/other-sources",
+    "https://developers.google.com/style/timeless-documentation",
+    "https://developers.google.com/style/tone",
+    "https://developers.google.com/style/abbreviations",
+    "https://developers.google.com/style/voice",
+    "https://developers.google.com/style/anthropomorphism",
+    "https://developers.google.com/style/articles",
+    "https://developers.google.com/style/capitalization",
+    "https://developers.google.com/style/contractions",
+    "https://developers.google.com/style/pluralization",
+    "https://developers.google.com/style/possessives",
+    "https://developers.google.com/style/prepositions",
+    "https://developers.google.com/style/tense",
+    "https://developers.google.com/style/pronouns",
+    "https://developers.google.com/style/person",
+    "https://developers.google.com/style/sentence-structure",
+    "https://developers.google.com/style/reference-verbs",
+    "https://developers.google.com/style/colons",
+    "https://developers.google.com/style/commas",
+    "https://developers.google.com/style/dashes",
+    "https://developers.google.com/style/ellipses",
+    "https://developers.google.com/style/hyphens",
+    "https://developers.google.com/style/parentheses",
+    "https://developers.google.com/style/periods",
+    "https://developers.google.com/style/quotation-marks",
+    "https://developers.google.com/style/semicolons",
+    "https://developers.google.com/style/slashes",
+    "https://developers.google.com/style/dates-times",
+    "https://developers.google.com/style/format-examples",
+    "https://developers.google.com/style/images",
+    "https://developers.google.com/style/footnotes",
+    "https://developers.google.com/style/headings",
+    "https://developers.google.com/style/italics-terms",
+    "https://developers.google.com/style/lists",
+    "https://developers.google.com/style/mathematical-notation",
+    "https://developers.google.com/style/notices",
+    "https://developers.google.com/style/numbers",
+    "https://developers.google.com/style/paragraph-structure",
+    "https://developers.google.com/style/phone-numbers",
+    "https://developers.google.com/style/procedures",
+    "https://developers.google.com/style/tables",
+    "https://developers.google.com/style/units-of-measure",
+    "https://developers.google.com/style/cross-references",
+    "https://developers.google.com/style/headings-targets",
+    "https://developers.google.com/style/api-reference-comments",
+    "https://developers.google.com/style/code-in-text",
+    "https://developers.google.com/style/code-samples",
+    "https://developers.google.com/style/code-syntax",
+    "https://developers.google.com/style/placeholders",
+    "https://developers.google.com/style/ui-elements",
+    "https://developers.google.com/style/semantic-tagging",
+    "https://developers.google.com/style/html-formatting",
+    "https://developers.google.com/style/markdown",
+    "https://developers.google.com/style/examples",
+    "https://developers.google.com/style/filenames",
+    "https://developers.google.com/style/trademarks"
+  ],
+  "pages": [
+    {
+      "url": "https://developers.google.com/style",
+      "source": "upstream/index.html.gz",
+      "sha256": "0eb01a7e138820d4125420dc13acba1c66d9a4463c27b98df071e6c784db461a",
+      "resources": [
+        "references/guide/index-01.html"
+      ],
+      "article_sha256": "ae5552a501b247132087edc155210bf9fbec178b1c343f986a78b228bbcde73a",
+      "title": "About this guide",
+      "upstream_updated": "2026-10-09",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/abbreviations",
+      "source": "upstream/abbreviations.html.gz",
+      "sha256": "5c6cea7662d73e75f6b697211f02d87ba665dd283e6b2ed9bd9c4b27b79cbd50",
+      "resources": [
+        "references/guide/abbreviations-01.html"
+      ],
+      "article_sha256": "4bef6840f7e1315459c9150e49ddc6a8dd51cb69cca48cafbdeddd73419103e4",
+      "title": "Abbreviations",
+      "upstream_updated": "2025-12-01",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/accessibility",
+      "source": "upstream/accessibility.html.gz",
+      "sha256": "1032c23f0031bd54d15e04bad871393c0872fc28a7ce3b7ba5cf0f9201a954be",
+      "resources": [
+        "references/guide/accessibility-01.html"
+      ],
+      "article_sha256": "3215bb8f03043478cab8def67dff1cd24ed0192620988b7d60af615cc6cf15f2",
+      "title": "Write accessible documentation",
+      "upstream_updated": "2026-10-09",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/anthropomorphism",
+      "source": "upstream/anthropomorphism.html.gz",
+      "sha256": "6adc82dacca17307175d34e031904c7ca0de369e69450a444952c0d314282682",
+      "resources": [
+        "references/guide/anthropomorphism-01.html"
+      ],
+      "article_sha256": "46154630366ae06a64e715b7f14e60a0aea12ca772ca611e6b3509fcef9c80c4",
+      "title": "Anthropomorphism",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/api-reference-comments",
+      "source": "upstream/api-reference-comments.html.gz",
+      "sha256": "6119b8239f1aba0a9b58ca2102a8f914e8cab6bae8522748f870958748b5ace1",
+      "resources": [
+        "references/guide/api-reference-comments-01.html"
+      ],
+      "article_sha256": "8767f3c7dd5a44f6ce9bac7ca46ed293bb72384ce7ae85e7e9badd8a096d9ed9",
+      "title": "API reference code comments",
+      "upstream_updated": "2026-07-01",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/articles",
+      "source": "upstream/articles.html.gz",
+      "sha256": "bbdd9bc80d2239860b84b5f8ec8bac63afc2484d13a5a1c702838aa1cdf65836",
+      "resources": [
+        "references/guide/articles-01.html"
+      ],
+      "article_sha256": "703b96cf125ed070ea94d5a0b15c7a7d3a09f3529f69826ba6e85132116a19cc",
+      "title": "Articles (a, an, the)",
+      "upstream_updated": "2025-03-21",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/capitalization",
+      "source": "upstream/capitalization.html.gz",
+      "sha256": "584478075412bdf7adfe174fd85eb7e95e4077ea82e78a838ccec7439c9c3ed7",
+      "resources": [
+        "references/guide/capitalization-01.html"
+      ],
+      "article_sha256": "a227e8387083cfa8d0171e8d2a60ce4687e74f4f5f6fd73c0f4fb93473ae75bc",
+      "title": "Capitalization",
+      "upstream_updated": "2025-04-02",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/code-in-text",
+      "source": "upstream/code-in-text.html.gz",
+      "sha256": "2e8a29cf5a093dbe9d87ed81b9446a8c3c613c2c39274507b4c10729f37692e4",
+      "resources": [
+        "references/guide/code-in-text-01.html",
+        "references/guide/code-in-text-02.html"
+      ],
+      "article_sha256": "29eef31b188ab06fb6623cc3dd5044590f5865e7a5dab4549de0dbe2311589db",
+      "title": "Code in text",
+      "upstream_updated": "2026-10-09",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/code-samples",
+      "source": "upstream/code-samples.html.gz",
+      "sha256": "7baf22e740bb6cfcd4a30139f567981eb3ea71b320c5b26058645044351636bb",
+      "resources": [
+        "references/guide/code-samples-01.html"
+      ],
+      "article_sha256": "b04490d1fa1b33e20fcf0ca4bbc1694ca3febdc50f38a334f13dfe11fe08a1d4",
+      "title": "Code samples",
+      "upstream_updated": "2025-10-10",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/code-syntax",
+      "source": "upstream/code-syntax.html.gz",
+      "sha256": "f1f9159f537509f6ce1db399c58011911a267700b696be998ce7e4492884b21f",
+      "resources": [
+        "references/guide/code-syntax-01.html",
+        "references/guide/code-syntax-02.html"
+      ],
+      "article_sha256": "5406319c67aeaf9cc8b86ac63e2b839689dec26b92288fe8a8056575f6789bab",
+      "title": "Document command-line syntax",
+      "upstream_updated": "2026-10-09",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/colons",
+      "source": "upstream/colons.html.gz",
+      "sha256": "88c634f91e2231dced3e07a13169af8b15253436e68a3c93bc95fe615e760454",
+      "resources": [
+        "references/guide/colons-01.html"
+      ],
+      "article_sha256": "5a5788bcbbf4478c92cc2bdbdb367d40c46506af2f28ef0ee9a948cbd4a3682f",
+      "title": "Colons",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/commas",
+      "source": "upstream/commas.html.gz",
+      "sha256": "81a2124ceeccbe7e846293ca16c1898685df7da1e92ca61c152004830cd2ee36",
+      "resources": [
+        "references/guide/commas-01.html"
+      ],
+      "article_sha256": "25242df6ead90741baa73a975e0bc186bf95ff8841deedb2e1362aad7187dbee",
+      "title": "Commas",
+      "upstream_updated": "2025-08-05",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/contractions",
+      "source": "upstream/contractions.html.gz",
+      "sha256": "2707896ba888213012d517c80d72b4b0b8ece84a3c6898a7582d3009f270085f",
+      "resources": [
+        "references/guide/contractions-01.html"
+      ],
+      "article_sha256": "0c0e7c7ad8ce181bade9db122b6da4c4e82629e99fac3c81fe3f4f380f698b8b",
+      "title": "Contractions",
+      "upstream_updated": "2025-02-21",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/cross-references",
+      "source": "upstream/cross-references.html.gz",
+      "sha256": "5c103b4bb18f96bd7253c893ca350c750003685f7ffad153326b7a291a7b7952",
+      "resources": [
+        "references/guide/cross-references-01.html"
+      ],
+      "article_sha256": "33aeeaa49b1914a9152097ee645c98768fad0e865f5ef03f6272b2f2eda78e43",
+      "title": "Cross-references and linking",
+      "upstream_updated": "2026-10-09",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/dashes",
+      "source": "upstream/dashes.html.gz",
+      "sha256": "bba2e84cb823e73391630636c690a01345d57e7994cc8913a16561b1f9c43240",
+      "resources": [
+        "references/guide/dashes-01.html"
+      ],
+      "article_sha256": "8d4dfea48a4ef0b8e6011823405616bf9457cc742d5de0cda932d304d8f02a63",
+      "title": "Dashes",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/dates-times",
+      "source": "upstream/dates-times.html.gz",
+      "sha256": "4361cfc945967c6386a52d656b8a34ab13c9838a3d7291ebfc17bb96c1fdd89c",
+      "resources": [
+        "references/guide/dates-times-01.html"
+      ],
+      "article_sha256": "e7191e6fee2a25aabdcd0f49ad2186a4eeadc8770a21637f49f116c0df44ff5f",
+      "title": "Dates and times",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/ellipses",
+      "source": "upstream/ellipses.html.gz",
+      "sha256": "49baafec6bc4b2d8f67d6729fea4d8c400b4a631895032250bc6d7f7dfff47e9",
+      "resources": [
+        "references/guide/ellipses-01.html"
+      ],
+      "article_sha256": "3e99a75a4970da90f9286536fcd8cc93e88c0fb27ce1d1f836f85535ee215afb",
+      "title": "Ellipses",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/examples",
+      "source": "upstream/examples.html.gz",
+      "sha256": "8eeac0dc1f9ff70473b6ac6427f5209151c43d547966b108dad78d1d411225ef",
+      "resources": [
+        "references/guide/examples-01.html"
+      ],
+      "article_sha256": "192585836d09b12ddbb3088870f6f2352c071d1a89b134a4f05964e63fe89def",
+      "title": "Example domains and names",
+      "upstream_updated": "2025-04-17",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/excessive-claims",
+      "source": "upstream/excessive-claims.html.gz",
+      "sha256": "24f8b51b7f761cb8f33a24d2e4ba55beaafa668d7d60cf45e21f188be26fa57d",
+      "resources": [
+        "references/guide/excessive-claims-01.html"
+      ],
+      "article_sha256": "f816b9eefb335112d887b37387cd996cd6ab844b21b9763a97cbdd4f6973eb34",
+      "title": "Avoid excessive claims",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/filenames",
+      "source": "upstream/filenames.html.gz",
+      "sha256": "a02ea8baf2d3c955b5367112fb0063f90859ff991f77b33cf8fb7d2a30e33e31",
+      "resources": [
+        "references/guide/filenames-01.html"
+      ],
+      "article_sha256": "4ceb02b6e42528e806cba66e517ee9f067223f0d0f80c339aaa2e370d89c8db1",
+      "title": "Filenames and file types",
+      "upstream_updated": "2026-10-09",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/footnotes",
+      "source": "upstream/footnotes.html.gz",
+      "sha256": "46470f7b55aea5bb60097658ea540cbf7293c3d7ab1c88fdfdf7f980ad2792c9",
+      "resources": [
+        "references/guide/footnotes-01.html"
+      ],
+      "article_sha256": "b6c5929df6fc31c08b68421e8477578cf5287bbdb22322876a810f857e326f1e",
+      "title": "Footnotes",
+      "upstream_updated": "2025-04-02",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/format-examples",
+      "source": "upstream/format-examples.html.gz",
+      "sha256": "a624221f1fd988628c75b5a9ba9c3473ed11bf87af448a72f32bb85f57384e96",
+      "resources": [
+        "references/guide/format-examples-01.html"
+      ],
+      "article_sha256": "97152dec596e722a9c9dae73df4025e73e3bde383d852514356334b80c00d553",
+      "title": "Format examples",
+      "upstream_updated": "2025-12-02",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/future",
+      "source": "upstream/future.html.gz",
+      "sha256": "553c778818f6f9372303e52ed4c4d4a2914a2b98323751deff8df4d861db9d80",
+      "resources": [
+        "references/guide/future-01.html"
+      ],
+      "article_sha256": "a94f3699b30c884ff35c500241dc8aa6f1549abc2f82db4fdeb8f1eb730b42fe",
+      "title": "Future features",
+      "upstream_updated": "2026-05-19",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/headings",
+      "source": "upstream/headings.html.gz",
+      "sha256": "fbc48a397d945ed27034f64c7d35d669d3a9c6c26f4894115d42e22ffd988656",
+      "resources": [
+        "references/guide/headings-01.html"
+      ],
+      "article_sha256": "4b01498bf5713b6336ccc252a686d61905a3ee0472ab588245c469fc89ba85fe",
+      "title": "Headings and titles",
+      "upstream_updated": "2026-06-08",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/headings-targets",
+      "source": "upstream/headings-targets.html.gz",
+      "sha256": "b435a7ee2fa3fcdad9e64892dc70959207cd3630541cad2d9b20c927de8a5e87",
+      "resources": [
+        "references/guide/headings-targets-01.html"
+      ],
+      "article_sha256": "5733a7a482daf6b7212904cdf9b7c6d50ebcb309ce6a2a40c146b7017b1b18f8",
+      "title": "Make headings into link targets",
+      "upstream_updated": "2026-05-06",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/highlights",
+      "source": "upstream/highlights.html.gz",
+      "sha256": "26b5431efdd236ce43bde69aeaf89d02548c86252e95a28fcb26ef7ae7347522",
+      "resources": [
+        "references/guide/highlights-01.html"
+      ],
+      "article_sha256": "2bf4ed3058231e24aa763d2ba4e046007c9d6b51879e55d082866275641e034c",
+      "title": "Highlights",
+      "upstream_updated": "2026-10-09",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/html-formatting",
+      "source": "upstream/html-formatting.html.gz",
+      "sha256": "6f032b090b5f6cce988006df07da20daf0ce5cdb1230eec74c78cc9387bef4e4",
+      "resources": [
+        "references/guide/html-formatting-01.html"
+      ],
+      "article_sha256": "6878412259d5a1082db59c99d5cf559a6d2c66c2b989ae8f17b4a577f366fd97",
+      "title": "HTML formatting",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/hyphens",
+      "source": "upstream/hyphens.html.gz",
+      "sha256": "d0438720fea249b51a2ed0ac5b21517c979d290e90518565920de6b56aad3c12",
+      "resources": [
+        "references/guide/hyphens-01.html"
+      ],
+      "article_sha256": "572110158d4dae0a77fa7f882a4d46137773b5918b55cb49f1c14d31328d5dab",
+      "title": "Hyphens",
+      "upstream_updated": "2026-04-17",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/images",
+      "source": "upstream/images.html.gz",
+      "sha256": "eea0cd514230c735169c73b183b60a4d631fd2a1b3d03aad574bdaed4fb6300a",
+      "resources": [
+        "references/guide/images-01.html",
+        "references/guide/images-02.html"
+      ],
+      "article_sha256": "1c492b6a92af9ef2eae41edadc973e2ba6a3e73c90d5ebd6786f8ffcdcc37561",
+      "title": "Diagrams, figures, and other images",
+      "upstream_updated": "2026-10-09",
+      "media": [
+        {
+          "tag": "img",
+          "src": "https://cloud.google.com/architecture/images/microservices-architecture-refactoring-monoliths-bounded-contexts.svg",
+          "alt": "Bounded contexts are applied to an application."
+        }
+      ]
+    },
+    {
+      "url": "https://developers.google.com/style/inclusive-documentation",
+      "source": "upstream/inclusive-documentation.html.gz",
+      "sha256": "fb7be745f8dec578dbb87131befa1466e8fe269ded176c6f43c532cc16c6693b",
+      "resources": [
+        "references/guide/inclusive-documentation-01.html"
+      ],
+      "article_sha256": "dc47dcddcf9a3487c038eb0dc879028c1abafa78c2a1c3c73c4b33e12d6359fd",
+      "title": "Write inclusive documentation",
+      "upstream_updated": "2026-10-26",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/italics-terms",
+      "source": "upstream/italics-terms.html.gz",
+      "sha256": "56eba79b31b98ed444f49c8d924bfa997325ebe86e7a2902d944d1f93cb9adcd",
+      "resources": [
+        "references/guide/italics-terms-01.html"
+      ],
+      "article_sha256": "b82226ae9f18346c232234d24ecaf2fd407751a7c217a665d6c95312553666e6",
+      "title": "Use italics to discuss terms",
+      "upstream_updated": "2025-05-22",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/jargon",
+      "source": "upstream/jargon.html.gz",
+      "sha256": "d172d50aa49b4766ff10148bbbd556fa0619eecf48ab4c47b4effc51f6526b4b",
+      "resources": [
+        "references/guide/jargon-01.html"
+      ],
+      "article_sha256": "4d1905f7f51de336f88e7421ffca091b056de5abff98fbb7230cf561be074eda",
+      "title": "Jargon",
+      "upstream_updated": "2025-06-25",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/lists",
+      "source": "upstream/lists.html.gz",
+      "sha256": "96e22facde061081c9aad91dfbd06f80515afe5e9ae48b5d0cf2603d6305aa5b",
+      "resources": [
+        "references/guide/lists-01.html"
+      ],
+      "article_sha256": "5ef98920b4d0475dd2e62ae7d955be7e61d9530ffda298344f7773ce8ee023bd",
+      "title": "Lists",
+      "upstream_updated": "2026-10-27",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/markdown",
+      "source": "upstream/markdown.html.gz",
+      "sha256": "6e5c19c53b43fad6aeb6b30045b04d1837c1d3aad619989d3251a29a4535b8d0",
+      "resources": [
+        "references/guide/markdown-01.html"
+      ],
+      "article_sha256": "ea4a0f2592e7c2820ab5ab5a154bc4b1e806d4a7725b5c936561240dd9cf850a",
+      "title": "Markdown versus HTML",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/mathematical-notation",
+      "source": "upstream/mathematical-notation.html.gz",
+      "sha256": "9aa83c097a0385248465f34dffc59039b4390c4bca195494b83a8f11648381d1",
+      "resources": [
+        "references/guide/mathematical-notation-01.html"
+      ],
+      "article_sha256": "0a6b7bdd242f3c32d8f3fdac966e090a6433c2c3ec6c1790762d06d1dc7fc2dd",
+      "title": "Mathematical notation",
+      "upstream_updated": "2026-03-03",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/notices",
+      "source": "upstream/notices.html.gz",
+      "sha256": "c8b360a63e61235779acdcba61ac0da7812009f234cc645a5bec2f22286147a0",
+      "resources": [
+        "references/guide/notices-01.html"
+      ],
+      "article_sha256": "50ea23b8f9ebf993377e5819a13a908eb9a98fd59e13ef23ace06e7108266010",
+      "title": "Notes, cautions, warnings, and other notices",
+      "upstream_updated": "2026-10-09",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/numbers",
+      "source": "upstream/numbers.html.gz",
+      "sha256": "64c38cfc0c2fbc482c0ef792d9c87da135133710e4a0d13ebea735edd305c4cb",
+      "resources": [
+        "references/guide/numbers-01.html"
+      ],
+      "article_sha256": "bef8fec771836637364eb6e45c74fc57d7a4a785b1519b24befe613778c97e5f",
+      "title": "Numbers",
+      "upstream_updated": "2026-04-17",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/other-sources",
+      "source": "upstream/other-sources.html.gz",
+      "sha256": "66a56cb7d58888de0774115d2b9595c727ce681ae1fde9bec95351e230f69f8f",
+      "resources": [
+        "references/guide/other-sources-01.html"
+      ],
+      "article_sha256": "52a2f5ded3b72b4363a596c9a4842fcce97a130eb1238473cffc073f47ac0203",
+      "title": "Third-party content",
+      "upstream_updated": "2026-10-09",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/paragraph-structure",
+      "source": "upstream/paragraph-structure.html.gz",
+      "sha256": "b1a4d36383305d83fc15f039851650316e2e7336f90f8f39159d744760ed56ab",
+      "resources": [
+        "references/guide/paragraph-structure-01.html"
+      ],
+      "article_sha256": "6bcec742212ee03c478ae2aed35034915b50186d172349a7d4e8a7e367cb1b13",
+      "title": "Paragraph structure",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/parentheses",
+      "source": "upstream/parentheses.html.gz",
+      "sha256": "95a244ce435eeb5e698d85939f97fb8985d737772bc282e7344416029cf9aac0",
+      "resources": [
+        "references/guide/parentheses-01.html"
+      ],
+      "article_sha256": "5c49ea2610c2d01077c9f9dc19f3f79b1de30db62d47d16b277f55b8f1e0ebd4",
+      "title": "Parentheses",
+      "upstream_updated": "2025-12-01",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/periods",
+      "source": "upstream/periods.html.gz",
+      "sha256": "563e439c3972e05aa34c080fb40a1d7f156786497d7eaedd07e60d600d5d1cd3",
+      "resources": [
+        "references/guide/periods-01.html"
+      ],
+      "article_sha256": "683d5ef21ba581c6bb23add044e6149cbf2d84faefc81236922ef8ad450596e2",
+      "title": "Periods and other end punctuation",
+      "upstream_updated": "2026-01-13",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/person",
+      "source": "upstream/person.html.gz",
+      "sha256": "d4063a1ad25ec381e370ffe5355141568071f8dca31a23bf0852de889ed0823e",
+      "resources": [
+        "references/guide/person-01.html"
+      ],
+      "article_sha256": "79b55c604a9418cda827bbe6d5b73fc5c0a91bcb64d3f953d40037e7f58d9612",
+      "title": "Second person and first person",
+      "upstream_updated": "2025-04-10",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/philosophy",
+      "source": "upstream/philosophy.html.gz",
+      "sha256": "cd685b9c63d264e0b3b69dc404f4836a8ee09bf8f65d64881b318cd5b49ad92d",
+      "resources": [
+        "references/guide/philosophy-01.html"
+      ],
+      "article_sha256": "f54b5fe130270e20b6d1d3205d0f46686d2be521586b238a16ea2375e7e03175",
+      "title": "Philosophy of this style guide",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/phone-numbers",
+      "source": "upstream/phone-numbers.html.gz",
+      "sha256": "7a3463f60b7db243550be0893a5ab58a12f2437b996023c61d5f330ec4a1ba65",
+      "resources": [
+        "references/guide/phone-numbers-01.html"
+      ],
+      "article_sha256": "54b7c8a187568c160db2ed619923903ad953ed7299552596a66e66fb8fc88d2a",
+      "title": "Format phone numbers in text",
+      "upstream_updated": "2025-04-17",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/placeholders",
+      "source": "upstream/placeholders.html.gz",
+      "sha256": "ae13e07bd92a7f2c9088d0858c6d95a482f7f14fa4b0aef6fb46524c7cd4f4a2",
+      "resources": [
+        "references/guide/placeholders-01.html"
+      ],
+      "article_sha256": "cc0b0e7cb0af67c14538f5acde6b6f8e9c09cfae5051b98c4092788e98b86852",
+      "title": "Format placeholders",
+      "upstream_updated": "2026-08-13",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/pluralization",
+      "source": "upstream/pluralization.html.gz",
+      "sha256": "1f4351c956d01f5a9cedf9a1d4b42d2b35a6bfa4c36029ca56292ff368a1e42a",
+      "resources": [
+        "references/guide/pluralization-01.html"
+      ],
+      "article_sha256": "a79f505b240ee3a46af591af541614acfa17b0f231878c42f038fc8c1f98220b",
+      "title": "Pluralization",
+      "upstream_updated": "2026-01-20",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/possessives",
+      "source": "upstream/possessives.html.gz",
+      "sha256": "ca774cc25f16553ca1310b8b65aaf99f5eaa50cc5953f932047f7162b4e351f7",
+      "resources": [
+        "references/guide/possessives-01.html"
+      ],
+      "article_sha256": "c060857f2954d9dc4d1251a29892eb7eb6ea1d83ff3d8f1ace5b95cf6a59f1ef",
+      "title": "Possessives",
+      "upstream_updated": "2025-12-01",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/prepositions",
+      "source": "upstream/prepositions.html.gz",
+      "sha256": "a6ed380e2d9632ef2dc93ba45c089bf4fb0c79ab8ccf139748d5bac0583b39f4",
+      "resources": [
+        "references/guide/prepositions-01.html"
+      ],
+      "article_sha256": "67c023ce8b1925b584260b12ce3d9aa53902b37fb5245a8036aaf03b8783893a",
+      "title": "Prepositions",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/prescriptive-documentation",
+      "source": "upstream/prescriptive-documentation.html.gz",
+      "sha256": "6fadaa9527856638a5875d11e24e04c550192c1d11f39c3fe12ed309c64db500",
+      "resources": [
+        "references/guide/prescriptive-documentation-01.html"
+      ],
+      "article_sha256": "23204736c31878cbecff7d7ac63dcd6df5e0696c8c92c1560738b5fcb531a7f8",
+      "title": "Prescriptive documentation",
+      "upstream_updated": "2026-10-09",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/procedures",
+      "source": "upstream/procedures.html.gz",
+      "sha256": "b8270261a6f2a3907310c2f9a4846e80ee73eaba4974b4c239944bf3e9cdfc63",
+      "resources": [
+        "references/guide/procedures-01.html"
+      ],
+      "article_sha256": "aac50d2fd1d609bcd5a50a0661a5145f7ec21aca69a1e47c7d4be77bc6067a34",
+      "title": "Procedures",
+      "upstream_updated": "2026-10-27",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/product-names",
+      "source": "upstream/product-names.html.gz",
+      "sha256": "d01e0c5fff559e22259f9be097a4ca71ca897b517ffd378f4ab27e3a9c5e8e4a",
+      "resources": [
+        "references/guide/product-names-01.html"
+      ],
+      "article_sha256": "2e5dd12909df080897efc7e7a3102203714b153a77540d427ce05db955e47cef",
+      "title": "Product names",
+      "upstream_updated": "2026-10-09",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/pronouns",
+      "source": "upstream/pronouns.html.gz",
+      "sha256": "fad0b23e5d00d64648257b2604e0788b6877f3d837215d0204a67b7f202d59e8",
+      "resources": [
+        "references/guide/pronouns-01.html"
+      ],
+      "article_sha256": "f588d2c90755f5aaf4b900d42e47dcb8be9d6934e54751c5948bf21d55b99cdf",
+      "title": "Pronouns",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/quotation-marks",
+      "source": "upstream/quotation-marks.html.gz",
+      "sha256": "dca592de88425f51bbeaa4c5614adfe31d8c6d6a930c41e19f4b8daa164a17cc",
+      "resources": [
+        "references/guide/quotation-marks-01.html"
+      ],
+      "article_sha256": "a6817936afac48bf8882334fa5e82df43ba3c3470fc88cd3dde7eee9a5133a1a",
+      "title": "Quotation marks",
+      "upstream_updated": "2025-05-14",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/reference-verbs",
+      "source": "upstream/reference-verbs.html.gz",
+      "sha256": "db61b1f1826882a1cc23c3227fbadde82ea1f3ffa70633c4ee0955453aabd24e",
+      "resources": [
+        "references/guide/reference-verbs-01.html"
+      ],
+      "article_sha256": "b82f79cbdef56b003e25ddae11068ab95f69feed094e9f709bf6fa481b19e3fa",
+      "title": "Verb forms in reference documentation",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/semantic-tagging",
+      "source": "upstream/semantic-tagging.html.gz",
+      "sha256": "5180b467373e68baabf580e6dfb8a34d1a869a2d8c4c17426abd2dbd6c00556c",
+      "resources": [
+        "references/guide/semantic-tagging-01.html"
+      ],
+      "article_sha256": "6307552a5fddd13c5a2aff9e972a7c1c7d3de2ac3ee0020dc54003d030cc06cb",
+      "title": "HTML and semantic tagging",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/semicolons",
+      "source": "upstream/semicolons.html.gz",
+      "sha256": "e43dc2cea223b0fe12a3a463ce17343957b822b6240736eefaa02ecb7f242908",
+      "resources": [
+        "references/guide/semicolons-01.html"
+      ],
+      "article_sha256": "2d7b65289b517063f055f7382587558c57bb4c5281eeced29509f30b48d6cbf8",
+      "title": "Semicolons",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/sentence-structure",
+      "source": "upstream/sentence-structure.html.gz",
+      "sha256": "6dd2118b73197b087533fc8ee0cceabcbe4841f9765617e05b71f90ea6575f3f",
+      "resources": [
+        "references/guide/sentence-structure-01.html"
+      ],
+      "article_sha256": "0bf76a75b2cc5730ecfbf5bff75fb868cea3c7555f2e9a311a9588a1c7475c6b",
+      "title": "Sentence structure",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/slashes",
+      "source": "upstream/slashes.html.gz",
+      "sha256": "c60fbfc957ce6c0089bef4954b2d5cff1995d9d725f41a4c7b4122b449c85f77",
+      "resources": [
+        "references/guide/slashes-01.html"
+      ],
+      "article_sha256": "a39bbaadbdd78a1d6bd1c651ba33c29ba8376ecf9e7d20c0670f1f2da6c752e4",
+      "title": "Slashes",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/tables",
+      "source": "upstream/tables.html.gz",
+      "sha256": "07f195ad4790ee7efe56115bbf0cf3f1c59cc8d573c1fcfe998fafe2b4269ca0",
+      "resources": [
+        "references/guide/tables-01.html"
+      ],
+      "article_sha256": "f0d58fda3d1cad61c5ad935c817b6ba1054fec8ece6b03343093161323e3b149",
+      "title": "Tables",
+      "upstream_updated": "2025-03-21",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/tense",
+      "source": "upstream/tense.html.gz",
+      "sha256": "04127dfc8d9943163fd0e4c3049d4ce4a509c1a5280344dde5f65b16a3c27ea5",
+      "resources": [
+        "references/guide/tense-01.html"
+      ],
+      "article_sha256": "2a4a62a3038ac5a9f88bb48a23f6cb8373babe318745b79321935787ed16dd09",
+      "title": "Present tense",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/text-formatting",
+      "source": "upstream/text-formatting.html.gz",
+      "sha256": "796340dcce090408dfb498492cee406595500665163a143a4388815ca437af1a",
+      "resources": [
+        "references/guide/text-formatting-01.html"
+      ],
+      "article_sha256": "15d1f4e1b07bc3f3f84b255b3f7dbcc6144355b5d76607ba456765b5dde65117",
+      "title": "Text-formatting summary",
+      "upstream_updated": "2026-01-20",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/timeless-documentation",
+      "source": "upstream/timeless-documentation.html.gz",
+      "sha256": "687440506bbd27d41f8cdef45f47a909c235473b2598965f9b5421d0e7c60759",
+      "resources": [
+        "references/guide/timeless-documentation-01.html"
+      ],
+      "article_sha256": "a678cb8fdcd91dec78ffd436b2158cd4f94aa8b2ac21fda1e1b6423a8cbbb1b2",
+      "title": "Timeless documentation",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/tone",
+      "source": "upstream/tone.html.gz",
+      "sha256": "854cf1e5ef66605a6f4f3919fb1b4bc525c78cf076ec23135cd536a2342d7d8f",
+      "resources": [
+        "references/guide/tone-01.html"
+      ],
+      "article_sha256": "08d7cba34ff4a9bf8fd5b71c812b08a90723e6bd3ab08faf4ac62825b0107141",
+      "title": "Voice and tone",
+      "upstream_updated": "2026-05-27",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/trademarks",
+      "source": "upstream/trademarks.html.gz",
+      "sha256": "f1b39451cc97f53840b1c922e084d26b3445f45327698b363b2c305e9b9764ce",
+      "resources": [
+        "references/guide/trademarks-01.html"
+      ],
+      "article_sha256": "821dcadcfa8e6b6360a9245a216ba22d89c318ba5d1ea1f0db2e550463514e43",
+      "title": "Trademarks",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/translation",
+      "source": "upstream/translation.html.gz",
+      "sha256": "18aa12bf12e8f2e7b7e87b3308ac35e106908f7a1cad407102ceee83d58b3b0d",
+      "resources": [
+        "references/guide/translation-01.html"
+      ],
+      "article_sha256": "98984e9077fc1bcf4fe2298b4b4f7fe1e01f6dbcf0c2b4349842ff816da593c5",
+      "title": "Write for a global audience",
+      "upstream_updated": "2026-10-02",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/ui-elements",
+      "source": "upstream/ui-elements.html.gz",
+      "sha256": "cfc83e750b5183b99efda5c1831c9dd840d1fa45b059bc4d509ed03d1e49afb2",
+      "resources": [
+        "references/guide/ui-elements-01.html",
+        "references/guide/ui-elements-02.html"
+      ],
+      "article_sha256": "fcd743c45be887dcddc5e0af1bb98dc1f1198d76242b0e503dd94fbca330e36a",
+      "title": "UI elements and interaction",
+      "upstream_updated": "2026-10-09",
+      "media": [
+        {
+          "tag": "img",
+          "src": "/static/style/images/icon-add.png",
+          "alt": ""
+        },
+        {
+          "tag": "img",
+          "src": "/static/style/images/icon-add.png",
+          "alt": "hammer icon"
+        },
+        {
+          "tag": "img",
+          "src": "/static/style/images/list-of-services.png",
+          "alt": "List of services."
+        }
+      ]
+    },
+    {
+      "url": "https://developers.google.com/style/units-of-measure",
+      "source": "upstream/units-of-measure.html.gz",
+      "sha256": "801676d58bef7687a90f1cf7d4e0096d6502c1d124984ac3cd21a2127a615aae",
+      "resources": [
+        "references/guide/units-of-measure-01.html"
+      ],
+      "article_sha256": "ebbf8a4faa36e9c1367bd347b41d847b167784af0c1fe2c28dc07004963668cb",
+      "title": "Units of measurement",
+      "upstream_updated": "2026-04-17",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/voice",
+      "source": "upstream/voice.html.gz",
+      "sha256": "e148a7c83079ff6f6e7858424e17b5ae40d739a555c5f5ecd823524174f996a3",
+      "resources": [
+        "references/guide/voice-01.html"
+      ],
+      "article_sha256": "27c363fa36f219dd42d449b61bcbf2235d45d124927a1f5be0698b57a40ca2cc",
+      "title": "Active voice",
+      "upstream_updated": "2024-10-15",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/whats-new",
+      "source": "upstream/whats-new.html.gz",
+      "sha256": "cad5bacecf1cf1370c5eb72cc6f1e6c10f8bac8e7e99afae2bb89b31b561a7ec",
+      "resources": [
+        "references/guide/whats-new-01.html",
+        "references/guide/whats-new-02.html",
+        "references/guide/whats-new-03.html",
+        "references/guide/whats-new-04.html",
+        "references/guide/whats-new-05.html",
+        "references/guide/whats-new-06.html"
+      ],
+      "article_sha256": "56268f8edbdd8c68e750f74dd78d8b720ef8514e705b1526c6a837ab72694420",
+      "title": "What's new",
+      "upstream_updated": "2026-10-16",
+      "media": []
+    },
+    {
+      "url": "https://developers.google.com/style/word-list",
+      "source": "upstream/word-list.html.gz",
+      "sha256": "a428f4bf1fad5d44e64736612cea12fbfe4f568d271807a82783d70b5cde2af0",
+      "resources": [
+        "references/guide/word-list-01.html",
+        "references/guide/word-list-02.html",
+        "references/guide/word-list-03.html",
+        "references/guide/word-list-04.html",
+        "references/guide/word-list-05.html",
+        "references/guide/word-list-06.html",
+        "references/guide/word-list-07.html",
+        "references/guide/word-list-08.html",
+        "references/guide/word-list-09.html",
+        "references/guide/word-list-10.html",
+        "references/guide/word-list-11.html"
+      ],
+      "article_sha256": "fd5904cac85103bc94920dd6ed56679a41bd67b678a158b646bc08f636753329",
+      "title": "Word list",
+      "upstream_updated": "2026-10-09",
+      "media": []
+    }
+  ],
+  "aliases": {
+    "https://developers.google.com/style": "https://developers.google.com/style",
+    "https://developers.google.com/style/highlights": "https://developers.google.com/style/highlights",
+    "https://developers.google.com/style/whats-new": "https://developers.google.com/style/whats-new",
+    "https://developers.google.com/style/philosophy": "https://developers.google.com/style/philosophy",
+    "https://developers.google.com/style/word-list": "https://developers.google.com/style/word-list",
+    "https://developers.google.com/style/product-names": "https://developers.google.com/style/product-names",
+    "https://developers.google.com/style/text-formatting": "https://developers.google.com/style/text-formatting",
+    "https://developers.google.com/style/accessibility": "https://developers.google.com/style/accessibility",
+    "https://developers.google.com/style/excessive-claims": "https://developers.google.com/style/excessive-claims",
+    "https://developers.google.com/style/future": "https://developers.google.com/style/future",
+    "https://developers.google.com/style/translation": "https://developers.google.com/style/translation",
+    "https://developers.google.com/style/inclusive-documentation": "https://developers.google.com/style/inclusive-documentation",
+    "https://developers.google.com/style/jargon": "https://developers.google.com/style/jargon",
+    "https://developers.google.com/style/prescriptive-documentation": "https://developers.google.com/style/prescriptive-documentation",
+    "https://developers.google.com/style/other-sources": "https://developers.google.com/style/other-sources",
+    "https://developers.google.com/style/timeless-documentation": "https://developers.google.com/style/timeless-documentation",
+    "https://developers.google.com/style/tone": "https://developers.google.com/style/tone",
+    "https://developers.google.com/style/abbreviations": "https://developers.google.com/style/abbreviations",
+    "https://developers.google.com/style/voice": "https://developers.google.com/style/voice",
+    "https://developers.google.com/style/anthropomorphism": "https://developers.google.com/style/anthropomorphism",
+    "https://developers.google.com/style/articles": "https://developers.google.com/style/articles",
+    "https://developers.google.com/style/capitalization": "https://developers.google.com/style/capitalization",
+    "https://developers.google.com/style/contractions": "https://developers.google.com/style/contractions",
+    "https://developers.google.com/style/pluralization": "https://developers.google.com/style/pluralization",
+    "https://developers.google.com/style/possessives": "https://developers.google.com/style/possessives",
+    "https://developers.google.com/style/prepositions": "https://developers.google.com/style/prepositions",
+    "https://developers.google.com/style/tense": "https://developers.google.com/style/tense",
+    "https://developers.google.com/style/pronouns": "https://developers.google.com/style/pronouns",
+    "https://developers.google.com/style/person": "https://developers.google.com/style/person",
+    "https://developers.google.com/style/sentence-structure": "https://developers.google.com/style/sentence-structure",
+    "https://developers.google.com/style/reference-verbs": "https://developers.google.com/style/reference-verbs",
+    "https://developers.google.com/style/colons": "https://developers.google.com/style/colons",
+    "https://developers.google.com/style/commas": "https://developers.google.com/style/commas",
+    "https://developers.google.com/style/dashes": "https://developers.google.com/style/dashes",
+    "https://developers.google.com/style/ellipses": "https://developers.google.com/style/ellipses",
+    "https://developers.google.com/style/hyphens": "https://developers.google.com/style/hyphens",
+    "https://developers.google.com/style/parentheses": "https://developers.google.com/style/parentheses",
+    "https://developers.google.com/style/periods": "https://developers.google.com/style/periods",
+    "https://developers.google.com/style/quotation-marks": "https://developers.google.com/style/quotation-marks",
+    "https://developers.google.com/style/semicolons": "https://developers.google.com/style/semicolons",
+    "https://developers.google.com/style/slashes": "https://developers.google.com/style/slashes",
+    "https://developers.google.com/style/dates-times": "https://developers.google.com/style/dates-times",
+    "https://developers.google.com/style/format-examples": "https://developers.google.com/style/format-examples",
+    "https://developers.google.com/style/images": "https://developers.google.com/style/images",
+    "https://developers.google.com/style/footnotes": "https://developers.google.com/style/footnotes",
+    "https://developers.google.com/style/headings": "https://developers.google.com/style/headings",
+    "https://developers.google.com/style/italics-terms": "https://developers.google.com/style/italics-terms",
+    "https://developers.google.com/style/lists": "https://developers.google.com/style/lists",
+    "https://developers.google.com/style/mathematical-notation": "https://developers.google.com/style/mathematical-notation",
+    "https://developers.google.com/style/notices": "https://developers.google.com/style/notices",
+    "https://developers.google.com/style/numbers": "https://developers.google.com/style/numbers",
+    "https://developers.google.com/style/paragraph-structure": "https://developers.google.com/style/paragraph-structure",
+    "https://developers.google.com/style/phone-numbers": "https://developers.google.com/style/phone-numbers",
+    "https://developers.google.com/style/procedures": "https://developers.google.com/style/procedures",
+    "https://developers.google.com/style/tables": "https://developers.google.com/style/tables",
+    "https://developers.google.com/style/units-of-measure": "https://developers.google.com/style/units-of-measure",
+    "https://developers.google.com/style/cross-references": "https://developers.google.com/style/cross-references",
+    "https://developers.google.com/style/headings-targets": "https://developers.google.com/style/headings-targets",
+    "https://developers.google.com/style/api-reference-comments": "https://developers.google.com/style/api-reference-comments",
+    "https://developers.google.com/style/code-in-text": "https://developers.google.com/style/code-in-text",
+    "https://developers.google.com/style/code-samples": "https://developers.google.com/style/code-samples",
+    "https://developers.google.com/style/code-syntax": "https://developers.google.com/style/code-syntax",
+    "https://developers.google.com/style/placeholders": "https://developers.google.com/style/placeholders",
+    "https://developers.google.com/style/ui-elements": "https://developers.google.com/style/ui-elements",
+    "https://developers.google.com/style/semantic-tagging": "https://developers.google.com/style/semantic-tagging",
+    "https://developers.google.com/style/html-formatting": "https://developers.google.com/style/html-formatting",
+    "https://developers.google.com/style/markdown": "https://developers.google.com/style/markdown",
+    "https://developers.google.com/style/examples": "https://developers.google.com/style/examples",
+    "https://developers.google.com/style/filenames": "https://developers.google.com/style/filenames",
+    "https://developers.google.com/style/trademarks": "https://developers.google.com/style/trademarks",
+    "https://developers.google.com/style/spelling": "https://developers.google.com/style/word-list",
+    "https://developers.google.com/style/wordlist": "https://developers.google.com/style/word-list",
+    "https://developers.google.com/style/commas-serial": "https://developers.google.com/style/commas",
+    "https://developers.google.com/style/links-external": "https://developers.google.com/style/cross-references",
+    "https://developers.google.com/style/link-text": "https://developers.google.com/style/cross-references",
+    "https://developers.google.com/style/fonts": "https://developers.google.com/style/semantic-tagging",
+    "https://developers.google.com/style/resources": "https://developers.google.com/style",
+    "https://developers.google.com/style/words-as-words": "https://developers.google.com/style/italics-terms",
+    "https://developers.google.com/style/plurals-parentheses": "https://developers.google.com/style/pluralization",
+    "https://developers.google.com/style/typographical-conventions": "https://developers.google.com/style/text-formatting",
+    "https://developers.google.com/style/formatting-words-as-words": "https://developers.google.com/style/italics-terms",
+    "https://developers.google.com/style/formatting-key-terms": "https://developers.google.com/style/italics-terms",
+    "https://developers.google.com/style/command-line-terminology": "https://developers.google.com/style/code-syntax",
+    "https://developers.google.com/style/img-elements": "https://developers.google.com/style/cross-references",
+    "https://developers.google.com/style/file-names": "https://developers.google.com/style/filenames",
+    "https://developers.google.com/style/dates": "https://developers.google.com/style/dates-times"
+  },
+  "broken_links": [
+    "https://developers.google.com/style/style/word-list"
+  ]
+}

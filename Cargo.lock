@@ -43,7 +43,7 @@ dependencies = [
  "futures",
  "futures-concurrency",
  "rustc-hash",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "schemars 1.2.2",
  "serde",
  "serde_json",
@@ -323,7 +323,7 @@ dependencies = [
  "futures-lite",
  "parking",
  "polling",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "slab",
  "windows-sys 0.61.2",
 ]
@@ -354,7 +354,7 @@ dependencies = [
  "cfg-if",
  "event-listener",
  "futures-lite",
- "rustix 1.1.4",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -380,7 +380,7 @@ dependencies = [
  "cfg-if",
  "futures-core",
  "futures-io",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "signal-hook-registry",
  "slab",
  "windows-sys 0.61.2",
@@ -1312,7 +1312,7 @@ dependencies = [
  "hmac 0.12.1",
  "portable-pty",
  "rcgen",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "rustls",
  "serde",
  "serde-saphyr",
@@ -1504,7 +1504,7 @@ dependencies = [
  "colossus-windows-native",
  "directories",
  "fs4",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "tempfile",
@@ -1689,7 +1689,7 @@ dependencies = [
  "prost",
  "prost-types",
  "rcgen",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "rustls",
  "serde",
  "serde_json",
@@ -1716,7 +1716,7 @@ dependencies = [
  "colossus-windows-native",
  "directories",
  "hex",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
@@ -1807,7 +1807,7 @@ name = "colossus-linux-native"
 version = "0.11.11-preview.7"
 dependencies = [
  "libc",
- "rustix 1.1.4",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -1815,7 +1815,7 @@ name = "colossus-mac-browser-process-broker"
 version = "0.1.0"
 dependencies = [
  "colossus-darwin-process",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1845,7 +1845,7 @@ dependencies = [
  "redb",
  "reqwest 0.12.28",
  "rmcp",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "rustls",
  "serde",
  "serde_json",
@@ -2026,7 +2026,7 @@ dependencies = [
  "image",
  "jsonschema",
  "reqwest 0.12.28",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -2213,7 +2213,7 @@ dependencies = [
  "image",
  "opentelemetry",
  "opentelemetry_sdk",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "rustls",
  "serde",
  "serde-saphyr",
@@ -2268,7 +2268,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "rmcp",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "rustls",
  "serde",
  "serde_json",
@@ -2309,7 +2309,7 @@ dependencies = [
  "nix 0.31.3",
  "prost",
  "prost-types",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "rustls",
  "security-framework",
  "serde",
@@ -2384,7 +2384,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "libc",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -2433,7 +2433,7 @@ dependencies = [
  "filedescriptor",
  "nix 0.31.3",
  "portable-pty",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
@@ -2502,7 +2502,7 @@ dependencies = [
  "colossus-windows-native",
  "futures",
  "reqwest 0.12.28",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "tempfile",
@@ -2573,7 +2573,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "hmac 0.12.1",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2594,7 +2594,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "hmac 0.12.1",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2643,7 +2643,7 @@ dependencies = [
  "fs4",
  "git2",
  "hex",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2879,7 +2879,7 @@ dependencies = [
  "document-features",
  "mio",
  "parking_lot",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "signal-hook",
  "signal-hook-mio",
  "winapi",
@@ -3804,7 +3804,7 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8640e34b88f7652208ce9e88b1a37a2ae95227d84abec377ccd3c5cfeb141ed4"
 dependencies = [
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "windows-sys 0.59.0",
 ]
 
@@ -5980,7 +5980,7 @@ dependencies = [
  "concurrent-queue",
  "hermit-abi",
  "pin-project-lite",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -7019,9 +7019,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.4"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.0",
  "errno",
@@ -8235,7 +8235,7 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.3",
  "once_cell",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -9784,7 +9784,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
- "rustix 1.1.4",
+ "rustix 1.1.6",
 ]
 
 [[package]]

@@ -93,7 +93,7 @@ fn documentation_policy_is_conditional_metadata_and_preserves_higher_priority_in
     assert!(policy < home && home < repo && repo < user);
     assert!(text.ends_with("Plan only."));
     assert!(!text.contains("# Developer documentation"));
-    assert!(!text.contains("# Language and tone"));
+    assert!(!text.contains("bare infinitive"));
     let composition = runtime
         .compose_plugin_skills("base", &[], &[])
         .expect("preview");
@@ -201,15 +201,17 @@ async fn documentation_references_are_selective_confined_and_add_no_authority() 
         .read_plugin_skill("colossus/documentation")
         .await
         .expect("entry point");
-    assert_eq!(skill.manifest.license.as_deref(), Some("CC-BY-4.0"));
+    assert_eq!(
+        skill.manifest.license.as_deref(),
+        Some("CC-BY-4.0 AND Apache-2.0")
+    );
     let resources = list_plugin_resources(&skill).expect("packaged resources");
     for path in [
         "LICENSE.txt",
-        "references/language.md",
-        "references/structure.md",
-        "references/procedures.md",
-        "references/code.md",
-        "references/accessibility.md",
+        "LICENSE-APACHE.txt",
+        "snapshot.json",
+        "references/index.md",
+        "references/guide/headings-01.html",
         "references/sources.md",
     ] {
         assert!(resources.iter().any(|resource| resource.path == path));
@@ -220,28 +222,38 @@ async fn documentation_references_are_selective_confined_and_add_no_authority() 
                 .is_empty()
         );
     }
-    assert!(skill.instructions.contains("references/language.md"));
-    assert!(!skill.instructions.contains("# Language and tone"));
+    assert!(skill.instructions.contains("references/index.md"));
+    assert!(!skill.instructions.contains("bare infinitive"));
+    let snapshot: serde_json::Value = serde_json::from_str(
+        &read_plugin_resource(&skill, "snapshot.json")
+            .expect("snapshot manifest")
+            .content,
+    )
+    .expect("snapshot JSON");
+    for page in snapshot["pages"].as_array().expect("page inventory") {
+        for path in page["resources"].as_array().expect("ordered parts") {
+            let path = path.as_str().expect("resource path");
+            let part = read_plugin_resource(&skill, path).expect("complete readable part");
+            assert!(!part.content.is_empty());
+            assert!(part.size <= 24_000);
+            assert!(serde_json::to_vec(&part).expect("tool envelope").len() < 64 * 1024);
+        }
+    }
     let read = |path: &str| PluginOperation::ReadResource {
         skill_id: "colossus/documentation".into(),
         path: path.into(),
     };
-    let language = runtime
-        .execute_plugin_operation(read("references/language.md"))
+    let headings = runtime
+        .execute_plugin_operation(read("references/guide/headings-01.html"))
         .await
-        .expect("one reference");
-    assert!(
-        language["content"]
-            .as_str()
-            .expect("text")
-            .starts_with("# Language and tone")
-    );
-    assert!(
-        !language["content"]
-            .as_str()
-            .expect("text")
-            .contains("# Procedures and notices")
-    );
+        .expect("one complete reference");
+    let text = headings["content"].as_str().expect("text");
+    assert!(text.contains("bare infinitive"));
+    assert!(text.contains("Billing"));
+    assert!(text.contains("Pricing"));
+    let expected = read_plugin_resource(&skill, "references/guide/headings-01.html")
+        .expect("exact requested part");
+    assert_eq!(text, expected.content.as_str());
     for path in ["../SKILL.md", "/etc/passwd", "references/../../plugin.json"] {
         assert!(runtime.execute_plugin_operation(read(path)).await.is_err());
     }

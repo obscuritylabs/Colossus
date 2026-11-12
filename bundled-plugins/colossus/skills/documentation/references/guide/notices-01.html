@@ -1,0 +1,127 @@
+<!-- Source: https://developers.google.com/style/notices; Google; CC BY 4.0 prose, Apache 2.0 code. -->
+<base href="https://developers.google.com/style/notices">
+<h1>Notes, cautions, warnings, and other notices</h1>
+
+
+  
+    
+      
+    
+    
+
+
+
+
+
+
+
+
+<p>To give the reader important or useful information that isn't part of the flow of the text, you
+  can offset the information with a notice. However, there's
+  <a href="https://www.nngroup.com/articles/tunnel-vision-and-selective-attention/">evidence</a>
+  that readers skip elements on the page, including notices, that are outside their focus of
+  interest. If you're not sure whether something should be a notice, write it first in regular text
+  and then decide if a notice is needed.</p>
+
+<p>Don't use too many notices. When you use multiple notices on a page, they begin to lose their
+  visual distinctiveness. See if you can convey the information in a different way. This is
+  especially true if you have two (or more) notices in a row.</p>
+
+<p>Where possible, avoid grouping two or more notices together. If you find it
+necessary to do so (for example, a <i>note</i> with a <i>caution</i> inside it, or several
+<i>warnings</i> one after another), consider reorganizing the content.</p>
+
+<h2 id="pick-a-notice-type" data-text="Pick a notice type" tabindex="-1">Pick a notice type</h2>
+
+<p>The following is a list of commonly used notices.</p>
+
+
+  
+
+
+  <dl>
+  <dt id="note">Note</dt>
+  <dd>An ordinary aside or tip. Provides information that is useful but not critical to the reader.
+    For example, "Generating excessive amounts of traffic to external systems can resemble a
+    denial-of-service attack." For more information, see
+    <a href="#when-to-use-a-note-notice-type">when to use</a>
+    and <a href="#when-not-to-use-a-note-notice-type">when not to use</a> a note notice type.</dd>
+  <dt id="caution">Caution</dt>
+  <dd>Tells the reader to proceed carefully. For example, "We don't recommend using a
+    broad <code translate="no" dir="ltr">0.0.0.0/0</code> range that would allow all traffic."</dd>
+  <dt id="warning">Warning</dt>
+  <dd>Stronger than a <i>caution</i> notice; it means "Don't do this" or that this step might be
+    irreversible, such as leading to permanent data loss. If a reader doesn't heed the warning, they
+    can lose money, lose work, or open themselves to a security breach. For example, "Don't put a
+    password on the command line; doing so is a security risk."</dd>
+  <dt id="success">Success</dt>
+  <dd>Describes a successful action or an error-free status. Used only in interactive or dynamic
+    content; don't use this notice type in ordinary static pages. For example, "You've successfully
+    deployed an application to GKE."</dd>
+
+
+
+
+
+</dl>
+
+<h2 id="when-to-use-a-note-notice-type" data-text="When to use a note notice type" tabindex="-1">When to use a <i>note</i> notice type</h2>
+<p>Create a <i>note</i> when all of the following are true:</p>
+<ul>
+<li>The information you're sharing is <i>relevant</i> but not
+<i>necessary</i> to what the reader is doing right now. If the reader skips
+the information, they'll still succeed.</li>
+<li>Interrupting the reader at this point is not an obstacle to the reader. For example, your
+<i>note</i> isn't suggesting an alternative that leads the reader down a
+different path.</li>
+<li>The information is not part of the flow of what you're writing—it's not just
+a continuation, a result, or a pointer to additional information.</li>
+</ul>
+
+<h2 id="when-not-to-use-a-note-notice-type" data-text="When not to use a note notice type" tabindex="-1">When not to use a <i>note</i> notice type</h2>
+<ul>
+<li>Don't use <i>notes</i> for <a
+href="https://developers.google.com/style/cross-references">cross-references</a>.</li>
+<li>Don't use <i>notes</i> to tell the reader about prerequisites or about
+steps they should have taken earlier. Information like this should precede the
+step.</li>
+<li>Don't make a full procedural step into a <i>note</i>.</li>
+<li>Don't use <i>notes</i> to provide information that's necessary for the
+reader to succeed.</li>
+<li>Don't use <i>notes</i> for information that's in flow with the preceding
+text. For example, don't use a <i>note</i> to state expected results or to
+include information that simply describes what precedes.</li>
+</ul>
+
+
+
+<h2 id="examples" data-text="Examples" tabindex="-1">Examples</h2>
+
+
+
+<p>Use whatever visual presentation for notices is standard for your site.</p>
+<p>If you're writing in HTML and your site doesn't specify what HTML to use for
+notices, we recommend using HTML code similar to the following example:</p>
+<div></div><devsite-code><pre translate="no" dir="ltr" is-upgraded>
+&lt;aside class="note">&lt;b>Note:&lt;/b> All VPC networks include firewall
+rules.&lt;/aside>
+</pre></devsite-code>
+
+
+
+<aside class="note"><b>Note</b>: All VPC networks include firewall
+rules.</aside>
+
+<aside class="caution"><b>Caution</b>: We don't recommend using a subnet that's part of a dynamic
+route.</aside>
+
+<aside class="warning"><b>Warning</b>: Do not manually edit or delete generated
+table entries.</aside>
+
+<aside class="success"><b>Success</b>: You've successfully created a Compute Engine instance.</aside>
+
+
+
+  
+
+  
