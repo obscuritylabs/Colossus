@@ -287,6 +287,79 @@ fn advertises_the_external_tls_port_without_changing_service_ports() {
 
 #[test]
 #[ignore = "static Helm tier; cargo xtask check helm"]
+fn install_notes_advertise_the_public_tls_port() {
+    let source = root().join("deploy/control-plane/chart");
+    let fixture = tempfile::tempdir().unwrap();
+    let chart = fixture.path();
+    let templates = chart.join("templates");
+    std::fs::create_dir(&templates).unwrap();
+    std::fs::write(
+        chart.join("Chart.yaml"),
+        "apiVersion: v2\nname: install-notes-fixture\nversion: 0.1.0\nappVersion: '0.1.0'\n",
+    )
+    .unwrap();
+    std::fs::copy(source.join("values.yaml"), chart.join("values.yaml")).unwrap();
+    std::fs::copy(
+        source.join("templates/_helpers.tpl"),
+        templates.join("_helpers.tpl"),
+    )
+    .unwrap();
+    std::fs::copy(source.join("templates/NOTES.txt"), chart.join("notes.txt")).unwrap();
+    // Helm template omits NOTES from its manifest output. Render the production
+    // notes in a test-only manifest with the chart's values and helpers.
+    std::fs::write(
+        templates.join("notes.yaml"),
+        r#"apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: install-notes
+data:
+  notes: {{ tpl (.Files.Get "notes.txt") . | quote }}
+"#,
+    )
+    .unwrap();
+
+    for (overrides, suffix, documentation) in [
+        (json!({}), "", true),
+        (json!({"routing": {"publicPort": 8443}}), ":8443", true),
+        (json!({"documentation": {"enabled": false}}), "", false),
+    ] {
+        let output = helm(
+            &["template", "colossus", chart.to_str().unwrap()],
+            overrides,
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let manifest: Value =
+            serde_saphyr::from_str(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
+        let notes = manifest["data"]["notes"].as_str().unwrap();
+        assert_eq!(
+            notes.lines().find(|line| line.starts_with("Browser: ")),
+            Some(format!("Browser: https://colossus.example.com{suffix}").as_str())
+        );
+        assert_eq!(
+            notes.lines().find(|line| line.starts_with("Connectors: ")),
+            Some(
+                format!("Connectors: https://runtimes.colossus.example.com{suffix} (end-to-end mutual TLS)")
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            notes
+                .lines()
+                .find(|line| line.starts_with("Documentation: ")),
+            documentation
+                .then(|| format!("Documentation: https://colossus.example.com{suffix}/docs/"))
+                .as_deref()
+        );
+    }
+}
+
+#[test]
+#[ignore = "static Helm tier; cargo xtask check helm"]
 fn renders_shared_hosted_chat_with_private_disposable_caches() {
     for platform in ["kubernetes", "openshift"] {
         let documents = render(json!({

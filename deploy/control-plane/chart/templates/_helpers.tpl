@@ -43,6 +43,10 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "cp.externalDatabaseSecret" -}}
 {{- default (printf "%s-external-db" (include "cp.fullname" .)) .Values.database.external.existingSecret -}}
 {{- end -}}
+{{- define "cp.publicPortSuffix" -}}
+{{- $port := int .Values.routing.publicPort -}}
+{{- if ne $port 443 -}}{{ printf ":%d" $port }}{{- end -}}
+{{- end -}}
 {{- define "cp.databaseCaSecret" -}}
 {{- default (printf "%s-database-ca" (include "cp.fullname" .)) .Values.database.external.tls.existingSecret -}}
 {{- end -}}
