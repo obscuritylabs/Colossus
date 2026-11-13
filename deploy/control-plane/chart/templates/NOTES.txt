@@ -1,7 +1,8 @@
+{{- $publicSuffix := include "cp.publicPortSuffix" . -}}
 Colossus Control Plane {{ .Chart.AppVersion }}
-Browser: https://{{ .Values.browserHost }}
-Connectors: https://{{ .Values.connectorHost }} (end-to-end mutual TLS)
-{{ if .Values.documentation.enabled }}Documentation: https://{{ .Values.browserHost }}/docs/{{ end }}
+Browser: https://{{ .Values.browserHost }}{{ $publicSuffix }}
+Connectors: https://{{ .Values.connectorHost }}{{ $publicSuffix }} (end-to-end mutual TLS)
+{{ if .Values.documentation.enabled }}Documentation: https://{{ .Values.browserHost }}{{ $publicSuffix }}/docs/{{ end }}
 
 Configure browser HTTPS and a TLS-passthrough connector listener on your controller.
 {{ if eq .Values.routing.mode "ingress-nginx" }}ingress-nginx requires --enable-ssl-passthrough.{{ end }}
