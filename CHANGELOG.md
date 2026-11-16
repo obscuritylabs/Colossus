@@ -70,6 +70,7 @@ include breaking changes while the public API is still settling.
 - **plugins:** avoid flushing temporary verification copies ([a64070a](https://github.com/obscuritylabs/Colossus/commit/a64070a286c71e9ca3977fda338b8f8497a7fe55))
 - **helm:** show the public TLS port in installation notes ([0e01fe8](https://github.com/obscuritylabs/Colossus/commit/0e01fe8ddf66f7a5ce888dcd70ba3f7306824d53))
 - **context:** recover oversized Anthropic exchanges in the same session ([0550e61](https://github.com/obscuritylabs/Colossus/commit/0550e616644584055157c184ee300fcd1e554f73))
+- **agent:** match managed wakes by exact owner and intent ([76ca0f7](https://github.com/obscuritylabs/Colossus/commit/76ca0f7b61b8776faeb194de68041a1b6457bfc5))
 
 #### Security
 
@@ -137,8 +138,9 @@ include breaking changes while the public API is still settling.
 - **release:** refresh preview.7 changelog after integration ([dbd8b68](https://github.com/obscuritylabs/Colossus/commit/dbd8b68954edff52a92a9d1a347ef020edddb54e))
 - **desktop:** wait for native plugin inventory refresh ([f8f4a58](https://github.com/obscuritylabs/Colossus/commit/f8f4a587ae310931b48b3c1d3d233208af32bd04))
 - **release:** align stable 0.12.0 version metadata ([70ad16d](https://github.com/obscuritylabs/Colossus/commit/70ad16d6be5878a9b150d357b5c93ff717ecf6fc))
+- **release:** prepare the 0.12.0 changelog ([552c485](https://github.com/obscuritylabs/Colossus/commit/552c485fbf310860bf3cc36adc1d4c864d388687))
 
-**Source:** [11f4596](https://github.com/obscuritylabs/Colossus/commit/11f45967d4510ec753c4c44cd243846ef85a3a82)
+**Source:** [67be1b9](https://github.com/obscuritylabs/Colossus/commit/67be1b953f1767c043b9f6ea2f62a78e09f1da89)
 
 **Full changelog:** [v0.11.10...v0.12.0](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.12.0)
 
