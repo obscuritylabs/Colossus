@@ -528,6 +528,21 @@ fn published_stable_releases_are_installed_anonymously_on_all_host_classes() {
     let distribution_jobs = jobs(&workflow);
     let unix = job(distribution_jobs, "unix");
     let windows = job(distribution_jobs, "windows");
+    let matrix = mapping(
+        field(mapping(field(unix, "strategy"), "Unix strategy"), "matrix"),
+        "Unix runner matrix",
+    );
+    assert_eq!(
+        field(matrix, "os"),
+        &serde_json::json!([
+            "ubuntu-24.04",
+            "ubuntu-26.04",
+            "ubuntu-26.04-arm",
+            "macos-latest"
+        ])
+    );
+    assert_eq!(field(unix, "runs-on").as_str(), Some("${{ matrix.os }}"));
+    assert_eq!(field(windows, "runs-on").as_str(), Some("windows-latest"));
     named_step(
         unix,
         "Download and verify the public Unix bootstrap anonymously",
@@ -545,9 +560,6 @@ fn published_stable_releases_are_installed_anonymously_on_all_host_classes() {
     for required in [
         "permissions: {}",
         "types: [published]",
-        "ubuntu-latest",
-        "macos-latest",
-        "windows-latest",
         "releases/latest/download",
         "colossus-install.sh.sha256",
         "colossus-install.ps1.sha256",

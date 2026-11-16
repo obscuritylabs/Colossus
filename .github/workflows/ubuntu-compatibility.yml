@@ -1,0 +1,90 @@
+name: Ubuntu 26.04 compatibility
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ubuntu-compatibility.yml
+      - .github/actionlint.yaml
+      - .cargo/config.toml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - crates/colossus-cli/Cargo.toml
+      - crates/colossus-cli/src/update_commands.rs
+      - crates/colossus-cli/tests/bootstrap_install_smoke.rs
+      - crates/colossus-cli/tests/release_install_smoke.rs
+      - crates/colossus-cli/tests/support/**
+      - crates/colossus-update/**
+      - release/**
+      - scripts/ci/release-unix.sh
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/ubuntu-compatibility.yml
+      - .github/actionlint.yaml
+      - .cargo/config.toml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - crates/colossus-cli/Cargo.toml
+      - crates/colossus-cli/src/update_commands.rs
+      - crates/colossus-cli/tests/bootstrap_install_smoke.rs
+      - crates/colossus-cli/tests/release_install_smoke.rs
+      - crates/colossus-cli/tests/support/**
+      - crates/colossus-update/**
+      - release/**
+      - scripts/ci/release-unix.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ubuntu-compatibility-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installer-smoke:
+    name: Ubuntu 26.04 source installer checks (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-26.04
+            arch: x64
+            machine: x86_64
+          - runner: ubuntu-26.04-arm
+            arch: arm64
+            machine: aarch64
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - name: Verify Ubuntu version and native architecture
+        shell: bash
+        env:
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: |
+          set -euo pipefail
+          . /etc/os-release
+          machine=$(uname -m)
+          printf 'Runner: %s (%s)\n' "$PRETTY_NAME" "$machine"
+          test "$ID" = ubuntu
+          test "$VERSION_ID" = 26.04
+          test "$machine" = "$EXPECTED_MACHINE"
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.96
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master 2026-07-20; upstream has no releases
+        with:
+          toolchain: 1.96.0
+
+      - name: Build the CLI and test both Unix installers
+        run: cargo test --locked -p colossus-cli --test release_install_smoke --test bootstrap_install_smoke
