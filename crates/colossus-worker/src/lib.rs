@@ -64,6 +64,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 type HmacSha256 = Hmac<Sha256>;
 
+mod always_on;
 mod authentication;
 mod authentication_key;
 mod client;
@@ -85,7 +86,7 @@ mod session_map_inspection;
 
 pub use authentication_key::WorkerAuthenticationKey;
 pub use client::{WorkerClient, WorkerPromptHandler};
-pub use colossus_worker_protocol::WorkerApprovalMode;
+pub use colossus_worker_protocol::{AlwaysOnCommand, WorkerApprovalMode};
 pub use frames::{WorkerPrompt, WorkerPromptKind};
 pub use native_browser::NativeBrowserServerConfig;
 pub use operations::{

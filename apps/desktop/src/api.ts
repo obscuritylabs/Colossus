@@ -1,6 +1,50 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+import type { AlwaysOnProfile, AlwaysOnStatus } from "./types";
+
+export function alwaysOnStatus(targetId: string): Promise<AlwaysOnStatus> {
+  return call("desktop_always_on_status", { targetId });
+}
+
+export function enableAlwaysOn(
+  targetId: string,
+  selectionEpoch: number,
+  sessionId: string,
+  expectedRevision: number,
+): Promise<AlwaysOnProfile> {
+  return call("desktop_always_on_enable", {
+    targetId,
+    selectionEpoch,
+    sessionId,
+    expectedRevision,
+  });
+}
+
+export function pauseAlwaysOn(
+  targetId: string,
+  selectionEpoch: number,
+  expectedRevision: number,
+): Promise<AlwaysOnProfile> {
+  return call("desktop_always_on_pause", {
+    targetId,
+    selectionEpoch,
+    expectedRevision,
+  });
+}
+
+export function wakeAlwaysOn(
+  targetId: string,
+  selectionEpoch: number,
+  expectedRevision: number,
+): Promise<AlwaysOnProfile> {
+  return call("desktop_always_on_wake", {
+    targetId,
+    selectionEpoch,
+    expectedRevision,
+  });
+}
+
 export function getCapabilityInventory(
   targetId: string,
 ): Promise<import("./capabilities").CapabilityInventory> {

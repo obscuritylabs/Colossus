@@ -256,6 +256,11 @@ pub enum InteractiveWorkerRequest {
 pub enum WorkerOperation {
     /// Authenticate the endpoint and return bounded readiness metadata.
     Ping,
+    /// Read or control the current local owner's standing chat.
+    AlwaysOn {
+        /// Exact revision-bound local operation.
+        command: colossus_worker_protocol::AlwaysOnCommand,
+    },
     /// Flush host-owned OTLP exporters and return secret-free signal readiness.
     ObservabilityDoctor,
     /// Change the worker-wide approval mode used outside client-scoped overrides.

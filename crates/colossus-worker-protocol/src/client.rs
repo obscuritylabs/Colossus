@@ -1,9 +1,11 @@
+use colossus_contracts::always_on::AlwaysOnProfile;
 use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::{
-    WorkerApprovalMode, WorkerControlError, WorkerSessionMap, WorkerThreadDelegateInspection,
+    AlwaysOnCommand, WorkerApprovalMode, WorkerControlError, WorkerSessionMap,
+    WorkerThreadDelegateInspection,
     wire::{
         ClientHello, ControlFrameContent, ControlOperation, MAX_CLOCK_SKEW_MS, MAX_FRAME_BYTES,
         MAX_REQUEST_BYTES, PROTOCOL_VERSION, ServerHello, UnsignedFrame, UnsignedRequest,
@@ -130,6 +132,16 @@ impl WorkerControlClient {
                 session_id: session_id.into(),
             })
             .await?;
+        serde_json::from_value(result)
+            .map_err(|error| WorkerControlError::Protocol(error.to_string()))
+    }
+
+    /// Operate the workspace Always On Agent as the worker's authenticated owner.
+    pub async fn always_on(
+        &self,
+        command: AlwaysOnCommand,
+    ) -> Result<Option<AlwaysOnProfile>, WorkerControlError> {
+        let result = self.call(ControlOperation::AlwaysOn { command }).await?;
         serde_json::from_value(result)
             .map_err(|error| WorkerControlError::Protocol(error.to_string()))
     }

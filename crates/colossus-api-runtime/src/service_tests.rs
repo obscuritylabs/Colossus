@@ -41,6 +41,7 @@ use std::{
 use tempfile::TempDir;
 use uuid::Uuid;
 
+mod always_on;
 mod communication;
 mod context_failures;
 mod image_views;
@@ -1630,6 +1631,8 @@ fn runtime_service_conformance() {
             dropping_a_watch_releases_its_per_application_permit(Arc::clone(&fixture.runtime))
                 .await;
             orphan_recovery_above_the_application_cap_drains_in_order(Arc::clone(&fixture.runtime))
+                .await;
+            always_on::managed_orphan_wakes_settle_without_restarting(Arc::clone(&fixture.runtime))
                 .await;
             caller_owned_text_artifacts_are_rendered_as_bounded_run_input(Arc::clone(
                 &fixture.runtime,

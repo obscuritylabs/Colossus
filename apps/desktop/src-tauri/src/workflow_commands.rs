@@ -5,11 +5,13 @@ use crate::{
     dto::CommandErrorDto,
     state::{AppState, SelectedTargetLease, TargetConsentContext},
 };
+use colossus_contracts::always_on::AlwaysOnProfile;
 use colossus_sdk::{
     CreateWorkflowScheduleRequest, DeleteWorkflowScheduleRequest, DeletedWorkflowSchedule,
     RegisteredWorkflow, SetWorkflowScheduleEnabledRequest, StartWorkflowRunRequest, WorkflowClient,
     WorkflowPage, WorkflowRunSnapshot, WorkflowScheduleSnapshot,
 };
+use colossus_worker_protocol::AlwaysOnCommand;
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
@@ -112,6 +114,124 @@ fn bounded_yaml(yaml: &str) -> Result<(), CommandErrorDto> {
     }
     Ok(())
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopAlwaysOnStatus {
+    selection_epoch: u64,
+    profile: Option<AlwaysOnProfile>,
+}
+
+async fn always_on_command(
+    state: &AppState,
+    lease: &SelectedTargetLease<'_>,
+    target_id: &str,
+    command: AlwaysOnCommand,
+) -> Result<Option<AlwaysOnProfile>, CommandErrorDto> {
+    if !matches!(lease.target.consent, TargetConsentContext::ManagedLocal) {
+        return Err(CommandErrorDto::invalid(
+            "targetId",
+            "Always On is available in a managed local Workspace.",
+        ));
+    }
+    let _slot = unary_slot(&lease.target)?;
+    crate::managed_diagnostics::worker_for(state, target_id)
+        .await?
+        .always_on(command)
+        .await
+        .map_err(|_| {
+            CommandErrorDto::local_sanitized(
+                "always_on_unavailable",
+                "Could not verify Always On state. Refresh this Workspace before trying again.",
+                true,
+            )
+        })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn desktop_always_on_status(
+    state: State<'_, AppState>,
+    target_id: String,
+) -> Result<DesktopAlwaysOnStatus, CommandErrorDto> {
+    let lease = target(&state, &target_id).await?;
+    let profile = always_on_command(&state, &lease, &target_id, AlwaysOnCommand::Status).await?;
+    Ok(DesktopAlwaysOnStatus {
+        selection_epoch: lease.epoch(),
+        profile,
+    })
+}
+
+async fn mutate_always_on(
+    state: &AppState,
+    target_id: &str,
+    selection_epoch: u64,
+    command: AlwaysOnCommand,
+) -> Result<AlwaysOnProfile, CommandErrorDto> {
+    let lease = selected(state, target_id, selection_epoch).await?;
+    let _guard = mutation_guard(state, &lease, target_id).await?;
+    always_on_command(state, &lease, target_id, command)
+        .await?
+        .ok_or_else(|| {
+            CommandErrorDto::local_sanitized(
+                "always_on_unavailable",
+                "The worker did not return an Always On profile.",
+                true,
+            )
+        })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn desktop_always_on_enable(
+    state: State<'_, AppState>,
+    target_id: String,
+    selection_epoch: u64,
+    session_id: String,
+    expected_revision: u64,
+) -> Result<AlwaysOnProfile, CommandErrorDto> {
+    mutate_always_on(
+        &state,
+        &target_id,
+        selection_epoch,
+        AlwaysOnCommand::Enable {
+            session_id,
+            expected_revision,
+        },
+    )
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn desktop_always_on_pause(
+    state: State<'_, AppState>,
+    target_id: String,
+    selection_epoch: u64,
+    expected_revision: u64,
+) -> Result<AlwaysOnProfile, CommandErrorDto> {
+    mutate_always_on(
+        &state,
+        &target_id,
+        selection_epoch,
+        AlwaysOnCommand::Pause { expected_revision },
+    )
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub(crate) async fn desktop_always_on_wake(
+    state: State<'_, AppState>,
+    target_id: String,
+    selection_epoch: u64,
+    expected_revision: u64,
+) -> Result<AlwaysOnProfile, CommandErrorDto> {
+    mutate_always_on(
+        &state,
+        &target_id,
+        selection_epoch,
+        AlwaysOnCommand::Wake { expected_revision },
+    )
+    .await
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub(crate) async fn list_registered_workflows(
     state: State<'_, AppState>,

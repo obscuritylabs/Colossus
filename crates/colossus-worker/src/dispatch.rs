@@ -52,6 +52,9 @@ async fn dispatch_general(
     observability_diagnostics: Option<&Arc<dyn Fn() -> Value + Send + Sync>>,
 ) -> Result<Value, WorkerError> {
     match operation {
+        WorkerOperation::AlwaysOn { .. } => Err(WorkerError::Protocol(
+            "Always On uses the authenticated local host".into(),
+        )),
         WorkerOperation::Ping => Ok(json!({
             "ready": true,
             "protocol_version": PROTOCOL_VERSION,

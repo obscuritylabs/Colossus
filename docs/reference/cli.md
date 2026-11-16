@@ -81,6 +81,7 @@ model output.
 | `artifacts` | Upload, inspect, and download caller-owned released artifacts |
 | `tools` | Inspect the resolved strict tool catalog |
 | `sessions` | Create and inspect durable sessions; `run` and TUI attach or resume |
+| `always-on` | Schedule and control an existing session in the current workspace worker |
 | `work` | Render bounded actionable work for a session |
 | `preferences` | Inspect or reset presentation preferences |
 | `context` | Inspect, compact, snapshot, and restore long-session context |
@@ -129,6 +130,7 @@ positional:
 | `artifacts` | `upload PATH`, `show ARTIFACT_ID`, `download ARTIFACT_ID OUTPUT` |
 | `tools` | `list` |
 | `sessions` | `list`, `show SESSION_ID`, `messages SESSION_ID`, `new [TITLE]` |
+| `always-on` | `enable SESSION_ID`, `status`, `pause`, `wake` |
 | `work` | `work [--session SESSION_ID]` |
 | `preferences` | `show`, `history`, `reset` |
 | `context` | `status SESSION_ID`, `list SESSION_ID`, `compact SESSION_ID`, `restore SESSION_ID SNAPSHOT_ID` |
@@ -164,6 +166,7 @@ positional:
 | `workflow webhook serve` | `--bind 127.0.0.1:8787` |
 | `search query` | `--role agent`; `--limit 10` |
 | `sessions list`, `research list`, `telemetry runs` | `--limit 20` |
+| `always-on enable` | An existing owned session in a durable workspace. Scheduled checks require a running worker. |
 | Most record lists | `--limit 100` |
 | `goals run` | `--role primary`; `--max-iterations 5` in `1..=50` |
 | `agents queue` | `--role subagent_default` |
@@ -183,6 +186,27 @@ anchor path, so the development journal cannot alias the source journal's identi
 `--sandbox-profile` selects the complete
 platform-isolating preset; omitting it retains the source selection, or uses full access
 when no source is supplied.
+
+## Always On Agent
+
+Run `colossus worker` in one terminal using its default local IPC, then use the
+same workspace in another.
+Choose a session ID from `colossus sessions list` or create one with
+`colossus sessions new`.
+
+```bash
+colossus always-on enable SESSION_ID
+colossus always-on status
+colossus run --session SESSION_ID "What is still open?"
+```
+
+Use `colossus tui --session SESSION_ID` to open the same conversation interactively.
+Use `colossus always-on wake` to request a check now and
+`colossus always-on pause` to pause future checks. Use `enable SESSION_ID`
+again to resume or choose another owned session after any pending wake settles.
+Wakes become due every 30 minutes and wait while the conversation has an active
+run. The profile stays in the workspace journal. Keep the worker running for
+background checks.
 
 ## Worker public API flags
 
@@ -283,6 +307,7 @@ contract. Important roots are:
 | `search query` | `query`, `count`, `results`; each result has `rank`, `title`, `url`, `snippet`, nullable `source` |
 | `workflow status` | `run_id`, workflow identity/hash, parent/trigger linkage, `call_depth`, `status`, `inputs`, nullable `outputs`, completion/wait fields |
 | `sessions show` | `id`, nullable `title`, timestamps, `message_count`, nullable `last_run_id`, nullable `last_user_preview` |
+| `always-on` | `session_id`, `enabled`, `revision`, `next_wake_at`, nullable `pending`, and nullable `last_wake`. `status` emits `null` before enrollment. |
 | `research show` | `id`, `session_id`, question/depth/source lanes, `status`, queries, progress, limitations, report/error, timestamps |
 | `telemetry metrics` | Aggregated run/tool/provider/context counters and duration totals |
 | `tools list` | Active schemas plus source/risk metadata, canonical workspace, sandbox profile, action decision, and bounds |

@@ -1,4 +1,5 @@
 use super::*;
+use crate::always_on::AlwaysOnHost;
 
 const PUBLIC_RUN_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 const PUBLIC_TRANSPORT_FORCE_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -16,11 +17,21 @@ pub struct WorkerServer {
     managed_configuration_identity: Option<String>,
     public_interactions: Arc<colossus_api_runtime::PublicInteractionRouter>,
     public_api: Option<public_api::PreparedPublicApi>,
+    always_on_primary_credential: Option<String>,
     browser_owner: Option<Arc<colossus_runtime::browser_package::InstalledBrowserOwner>>,
     pub(super) native_browser: Option<super::native_browser::PreparedNativeBrowser>,
 }
 
 impl WorkerServer {
+    /// Bind the activated bootstrap identity for local managed Always On wakes.
+    ///
+    /// Only trusted sidecar composition may supply this ID. The worker rechecks
+    /// the live journal grant before every command and wake.
+    pub fn with_managed_always_on_credential(mut self, credential_id: String) -> Self {
+        self.always_on_primary_credential = Some(credential_id);
+        self
+    }
+
     /// Bind a trusted managed host's configuration digest to authenticated Ping metadata.
     /// Ordinary workers omit this marker and cannot be adopted as managed CLI hosts.
     pub fn with_managed_configuration_identity(
@@ -94,6 +105,7 @@ impl WorkerServer {
             managed_configuration_identity: None,
             public_interactions: interactions,
             public_api: None,
+            always_on_primary_credential: None,
             browser_owner: None,
             native_browser: None,
         })
@@ -229,6 +241,7 @@ impl WorkerServer {
             managed_configuration_identity: None,
             public_interactions: interactions,
             public_api: None,
+            always_on_primary_credential: None,
             browser_owner: None,
             native_browser: None,
         })
@@ -427,6 +440,22 @@ impl WorkerServer {
             }
         }));
         let mut public_api = self.public_api.take();
+        let always_on = match (&public_api, self.always_on_primary_credential.take()) {
+            (Some(api), Some(credential_id)) => Some(Arc::new(AlwaysOnHost::Managed {
+                runs: Arc::clone(&api.runs),
+                credential_id,
+            })),
+            (None, None) => Some(Arc::new(AlwaysOnHost::Terminal)),
+            _ => None,
+        };
+        let (always_on_stop, always_on_shutdown) = tokio::sync::watch::channel(false);
+        if let Some(host) = &always_on {
+            let host = Arc::clone(host);
+            let runtime = Arc::clone(&runtime);
+            tasks.spawn(async move {
+                host.serve(&runtime, always_on_shutdown).await;
+            });
+        }
         let (public_error_tx, mut public_error_rx) = tokio::sync::mpsc::channel::<String>(1);
         let mut public_error_open = false;
         let mut public_shutdown = None;
@@ -511,6 +540,7 @@ impl WorkerServer {
                     let observability_diagnostics = observability_diagnostics.clone();
                     let managed_configuration_identity = managed_configuration_identity.clone();
                     let approval_mode = approval_mode.clone();
+                    let always_on = always_on.clone();
                     let drain_requests = drain_request_tx.clone();
                     let shutdown = shutdown_tx.clone();
                     tasks.spawn(async move {
@@ -524,6 +554,7 @@ impl WorkerServer {
                                 observability_diagnostics,
                                 managed_configuration_identity,
                                 approval_mode,
+                                always_on,
                                 drain_requests: &drain_requests,
                             },
                         )
@@ -536,6 +567,7 @@ impl WorkerServer {
                 }
             }
         }
+        let _ = always_on_stop.send(true);
         if let Some(shutdown) = public_shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -1009,6 +1041,7 @@ struct WorkerConnectionContext<'a> {
     observability_diagnostics: Option<Arc<dyn Fn() -> Value + Send + Sync>>,
     managed_configuration_identity: Option<String>,
     approval_mode: WorkerApprovalModeState,
+    always_on: Option<Arc<AlwaysOnHost>>,
     drain_requests: &'a tokio::sync::mpsc::Sender<()>,
 }
 
@@ -1027,6 +1060,7 @@ where
         observability_diagnostics,
         managed_configuration_identity,
         approval_mode,
+        always_on,
         drain_requests,
     } = context;
     let connection_nonce =
@@ -1209,14 +1243,25 @@ where
         operation => {
             let shutdown = matches!(operation, WorkerOperation::Shutdown);
             let ping = matches!(operation, WorkerOperation::Ping);
-            let mut result = dispatch(
-                &runtime,
-                operation,
-                maintenance,
-                &approval_mode,
-                observability_diagnostics.as_ref(),
-            )
-            .await;
+            let mut result = match operation {
+                WorkerOperation::AlwaysOn { command } => always_on
+                    .as_ref()
+                    .ok_or_else(|| {
+                        WorkerError::Protocol("Always On is unavailable for this worker".into())
+                    })
+                    .and_then(|host| host.command(&runtime, command))
+                    .and_then(|profile| Ok(serde_json::to_value(profile)?)),
+                operation => {
+                    dispatch(
+                        &runtime,
+                        operation,
+                        maintenance,
+                        &approval_mode,
+                        observability_diagnostics.as_ref(),
+                    )
+                    .await
+                }
+            };
             if ping
                 && let (Ok(value), Some(identity)) = (&mut result, managed_configuration_identity)
             {

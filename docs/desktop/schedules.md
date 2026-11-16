@@ -1,6 +1,6 @@
 ---
 title: Workflows and schedules
-description: Run reusable workflows, inspect their logic, and schedule workflows or plain-language agent tasks in a Workspace.
+description: Run reusable workflows, schedule agent tasks, and set up Always On check-ins in a Workspace.
 audience: user
 type: how-to
 icon: lucide/calendar-clock
@@ -41,6 +41,32 @@ reviewed definition hash and a durable retry identity. If its response is unconf
 Managed Local stores definitions and schedules in its private Workspace partition.
 Separate CLI registrations are not imported automatically. See
 [Your first workflow](../extend/workflows/first-workflow.md) for definition authoring.
+
+## Set up an Always On Agent
+
+Finish an **Execute** conversation in a connected Managed Local Workspace.
+In the Work header, select **Always On** and choose **Use this conversation**.
+Each Workspace can enroll one conversation without writing a configuration file.
+
+Wakes become due every 30 minutes while the Workspace worker runs. A wake waits
+while its conversation has an active run. It uses the current provider with an
+empty tool list to summarize counts from up to 100 recorded tasks in the
+conversation and 100 integrations in the Workspace. Connection counts reflect
+recorded status. Use the conversation for ordinary requests between check-ins.
+
+Select **Always On** to see the next wake and the latest outcome. Choose **Wake now**
+to request a check or **Pause** to stop future wakes. A claimed wake can still
+settle after you pause. Open the enrolled conversation and choose **Resume** to
+restart the interval. To switch conversations, pause Always On, wait for any
+pending wake to settle, and open another completed Execute conversation in the
+same Workspace. Choose **Move to this conversation** in the **Always On** menu
+to start a new interval there. If the outcome is unknown, review the enrolled
+conversation before resuming or moving Always On.
+
+The profile stays in this Managed Local Workspace. Standalone CLI uses its own
+Workspace state. An enabled profile keeps its worker eligible for background
+check-ins when other Workspaces are opened. Shutting down the worker stops wake
+processing. After restart, it can reconcile the latest missed scheduled wake once.
 
 ## Schedule a task
 

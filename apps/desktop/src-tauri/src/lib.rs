@@ -61,11 +61,12 @@ mod process_session_commands;
 mod workflow_commands;
 use process_session_commands::{list_shell_sessions, read_shell_session, stop_shell_session};
 use workflow_commands::{
-    create_workflow_schedule, delete_workflow_schedule, get_registered_workflow,
-    get_scheduled_workflow_run, get_workflow_schedule, list_registered_workflows,
-    list_workflow_runs, list_workflow_schedules, register_workflow_definition,
-    set_workflow_schedule_enabled, start_workflow_run, validate_workflow_definition,
-    workflow_context,
+    create_workflow_schedule, delete_workflow_schedule, desktop_always_on_enable,
+    desktop_always_on_pause, desktop_always_on_status, desktop_always_on_wake,
+    get_registered_workflow, get_scheduled_workflow_run, get_workflow_schedule,
+    list_registered_workflows, list_workflow_runs, list_workflow_schedules,
+    register_workflow_definition, set_workflow_schedule_enabled, start_workflow_run,
+    validate_workflow_definition, workflow_context,
 };
 mod configuration_import;
 mod connection;
@@ -458,6 +459,10 @@ pub fn run() {
             list_runs,
             list_shell_sessions,
             workflow_context,
+            desktop_always_on_status,
+            desktop_always_on_enable,
+            desktop_always_on_pause,
+            desktop_always_on_wake,
             list_registered_workflows,
             get_registered_workflow,
             validate_workflow_definition,

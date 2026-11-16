@@ -1,4 +1,6 @@
 use super::*;
+use colossus_contracts::always_on::AlwaysOnProfile;
+use colossus_worker::AlwaysOnCommand;
 
 pub(super) struct WorkerDispatchOptions {
     pub(super) approval_mode: Option<ApprovalMode>,
@@ -26,6 +28,9 @@ pub(super) fn reject_ephemeral_worker_attachment(
             "ephemeral storage is process-local and cannot host or reach a worker; use redb or PostgreSQL for a persistent worker, or `colossus worker --once` to drain this process"
                 .into(),
         );
+    }
+    if matches!(command, Command::AlwaysOn(_)) {
+        return Err("Always On requires durable storage and a workspace worker".into());
     }
     Ok(())
 }
@@ -87,6 +92,10 @@ pub(super) async fn dispatch_to_worker_if_active(
         );
     }
     match command {
+        Command::AlwaysOn(command) => {
+            dispatch_always_on(&client, &command.command).await?;
+            Ok(true)
+        }
         Command::Audit(command) => {
             match &command.command {
                 AuditAction::Verify => {
@@ -1276,6 +1285,57 @@ pub(super) async fn dispatch_to_worker_if_active(
         | Command::DevelopmentCredentials(_)
         | Command::Worktree(_) => Ok(false),
     }
+}
+
+async fn dispatch_always_on(
+    client: &WorkerClient,
+    action: &AlwaysOnAction,
+) -> Result<(), Box<dyn Error>> {
+    let current: Option<AlwaysOnProfile> = serde_json::from_value(
+        client
+            .call(WorkerOperation::AlwaysOn {
+                command: AlwaysOnCommand::Status,
+            })
+            .await?,
+    )?;
+    let command = match action {
+        AlwaysOnAction::Status => {
+            if current.is_none()
+                && (output_mode() == OutputMode::Human
+                    || output_mode() == OutputMode::Auto && io::stdout().is_terminal())
+            {
+                println!(
+                    "Always On is not configured. Run `colossus always-on enable SESSION_ID`."
+                );
+                return Ok(());
+            }
+            return print_json(&current);
+        }
+        AlwaysOnAction::Enable { session_id } => AlwaysOnCommand::Enable {
+            session_id: session_id.clone(),
+            expected_revision: current.as_ref().map_or(0, |profile| profile.revision),
+        },
+        AlwaysOnAction::Pause | AlwaysOnAction::Wake => {
+            let Some(profile) = current else {
+                return Err(
+                    "Always On is not configured. Run `colossus always-on enable SESSION_ID`."
+                        .into(),
+                );
+            };
+            if matches!(action, AlwaysOnAction::Pause) {
+                AlwaysOnCommand::Pause {
+                    expected_revision: profile.revision,
+                }
+            } else {
+                AlwaysOnCommand::Wake {
+                    expected_revision: profile.revision,
+                }
+            }
+        }
+    };
+    let profile: AlwaysOnProfile =
+        serde_json::from_value(client.call(WorkerOperation::AlwaysOn { command }).await?)?;
+    print_json(&profile)
 }
 
 pub(super) fn validate_worker_workspace(
