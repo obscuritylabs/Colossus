@@ -67,7 +67,7 @@ through session commands and audit state.
 | `autoCompaction` | Create a snapshot automatically after the threshold is crossed | Boolean | `true` |
 | `compactAtPercent` | Percentage of the effective model input budget that triggers compaction | `1..99` and above `targetPercent` | `85` |
 | `targetPercent` | Desired prepared-context size after compaction | `1..99` and below `compactAtPercent` | `45` |
-| `preserveRecentMessages` | Newest canonical messages not summarized automatically | `0..=1024` | `8` |
+| `preserveRecentMessages` | Target number of recent messages kept verbatim in the prepared context | `0..=1024` | `8` |
 | `modelAssisted` | Prefer a bounded summarizer-model result before deterministic fallback | Boolean | `true` |
 
 All percentages apply to the selected model profile's effective input budget, not its
@@ -92,11 +92,10 @@ Colossus creates a snapshot only when there is no useful active snapshot or the 
 prepared view also exceeds the threshold. It summarizes an older message range and
 preserves the newest configured messages.
 
-Compaction tries to reach `targetPercent`, but preservation and binding context take
-precedence. If the newest logical turn, instructions, tool definitions, decisions, or
-preserved messages cannot fit in the effective input budget, Colossus fails explicitly
-instead of discarding them. This means compaction may have triggered even when the turn
-ends with a preservation error: the protected tail alone was too large to summarize.
+Compaction tries to reach `targetPercent`. When the recent-message target cannot fit
+within the hard request budget, Colossus can summarize additional older complete
+turns. The newest logical turn and required bindings still need to fit. Colossus
+reports a context budget error if the minimum request exceeds a hard limit.
 Before this check, provider-visible tool results are projected to at most 64 KiB each and
 256 KiB across the complete user logical turn, including sequential assistant/tool
 cycles. Built-in repository file summaries are byte-bounded as well as line-bounded so

@@ -83,9 +83,10 @@ keyless custody remains bounded process memory. When a keyless runtime has lost 
 checkpoint, an ordinary Execute continuation with a valid committed transcript can
 prepare a fresh response from saved evidence. Tool calls and results appear as
 untrusted text in the recovery request. The request offers no tools, and recovery
-context compaction is transient. The canonical transcript and any active snapshot
-retain their original authority. A pending tool turn still requires reconciliation
-from effect evidence before provider dispatch.
+context compaction is transient. Ordinary Execute can also use this path when exact
+replay passes its binding checks but exceeds a hard context budget. The canonical
+transcript and any active snapshot retain their original authority. A pending tool
+turn still requires reconciliation from effect evidence before provider dispatch.
 
 Normal loads respect replay retirement. Recovery of an unfinished legacy exchange
 may inspect the immediately preceding protected settled record and restore it only

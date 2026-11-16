@@ -294,17 +294,19 @@ estimation, so these are planning thresholds rather than provider billing measur
 
 Increasing `maxOutputTokens` reduces the available input budget. Increasing
 `compactAtPercent` delays compaction but does not enlarge the model window. A large
-`preserveRecentMessages` value can also make compaction less effective because those
-messages are never summarized automatically.
+`preserveRecentMessages` value keeps more messages verbatim when the request fits.
 
 Context preparation also keeps a conservative byte estimate below a fixed budget that
 leaves room inside the 1 MiB pre-effect policy and provider request ceilings. The
 estimate includes both the serialized logical model request and additional escaping
 introduced when provider adapters project structured tool-call arguments. This byte
 budget can trigger compaction before the configured token percentage on very
-large-context models. If the preserved recent messages, tool schemas, retrieved
-material, or instructions alone exceed it, Colossus returns a context configuration
-error before attempting the provider effect.
+large-context models. Colossus can summarize older complete turns to stay under
+the byte ceiling. If the newest turn and required context still exceed it, Colossus
+reports a context budget error before the provider request. An Anthropic exchange
+with committed tool results can use
+[same-session recovery](../../use/sessions-context.md#continue-after-an-anthropic-context-limit)
+when exact replay exceeds the budget.
 
 See [Provider and model configuration](providers-models.md#model-profiles) for complete
 profiles and [Context, memory, and research configuration](context-memory-research.md)

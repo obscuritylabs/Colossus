@@ -422,6 +422,258 @@ async fn anthropic_recovery_repeated_http_failures_keep_protected_signed_replay_
     }
 }
 
+async fn oversized_replay_round_trip(protected_restart: bool) {
+    const LARGE_USER_INPUT: usize = 640 * 1024;
+    const LARGE_PRIVATE_BLOCK: usize = 300 * 1024;
+    const REPLAY_BYTE_BUDGET: usize = 896 * 1024;
+    let (base, server) = scripted_messages_server(3, |step| {
+        let content = if step == 0 {
+            let mut content = signed_title(step);
+            content[0]["thinking"] = json!(format!(
+                "PRIVATE_RECOVERY_THOUGHT_{}",
+                "t".repeat(LARGE_PRIVATE_BLOCK)
+            ));
+            content
+        } else {
+            vec![json!({"type":"text","text":if step == 1 {
+                "Recovered without running tools again."
+            } else {
+                "Normal next turn."
+            }})]
+        };
+        (
+            200,
+            "application/json",
+            response_body(
+                step,
+                &content,
+                if step == 0 { "tool_use" } else { "end_turn" },
+                false,
+            ),
+        )
+    })
+    .await;
+    let workspace = crate::test_support::private_tempdir();
+    let mut config = recovery_config(workspace.path(), base, false, protected_restart);
+    config
+        .models
+        .profiles
+        .get_mut("echo")
+        .unwrap()
+        .context_window_tokens = 1_000_000;
+    config.context.model_assisted = false;
+    let keys =
+        protected_restart.then(|| Arc::new(StaticKeyProvider::new("recovery-test", [7; 32])));
+    let runtime = open_runtime(&config, workspace.path(), keys.as_ref());
+    let prompt = format!(
+        "Keep the original request. {}",
+        "x".repeat(LARGE_USER_INPUT)
+    );
+    let result = if protected_restart {
+        let error = runtime
+            .run_model_with_max_turns("primary", "test instructions", &prompt, 1)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("turn limit exhausted"),
+            "{error}"
+        );
+        let session = runtime.latest_session().unwrap().id;
+        let before = runtime.session_messages(&session).unwrap();
+        assert_private_blocks_absent(&runtime, &session, 1);
+        drop(runtime);
+        let runtime = open_runtime(&config, workspace.path(), keys.as_ref());
+        let recovered = runtime
+            .run_model_in_session(
+                "primary",
+                "test instructions",
+                "Use this new guidance and the saved result.",
+                Some(2),
+                &session,
+            )
+            .await
+            .unwrap();
+        assert!(
+            runtime
+                .session_messages(&session)
+                .unwrap()
+                .starts_with(&before),
+            "recovery must preserve the committed canonical prefix"
+        );
+        (runtime, session, recovered)
+    } else {
+        let recovered = runtime
+            .run_model_with_max_turns("primary", "test instructions", &prompt, 2)
+            .await
+            .unwrap();
+        let session = runtime.latest_session().unwrap().id;
+        (runtime, session, recovered)
+    };
+    let (runtime, session, recovered) = result;
+    assert_eq!(recovered.output, "Recovered without running tools again.");
+    assert_private_blocks_absent(&runtime, &session, 1);
+    let next = runtime
+        .run_model_in_session(
+            "primary",
+            "test instructions",
+            "Normal follow-up.",
+            Some(1),
+            &session,
+        )
+        .await
+        .unwrap();
+    assert_eq!(next.output, "Normal next turn.");
+    assert_private_blocks_absent(&runtime, &session, 1);
+
+    let requests = server.await.unwrap();
+    let initial_bytes = serde_json::to_vec(&requests[0]).unwrap().len();
+    assert!(initial_bytes < REPLAY_BYTE_BUDGET);
+    assert!(initial_bytes.saturating_add(LARGE_PRIVATE_BLOCK) > REPLAY_BYTE_BUDGET);
+    let recovery = &requests[1];
+    assert!(recovery["tools"].as_array().is_none_or(Vec::is_empty));
+    let recovery_body = recovery.to_string();
+    assert!(recovery_body.len() <= REPLAY_BYTE_BUDGET);
+    assert!(recovery_body.contains("Keep the original request."));
+    assert!(recovery_body.contains("Colossus saved tool evidence"));
+    assert!(recovery_body.contains("Recovery title 0"));
+    assert!(!recovery_body.contains("EXACT_RECOVERY_SIGNATURE"));
+    if protected_restart {
+        assert!(recovery_body.contains("Use this new guidance and the saved result."));
+    }
+    assert!(
+        requests[2]["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn anthropic_oversized_replay_continues_in_the_same_run_without_repeating_tools() {
+    oversized_replay_round_trip(false).await;
+}
+
+#[tokio::test]
+async fn anthropic_oversized_replay_continues_the_same_protected_session_after_restart() {
+    oversized_replay_round_trip(true).await;
+}
+
+#[tokio::test]
+async fn anthropic_recovery_bounds_oversized_canonical_tool_arguments_in_the_same_session() {
+    const LARGE_USER_INPUT: usize = 670 * 1024;
+    const ESCAPED_ARGUMENT_INPUT: usize = 70 * 1024;
+    let (base, server) = scripted_messages_server(2, |step| {
+        let content = if step == 0 {
+            let mut content = signed_title(step);
+            content.push(json!({
+                "type": "tool_use",
+                "id": "rejected-long-title",
+                "name": "session_set_title",
+                "input": { "title": "\\".repeat(ESCAPED_ARGUMENT_INPUT) },
+            }));
+            content
+        } else {
+            vec![json!({"type":"text","text":"Recovered from bounded saved results."})]
+        };
+        (
+            200,
+            "application/json",
+            response_body(
+                step,
+                &content,
+                if step == 0 { "tool_use" } else { "end_turn" },
+                false,
+            ),
+        )
+    })
+    .await;
+    let workspace = crate::test_support::private_tempdir();
+    let mut config = recovery_config(workspace.path(), base, false, false);
+    config
+        .models
+        .profiles
+        .get_mut("echo")
+        .unwrap()
+        .context_window_tokens = 1_000_000;
+    config.context.model_assisted = false;
+    let runtime = open_runtime(&config, workspace.path(), None);
+    let original = format!("Original large request. {}", "x".repeat(LARGE_USER_INPUT));
+    let error = runtime
+        .run_model_with_max_turns("primary", "test instructions", &original, 1)
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("turn limit exhausted"),
+        "{error}"
+    );
+    let session = runtime.latest_session().unwrap().id;
+    let committed = runtime.session_messages(&session).unwrap();
+    assert_eq!(
+        committed
+            .iter()
+            .filter(|entry| entry.message.role == ModelMessageRole::Tool)
+            .count(),
+        2
+    );
+    let latest = "Preserve this new guidance verbatim.";
+    let recovered = runtime
+        .run_model_in_session("primary", "test instructions", latest, Some(2), &session)
+        .await
+        .unwrap();
+    assert_eq!(recovered.output, "Recovered from bounded saved results.");
+    let after = runtime.session_messages(&session).unwrap();
+    assert!(after.starts_with(&committed));
+    assert_eq!(after.len(), committed.len() + 2);
+    assert_eq!(after[committed.len()].message.content, latest);
+    let title_changes = runtime
+        .journal()
+        .read_stream(&format!("session:{session}"))
+        .unwrap()
+        .iter()
+        .filter(|event| event.event_type == "session.title.set.v1")
+        .count();
+    assert_eq!(title_changes, 1);
+    let prepared = runtime
+        .journal()
+        .read_stream(&format!("run:{}", recovered.run_id))
+        .unwrap()
+        .into_iter()
+        .find(|event| event.event_type == "context.prepared.v1")
+        .unwrap();
+    assert_eq!(
+        runtime.journal().decrypt_payload(&prepared).unwrap()["strategy"],
+        "bounded_tool_evidence_recovery"
+    );
+
+    let requests = server.await.unwrap();
+    assert!(requests[1]["tools"].as_array().is_none_or(Vec::is_empty));
+    let blocks = flattened_blocks(&requests[1]);
+    assert!(
+        blocks
+            .iter()
+            .any(|(role, block)| role == "user" && block["text"] == latest)
+    );
+    let evidence: Value = blocks
+        .iter()
+        .filter_map(|(_, block)| block["text"].as_str())
+        .find_map(|text| text.strip_prefix("[Colossus saved tool evidence]\n"))
+        .map(|text| serde_json::from_str(text).unwrap())
+        .expect("bounded saved result receipts");
+    assert_eq!(evidence["receipt_count"], 2);
+    assert_eq!(evidence["recorded_nonzero_count"], 1);
+    assert_eq!(evidence["receipts"][1]["call_id"], "rejected-long-title");
+    assert_eq!(evidence["receipts"][1]["status"], "nonzero_exit");
+    assert_eq!(evidence["receipts"][1]["recorded_exit_code"], 1);
+    assert!(
+        evidence["prior_prompt_preview"]
+            .as_str()
+            .is_some_and(
+                |text| text.starts_with("Original large request.") && text.ends_with("...")
+            )
+    );
+    assert!(!requests[1].to_string().contains("EXACT_RECOVERY_SIGNATURE"));
+    assert!(!requests[1].to_string().contains(&original));
+}
+
 async fn keyless_restart_round_trip(streamed: bool) {
     let (base, server) = scripted_messages_server(6, move |step| {
         if step == 2 {

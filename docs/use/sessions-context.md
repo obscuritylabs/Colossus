@@ -73,6 +73,24 @@ compaction can still fail rather than silently discard it.
 Operators can adjust the threshold and preservation settings in
 [context configuration](../reference/configuration/context-memory-research.md#context-configuration).
 
+## Continue after an Anthropic context limit
+
+When an Anthropic tool exchange has already saved its results and exact replay
+exceeds the request budget, Colossus can finish the response using those results
+as bounded evidence. If the saved tool exchange is also too large, the request
+uses short receipts and keeps the latest guidance. The recovery request offers
+no tools. The full conversation and tool results stay in the current session.
+
+If a request still exceeds the budget, send shorter guidance in the same thread
+and reduce any new attachments. From the CLI, use the same workspace and session:
+
+```bash
+colossus run --session SESSION_ID "Continue from the saved results"
+```
+
+Once the recovery response completes, send a new instruction in the same
+session if the remaining work requires tools.
+
 ## Inspect or restore snapshots
 
 Use these commands in the Terminal UI:

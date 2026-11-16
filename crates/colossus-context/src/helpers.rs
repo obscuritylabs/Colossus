@@ -101,7 +101,16 @@ pub(super) fn apply_snapshot(
         .unwrap_or(usize::MAX)
         .min(messages.len());
     let mut prepared = Vec::with_capacity(messages.len().saturating_sub(source_end) + 1);
-    let markers = messages[..source_end]
+    prepared.push(snapshot_message(snapshot, &messages[..source_end]));
+    prepared.extend_from_slice(&messages[source_end..]);
+    prepared
+}
+
+pub(super) fn snapshot_message(
+    snapshot: &ContextSnapshot,
+    source: &[ModelMessage],
+) -> ModelMessage {
+    let markers = source
         .iter()
         .flat_map(|message| message.content.images())
         .map(image_compaction_marker)
@@ -111,7 +120,7 @@ pub(super) fn apply_snapshot(
     } else {
         format!("\n\nCompacted image inputs:\n{}", markers.join("\n"))
     };
-    prepared.push(ModelMessage {
+    ModelMessage {
             agent_message_origin: None,
         role: ModelMessageRole::System,
         content: format!(
@@ -126,9 +135,7 @@ pub(super) fn apply_snapshot(
         .into(),
         tool_call_id: None,
         tool_calls: Vec::new(),
-    });
-    prepared.extend_from_slice(&messages[source_end..]);
-    prepared
+    }
 }
 
 pub(super) fn last_tool_evidence(messages: &[ModelMessage]) -> Option<usize> {

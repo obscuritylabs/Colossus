@@ -32,6 +32,8 @@ const SUMMARY_INSTRUCTIONS: &str = "Summarize this Colossus session history for 
 
 mod helpers;
 use helpers::*;
+mod recovery;
+use recovery::SavedToolEvidence;
 
 mod config;
 pub use config::*;
