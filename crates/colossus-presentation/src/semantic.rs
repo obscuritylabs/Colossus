@@ -494,7 +494,7 @@ impl SemanticRenderer {
         let mut fields = vec![
             ("Code".into(), code.into()),
             (
-                "Run recoverable".into(),
+                "Recoverable".into(),
                 if recoverable { "yes" } else { "no" }.into(),
             ),
         ];
