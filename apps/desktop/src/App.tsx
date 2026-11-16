@@ -124,6 +124,7 @@ import type {
   SpaceStartup,
 } from "./components/WorkSidebar";
 import { WorkSurface } from "./components/WorkSurface";
+import { AlwaysOnControl } from "./components/AlwaysOnControl";
 import type { SessionWorkspaceView } from "./components/SessionWorkspace";
 import type { WorkspaceFileOpenRequest } from "./components/WorkspaceFiles";
 import { WorkspaceFiles } from "./components/WorkspaceFiles";
@@ -5681,6 +5682,60 @@ export default function App() {
   const selectedTarget = desktop.targets.find(
     (target) => target.targetId === desktop.selectedTargetId,
   );
+  const alwaysOnRoute =
+    activeRun === undefined
+      ? (targetRoutes.current?.capture() ?? null)
+      : activeRoute;
+  const alwaysOnRouteIsCurrent = useCallback(
+    () =>
+      alwaysOnRoute !== null &&
+      targetRoutes.current?.isCurrent(alwaysOnRoute) === true,
+    [alwaysOnRoute],
+  );
+  const alwaysOnControl =
+    !FIXTURE_MODE &&
+    alwaysOnRoute?.kind === "managed_local" &&
+    selectedTarget?.targetId === alwaysOnRoute.targetId &&
+    selectedTarget.state === "ready" &&
+    connection.state === "connected" &&
+    connection.targetId === alwaysOnRoute.targetId ? (
+      <AlwaysOnControl
+        key={JSON.stringify([alwaysOnRoute.generation, activeRun?.sessionId])}
+        targetId={alwaysOnRoute.targetId}
+        sessionId={activeRun?.sessionId ?? null}
+        canEnroll={
+          activeForkDraft === undefined &&
+          activeRun?.mode === "execute" &&
+          activeRun.status === "completed" &&
+          !activeRun.archived
+        }
+        isCurrent={alwaysOnRouteIsCurrent}
+        onOpenConversation={async (sessionId) => {
+          const available = () =>
+            alwaysOnRouteIsCurrent() &&
+            !submitInFlight.current &&
+            !connectingRef.current;
+          if (!available()) return false;
+          const page = await listRuns(alwaysOnRoute.targetId, {
+            pageToken: "",
+            sessionId,
+          }).catch(() => null);
+          const run = page?.runs.find(
+            (candidate) =>
+              candidate.sessionId === sessionId && !candidate.archived,
+          );
+          if (
+            !run ||
+            !available() ||
+            !targetRoutes.current?.bindRun(run.runId, alwaysOnRoute)
+          ) {
+            return false;
+          }
+          await openRun(run);
+          return true;
+        }}
+      />
+    ) : null;
   const terminalAvailable = selectedTarget?.terminalAvailable === true;
   const workspaceFilesAvailable = desktop.capabilities.files;
   const generatedTitle =
@@ -6147,6 +6202,7 @@ export default function App() {
           }}
           title={title}
           view={activeView}
+          alwaysOnControl={alwaysOnControl}
           forkDraft={activeForkDraft !== undefined}
           inheritedViews={
             activeForkOrigin === undefined

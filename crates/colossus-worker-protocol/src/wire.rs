@@ -62,6 +62,31 @@ impl From<std::io::Error> for WorkerControlError {
     }
 }
 
+/// Control an Always On Agent in the authenticated worker's workspace.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AlwaysOnCommand {
+    /// Read the current profile without scheduling a wake.
+    Status,
+    /// Enable recurring wakes for an existing owned session.
+    Enable {
+        /// Exact durable session identifier.
+        session_id: String,
+        /// Observed profile revision, or zero for the first enrollment.
+        expected_revision: u64,
+    },
+    /// Pause recurring wakes.
+    Pause {
+        /// Observed profile revision.
+        expected_revision: u64,
+    },
+    /// Request one wake using the existing enabled profile.
+    Wake {
+        /// Observed profile revision.
+        expected_revision: u64,
+    },
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub(crate) enum ControlOperation {
@@ -78,6 +103,9 @@ pub(crate) enum ControlOperation {
     },
     InspectSessionMap {
         session_id: String,
+    },
+    AlwaysOn {
+        command: AlwaysOnCommand,
     },
     McpServers,
     McpDoctor {
@@ -462,6 +490,42 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ControlOperation::WorkflowList).expect("workflow list"),
             serde_json::json!({"operation": "workflow_list"})
+        );
+    }
+
+    #[test]
+    fn always_on_control_contains_only_the_command_and_observed_revision() {
+        let command = AlwaysOnCommand::Enable {
+            session_id: "session-1".into(),
+            expected_revision: 4,
+        };
+        let operation = serde_json::to_value(ControlOperation::AlwaysOn {
+            command: command.clone(),
+        })
+        .expect("serialize authenticated operation");
+        assert_eq!(
+            operation,
+            serde_json::json!({
+                "operation": "always_on",
+                "command": {
+                    "action": "enable",
+                    "session_id": "session-1",
+                    "expected_revision": 4,
+                },
+            }),
+        );
+        assert_eq!(
+            serde_json::from_value::<AlwaysOnCommand>(operation["command"].clone())
+                .expect("read command"),
+            command,
+        );
+        assert!(
+            serde_json::from_value::<AlwaysOnCommand>(serde_json::json!({
+                "action": "wake",
+                "expected_revision": 4,
+                "application_id": "another-owner",
+            }))
+            .is_err(),
         );
     }
 

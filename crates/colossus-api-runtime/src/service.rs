@@ -1003,6 +1003,15 @@ impl RuntimeAgentRunApi {
     }
 
     fn recover_orphan(&self, caller: &CallerContext, run: Run) -> ApiResult<Run> {
+        self.recover_owned_orphan(caller, run, true)
+    }
+
+    fn recover_owned_orphan(
+        &self,
+        caller: &CallerContext,
+        run: Run,
+        resume_queued: bool,
+    ) -> ApiResult<Run> {
         if run.status.is_terminal() {
             self.settle_communication(&run)?;
             return Ok(run);
@@ -1030,6 +1039,25 @@ impl RuntimeAgentRunApi {
         let _recovery_span = recovery_span.enter();
         self.telemetry.recovery_started(&current.id, current.status);
         match current.status {
+            RunStatus::Queued
+                if !resume_queued || self.is_pending_host_wake(caller, &execution.request)? =>
+            {
+                let writer = RunWriter::new(
+                    Arc::clone(&self.repository),
+                    Arc::clone(&self.feeds),
+                    recovered.clone(),
+                    &current,
+                );
+                writer.append(RunUpdateKind::Failure {
+                    status: RunStatus::Interrupted,
+                    failure: crate::run_failures::generic_failure(
+                        "runtime.interrupted",
+                        "the local worker stopped before the Always On wake began",
+                        OutcomeCertainty::Known,
+                    ),
+                })?;
+                self.current_recovered(&recovered, &current.id, caller)
+            }
             RunStatus::Queued => {
                 let create_session = execution.request.session_id.is_none();
                 let pending_caller = recovered.clone();
@@ -1090,6 +1118,29 @@ impl RuntimeAgentRunApi {
             | RunStatus::Interrupted
             | RunStatus::OutcomeUnknown => Ok(current),
         }
+    }
+
+    fn is_pending_host_wake(
+        &self,
+        caller: &CallerContext,
+        request: &CreateRunRequest,
+    ) -> ApiResult<bool> {
+        let key = request.idempotency_key.as_str();
+        if caller.principal().kind() != colossus_api::ApplicationKind::Sidecar
+            || !key.starts_with("always-on-")
+        {
+            return Ok(false);
+        }
+        let profile = self
+            .runtime
+            .always_on_profile(&caller.actor())
+            .map_err(|_| recovery_invariant(caller))?;
+        Ok(profile.is_some_and(|profile| {
+            request.session_id.as_deref() == Some(profile.session_id.as_str())
+                && profile
+                    .pending
+                    .is_some_and(|wake| wake.idempotency_key() == key)
+        }))
     }
 
     fn current_recovered(
@@ -3216,6 +3267,25 @@ fn process_session_error() -> ApiError {
 }
 
 impl RuntimeAgentRunApi {
+    /// Read a trusted host wake's previously allocated run by exact owned intent.
+    ///
+    /// Used by the local worker to settle interrupted background dispatch.
+    /// An absent allocation never causes a new run through this path.
+    pub fn resolve_host_wake(
+        &self,
+        caller: &CallerContext,
+        request: &CreateRunRequest,
+    ) -> ApiResult<Option<RunStatus>> {
+        caller.require_scope(scopes::RUNS_READ)?;
+        let Some(run) = self.repository.resolve_create_run(caller, request)? else {
+            return Ok(None);
+        };
+        if !self.is_pending_host_wake(caller, request)? {
+            return Ok(None);
+        }
+        Ok(Some(self.recover_owned_orphan(caller, run, false)?.status))
+    }
+
     pub(crate) async fn allocate_run(
         &self,
         caller: &CallerContext,

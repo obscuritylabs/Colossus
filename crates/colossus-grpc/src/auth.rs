@@ -130,6 +130,14 @@ impl CredentialRecord {
         matches!(self.state, CredentialState::Active)
     }
 
+    /// Resolve the current grant for a trusted host's exact bootstrap record.
+    ///
+    /// This is for server-owned background dispatch after a verified bootstrap.
+    /// An identifier supplied by a client is never proof of authentication.
+    pub fn active_host_principal(&self) -> ApiResult<Option<ApplicationPrincipal>> {
+        self.is_active().then(|| self.principal()).transpose()
+    }
+
     pub(crate) const fn is_pending(&self) -> bool {
         matches!(self.state, CredentialState::Pending)
     }

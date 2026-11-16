@@ -3,6 +3,7 @@ use super::*;
 pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
     match operation {
         WorkerOperation::Ping => "ping",
+        WorkerOperation::AlwaysOn { .. } => "always_on",
         WorkerOperation::ObservabilityDoctor => "observability_doctor",
         WorkerOperation::SetApprovalMode { .. } => "set_approval_mode",
         WorkerOperation::InspectThreadDelegate { .. } => "inspect_thread_delegate",

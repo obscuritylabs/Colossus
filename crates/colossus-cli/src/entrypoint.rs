@@ -518,6 +518,12 @@ async fn runtime_command(
     {
         return Ok(());
     }
+    if matches!(&cli.command, Command::AlwaysOn(_)) {
+        return Err(
+            "Always On requires an active worker. Start `colossus worker` in this workspace, then retry."
+                .into(),
+        );
+    }
     if interactive_tui && cli.output == OutputMode::Json {
         return Err(
             "interactive --output json is not supported; omit it for the TUI or redirect line-mode input"
@@ -578,6 +584,7 @@ async fn runtime_command(
         Command::Cloud(_) => unreachable!("handled before runtime construction"),
         Command::DevelopmentCredentials(_) => unreachable!("handled before runtime construction"),
         Command::Update(_) => unreachable!("handled before runtime construction"),
+        Command::AlwaysOn(_) => unreachable!("handled before runtime construction"),
         Command::Config(ConfigCommand {
             command: ConfigAction::Effective,
         }) => {

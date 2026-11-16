@@ -344,14 +344,14 @@ async fn ensure_managed_capacity(
             state.remove_managed_space_runtime(&target_id).await;
             continue;
         };
-        let active = managed_target_has_active_work(&target).await?;
+        let active = managed_capacity_has_active_work(state, &target_id, &target).await?;
         candidates.push((last_used, target_id, active));
     }
     let Some(target_id) = activity::revalidated_idle_lru(candidates, |target_id| async move {
         let Some(target) = state.target(&target_id).await else {
             return Ok(false);
         };
-        managed_target_has_active_work(&target).await
+        managed_capacity_has_active_work(state, &target_id, &target).await
     })
     .await?
     else {
@@ -376,6 +376,23 @@ pub(crate) async fn managed_target_has_active_work(
         managed_target_has_active_chat_work(target),
     )
     .await
+}
+
+async fn managed_capacity_has_active_work(
+    state: &AppState,
+    target_id: &str,
+    target: &TargetHandle,
+) -> Result<bool, CommandErrorDto> {
+    if let Some(worker) = state.managed_worker_for(target_id).await
+        && worker
+            .always_on(colossus_worker_protocol::AlwaysOnCommand::Status)
+            .await
+            .map_err(|_| CommandErrorDto::busy("Always On state could not be checked."))?
+            .is_some_and(|profile| profile.enabled)
+    {
+        return Ok(true);
+    }
+    managed_target_has_active_work(target).await
 }
 
 async fn managed_workflows_have_active_work(client: &Colossus) -> Result<bool, CommandErrorDto> {

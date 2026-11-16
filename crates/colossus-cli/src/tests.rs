@@ -1565,6 +1565,40 @@ fn desktop_worker_required_flag_is_hidden_and_tui_only() {
 }
 
 #[test]
+fn always_on_requires_an_existing_session_for_enable_and_durable_worker_storage() {
+    let enabled = Cli::try_parse_from(["colossus", "always-on", "enable", "session-1"])
+        .expect("enable an existing session");
+    assert!(matches!(
+        &enabled.command,
+        Command::AlwaysOn(AlwaysOnAgentCommand {
+            command: AlwaysOnAction::Enable { session_id },
+        }) if session_id == "session-1"
+    ));
+    assert!(Cli::try_parse_from(["colossus", "always-on", "enable"]).is_err());
+    for operation in ["status", "pause", "wake"] {
+        let cli =
+            Cli::try_parse_from(["colossus", "always-on", operation]).expect("Always On operation");
+        assert!(matches!(cli.command, Command::AlwaysOn(_)));
+        assert!(
+            Cli::try_parse_from(["colossus", "always-on", operation, "other-session"]).is_err()
+        );
+    }
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut config = RuntimeConfig::offline_template(directory.path().join("always-on"));
+    config.storage.adapter = colossus_runtime::StorageAdapter::Ephemeral;
+    assert!(
+        reject_ephemeral_worker_attachment(&config, &enabled.command)
+            .expect_err("background work cannot use ephemeral storage")
+            .to_string()
+            .contains("requires durable storage"),
+    );
+    config.storage.adapter = colossus_runtime::StorageAdapter::Redb;
+    reject_ephemeral_worker_attachment(&config, &enabled.command)
+        .expect("durable configurations can attach to the worker");
+}
+
+#[test]
 fn ephemeral_storage_refuses_worker_modes_that_need_a_separate_process() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let mut ephemeral =

@@ -124,6 +124,7 @@ interface WorkSurfaceProps {
   onOpenGenericTerminal?: () => void;
   title: string;
   view: RunView | undefined;
+  alwaysOnControl?: ReactNode;
   forkDraft?: boolean;
   inheritedViews?: readonly RunView[];
   conversationViews: readonly RunView[];
@@ -212,6 +213,7 @@ export function WorkSurface({
   inheritedViews = [],
   title,
   view,
+  alwaysOnControl,
   conversationViews,
   connection,
   connecting,
@@ -1212,6 +1214,7 @@ export function WorkSurface({
             actions={
               <>
                 {!composerVisible ? gitControl : null}
+                {alwaysOnControl}
                 <button
                   ref={workNavigationTriggerRef}
                   className="button secondary compact work-navigation-button"

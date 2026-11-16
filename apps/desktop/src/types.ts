@@ -249,6 +249,29 @@ export interface DesktopStatus {
   capabilities: DesktopCapabilities;
 }
 
+export interface AlwaysOnProfile {
+  session_id: string;
+  enabled: boolean;
+  revision: number;
+  next_wake_at: string;
+  pending: {
+    id: string;
+    requested_at: string;
+    trigger: "scheduled" | "manual";
+  } | null;
+  last_wake: {
+    id: string;
+    completed_at: string;
+    status:
+      "completed" | "failed" | "interrupted" | "blocked" | "outcome_unknown";
+  } | null;
+}
+
+export interface AlwaysOnStatus {
+  selectionEpoch: number;
+  profile: AlwaysOnProfile | null;
+}
+
 export interface ControlPlaneProfile {
   id: string;
   label: string;

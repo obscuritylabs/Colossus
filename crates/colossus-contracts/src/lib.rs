@@ -8,6 +8,7 @@ mod provider_retry;
 pub use provider_retry::*;
 
 mod agent;
+pub mod always_on;
 mod browser;
 mod command_approval;
 mod command_output;
