@@ -538,7 +538,8 @@ jobs:
     name: Build immutable stable SDK candidate
     if: needs.validate.outputs.target_channel == 'stable'
     needs: validate
-    runs-on: ubuntu-latest-m
+    # Python 3.10.18 has a setup-python build for Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     environment:
       name: ${{ needs.validate.outputs.publish_draft == 'true' && vars.SCCACHE_R2_ENABLED == 'true' && 'sccache-r2-write' || 'release-validation' }}
       deployment: false

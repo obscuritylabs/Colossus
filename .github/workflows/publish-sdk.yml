@@ -162,7 +162,8 @@ jobs:
     name: Publish missing SDK artifacts
     if: needs.validate.outputs.authorize_publish == 'true'
     needs: validate
-    runs-on: ubuntu-latest-m
+    # Rebuild on the same runner image as the stable SDK candidate.
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: sdk-production
     env:
