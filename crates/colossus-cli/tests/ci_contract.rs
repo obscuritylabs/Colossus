@@ -53,7 +53,7 @@ fn workflows_are_split_and_the_catch_all_is_removed() {
 }
 
 #[test]
-fn actionlint_recognizes_the_provisioned_larger_runner() {
+fn actionlint_recognizes_provisioned_and_ubuntu_26_runners() {
     let path = repository_root().join(".github/actionlint.yaml");
     let source = fs::read_to_string(&path).expect("read actionlint configuration");
     let config: serde_json::Value =
@@ -73,9 +73,15 @@ fn actionlint_recognizes_the_provisioned_larger_runner() {
     );
     assert_eq!(
         labels,
-        ["ubuntu-latest-m".to_owned(), "windows-latest-l".to_owned(),]
-            .into_iter()
-            .collect()
+        [
+            "ubuntu-latest-m",
+            "windows-latest-l",
+            "ubuntu-26.04",
+            "ubuntu-26.04-arm",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
     );
 }
 

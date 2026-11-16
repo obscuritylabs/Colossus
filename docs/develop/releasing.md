@@ -238,9 +238,10 @@ sh /tmp/colossus-install.sh --version vX.Y.Z --dry-run --yes
 
 The `Verify public distribution` workflow also runs automatically when the stable draft
 is published. It uses no repository token, compares the exact-tag and `latest` bootstrap
-bytes, verifies the bootstrap sidecar, performs a clean direct install on macOS, Linux,
-and Windows, validates the receipt, and runs structured update discovery. Do not treat
-the release as installation-ready until all three jobs pass.
+bytes, verifies the bootstrap sidecar, and performs clean direct installs on Ubuntu
+24.04 x64, Ubuntu 26.04 x64 and Arm64, macOS, and Windows. Each job validates the
+receipt and runs structured update discovery. All five jobs must pass before the
+release is installation-ready.
 
 Generate the exact Homebrew formula only from the published macOS checksum sidecars:
 

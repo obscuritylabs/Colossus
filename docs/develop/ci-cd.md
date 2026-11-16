@@ -28,6 +28,15 @@ ARM64 and macOS jobs keep their native runners; short control, service-backed an
 bounded single-process fuzzing jobs retain their existing standard or slim runners.
 Provisioned runner names belong in `.github/actionlint.yaml`.
 
+Ubuntu 26.04 LTS compatibility checks run the CLI release and bootstrap installer
+smoke tests against the current source on `ubuntu-26.04` (x64) and
+`ubuntu-26.04-arm` (Arm64). The workflow runs on changes to its recipe, the Rust
+toolchain or lockfile, or the installer and its tests. You can also run it manually.
+It uses isolated runner builds. The packaged CLI is exercised with local release
+fixtures. [Public distribution verification](releasing.md#verification) tests
+the actual published binaries separately. The standard AppArmor, SDK, and release
+build jobs retain their Ubuntu 24.04 recipes as those workloads migrate separately.
+
 Native ARM64 macOS jobs and their dependency and compiler-cache warmers use `macos-15`.
 Keep producers and consumers on the same image. Partition native dependency archives
 by image, using `macos-15-desktop-acceptance-v1` and

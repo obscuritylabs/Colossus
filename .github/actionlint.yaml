@@ -2,3 +2,6 @@ self-hosted-runner:
   labels:
     - ubuntu-latest-m
     - windows-latest-l
+    # GitHub-hosted labels missing from actionlint 1.7.12.
+    - ubuntu-26.04
+    - ubuntu-26.04-arm
