@@ -166,4 +166,23 @@ pub(super) async fn managed_orphan_wakes_settle_without_restarting(runtime: Arc<
         assert!(profile.pending.is_none());
         assert_eq!(profile.enabled, !started);
     }
+
+    // An ordinary Sidecar caller can use any public idempotency token. The
+    // prefix alone does not make that caller's queued run a managed wake.
+    let foreign_session_id = Uuid::now_v7().to_string();
+    runtime
+        .create_application_session(&foreign_session_id, None, foreign.actor())
+        .expect("separately owned conversation");
+    let mut input = request("always-on-weekly", "Recover the queued ordinary run.");
+    input.session_id = Some(foreign_session_id.clone());
+    let run_id = Uuid::now_v7().to_string();
+    let allocation = NewRun::from_request(&run_id, &foreign_session_id, "primary", &input).unwrap();
+    repository
+        .create_run(&foreign, &input, &allocation)
+        .expect("durable ordinary allocation");
+    let api = service(runtime, RunAdmissionConfig::default());
+    assert_eq!(api.resolve_host_wake(&foreign, &input).unwrap(), None);
+    let ordinary = wait_terminal(&api, &foreign, &run_id).await;
+    assert_eq!(ordinary.id, run_id);
+    assert_eq!(ordinary.status, RunStatus::Completed);
 }
