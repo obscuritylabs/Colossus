@@ -655,6 +655,24 @@ fn existing_message_observation<'a>(
     (observation.truncated || released_text_form(message)).then_some(observation)
 }
 
+/// Read exit status from the released observation envelope for the matched call.
+///
+/// Untyped or legacy scalar content cannot supply a verified exit status.
+pub fn released_tool_observation_exit_code(message: &ModelMessage, tool_name: &str) -> Option<i32> {
+    if !released_text_form(message) {
+        return None;
+    }
+    let call_id = message.tool_call_id.as_deref()?;
+    let payload = serde_json::from_str::<Value>(&message.content.plain_text()).ok()?;
+    let observation = existing_message_observation(message, &payload)?;
+    if observation.metadata.call_id != Some(call_id)
+        || observation.metadata.tool_name != Some(tool_name)
+    {
+        return None;
+    }
+    observation.metadata.exit_code
+}
+
 fn projected_text_content(message: &ModelMessage, text: String) -> ModelContent {
     if released_text_form(message) {
         ModelContent::Parts(vec![ModelContentPart::Text { text }])

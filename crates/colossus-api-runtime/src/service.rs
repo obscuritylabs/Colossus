@@ -2579,9 +2579,9 @@ fn released_run_error_notice(code: &str, recoverable: bool) -> &'static str {
     {
         reason.message()
     } else if code == "context.token_limit_exceeded" {
-        "the model request exceeds its token budget; shorten the message, reduce tool arguments or output, or start a new session"
+        "the model request exceeds its token budget; shorten the message or reduce attachments and continue in this session"
     } else if code == "context.request_too_large" {
-        "the model request exceeds its byte budget; reduce the message, tool arguments, attachments, or instructions"
+        "the model request exceeds its byte budget; shorten the message or reduce attachments and continue in this session"
     } else if code == "tool.denied" {
         "the requested tool was denied before execution; review policy, tool access, and approval settings"
     } else {
