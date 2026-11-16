@@ -296,10 +296,10 @@ Increasing `maxOutputTokens` reduces the available input budget. Increasing
 `compactAtPercent` delays compaction but does not enlarge the model window. A large
 `preserveRecentMessages` value keeps more messages verbatim when the request fits.
 
-Context preparation also keeps a conservative byte estimate below a fixed budget that
-leaves room inside the 1 MiB pre-effect policy and provider request ceilings. The
-estimate includes both the serialized logical model request and additional escaping
-introduced when provider adapters project structured tool-call arguments. This byte
+Context preparation has a 896 KiB budget for its conservative byte estimate. This
+leaves room inside the default 1 MiB pre-effect policy and non-image provider limits.
+Image bytes have separate transport bounds. The estimate includes the serialized
+logical model request and additional escaping for structured tool arguments. This byte
 budget can trigger compaction before the configured token percentage on very
 large-context models. Colossus can summarize older complete turns to stay under
 the byte ceiling. If the newest turn and required context still exceed it, Colossus

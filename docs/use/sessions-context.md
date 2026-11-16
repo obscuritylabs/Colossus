@@ -75,11 +75,11 @@ Operators can adjust the threshold and preservation settings in
 
 ## Continue after an Anthropic context limit
 
-When an Anthropic tool exchange has already saved its results and exact replay
-exceeds the request budget, Colossus can finish the response using those results
-as bounded evidence. If the saved tool exchange is also too large, the request
-uses short receipts and keeps the latest guidance. The recovery request offers
-no tools. The full conversation and tool results stay in the current session.
+In an ordinary Execute conversation, Colossus can finish a response using saved
+Anthropic tool results when exact replay exceeds the request budget. If the
+saved exchange is also too large, the recovery request uses short receipts and
+keeps the latest guidance. It offers no tools. The full conversation and tool
+results stay in the current session.
 
 If a request still exceeds the budget, send shorter guidance in the same thread
 and reduce any new attachments. From the CLI, use the same workspace and session:

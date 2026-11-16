@@ -89,8 +89,8 @@ example.
 
 When `autoCompaction` is enabled and the original context estimate exceeds the threshold,
 Colossus creates a snapshot only when there is no useful active snapshot or the active
-prepared view also exceeds the threshold. It summarizes an older message range and
-preserves the newest configured messages.
+prepared view also exceeds the threshold. It summarizes older messages and aims to
+keep the configured number of recent messages verbatim.
 
 Compaction tries to reach `targetPercent`. When the recent-message target cannot fit
 within the hard request budget, Colossus can summarize additional older complete
