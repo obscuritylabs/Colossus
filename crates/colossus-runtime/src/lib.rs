@@ -13,6 +13,7 @@ mod access_policy;
 mod adapter_composition;
 mod agent_runs;
 mod agent_tools;
+mod always_on;
 mod browser_tools;
 mod computer_tools;
 pub use browser_tools::{
@@ -122,6 +123,7 @@ use adapter_composition::*;
 #[cfg(test)]
 mod test_support;
 
+pub use always_on::AlwaysOnWakeClaim;
 pub use colossus_contracts::{ModelCapabilities, ModelFeatureSettings, ReasoningEffort};
 pub use colossus_observability::{
     JournalPayloadMode, LogSignalConfig, MetricSignalConfig, ObservabilityConfig, OtlpConfig,

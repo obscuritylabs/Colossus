@@ -6,7 +6,7 @@ mod audit_support;
 mod process_support;
 
 use colossus_worker_protocol::{
-    PROTOCOL_VERSION, WorkerApprovalMode, WorkerControlClient, worker_ipc_endpoint,
+    AlwaysOnCommand, PROTOCOL_VERSION, WorkerApprovalMode, WorkerControlClient, worker_ipc_endpoint,
 };
 use hmac::{Hmac, Mac as _};
 use process_support::tempdir;
@@ -170,6 +170,51 @@ fn worker_exit_diagnostics(worker: &mut ChildGuard) -> String {
         pipe.read_to_string(&mut stderr).expect("worker stderr");
     }
     format!("worker exited with {status}; stdout: {stdout}; stderr: {stderr}")
+}
+
+fn assert_always_on_worker(binary: &Path, config: &Path, session_id: &str) {
+    let json_command = |arguments: &[&str]| -> Value {
+        let output = run(binary, config, arguments);
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        serde_json::from_slice(&output.stdout).expect("CLI response JSON")
+    };
+    let messages = || {
+        json_command(&["sessions", "messages", session_id])
+            .as_array()
+            .expect("session messages array")
+            .len()
+    };
+    let before = messages();
+    let enabled = json_command(&["always-on", "enable", session_id]);
+    assert_eq!(enabled["session_id"], session_id);
+    assert_eq!(enabled["enabled"], true);
+    let requested = json_command(&["always-on", "wake"]);
+    let wake_id = requested["pending"]["id"]
+        .as_str()
+        .or_else(|| requested["last_wake"]["id"].as_str())
+        .expect("admitted wake identity");
+
+    let deadline = Instant::now() + WORKER_AGENT_DRAIN_TIMEOUT;
+    loop {
+        let status = json_command(&["always-on", "status"]);
+        assert_eq!(status["session_id"], session_id);
+        if status["last_wake"]["id"] == wake_id {
+            assert_eq!(status["last_wake"]["status"], "completed");
+            assert!(status["pending"].is_null());
+            break;
+        }
+        assert!(Instant::now() < deadline, "Always On wake remained pending");
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(messages(), before + 2, "wake continued the same session");
+    let paused = json_command(&["always-on", "pause"]);
+    assert_eq!(paused["session_id"], session_id);
+    assert_eq!(paused["enabled"], false);
+    assert!(!run(binary, config, &["always-on", "wake"]).status.success());
 }
 
 #[test]
@@ -344,6 +389,13 @@ sandbox:
     tokio::runtime::Runtime::new()
         .expect("control runtime")
         .block_on(async {
+            assert!(
+                control
+                    .always_on(AlwaysOnCommand::Status)
+                    .await
+                    .expect("read optional authenticated Always On status")
+                    .is_none()
+            );
             assert_eq!(
                 control.approval_mode().await.expect("read approval mode"),
                 Some(WorkerApprovalMode::FullAccess)
@@ -974,6 +1026,8 @@ steps:
     let echo = run(binary, &config, &["echo", "still-alive"]);
     assert!(echo.status.success());
     assert_eq!(String::from_utf8_lossy(&echo.stdout), "still-alive\n");
+
+    assert_always_on_worker(binary, &config, session_id);
 
     let shutdown = run(binary, &config, &["worker", "--shutdown"]);
     assert!(

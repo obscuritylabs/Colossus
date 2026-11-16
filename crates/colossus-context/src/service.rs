@@ -486,7 +486,12 @@ impl ContextPreparer for ContextService {
                 "tool evidence recovery requires a fresh tool-free request".into(),
             ));
         }
-        self.prepare_context(request, true).await
+        match self.prepare_context(request.clone(), true).await {
+            Err(ContextError::BudgetExceeded(error)) => {
+                self.prepare_bounded_tool_evidence(request, error)
+            }
+            result => result,
+        }
     }
 
     async fn prepare(
@@ -498,6 +503,123 @@ impl ContextPreparer for ContextService {
 }
 
 impl ContextService {
+    fn prepare_bounded_tool_evidence(
+        &self,
+        request: ContextPreparationRequest,
+        mut failure: ContextBudgetExceeded,
+    ) -> Result<PreparedContext, ContextError> {
+        let ContextPreparationRequest {
+            session_id,
+            instructions,
+            messages,
+            route,
+            ..
+        } = request;
+        let active = self.snapshots.active(&session_id)?;
+        let cutoff = active
+            .as_ref()
+            .map_or(0, |snapshot| {
+                usize::try_from(snapshot.source_end_sequence).unwrap_or(usize::MAX)
+            })
+            .min(messages.len());
+        let suffix = &messages[cutoff..];
+        let Some(newest_input) = suffix
+            .iter()
+            .rposition(ModelMessage::begins_user_turn)
+            .or_else(|| {
+                suffix
+                    .iter()
+                    .rposition(|message| message.role == ModelMessageRole::User)
+            })
+        else {
+            return Err(failure.into());
+        };
+        let Some(evidence_end) = last_tool_evidence(suffix).map(|index| index + 1) else {
+            return Err(failure.into());
+        };
+        let evidence = &suffix[..evidence_end];
+        let evidence_start = evidence
+            .iter()
+            .rposition(ModelMessage::begins_user_turn)
+            .unwrap_or(0);
+        let prior_prompt = (evidence_start < newest_input
+            && evidence[evidence_start].begins_user_turn())
+        .then_some(&evidence[evidence_start].content);
+        let saved = SavedToolEvidence::collect(&evidence[evidence_start..], prior_prompt);
+        let newest_guidance = suffix[newest_input..]
+            .iter()
+            .filter(|message| message.role == ModelMessageRole::User)
+            .cloned()
+            .collect::<Vec<_>>();
+        // Tool images are represented by omission counts. Current user input
+        // keeps its exact attachments and still obeys the existing image bound.
+        validate_newest_image_turn(&newest_guidance)?;
+        let bindings = self.decision_message()?.into_iter().collect::<Vec<_>>();
+        let context_binding_hash = context_binding_hash(&bindings)?;
+        let threshold = self
+            .config
+            .threshold_tokens(route.limits.input_budget_tokens);
+        let target = self.config.target_tokens(route.limits.input_budget_tokens);
+        let original = estimate_tokens_for_model(&route.model, &instructions, &messages, &[]);
+        for with_previews in [true, false] {
+            let mut prepared = bindings.clone();
+            if let Some(snapshot) = &active {
+                let mut prefix = snapshot_message(snapshot, &messages[..cutoff]);
+                prefix.role = ModelMessageRole::User;
+                prepared.push(prefix);
+            }
+            prepared.push(saved.to_message(with_previews));
+            prepared.extend(newest_guidance.iter().cloned());
+            if active.is_some() {
+                bound_summary_to_target(&route.model, &instructions, &mut prepared, &[], target);
+                bound_summary_to_byte_limit(
+                    &instructions,
+                    &mut prepared,
+                    &[],
+                    MAX_PREPARED_MODEL_REQUEST_BYTES,
+                );
+            }
+            let token_estimate =
+                estimate_tokens_for_model(&route.model, &instructions, &prepared, &[]);
+            let bytes = model_request_bytes(&instructions, &prepared, &[]);
+            if bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
+                failure = ContextBudgetExceeded::request_bytes(
+                    bytes,
+                    MAX_PREPARED_MODEL_REQUEST_BYTES,
+                    ContextBudgetScope::CompactedRequest,
+                );
+                continue;
+            }
+            if token_estimate > route.limits.input_budget_tokens {
+                failure = ContextBudgetExceeded::tokens(
+                    token_estimate,
+                    route.limits.input_budget_tokens,
+                    ContextBudgetScope::CompactedRequest,
+                );
+                continue;
+            }
+            return Ok(PreparedContext {
+                context_binding_hash,
+                continuation_id: None,
+                messages: prepared,
+                token_estimate,
+                original_token_estimate: original,
+                model_profile: route.model_profile,
+                context_window_tokens: route.limits.context_window_tokens,
+                max_output_tokens: route.limits.max_output_tokens,
+                safety_margin_tokens: route.limits.safety_margin_tokens,
+                input_budget_tokens: route.limits.input_budget_tokens,
+                threshold_tokens: threshold,
+                target_tokens: target,
+                snapshot_id: active.as_ref().map(|snapshot| snapshot.id.clone()),
+                compacted: true,
+                snapshot_created: false,
+                strategy: Some("bounded_tool_evidence_recovery".into()),
+            });
+        }
+        Err(failure.into())
+    }
+
     async fn prepare_context(
         &self,
         request: ContextPreparationRequest,
@@ -542,11 +664,7 @@ impl ContextService {
             self.binding_messages(&session_id, &messages, context.clone())
                 .await?
         };
-        let context_binding_hash = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
-            serde_json::to_vec(&bindings).map_err(|_| {
-                ContextError::Configuration("unable to bind context messages".into())
-            })?,
-        ));
+        let context_binding_hash = context_binding_hash(&bindings)?;
         // Apply snapshots to the original slots before changing the provider-facing roles.
         let with_snapshot = |snapshot: &ContextSnapshot| {
             let mut prepared = apply_snapshot(snapshot, &messages);
@@ -674,6 +792,23 @@ impl ContextService {
                 });
             }
         }
+        let newest_turn_start = messages
+            .iter()
+            .rposition(ModelMessage::begins_user_turn)
+            .unwrap_or(0);
+        let latest_evidence_start = if tool_evidence {
+            last_tool_evidence(&messages).map(|last_result| {
+                messages[..last_result]
+                    .iter()
+                    .rposition(ModelMessage::begins_user_turn)
+                    .unwrap_or(0)
+            })
+        } else {
+            None
+        };
+        let protected_start = latest_evidence_start.unwrap_or(newest_turn_start);
+        let active_over_budget = active_estimate > budget.limits.input_budget_tokens
+            || active_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES;
         let should_create = force
             || (self.config.auto_compaction
                 // A recovery request must honor a retained snapshot's cutoff.
@@ -682,22 +817,52 @@ impl ContextService {
                 && (active.is_none()
                     || active_estimate > threshold
                     || active_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES));
-        if !should_create {
-            if active_estimate > budget.limits.input_budget_tokens {
-                return Err(ContextBudgetExceeded::tokens(
+        let mut source_end = 0;
+        if should_create {
+            let preserve = self.config.preserve_recent_messages.min(messages.len());
+            source_end = messages.len().saturating_sub(preserve);
+            if preserve > 0 {
+                while source_end > 0 && !messages[source_end].begins_user_turn() {
+                    source_end -= 1;
+                }
+            }
+            if force && source_end == 0 {
+                source_end = messages.len();
+            }
+            if !force {
+                source_end = source_end.min(protected_start);
+                if source_end == 0 && active_over_budget {
+                    source_end = protected_start;
+                }
+            }
+        }
+        if source_end == 0 {
+            let scope = if should_create && active.is_none() {
+                ContextBudgetScope::NewestTurn
+            } else {
+                ContextBudgetScope::PreparedRequest
+            };
+            let token_error = (active_estimate > budget.limits.input_budget_tokens).then(|| {
+                ContextBudgetExceeded::tokens(
                     active_estimate,
                     budget.limits.input_budget_tokens,
-                    ContextBudgetScope::PreparedRequest,
+                    scope,
                 )
-                .into());
-            }
-            if active_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
-                return Err(ContextBudgetExceeded::request_bytes(
+            });
+            let byte_error = (active_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES).then(|| {
+                ContextBudgetExceeded::request_bytes(
                     active_bytes,
                     MAX_PREPARED_MODEL_REQUEST_BYTES,
-                    ContextBudgetScope::PreparedRequest,
+                    scope,
                 )
-                .into());
+            });
+            let budget_error = if should_create {
+                byte_error.or(token_error)
+            } else {
+                token_error.or(byte_error)
+            };
+            if let Some(error) = budget_error {
+                return Err(error.into());
             }
             return Ok(PreparedContext {
                 context_binding_hash,
@@ -718,102 +883,57 @@ impl ContextService {
                 strategy: recovery_strategy.or_else(|| active.map(|snapshot| snapshot.strategy)),
             });
         }
-        let preserve = self.config.preserve_recent_messages.min(messages.len());
-        let mut source_end = messages.len().saturating_sub(preserve);
-        if preserve > 0 {
-            while source_end > 0 && !messages[source_end].begins_user_turn() {
-                source_end = source_end.saturating_sub(1);
-            }
-        }
-        if force && source_end == 0 {
-            source_end = messages.len();
-        }
-        if tool_evidence && let Some(last_result) = last_tool_evidence(&messages) {
-            let evidence_start = messages[..last_result]
-                .iter()
-                .rposition(ModelMessage::begins_user_turn)
-                .unwrap_or(0);
-            source_end = source_end.min(evidence_start);
-        }
-        if source_end == 0 {
-            if original_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
+        let snapshot_candidate = |source_end| -> Result<_, ContextBudgetExceeded> {
+            let preserved = bind_request(bindings.clone(), messages[source_end..].to_vec());
+            let preserved_bytes = model_request_bytes(&instructions, &preserved, &tools);
+            if preserved_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
                 return Err(ContextBudgetExceeded::request_bytes(
-                    original_bytes,
+                    preserved_bytes,
                     MAX_PREPARED_MODEL_REQUEST_BYTES,
-                    ContextBudgetScope::NewestTurn,
-                )
-                .into());
+                    ContextBudgetScope::PreservedMessages,
+                ));
             }
-            if original > budget.limits.input_budget_tokens {
+            let preserved_estimate =
+                estimate_tokens_for_model(&budget.model, &instructions, &preserved, &tools);
+            if preserved_estimate.saturating_add(64) > budget.limits.input_budget_tokens {
                 return Err(ContextBudgetExceeded::tokens(
-                    original,
+                    preserved_estimate.saturating_add(64),
                     budget.limits.input_budget_tokens,
-                    ContextBudgetScope::NewestTurn,
-                )
-                .into());
+                    ContextBudgetScope::SnapshotEnvelope,
+                ));
             }
-            return Ok(PreparedContext {
-                context_binding_hash,
-                continuation_id: None,
-                messages: original_messages,
-                token_estimate: original,
-                original_token_estimate: original,
-                model_profile: budget.model_profile.clone(),
-                context_window_tokens: budget.limits.context_window_tokens,
-                max_output_tokens: budget.limits.max_output_tokens,
-                safety_margin_tokens: budget.limits.safety_margin_tokens,
-                input_budget_tokens: budget.limits.input_budget_tokens,
-                threshold_tokens: threshold,
-                target_tokens: target,
-                snapshot_id: active.as_ref().map(|snapshot| snapshot.id.clone()),
-                compacted: false,
-                snapshot_created: false,
-                strategy: recovery_strategy,
-            });
-        }
-        let preserved = bind_request(bindings.clone(), messages[source_end..].to_vec());
-        let preserved_bytes = model_request_bytes(&instructions, &preserved, &tools);
-        if preserved_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
-            return Err(ContextBudgetExceeded::request_bytes(
-                preserved_bytes,
-                MAX_PREPARED_MODEL_REQUEST_BYTES,
-                ContextBudgetScope::PreservedMessages,
-            )
-            .into());
-        }
-        let preserved_estimate =
-            estimate_tokens_for_model(&budget.model, &instructions, &preserved, &tools);
-        if preserved_estimate.saturating_add(64) > budget.limits.input_budget_tokens {
-            return Err(ContextBudgetExceeded::tokens(
-                preserved_estimate.saturating_add(64),
-                budget.limits.input_budget_tokens,
-                ContextBudgetScope::SnapshotEnvelope,
-            )
-            .into());
-        }
-        let draft_snapshot = deterministic_snapshot(&session_id, &messages[..source_end]);
-        let mut minimum_snapshot = draft_snapshot.clone();
-        minimum_snapshot.summary = "...".into();
-        let minimum_prepared = bind_request(bindings.clone(), with_snapshot(&minimum_snapshot));
-        let minimum_bytes = model_request_bytes(&instructions, &minimum_prepared, &tools);
-        if minimum_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
-            return Err(ContextBudgetExceeded::request_bytes(
-                minimum_bytes,
-                MAX_PREPARED_MODEL_REQUEST_BYTES,
-                ContextBudgetScope::SnapshotEnvelope,
-            )
-            .into());
-        }
-        let minimum_estimate =
-            estimate_tokens_for_model(&budget.model, &instructions, &minimum_prepared, &tools);
-        if minimum_estimate > budget.limits.input_budget_tokens {
-            return Err(ContextBudgetExceeded::tokens(
-                minimum_estimate,
-                budget.limits.input_budget_tokens,
-                ContextBudgetScope::SnapshotEnvelope,
-            )
-            .into());
-        }
+            let snapshot = deterministic_snapshot(&session_id, &messages[..source_end]);
+            let mut minimum_snapshot = snapshot.clone();
+            minimum_snapshot.summary = "...".into();
+            let minimum_prepared = bind_request(bindings.clone(), with_snapshot(&minimum_snapshot));
+            let minimum_bytes = model_request_bytes(&instructions, &minimum_prepared, &tools);
+            if minimum_bytes > MAX_PREPARED_MODEL_REQUEST_BYTES {
+                return Err(ContextBudgetExceeded::request_bytes(
+                    minimum_bytes,
+                    MAX_PREPARED_MODEL_REQUEST_BYTES,
+                    ContextBudgetScope::SnapshotEnvelope,
+                ));
+            }
+            let minimum_estimate =
+                estimate_tokens_for_model(&budget.model, &instructions, &minimum_prepared, &tools);
+            if minimum_estimate > budget.limits.input_budget_tokens {
+                return Err(ContextBudgetExceeded::tokens(
+                    minimum_estimate,
+                    budget.limits.input_budget_tokens,
+                    ContextBudgetScope::SnapshotEnvelope,
+                ));
+            }
+            Ok(snapshot)
+        };
+        let draft_snapshot = match snapshot_candidate(source_end) {
+            Err(_) if !force && source_end < protected_start => {
+                // The preferred recent window did not leave enough hard-budget
+                // headroom. Compact only whole turns before the protected one.
+                source_end = protected_start;
+                snapshot_candidate(source_end)?
+            }
+            candidate => candidate?,
+        };
         let actor = context_actor(&context);
         let snapshot = if tool_evidence {
             // This projection is only for the recovery request. Keep the snapshot
@@ -874,6 +994,12 @@ impl ContextService {
             strategy,
         })
     }
+}
+
+fn context_binding_hash(bindings: &[ModelMessage]) -> Result<String, ContextError> {
+    let bytes = serde_json::to_vec(bindings)
+        .map_err(|_| ContextError::Configuration("unable to bind context messages".into()))?;
+    Ok(hex::encode(<sha2::Sha256 as sha2::Digest>::digest(bytes)))
 }
 
 fn unfinished_tool_exchange(messages: &[ModelMessage]) -> bool {

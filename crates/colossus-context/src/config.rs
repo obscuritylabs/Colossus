@@ -10,7 +10,8 @@ pub struct ContextConfig {
     pub compact_at_percent: u8,
     /// Integer percentage targeted after compaction.
     pub target_percent: u8,
-    /// Number of newest canonical messages never summarized automatically.
+    /// Preferred number of recent canonical messages kept during automatic compaction.
+    /// Hard request limits can require summarizing older complete turns in this window.
     pub preserve_recent_messages: usize,
     /// Prefer a policy-bound context-summarizer model before deterministic fallback.
     pub model_assisted: bool,

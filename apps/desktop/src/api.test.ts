@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import {
   addExternalTarget,
+  alwaysOnStatus,
   applyRepositoryConfiguration,
   applySpaceConfiguration,
   applyManagedModelConfiguration,
@@ -44,6 +45,7 @@ import {
   diagnoseManagedProvider,
   diagnoseManagedSearch,
   diagnoseManagedTelemetry,
+  enableAlwaysOn,
   getManagedExtensionInventory,
   getManagedConfiguration,
   getWorkspaceGitDiff,
@@ -59,6 +61,7 @@ import {
   listRuns,
   notifyBackground,
   openTerminal,
+  pauseAlwaysOn,
   resizeTerminal,
   reenterManagedCredential,
   rotateManagedCredential,
@@ -81,6 +84,7 @@ import {
   upsertGlobalSearchProvider,
   upsertGlobalTelemetryProfile,
   watchRun,
+  wakeAlwaysOn,
   writeTerminal,
 } from "./api";
 import type {
@@ -100,6 +104,61 @@ describe("desktop API target routing", () => {
     tauri.invoke.mockReset();
     tauri.invoke.mockResolvedValue(undefined);
     tauri.channels.length = 0;
+  });
+
+  it("keeps Always On writes bound to the reviewed target, epoch and revision", async () => {
+    const dto = {
+      session_id: "session-1",
+      enabled: true,
+      revision: 5,
+      next_wake_at: "2026-11-16T12:30:00Z",
+      pending: {
+        id: "wake-1",
+        requested_at: "2026-11-16T12:01:00Z",
+        trigger: "manual",
+      },
+      last_wake: {
+        id: "wake-0",
+        completed_at: "2026-11-16T12:00:00Z",
+        status: "outcome_unknown",
+      },
+    };
+    tauri.invoke.mockResolvedValueOnce({ selectionEpoch: 3, profile: dto });
+    await expect(alwaysOnStatus("space-1")).resolves.toEqual({
+      selectionEpoch: 3,
+      profile: dto,
+    });
+    expect(tauri.invoke).toHaveBeenLastCalledWith("desktop_always_on_status", {
+      targetId: "space-1",
+    });
+
+    tauri.invoke.mockResolvedValue(dto);
+    await enableAlwaysOn("space-1", 3, "session-1", 0);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("desktop_always_on_enable", {
+      targetId: "space-1",
+      selectionEpoch: 3,
+      sessionId: "session-1",
+      expectedRevision: 0,
+    });
+    await enableAlwaysOn("space-1", 3, "session-2", 5);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("desktop_always_on_enable", {
+      targetId: "space-1",
+      selectionEpoch: 3,
+      sessionId: "session-2",
+      expectedRevision: 5,
+    });
+    await pauseAlwaysOn("space-1", 3, 5);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("desktop_always_on_pause", {
+      targetId: "space-1",
+      selectionEpoch: 3,
+      expectedRevision: 5,
+    });
+    await wakeAlwaysOn("space-1", 3, 5);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("desktop_always_on_wake", {
+      targetId: "space-1",
+      selectionEpoch: 3,
+      expectedRevision: 5,
+    });
   });
 
   it("passes bounded notification content to the native notification command", async () => {

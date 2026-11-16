@@ -991,7 +991,7 @@ fn release_signs_windows_artifacts_for_stable_and_preview_tags() {
     let desktop_build = job(release_jobs, "desktop_macos_build");
     let desktop = job(release_jobs, "desktop_macos");
     let sdk = job(release_jobs, "sdk_release");
-    assert_eq!(field(sdk, "runs-on").as_str(), Some("ubuntu-latest-m"));
+    assert_eq!(field(sdk, "runs-on").as_str(), Some("ubuntu-24.04"));
     assert_eq!(field(sdk, "needs").as_str(), Some("validate"));
     assert_eq!(
         field(sdk, "if").as_str(),
@@ -1190,6 +1190,7 @@ fn sdk_publication_is_oidc_protected_recoverable_and_byte_exact() {
         Some("read")
     );
     let publish = job(publication_jobs, "publish");
+    assert_eq!(field(publish, "runs-on").as_str(), Some("ubuntu-24.04"));
     assert_eq!(
         field(publish, "environment").as_str(),
         Some("sdk-production")
@@ -1207,7 +1208,6 @@ fn sdk_publication_is_oidc_protected_recoverable_and_byte_exact() {
         "sdk_base_tag: ${{ steps.release.outputs.sdk_base_tag }}",
         "source_date_epoch: ${{ steps.release.outputs.source_date_epoch }}",
         "cargo xtask check sdk --base \"$SDK_BASE_TAG\"",
-        "runs-on: ubuntu-latest-m",
         "timeout-minutes: 45",
         "npm install --global npm@11.5.1",
         "--output dist/sdk-rebuilt",

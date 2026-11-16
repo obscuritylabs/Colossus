@@ -46,7 +46,7 @@ pub(super) async fn oversized_context_reaches_public_failure(runtime: Arc<Runtim
             if let RunUpdateKind::Notice { notice } = update.unwrap().kind
                 && notice.reason == expected_code
             {
-                assert!(!notice.message.contains("encountered an error"));
+                assert!(notice.message.contains("continue in this session"));
                 saw_notice = true;
             }
         }

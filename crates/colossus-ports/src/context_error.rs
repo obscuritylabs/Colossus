@@ -50,7 +50,7 @@ impl fmt::Display for ContextBudgetScope {
 /// Safe numeric evidence of a context-size failure; contains no model input.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[error(
-    "{scope} requires {required} {resource}, exceeding the {limit} {resource} input budget; shorten the message, reduce tool arguments or output, or start a new session"
+    "{scope} requires {required} {resource}, exceeding the {limit} {resource} input budget; shorten the message, reduce attachments or tool output, and continue in this session"
 )]
 pub struct ContextBudgetExceeded {
     /// Bound that was exceeded.

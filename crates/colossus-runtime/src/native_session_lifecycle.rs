@@ -8,8 +8,13 @@ pub(super) struct NativeSessionLifecycle {
     sessions: Arc<dyn SessionRepository>,
     work: Arc<dyn WorkRepository>,
     journal: Arc<dyn EventJournal>,
-    activities: Mutex<HashMap<String, Vec<String>>>,
+    activities: Mutex<HashMap<String, Activity>>,
     processes: Option<Arc<crate::ProcessSessions>>,
+}
+
+struct Activity {
+    sessions: Vec<String>,
+    is_run: bool,
 }
 
 impl NativeSessionLifecycle {
@@ -59,10 +64,10 @@ impl NativeSessionLifecycle {
                 sessions.push(job.session_id);
             }
         }
-        self.begin(run_id, sessions).map_err(store_tool_error)
+        self.begin(run_id, sessions, true).map_err(store_tool_error)
     }
 
-    fn begin(&self, id: &str, sessions: Vec<String>) -> Result<(), StoreError> {
+    fn begin(&self, id: &str, sessions: Vec<String>, is_run: bool) -> Result<(), StoreError> {
         let mut activities = self
             .activities
             .lock()
@@ -70,6 +75,15 @@ impl NativeSessionLifecycle {
         if activities.contains_key(id) {
             return Err(StoreError::Adapter(
                 "native session activity identity already active".into(),
+            ));
+        }
+        if is_run
+            && let Some(session_id) = sessions.first()
+            && primary_run_active(&activities, session_id)
+            && crate::always_on::is_enrolled_session(self.journal.as_ref(), session_id)?
+        {
+            return Err(StoreError::Adapter(
+                "the Always On conversation already has an active run".into(),
             ));
         }
         for session in &sessions {
@@ -83,8 +97,31 @@ impl NativeSessionLifecycle {
                 ));
             }
         }
-        activities.insert(id.into(), sessions);
+        activities.insert(id.into(), Activity { sessions, is_run });
         Ok(())
+    }
+
+    pub(super) fn has_live_primary_run(&self, session_id: &str) -> Result<bool, StoreError> {
+        let activities = self
+            .activities
+            .lock()
+            .map_err(|_| StoreError::Adapter("native session admission unavailable".into()))?;
+        Ok(primary_run_active(&activities, session_id))
+    }
+
+    /// Serialize a bounded synchronous wake claim with run admission and archival.
+    pub(super) fn with_always_on_admission<T>(
+        &self,
+        session_id: &str,
+        claim: impl FnOnce(bool) -> Result<T, crate::RuntimeError>,
+    ) -> Result<T, crate::RuntimeError> {
+        let activities = self
+            .activities
+            .lock()
+            .map_err(|_| StoreError::Adapter("native session admission unavailable".into()))?;
+        let result = claim(primary_run_active(&activities, session_id));
+        drop(activities);
+        result
     }
 
     pub(super) fn finish_run(&self, run_id: &str) {
@@ -97,7 +134,7 @@ impl NativeSessionLifecycle {
     /// Callers release explicitly after the operation returns, including normal errors.
     pub(super) fn begin_operation(&self, session_id: &str) -> Result<String, StoreError> {
         let id = format!("native-operation:{}", Uuid::now_v7());
-        self.begin(&id, vec![session_id.into()])?;
+        self.begin(&id, vec![session_id.into()], false)?;
         Ok(id)
     }
 
@@ -143,10 +180,16 @@ impl NativeSessionLifecycle {
             }
             if activities
                 .values()
-                .any(|sessions| sessions.iter().any(|id| id == session_id))
+                .any(|activity| activity.sessions.iter().any(|id| id == session_id))
             {
                 return Err(StoreError::Adapter(
                     "session has active or waiting work; stop it before archiving".into(),
+                ));
+            }
+            if crate::always_on::has_claimed_wake(self.journal.as_ref(), session_id)? {
+                return Err(StoreError::Adapter(
+                    "session has a claimed Always On wake; wait for its outcome before archiving"
+                        .into(),
                 ));
             }
             for status in [SubagentStatus::Queued, SubagentStatus::Running] {
@@ -234,6 +277,12 @@ impl NativeSessionLifecycle {
             "delegated process ownership exceeds archive ancestry bound".into(),
         ))
     }
+}
+
+fn primary_run_active(activities: &HashMap<String, Activity>, session_id: &str) -> bool {
+    activities.values().any(|activity| {
+        activity.is_run && activity.sessions.first().is_some_and(|id| id == session_id)
+    })
 }
 
 fn store_tool_error(error: StoreError) -> ToolError {

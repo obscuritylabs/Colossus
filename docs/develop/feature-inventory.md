@@ -22,6 +22,7 @@ the owning crates and tests.
 | Memory and lexical projection | `colossus-memory` | [Memories](../use/memories.md), [Context and memory configuration](../reference/configuration/context-memory-research.md) | Canonical lifecycle, Tantivy, fallback, and recovery tests |
 | Search and source-backed research | `colossus-search`, `colossus-research`, `colossus-runtime` | [Web search](../use/web-search.md), [Deep research](../use/deep-research.md) | Search adapter, evidence/citation, and CLI research tests |
 | Workflows and triggers | `colossus-workflow`, `colossus-runtime` | [Workflow authoring](../extend/workflows/authoring.md), [Triggers and recovery](../extend/workflows/triggers-recovery.md) | Parser, control-flow, idempotency, compensation, and restart tests |
+| Always On Agent | Runtime standing-chat journal, local authenticated worker, managed Desktop host | [Desktop schedules](../desktop/schedules.md), [CLI reference](../reference/cli.md) | Owner and revision checks, durable wake reconciliation, authenticated CLI worker smoke, and Desktop request mapping |
 | Agent Plugins, integrations, standalone MCP, and release bundles | extension crates and runtime adapters | [Extend Colossus](../extend/index.md) | Upstream schema, confinement, OCI, Sigstore, registry, lifecycle, and live-adapter tests |
 | Conditional documentation guidance | runtime configuration and instruction snapshots, bundled unabridged documentation reference | [Skills and plugins](../use/skills-plugins.md), [Plugin configuration](../reference/configuration/extensions.md) | Offline source-fidelity/completeness verification, documentation policy, instruction precedence, bounded multipart resource reads, and sidecar configuration tests |
 | Public API, worker, SDKs, and Desktop | API, gRPC, worker, SDK crates and `apps/desktop` | [Public API and SDKs](application-sdk.md), [Colossus Desktop](../desktop/index.md) | Protocol, enrollment, parity, sidecar, SDK, and Desktop tests |
@@ -66,7 +67,8 @@ Their pending native checks remain separate from implementation and historical t
 | Capability | Public API / SDK | CLI / TUI | Desktop | VS Code | Web |
 | --- | --- | --- | --- | --- | --- |
 | Standalone Goal creation | Supported; bounded iterations and caller tool ceiling | Supported; CLI and full-screen TUI `/goal` creation/completion acceptance in embedded and worker hosts | Supported; composer and native request validation evidence | Missing; composer exposes Plan, Execute, and Research | Supported on connected runtimes; capability and budget-bound composer |
-| Keyless Anthropic tool recovery | Existing ordinary Execute continuation on a keyless runtime | Existing CLI resume and TUI continuation on keyless runtimes | Managed release uses protected replay. Keyless attached workers use the shared recovery path | Existing managed or connected continuation inherits runtime recovery | Connected runtimes inherit recovery. Protected Hosted deployments use exact replay |
+| Always On check-ins in an owned local conversation | Standing-chat controls use authenticated local worker IPC. Desktop wake runs use the existing owned run API. | CLI enrollment, status, pause, and manual wake. TUI opens the same session using its ordinary session selector. | Managed Local conversation enrollment and wake controls. Workspace worker must be running. | No Always On control. | No Always On control. |
+| Anthropic tool replay recovery | Ordinary Execute can continue a verified oversized replay using saved tool evidence. The keyless missing-checkpoint path also remains available. | Existing CLI resume and TUI continuation use the same runtime recovery. | Managed Local inherits protected replay overflow recovery. | Existing Execute conversations inherit the runtime behavior. | Connected runtimes inherit the ordinary Execute recovery. |
 | Revision-bound Plan workflow | Supported; source-run-bound Draft continuation | Supported; revision-bound refinement, approval, and execution | Supported; exact-revision Plan continuation | Partial; canonical Plan inspection exists, continuation controls missing | Supported; source-run and revision-bound continuation |
 | Human managed-shell discovery, read, and Stop | Supported; scoped process-session requests | Unverified; dedicated human controls not evidenced by agent-tool tests | Supported; active-shell inspection and Stop | Missing; process-supervision controls unimplemented | Unverified; Fleet human terminals are a distinct workflow |
 | Conditional documentation guidance | Partial; explicit skill selection and bounded reads; policy configuration belongs to the host, without a public editor | Supported through YAML policy and existing `@` / `/plugin` selection | Supported; advanced Plugins controls and validated native overrides; feature-specific browser acceptance unverified | Partial; inherits host policy; guidance settings and skill selection controls absent | Partial; connected runtimes inherit policy; discovery-only plugin UI and no composer skill selections; Hosted-specific acceptance unverified |
@@ -79,12 +81,19 @@ Their pending native checks remain separate from implementation and historical t
 
 Evidence and owned follow-ups:
 
-- **Keyless Anthropic recovery:** Runtime restart coverage in
-  `crates/colossus-runtime/src/anthropic_recovery_tests.rs` exercises JSON and SSE,
-  saved results, tool-free recovery, and a later ordinary turn. Existing Execute
-  entry points share this behavior. Plan, Goal, workflow, and delegated runs keep
-  their exact replay requirements. The client owners and `test_owner` own rendered
-  and connected client acceptance for this behavior.
+- **Always On:** Runtime tests cover stable wake identity, schedule advancement,
+  owner checks, and pause. The CLI worker smoke covers manual wake and continuation
+  in one session. `desktop_owner` owns packaged Desktop acceptance. `cli_owner`
+  owns follow-up TUI controls. `maintenance_coordinator` owns any later evaluation
+  of extension or web enrollment and whether it requires a distinct authority.
+- **Anthropic replay recovery:** Runtime tests in
+  `crates/colossus-runtime/src/anthropic_recovery_tests.rs` cover keyless replay
+  recovery, protected restart, an oversized signed replay, and a saved exchange
+  whose canonical content also exceeds the budget. The requests preserve current
+  guidance, offer no tools during recovery, and allow ordinary tool access on a
+  later turn. Plan, Goal, workflow, and delegated runs keep their exact replay
+  requirements. Client owners and `test_owner` own rendered and connected client
+  acceptance for this behavior.
 - **Compose:** Hosted Chat is the web workflow. `deploy/compose/test-init.ps1`,
   `deploy/compose/smoke.cjs` and `.github/workflows/compose-smoke.yml` own
   initialization and smoke checks. Acceptance uses published `v0.11.11-preview.5`

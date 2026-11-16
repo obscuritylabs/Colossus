@@ -45,6 +45,8 @@ pub(super) enum Command {
     Tools(ToolsCommand),
     /// Create, inspect, and resume durable sessions.
     Sessions(SessionsCommand),
+    /// Enable, inspect, pause, or wake an Always On Agent in this workspace.
+    AlwaysOn(AlwaysOnAgentCommand),
     /// Refresh bounded actionable work for a session.
     Work {
         /// Exact session; defaults to the latest session.
@@ -142,6 +144,27 @@ pub(super) enum Command {
     /// Internal authenticated one-shot sandbox helper.
     #[command(name = "__sandbox-helper", hide = true)]
     SandboxHelper,
+}
+
+#[derive(Args)]
+pub(super) struct AlwaysOnAgentCommand {
+    #[command(subcommand)]
+    pub(super) command: AlwaysOnAction,
+}
+
+#[derive(Subcommand)]
+pub(super) enum AlwaysOnAction {
+    /// Enable recurring wakes for an existing session. Start the workspace worker first.
+    Enable {
+        /// Exact existing session ID from `colossus sessions list`.
+        session_id: String,
+    },
+    /// Show the current session, wake schedule, and most recent outcome.
+    Status,
+    /// Pause future wakes while retaining the agent's conversation.
+    Pause,
+    /// Request one wake for the enabled Always On Agent.
+    Wake,
 }
 
 #[derive(Args)]

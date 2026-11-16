@@ -20,10 +20,10 @@ See [Contributing](contributing.md) for the local development and review sequenc
 
 Every hosted job needs a timeout. Routine PR jobs use standard public Linux runners.
 Complete Linux integration, OCI/OPA acceptance, release readiness and x86_64 Linux
-release jobs use `ubuntu-24.04`. Windows Desktop acceptance, x86_64 CLI packaging and
-signed Desktop releases use `windows-2025`. Stable SDK builds and publication retain
-`ubuntu-latest-m`; manual unsigned Windows Desktop validation retains
-`windows-latest-l`. Those paths still require the corresponding paid runner allocation.
+release jobs use `ubuntu-24.04`. Stable SDK candidates and publisher rebuilds share
+that image because it provides the pinned Python 3.10.18 build. Windows Desktop
+acceptance, x86_64 CLI packaging and signed Desktop releases use `windows-2025`.
+Manual unsigned Windows Desktop validation requires the paid `windows-latest-l` runner.
 ARM64 and macOS jobs keep their native runners; short control, service-backed and
 bounded single-process fuzzing jobs retain their existing standard or slim runners.
 Provisioned runner names belong in `.github/actionlint.yaml`.
