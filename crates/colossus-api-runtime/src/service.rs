@@ -1131,16 +1131,9 @@ impl RuntimeAgentRunApi {
         {
             return Ok(false);
         }
-        let profile = self
-            .runtime
-            .always_on_profile(&caller.actor())
-            .map_err(|_| recovery_invariant(caller))?;
-        Ok(profile.is_some_and(|profile| {
-            request.session_id.as_deref() == Some(profile.session_id.as_str())
-                && profile
-                    .pending
-                    .is_some_and(|wake| wake.idempotency_key() == key)
-        }))
+        self.runtime
+            .matches_pending_always_on_wake(&caller.actor(), request.session_id.as_deref(), key)
+            .map_err(|_| recovery_invariant(caller))
     }
 
     fn current_recovered(

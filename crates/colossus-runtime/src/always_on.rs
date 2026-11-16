@@ -43,6 +43,26 @@ struct Record {
 }
 
 impl Runtime {
+    /// Test whether a stored application run is the current owned wake.
+    ///
+    /// Foreign owners receive no match. Callers use this only to distinguish
+    /// worker-created wakes from ordinary run idempotency keys.
+    pub fn matches_pending_always_on_wake(
+        &self,
+        owner: &Actor,
+        session_id: Option<&str>,
+        idempotency_key: &str,
+    ) -> Result<bool, RuntimeError> {
+        Ok(read_record(self.journal.as_ref())?.is_some_and(|record| {
+            &record.owner == owner
+                && session_id == Some(record.profile.session_id.as_str())
+                && record
+                    .profile
+                    .pending
+                    .is_some_and(|wake| wake.idempotency_key() == idempotency_key)
+        }))
+    }
+
     /// Read the owned profile from this workspace's canonical journal.
     ///
     /// The host must derive the owner from the verified transport, never request data.
