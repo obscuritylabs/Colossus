@@ -118,10 +118,18 @@ impl AuditExportService {
             )));
         }
         self.retry_gate()?;
+        let mut position = self.queue.position(AUDIT_EXPORT_CONSUMER)?;
         let work = self.queue.pending(AUDIT_EXPORT_CONSUMER, limit)?;
         let mut exported = 0_u64;
         let mut skipped = 0_u64;
         for item in &work {
+            let expected_sequence = position.saturating_add(1);
+            if item.global_sequence != expected_sequence {
+                return Err(StoreError::Verification(format!(
+                    "audit export expected sequence {expected_sequence}, got {}",
+                    item.global_sequence
+                )));
+            }
             let event = self
                 .journal
                 .read_global(item.global_sequence, 1)?
@@ -141,29 +149,30 @@ impl AuditExportService {
             }
             if event.actor.actor_type == ActorType::System && event.actor.id == AUDIT_EXPORT_ACTOR {
                 skipped = skipped.saturating_add(1);
-                continue;
+            } else {
+                if let Err(error) = exporter.export(&evidence(&event)).await {
+                    let (retryable, code) = export_retry_classification(&error);
+                    let diagnostic = bounded_error(&error);
+                    self.queue.record_failure(
+                        AUDIT_EXPORT_CONSUMER,
+                        Some(item),
+                        &now()?,
+                        retryable,
+                        code,
+                        &diagnostic,
+                    )?;
+                    return Err(error);
+                }
+                #[cfg(test)]
+                crash_at_test_fault("after_export_before_ack");
+                exported = exported.saturating_add(1);
             }
-            if let Err(error) = exporter.export(&evidence(&event)).await {
-                let (retryable, code) = export_retry_classification(&error);
-                let diagnostic = bounded_error(&error);
-                self.queue.record_failure(
-                    AUDIT_EXPORT_CONSUMER,
-                    Some(item),
-                    &now()?,
-                    retryable,
-                    code,
-                    &diagnostic,
-                )?;
-                return Err(error);
-            }
-            #[cfg(test)]
-            crash_at_test_fault("after_export_before_ack");
-            exported = exported.saturating_add(1);
+            // A later failure can only be recorded for the next unacknowledged item.
+            position = self
+                .queue
+                .acknowledge(AUDIT_EXPORT_CONSUMER, position, item)?;
         }
         if !work.is_empty() {
-            let position = self.queue.position(AUDIT_EXPORT_CONSUMER)?;
-            self.queue
-                .acknowledge_batch(AUDIT_EXPORT_CONSUMER, position, &work)?;
             self.queue.clear_failure(AUDIT_EXPORT_CONSUMER)?;
         }
         Ok(AuditExportReport {
