@@ -141,8 +141,10 @@ include breaking changes while the public API is still settling.
 - **release:** align stable 0.12.0 version metadata ([70ad16d](https://github.com/obscuritylabs/Colossus/commit/70ad16d6be5878a9b150d357b5c93ff717ecf6fc))
 - **release:** prepare the 0.12.0 changelog ([552c485](https://github.com/obscuritylabs/Colossus/commit/552c485fbf310860bf3cc36adc1d4c864d388687))
 - **release:** refresh stable 0.12.0 notes ([3c4af05](https://github.com/obscuritylabs/Colossus/commit/3c4af05e13d25a1dd92463f122a37b0db7074ee3))
+- **release:** refresh notes for CLI compatibility ([e8b6655](https://github.com/obscuritylabs/Colossus/commit/e8b6655de9a5d58e7492014d3c566ee8ff8f7610))
+- **release:** pin the SDK build and publisher to Ubuntu 24.04 ([40383af](https://github.com/obscuritylabs/Colossus/commit/40383af62d23341e90b51d17439ee11597a98772))
 
-**Source:** [330c060](https://github.com/obscuritylabs/Colossus/commit/330c06038aa198ec2983cf494dfcc22ddade4cdc)
+**Source:** [40383af](https://github.com/obscuritylabs/Colossus/commit/40383af62d23341e90b51d17439ee11597a98772)
 
 **Full changelog:** [v0.11.10...v0.12.0](https://github.com/obscuritylabs/Colossus/compare/v0.11.10...v0.12.0)
 
