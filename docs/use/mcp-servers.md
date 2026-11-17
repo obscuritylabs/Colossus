@@ -61,6 +61,8 @@ is an argument object that matches its schema. Inspect `/mcp tools SERVER` first
 or run `colossus mcp tools --server SERVER` from the shell. The shell also has
 `colossus mcp servers` for the configuration inventory.
 
+If discovery fails, [check the server's health from the shell](../extend/mcp.md#check-mcp-server-health).
+
 ## What's next?
 
 <div class="grid cards" markdown>

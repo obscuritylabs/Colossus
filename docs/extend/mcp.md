@@ -176,6 +176,27 @@ recent audit evidence identifies the exact server and tool without credential va
 The maintainer-only live Splunk smoke-test command is documented in
 [Source setup and test tiers](../develop/setup-testing.md).
 
+## Check MCP server health
+
+From the workspace, run a live health check for one configured server:
+
+```bash
+colossus --config .colossus/config.yaml mcp doctor local-docs
+```
+
+`mcp servers` lists the configuration without contacting the server. `mcp doctor`
+runs live discovery under the current policy using the configured credential bindings
+and trust settings. Tool invocation is a separate operation.
+
+A completed check prints a JSON report and can exit successfully even when discovery
+fails. Read `report.healthy` for the verdict and `report.failure` for the failure code
+and any released HTTP status. If a command or worker error prevents a report, address
+that error before drawing conclusions about the server.
+
+In Desktop, run the health check under **Workspace → MCP** for the active workspace.
+To compare the results, use the same effective server settings, credential bindings,
+CA trust, and runtime policy as the applied Desktop workspace configuration.
+
 ## Failure path
 
 - **Executable denied:** configure an exact absolute executable; under isolation also
