@@ -61,6 +61,11 @@ is an argument object that matches its schema. Inspect `/mcp tools SERVER` first
 or run `colossus mcp tools --server SERVER` from the shell. The shell also has
 `colossus mcp servers` for the configuration inventory.
 
+During a local Execute run, a configured Tasks server can keep an approved
+tool call active while remote work finishes. See
+[Follow a remote Tasks tool](../reference/configuration/mcp.md#follow-a-remote-tasks-tool)
+for configuration and cancellation behavior.
+
 ## What's next?
 
 <div class="grid cards" markdown>

@@ -30,7 +30,9 @@ mod diagnostics;
 mod executor;
 mod param_headers;
 mod remote;
+mod remote_tasks;
 mod schema;
+mod tasks;
 mod wire;
 pub use diagnostics::McpDiagnosticCapture;
 use executor::resolve_path;
@@ -41,6 +43,7 @@ use executor::{
     parse_tools_result, protocol_input, redact_value, remote_call_failure, remote_timeout_error,
     tools_page_contains_secret,
 };
+pub use tasks::{McpTaskCallError, recover_mcp_task_receipts, with_mcp_task_run};
 
 mod config;
 pub use config::*;

@@ -49,6 +49,16 @@ registry publication remains a hosted release operation.
 
 ## Interface coverage
 
+Remote MCP Tasks first targets ordinary Execute runs through the local CLI and
+TUI with file-backed redb. Existing tool activity shows the call as pending
+and delivers its released terminal outcome. The `colossus-mcp` and runtime owners
+maintain the authorized follow-up and restart receipts. The CLI owner tracks
+standalone `mcp call` support. The
+Desktop and VS Code owners track dedicated controls or acceptance for connected
+clients. The application SDK and web owners track hosted/Fleet placement under
+[#372](https://github.com/obscuritylabs/Colossus/issues/372). The first placement
+uses the existing run and tool result contracts.
+
 The [client owners and daily coordinator](agent-maintenance.md) maintain material
 coverage differences here. These records were reviewed against
 [`ad338c4f`](https://github.com/obscuritylabs/Colossus/commit/ad338c4f8a94eed27f5ab735a433612747e9b56f)

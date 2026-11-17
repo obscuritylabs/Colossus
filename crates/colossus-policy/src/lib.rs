@@ -44,6 +44,8 @@ use kernel::{
 mod gateway;
 pub use gateway::*;
 
+mod mcp_tasks;
+
 mod builtin;
 #[cfg(test)]
 use builtin::default_obligations;

@@ -416,8 +416,13 @@ from the active run snapshot and workspace overlay.
 | Local state | `session.set_title`, `context.compact`, `context.restore`, `presentation.preferences.update`, `presentation.history.append`, `task.create`, `task.update`, `decision.create`, `decision.update`, `decision.archive`, `decision.supersede`, `plan.create`, `plan.update`, `plan.discard`, `goal.create`, `goal.update`, `goal.iteration.record`, `subagent.create`, `subagent.start`, `subagent.complete`, `subagent.fail`, `subagent.cancel`, `subagent.interrupt`, `subagent.requeue`, `memory.create`, `memory.update`, `memory.archive`, `memory.supersede`, `memory.index.sync`, `memory.index.rebuild`, `workflow.webhook.ingest`, `workflow.subscription.dispatch`, `browser.tab.select`, `browser.tab.close`, `browser.stop`, `browser.close` |
 | Workspace mutation | `filesystem.write`, `patch.apply`, `patch.reverse`, `trace.export`, `audit.export.write` |
 | Execution | `process.spawn`, `shell.run`, `plugin.registry.credential_helper`, `workflow.execute`, `workflow.start`, `agent.run`, `plan.execute` |
-| External network | `network.http`, `web.search`, `research.run`, `integration.openapi.import`, `integration.connect`, `integration.disconnect`, `integration.invoke`, `mcp.invoke`, `mcp.call`, `browser.open`, `browser.tab.open`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.reload`, `browser.click`, `browser.fill`, `browser.select`, `browser.press`, `browser.scroll` |
+| External network | `network.http`, `web.search`, `research.run`, `integration.openapi.import`, `integration.connect`, `integration.disconnect`, `integration.invoke`, `mcp.invoke`, `mcp.call`, `mcp.tasks.get`, `mcp.tasks.cancel`, `browser.open`, `browser.tab.open`, `browser.navigate`, `browser.back`, `browser.forward`, `browser.reload`, `browser.click`, `browser.fill`, `browser.select`, `browser.press`, `browser.scroll` |
 | Administration | `plan.approve_request`, `audit.export.worm.write`, `plugin.install`, `plugin.enable`, `plugin.disable`, `plugin.workspace.accept`, `plugin.workspace.disable`, `plugin.update`, `plugin.uninstall`, `plugin.gc`, `plugin.package`, `plugin.pull`, `plugin.push`, `plugin.export`, `bundle.build`, `bundle.install` |
+
+The runtime uses `mcp.tasks.get` and `mcp.tasks.cancel` for authorized follow-up
+requests in the original run. See
+[Follow a remote Tasks tool](configuration/mcp.md#follow-a-remote-tasks-tool)
+for opt-in settings and policy requirements.
 
 ## Effect action classes
 

@@ -22,6 +22,7 @@ use std::{
     time::Duration,
 };
 
+#[cfg(test)]
 pub(super) async fn execute_remote_operation<C>(
     http: C,
     server: &ConfiguredServer,
@@ -32,20 +33,44 @@ pub(super) async fn execute_remote_operation<C>(
 where
     C: StreamableHttpClient + Send + Sync,
 {
+    execute_with_tasks(
+        http,
+        server,
+        operation,
+        headers,
+        call_dispatched,
+        None,
+        false,
+    )
+    .await
+}
+
+pub(super) async fn execute_with_tasks<C>(
+    http: C,
+    server: &ConfiguredServer,
+    operation: &McpOperation,
+    headers: HashMap<HeaderName, HeaderValue>,
+    call_dispatched: &AtomicBool,
+    direct: Option<&HardenedStreamableHttpClient>,
+    discover_tasks: bool,
+) -> Result<RemoteOperationResult, ExecutionError>
+where
+    C: StreamableHttpClient + Send + Sync,
+{
     let diagnostics = McpDiagnosticCapture::current();
     diagnostics.stage(McpDiagnosticStage::Initialize);
     let endpoint = server
         .url
         .clone()
         .ok_or_else(|| failed("MCP HTTP endpoint is absent"))?;
-    let mut config = StreamableHttpClientTransportConfig::with_uri(endpoint);
+    let mut config = StreamableHttpClientTransportConfig::with_uri(endpoint.clone());
     config.retry_config = Arc::new(NeverRetry::default());
     config.allow_stateless = server.allow_stateless;
     config.reinit_on_expired_session = false;
     config.max_concurrent_requests = 1;
     config.max_sse_event_size =
         usize::try_from(server.max_output_bytes.unwrap_or(1024 * 1024)).unwrap_or(1024 * 1024);
-    config.custom_headers = headers;
+    config.custom_headers = headers.clone();
     let transport = StreamableHttpClientTransport::with_client(http, config);
     let lifecycle = match server.protocol_version {
         McpProtocolVersion::Auto => ClientLifecycleMode::Auto {
@@ -84,6 +109,13 @@ where
                 "MCP server negotiated an unsupported protocol or omitted tools capability",
             ));
         }
+        let task_capable = info.protocol_version == ProtocolVersion::V_2026_07_28
+            && info.capabilities.supports_tasks();
+        if let Some(direct) = direct {
+            direct
+                .task_discovery_gate()
+                .store(task_capable && discover_tasks, Ordering::Release);
+        }
         if let McpOperation::CallTool {
             tool, arguments, ..
         } = operation
@@ -103,7 +135,35 @@ where
             let request = CallToolRequest::new(
                 CallToolRequestParams::new(tool.clone()).with_arguments(arguments),
             );
+            if direct.is_some() && crate::tasks::cancelled_before_dispatch() {
+                return Err(failed("MCP task call was cancelled before dispatch"));
+            }
             call_dispatched.store(true, Ordering::Release);
+            if task_capable && let Some(direct) = direct {
+                use crate::remote_tasks::{TaskCallResult, TaskRequestError};
+                return match crate::remote_tasks::call_tool(direct, &endpoint, headers, request)
+                    .await
+                {
+                    Ok(TaskCallResult::Complete(result)) => Ok(RemoteOperationResult::Call(result)),
+                    Ok(TaskCallResult::Started(started)) => {
+                        Ok(RemoteOperationResult::Task(started))
+                    }
+                    Ok(TaskCallResult::InputRequired) => Err(ExecutionError::OutcomeUnknown(
+                        "MCP task creation outcome is unknown".into(),
+                    )),
+                    Err(TaskRequestError::CallRpc(code)) => remote_call_failure(
+                        ServiceError::McpError(rmcp::model::ErrorData::new(
+                            rmcp::model::ErrorCode(code),
+                            "MCP server rejected the tool request",
+                            None,
+                        )),
+                        operation,
+                    ),
+                    Err(_) => Err(ExecutionError::OutcomeUnknown(
+                        "MCP task creation outcome is unknown".into(),
+                    )),
+                };
+            }
             return match service
                 .send_request(ClientRequest::CallToolRequest(request))
                 .await
