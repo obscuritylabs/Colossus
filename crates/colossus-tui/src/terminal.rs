@@ -1,4 +1,5 @@
 use super::*;
+use crate::companion::CompanionView;
 
 fn render_terminal_frame(
     frame: &mut Frame<'_>,
@@ -6,8 +7,9 @@ fn render_terminal_frame(
     transcript_start: usize,
     mode: ScreenMode,
     monochrome: bool,
+    companion: Option<CompanionView<'_>>,
 ) {
-    render(frame, state, transcript_start, mode);
+    render_with_companion(frame, state, transcript_start, mode, companion);
     if monochrome {
         // Crossterm's disabled-color SetColors emits an empty SGR sequence,
         // which also resets reverse/bold attributes. Avoid color commands so
@@ -69,7 +71,11 @@ impl OwnedTerminal {
         })
     }
 
-    pub(super) fn draw(&mut self, state: &mut TuiState) -> Result<(), io::Error> {
+    pub(super) fn draw(
+        &mut self,
+        state: &mut TuiState,
+        companion: Option<CompanionView<'_>>,
+    ) -> Result<(), io::Error> {
         if let Some(text) = state.text_selection.take_copy() {
             use base64::Engine as _;
             let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
@@ -79,18 +85,23 @@ impl OwnedTerminal {
         if state.selecting_text && self.selection_frame_frozen {
             return Ok(());
         }
-        self.draw_current_frame(state)?;
+        self.draw_current_frame(state, companion)?;
         self._guard.select_text(state.selecting_text)?;
         self.selection_frame_frozen = state.selecting_text;
         Ok(())
     }
 
-    fn draw_current_frame(&mut self, state: &mut TuiState) -> Result<(), io::Error> {
+    fn draw_current_frame(
+        &mut self,
+        state: &mut TuiState,
+        companion: Option<CompanionView<'_>>,
+    ) -> Result<(), io::Error> {
         if self.mode == ScreenMode::Alternate || state.text_selection.active() {
             // Keep the captured viewport and native history fixed while still
             // redrawing selection highlights and servicing clipboard requests.
-            self.terminal
-                .draw(|frame| render_terminal_frame(frame, state, 0, self.mode, self.monochrome))?;
+            self.terminal.draw(|frame| {
+                render_terminal_frame(frame, state, 0, self.mode, self.monochrome, companion)
+            })?;
             return Ok(());
         }
 
@@ -126,6 +137,7 @@ impl OwnedTerminal {
                 transcript_start,
                 ScreenMode::Inline,
                 self.monochrome,
+                None,
             )
         })?;
         Ok(())
@@ -169,7 +181,14 @@ impl OwnedTerminal {
         }
         state.transcript_width = usize::from(screen_size.width).max(20);
         self.terminal.draw(|frame| {
-            render_terminal_frame(frame, state, 0, ScreenMode::Alternate, self.monochrome)
+            render_terminal_frame(
+                frame,
+                state,
+                0,
+                ScreenMode::Alternate,
+                self.monochrome,
+                None,
+            )
         })?;
         Ok(())
     }

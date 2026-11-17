@@ -1,15 +1,27 @@
 use super::*;
+use crate::companion::CompanionView;
 
 const OBSCURITY_LABS_RED: Color = Color::Rgb(213, 16, 48);
 const OBSCURITY_LABS_SEGMENT: &str = "OL //  ";
 const WIDE_WELCOME_MIN_WIDTH: usize = 96;
 const WIDE_WELCOME_MIN_HEIGHT: usize = 22;
 
+#[cfg(test)]
 pub(super) fn render(
     frame: &mut Frame<'_>,
     state: &mut TuiState,
     transcript_start: usize,
     screen_mode: ScreenMode,
+) {
+    render_with_companion(frame, state, transcript_start, screen_mode, None);
+}
+
+pub(super) fn render_with_companion(
+    frame: &mut Frame<'_>,
+    state: &mut TuiState,
+    transcript_start: usize,
+    screen_mode: ScreenMode,
+    companion: Option<CompanionView<'_>>,
 ) {
     let now = Instant::now();
     let area = frame.area();
@@ -20,6 +32,7 @@ pub(super) fn render(
         state.agents.area = None;
         state.workspace_hits.clear();
         state.tool_hits.clear();
+        state.companion_area = None;
         state.text_selection.regions.clear();
         animation.render(frame.buffer_mut(), area, &state.preferences, now);
         return;
@@ -40,7 +53,7 @@ pub(super) fn render(
         return;
     }
     state.text_selection.regions.clear();
-    render_content(frame, state, transcript_start, screen_mode);
+    render_content(frame, state, transcript_start, screen_mode, companion);
     state.text_selection.remember(frame.buffer_mut());
 }
 
@@ -83,11 +96,13 @@ fn render_content(
     state: &mut TuiState,
     transcript_start: usize,
     screen_mode: ScreenMode,
+    companion: Option<CompanionView<'_>>,
 ) {
     let area = frame.area();
     state.agents.area = None;
     state.workspace_hits.clear();
     state.tool_hits.clear();
+    state.companion_area = None;
     if state.workspace_center {
         crate::workspace_view::render_center(frame, state, area);
         return;
@@ -156,7 +171,13 @@ fn render_content(
     ])
     .split(chrome[1]);
     let content_area = columns[0];
-    if columns[1].width > 0 && columns[1].height >= 4 {
+    if let Some(companion) = companion
+        .filter(|_| screen_mode == ScreenMode::Alternate && CompanionView::fits(columns[1]))
+    {
+        state.companion_area = Some(columns[1]);
+        state.text_selection.regions.push(columns[1]);
+        companion.render(frame, columns[1]);
+    } else if columns[1].width > 0 && columns[1].height >= 4 {
         state.agents.area = Some(columns[1]);
         state.text_selection.regions.push(Rect::new(
             columns[1].x + 1,
@@ -331,6 +352,7 @@ pub(super) fn render_transcript(
             transcript_start.min(state.transcript.len()),
             state.transcript.len(),
             !lines.is_empty(),
+            Some(state.preview_transcript_size),
         );
     let visible = usize::from(transcript_area.height);
 
@@ -701,7 +723,23 @@ pub(super) fn transcript_lines_range<'a>(
     end: usize,
     leading_separator: bool,
 ) -> Vec<Line<'a>> {
-    transcript_lines_range_with_images(state, width, start, end, leading_separator).0
+    transcript_lines_range_with_images(
+        state,
+        width,
+        start,
+        end,
+        leading_separator,
+        Some(state.preview_transcript_size),
+    )
+    .0
+}
+
+pub(super) fn companion_transcript_lines(
+    state: &TuiState,
+    width: usize,
+    start: usize,
+) -> Vec<Line<'_>> {
+    transcript_lines_range_with_images(state, width, start, state.transcript.len(), false, None).0
 }
 
 struct TranscriptImagePlacement {
@@ -716,6 +754,7 @@ fn transcript_lines_range_with_images<'a>(
     start: usize,
     end: usize,
     leading_separator: bool,
+    image_preview_size: Option<Size>,
 ) -> (
     Vec<Line<'a>>,
     Vec<TranscriptImagePlacement>,
@@ -815,7 +854,13 @@ fn transcript_lines_range_with_images<'a>(
         let (rendered, images) = if state.security_posture_entry == Some(entry_index) {
             (security_posture_lines(state, content_width), Vec::new())
         } else {
-            transcript_document_lines(state, &entry.document, content_width, inspectable)
+            transcript_document_lines(
+                state,
+                &entry.document,
+                content_width,
+                inspectable,
+                image_preview_size,
+            )
         };
         let rendered_start = lines.len();
         image_placements.extend(images.into_iter().map(|(line, digest)| {
@@ -841,6 +886,7 @@ fn transcript_document_lines(
     document: &PresentationDocument,
     width: usize,
     inline_tool: bool,
+    image_preview_size: Option<Size>,
 ) -> (Vec<Line<'static>>, Vec<(usize, String)>) {
     let mut preferences = state.preferences.clone();
     if inline_tool && preferences.events_mode == colossus_contracts::EventDisplayMode::Verbose {
@@ -852,10 +898,9 @@ fn transcript_document_lines(
     let mut lines = Vec::new();
     let mut images = Vec::new();
     for block in &document.blocks {
-        if let PresentationBlock::Image(image) = block
-            && let Some(preview) = state
-                .preview_cache
-                .lines(&image.sha256, state.preview_transcript_size)
+        if let Some(size) = image_preview_size
+            && let PresentationBlock::Image(image) = block
+            && let Some(preview) = state.preview_cache.lines(&image.sha256, size)
         {
             images.push((lines.len(), image.sha256.clone()));
             lines.extend(preview.iter().cloned());

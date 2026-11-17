@@ -43,6 +43,20 @@ conversation, and a decision indicator calls attention to a session needing inpu
 In the Sessions browser, `s` stops the highlighted running or waiting session while the others
 continue.
 
+### Follow another open session
+
+In the full-screen TUI, press F2, highlight another session on **Open**, and press
+`p` to pin its read-only transcript. The right sidebar shows the pinned session's
+identity, status, and most recent output as it arrives. The active conversation
+keeps its draft, reading position, and controls. To respond to a decision in the
+pinned session, open that session with Enter in the Sessions browser.
+
+To unpin, highlight the pinned session on **Open** and press `p` again. Opening
+or archiving the pinned session also removes the pane. Compact terminals hide the
+pane and restore it when space returns. The pin lasts for the current terminal
+process and is available in both embedded and worker-backed full-screen TUI
+sessions.
+
 The terminal retains up to eight open sessions and lists up to 100 saved sessions
 in its catalogue. Working and decision indicators describe retained sessions in
 this terminal. Other saved conversations show **ready**; that label does not report

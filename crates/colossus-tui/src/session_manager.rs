@@ -38,6 +38,7 @@ pub(super) struct ManagerEntry {
     pub(super) open: bool,
     pub(super) detail: String,
     pub(super) archive_allowed: bool,
+    pub(super) companion_allowed: bool,
 }
 
 #[derive(Default)]
@@ -60,9 +61,26 @@ pub(super) struct SessionManagerState {
     pub(super) selected: Option<String>,
     pub(super) preview: ManagerPreview,
     pub(super) preview_area: Option<Rect>,
+    pub(super) companion_id: Option<String>,
 }
 
 impl SessionManagerState {
+    fn companion_action(&self) -> Option<(&'static str, WorkspaceAction)> {
+        if self.tab != SessionTab::Open {
+            return None;
+        }
+        let entry = self.selected_entry()?;
+        let id = &entry.summary.id;
+        let label = if self.companion_id.as_ref() == Some(id) {
+            "[p] Unpin"
+        } else if entry.companion_allowed {
+            "[p] Pin"
+        } else {
+            return None;
+        };
+        Some((label, WorkspaceAction::ToggleCompanion(id.clone())))
+    }
+
     pub(super) fn filtered(&self) -> Vec<usize> {
         let query = self.query.trim().to_lowercase();
         self.entries
@@ -161,6 +179,7 @@ fn ensure_entries(state: &mut TuiState) {
                 row.status,
                 WorkspaceSessionStatus::Running | WorkspaceSessionStatus::Waiting
             ),
+            companion_allowed: false,
         })
         .collect();
     state.workspace_manager.select(
@@ -247,6 +266,11 @@ pub(super) fn handle_key(state: &mut TuiState, key: KeyEvent) -> bool {
         }
         KeyCode::Char('r') if key.modifiers.is_empty() => {
             state.workspace_action = Some(WorkspaceAction::Browse)
+        }
+        KeyCode::Char('p') if key.modifiers.is_empty() => {
+            if let Some((_, action)) = manager.companion_action() {
+                state.workspace_action = Some(action);
+            }
         }
         KeyCode::Char('s') if key.modifiers.is_empty() => {
             if let Some(entry) = manager.selected_entry()

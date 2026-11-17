@@ -150,8 +150,10 @@ fn schedule(workspace: &mut Workspace, host: Arc<dyn InteractiveHost>) {
 
 #[tokio::test]
 async fn delayed_model_prediction_routes_to_its_retained_session() {
-    let (mut workspace, mut events) =
-        Workspace::new(TuiState::from_snapshot(model_snapshot("alpha")));
+    let (mut workspace, mut events) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(model_snapshot("alpha")),
+    );
     workspace.next_prompt.completed(&completed("alpha"));
     let alpha_sender = workspace.sender();
     open_snapshot(&mut workspace, "beta");
@@ -185,8 +187,10 @@ async fn canonical_opt_out_coalesces_stale_reads_and_aborts_other_session_predic
         reads: read_tx,
         predictions: prediction_tx,
     });
-    let (mut workspace, mut events) =
-        Workspace::new(TuiState::from_snapshot(model_snapshot("alpha")));
+    let (mut workspace, mut events) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(model_snapshot("alpha")),
+    );
     workspace.next_prompt.completed(&completed("alpha"));
     schedule(&mut workspace, Arc::clone(&host));
     let pending_prediction = tokio::time::timeout(Duration::from_secs(1), predictions.recv())
@@ -318,8 +322,10 @@ async fn failed_canonical_refresh_keeps_model_paused_and_local_hint_available() 
         reads: read_tx,
         predictions: prediction_tx,
     });
-    let (mut workspace, mut events) =
-        Workspace::new(TuiState::from_snapshot(model_snapshot("alpha")));
+    let (mut workspace, mut events) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(model_snapshot("alpha")),
+    );
     workspace.next_prompt.completed(&completed("alpha"));
     workspace.receive(
         preference_completion("alpha", workspace.preferences.clone()),

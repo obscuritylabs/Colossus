@@ -130,6 +130,7 @@ impl Workspace {
                     },
                 );
                 ManagerEntry {
+                    companion_allowed: tab == SessionTab::Open && self.can_pin(&summary.id),
                     summary,
                     status,
                     open: state.is_some(),
@@ -139,6 +140,10 @@ impl Workspace {
             })
             .collect();
         self.active.workspace_manager.entries = entries;
+        self.active
+            .workspace_manager
+            .companion_id
+            .clone_from(&self.companion_id);
         self.active.workspace_manager.reconcile();
         let id = self.active.workspace_manager.selected.clone();
         if let Some(messages) = id

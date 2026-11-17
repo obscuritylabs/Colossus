@@ -42,6 +42,7 @@ pub(super) enum WorkspaceAction {
     History,
     Tab(crate::session_manager::SessionTab),
     Select(String),
+    ToggleCompanion(String),
     Archive(String, bool),
     CloseCenter,
     Stop(String),
