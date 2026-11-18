@@ -66,6 +66,7 @@ Their pending native checks remain separate from implementation and historical t
 
 | Capability | Public API / SDK | CLI / TUI | Desktop | VS Code | Web |
 | --- | --- | --- | --- | --- | --- |
+| Progressive Desktop thread history | Existing authenticated run discovery and bounded pages; full run reads retain their contract | Existing session browsers and history commands retain their workflows | Supported: older pages load while scrolling, thin summaries survive beyond the former 200-entry cutoff, and a virtual list bounds rendered rows; reopening an evicted native binding revalidates its source | Existing extension history workflow; no host change | Existing web history workflow; no host change |
 | Standalone Goal creation | Supported; bounded iterations and caller tool ceiling | Supported; CLI and full-screen TUI `/goal` creation/completion acceptance in embedded and worker hosts | Supported; composer and native request validation evidence | Missing; composer exposes Plan, Execute, and Research | Supported on connected runtimes; capability and budget-bound composer |
 | Always On check-ins in an owned local conversation | Standing-chat controls use authenticated local worker IPC. Desktop wake runs use the existing owned run API. | CLI enrollment, status, pause, and manual wake. TUI opens the same session using its ordinary session selector. | Managed Local conversation enrollment and wake controls. Workspace worker must be running. | No Always On control. | No Always On control. |
 | Anthropic tool replay recovery | Ordinary Execute can continue a verified oversized replay using saved tool evidence. The keyless missing-checkpoint path also remains available. | Existing CLI resume and TUI continuation use the same runtime recovery. | Managed Local inherits protected replay overflow recovery. | Existing Execute conversations inherit the runtime behavior. | Connected runtimes inherit the ordinary Execute recovery. |
@@ -81,6 +82,18 @@ Their pending native checks remain separate from implementation and historical t
 
 Evidence and owned follow-ups:
 
+- **Desktop thread history:** The [Desktop guide](../desktop/work.md#return-to-a-conversation)
+  describes progressive paging and retry. Native adapter tests in
+  `apps/desktop/src-tauri/src/conversation_runs/revalidation_tests.rs` cover bounded
+  source recovery and thin history output. Renderer regressions cover paging,
+  metadata retention, and routing; `apps/desktop/tests/browser/thread-history.spec.ts`
+  exercises long histories and a bounded rendered window. `desktop_owner` and
+  `test_owner` own native packaged acceptance. Renderer fixtures and native adapter
+  tests establish their stated contracts; installed application startup remains a
+  separate platform check.
+  `desktop_owner` and the public API owner retain the follow-up for deep persisted
+  search and archived results without a reusable discovery receipt; released
+  history can remain read-only when bounded ownership checks are inconclusive.
 - **Always On:** Runtime tests cover stable wake identity, schedule advancement,
   owner checks, and pause. The CLI worker smoke covers manual wake and continuation
   in one session. `desktop_owner` owns packaged Desktop acceptance. `cli_owner`

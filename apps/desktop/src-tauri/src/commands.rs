@@ -12,6 +12,7 @@ use tauri_plugin_dialog::DialogExt as _;
 mod image_preview_timing;
 
 use crate::{
+    conversation_runs::ConversationSource,
     desktop_settings::{AsideSetting, SettingsStore},
     dto::{
         ArtifactContentDto, ArtifactReferenceDto, AsideDto, CancelRunInput, CommandErrorDto,
@@ -339,6 +340,10 @@ pub(crate) async fn create_run(
         .create_run(request)
         .await
         .map_err(CommandErrorDto::from_api)?;
+    target
+        .target
+        .remember_primary_conversation(&response.run)
+        .map_err(CommandErrorDto::from_api)?;
     state
         .bind_runs(&target, vec![response.run.run_id.clone()])
         .await;
@@ -359,20 +364,25 @@ pub(crate) async fn get_run(
     target_id: String,
     request: GetRunInput,
 ) -> Result<GetRunDto, CommandErrorDto> {
+    let proofs = crate::conversation_runs::ConversationProofs {
+        discovery: request.discovery_proof.clone(),
+        continuation: request.continuation_proof.clone(),
+    };
     let request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
     let _unary_slot = unary_slot(&target.target)?;
-    let cloud = target.target.is_cloud_conversation(&request.run_id);
-    let reader = target
+    ensure_run_target(&state, &target, &request.run_id).await?;
+    let verified = target
         .target
-        .conversation_reader(&request.run_id)
-        .map_err(CommandErrorDto::from_api)?;
-    let mut response = reader
-        .get_run(request)
+        .get_conversation_with_proofs(request, proofs)
         .await
         .map_err(CommandErrorDto::from_api)?;
-    let initial_prompt = if cloud {
-        crate::conversation_runs::initial_prompt(reader.as_ref(), &response.run).await
+    let read_only = !verified.source.can_control();
+    let source = verified.source;
+    let continuable = verified.continuable;
+    let mut response = verified.response;
+    let initial_prompt = if read_only {
+        crate::conversation_runs::initial_prompt(verified.reader.as_ref(), &response.run).await
     } else {
         None
     };
@@ -380,16 +390,17 @@ pub(crate) async fn get_run(
         .bind_runs(&target, vec![response.run.run_id.clone()])
         .await;
     for interaction in &mut response.pending_interactions {
-        if cloud {
+        if read_only {
             interaction.respondable_by_caller = false;
         }
-        if let Some(resolved) = crate::remembered_approvals::apply_saved(
-            &state,
-            &target.target,
-            &target_id,
-            interaction,
-        )
-        .await
+        if !read_only
+            && let Some(resolved) = crate::remembered_approvals::apply_saved(
+                &state,
+                &target.target,
+                &target_id,
+                interaction,
+            )
+            .await
         {
             *interaction = resolved;
         }
@@ -397,7 +408,8 @@ pub(crate) async fn get_run(
     response
         .pending_interactions
         .retain(|interaction| interaction.status == colossus_sdk::InteractionStatus::Pending);
-    let run = conversation_dto(&target.target, response.run);
+    let mut run = conversation_dto(response.run, source, continuable);
+    run.discovery_proof = verified.discovery_proof;
     index_released_runs(&target_id, std::slice::from_ref(&run));
     Ok(GetRunDto {
         initial_prompt,
@@ -416,12 +428,13 @@ pub(crate) async fn list_runs(
     target_id: String,
     request: ListRunsInput,
 ) -> Result<ListRunsDto, CommandErrorDto> {
+    let history_replacement = request.history_replacement;
     let request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
     let _unary_slot = unary_slot(&target.target)?;
     let response = target
         .target
-        .list_conversations(request)
+        .list_conversations(request, history_replacement)
         .await
         .map_err(CommandErrorDto::from_api)?;
     state
@@ -434,7 +447,15 @@ pub(crate) async fn list_runs(
     let runs = response
         .runs
         .into_iter()
-        .map(|run| conversation_dto(&target.target, run))
+        .map(|run| {
+            let source = response.sources[&run.run_id];
+            let continuable =
+                source.can_control() || target.target.can_continue_conversation(&run.session_id);
+            let proof = response.proofs.get(&run.run_id).cloned();
+            let mut run = conversation_dto(run, source, continuable);
+            run.discovery_proof = proof;
+            run
+        })
         .filter(|run: &RunDto| !aside_sessions.contains(&run.session_id))
         .collect::<Vec<_>>();
     index_released_runs(&target_id, &runs);
@@ -450,12 +471,20 @@ pub(crate) async fn list_session_activity(
     target_id: String,
     request: ListSessionActivityInput,
 ) -> Result<ListSessionActivityDto, CommandErrorDto> {
+    let discovery_proof = request.discovery_proof.clone();
     let request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
     let _unary_slot = unary_slot(&target.target)?;
+    let source = require_run_binding_with_proof(
+        &state,
+        &target,
+        &request.source_run_id,
+        discovery_proof.clone(),
+    )
+    .await?;
     let reader = target
         .target
-        .conversation_reader(&request.source_run_id)
+        .conversation_reader(source)
         .map_err(CommandErrorDto::from_api)?;
     let response = reader
         .list_session_activity(request)
@@ -495,23 +524,23 @@ pub(crate) async fn list_asides(
     let _unary_slot = unary_slot(&target.target)?;
     let mut asides = Vec::with_capacity(records.len());
     for record in records {
-        let response = target
+        ensure_run_target(&state, &target, &record.latest_run_id).await?;
+        let verified = target
             .target
-            .client
-            .get_run(GetRunRequest {
+            .get_conversation(GetRunRequest {
                 run_id: record.latest_run_id,
             })
             .await
             .map_err(CommandErrorDto::from_api)?;
         state
-            .bind_runs(&target, vec![response.run.run_id.clone()])
+            .bind_runs(&target, vec![verified.response.run.run_id.clone()])
             .await;
         asides.push(AsideDto {
             parent_session_id: record.parent_session_id,
             source_run_id: record.source_run_id,
             created_at: record.created_at,
             closed: record.closed,
-            run: response.run.into(),
+            run: conversation_dto(verified.response.run, verified.source, verified.continuable),
         });
     }
     asides.sort_by(|left, right| right.created_at.cmp(&left.created_at));
@@ -609,22 +638,24 @@ fn register_or_advance_aside(
     Ok(true)
 }
 
-fn require_desktop_control(target: &TargetHandle, run_id: &str) -> Result<(), CommandErrorDto> {
-    if target.is_cloud_conversation(run_id) {
+fn require_desktop_control(source: ConversationSource) -> Result<(), CommandErrorDto> {
+    if !source.can_control() {
         return Err(CommandErrorDto::local_sanitized(
             "permission_denied",
-            "Control Plane runs are read-only in Desktop. Use the Control Plane to stop or answer this run.",
+            "Desktop could not verify ownership of this run. Reopen it to refresh access, or use its owning application to control it.",
             false,
         ));
     }
     Ok(())
 }
 
-fn conversation_dto(target: &TargetHandle, run: colossus_sdk::Run) -> RunDto {
-    let cloud = target.is_cloud_conversation(&run.run_id);
-    let continuable = !cloud || target.can_continue_conversation(&run.session_id);
+fn conversation_dto(
+    run: colossus_sdk::Run,
+    source: ConversationSource,
+    continuable: bool,
+) -> RunDto {
     let mut dto: RunDto = run.into();
-    dto.controllable = !cloud;
+    dto.controllable = source.can_control();
     dto.continuable = continuable;
     dto
 }
@@ -646,17 +677,21 @@ pub(crate) async fn watch_run(
     request: WatchRunInput,
     on_event: Channel<WatchEventDto>,
 ) -> Result<(), CommandErrorDto> {
+    let discovery_proof = request.discovery_proof.clone();
     let request = request.into_sdk()?;
     let run_id = request.run_id.clone();
     let target = target(&state, &target_id).await?;
-    require_run_binding(&state, &target, &run_id).await?;
+    let source = {
+        let _unary_slot = unary_slot(&target.target)?;
+        require_run_binding_with_proof(&state, &target, &run_id, discovery_proof.clone()).await?
+    };
     let _watch_slot = target.target.try_watch_slot().ok_or_else(|| {
         CommandErrorDto::busy("The desktop watch limit is active. Close another run and retry.")
     })?;
     let epoch = target.epoch();
     let mut selection = state.subscribe_selection();
-    let cloud = target.target.is_cloud_conversation(&run_id);
-    let mut updates = if cloud {
+    let read_only = !source.can_control();
+    let mut updates = if source.uses_connector() {
         target.target.client.watch_connector_run(request).await
     } else {
         target.target.client.watch_run(request).await
@@ -685,10 +720,10 @@ pub(crate) async fn watch_run(
                 }
                 match item {
                     Some(Ok(mut update)) => {
-                        if cloud && let colossus_sdk::RunUpdateKind::Interaction(interaction) = &mut update.update {
+                        if read_only && let colossus_sdk::RunUpdateKind::Interaction(interaction) = &mut update.update {
                             interaction.respondable_by_caller = false;
                         }
-                        if !cloud && let colossus_sdk::RunUpdateKind::Interaction(interaction) = &mut update.update
+                        if !read_only && let colossus_sdk::RunUpdateKind::Interaction(interaction) = &mut update.update
                             && let Ok(selected) = crate::commands::target(&state, &target_id).await
                             && selected.epoch() == epoch
                             && let Some(resolved) = crate::remembered_approvals::apply_saved(
@@ -727,17 +762,23 @@ pub(crate) async fn cancel_run(
     target_id: String,
     request: CancelRunInput,
 ) -> Result<RunDto, CommandErrorDto> {
+    let discovery_proof = request.discovery_proof.clone();
     let request = request.into_sdk()?;
     let run_id = request.run_id.clone();
     let target = target(&state, &target_id).await?;
-    require_run_binding(&state, &target, &run_id).await?;
-    require_desktop_control(&target.target, &request.run_id)?;
     let _unary_slot = unary_slot(&target.target)?;
+    let source =
+        require_run_binding_with_proof(&state, &target, &run_id, discovery_proof.clone()).await?;
+    require_desktop_control(source)?;
     let response = target
         .target
         .client
         .cancel_run(request)
         .await
+        .map_err(CommandErrorDto::from_api)?;
+    target
+        .target
+        .remember_primary_conversation(&response.run)
         .map_err(CommandErrorDto::from_api)?;
     state
         .bind_runs(&target, vec![response.run.run_id.clone()])
@@ -751,10 +792,14 @@ pub(crate) async fn archive_thread(
     target_id: String,
     request: ThreadLifecycleInput,
 ) -> Result<ThreadLifecycleDto, CommandErrorDto> {
+    let discovery_proof = request.discovery_proof.clone();
     let request = request.into_archive_sdk()?;
     let target = target(&state, &target_id).await?;
-    require_desktop_control(&target.target, &request.run_id)?;
     let _unary_slot = unary_slot(&target.target)?;
+    let source =
+        require_run_binding_with_proof(&state, &target, &request.run_id, discovery_proof.clone())
+            .await?;
+    require_desktop_control(source)?;
     let lifecycle = target
         .target
         .client
@@ -775,10 +820,14 @@ pub(crate) async fn restore_thread(
     target_id: String,
     request: ThreadLifecycleInput,
 ) -> Result<ThreadLifecycleDto, CommandErrorDto> {
+    let discovery_proof = request.discovery_proof.clone();
     let request = request.into_restore_sdk()?;
     let target = target(&state, &target_id).await?;
-    require_desktop_control(&target.target, &request.run_id)?;
     let _unary_slot = unary_slot(&target.target)?;
+    let source =
+        require_run_binding_with_proof(&state, &target, &request.run_id, discovery_proof.clone())
+            .await?;
+    require_desktop_control(source)?;
     let lifecycle = target
         .target
         .client
@@ -828,11 +877,14 @@ pub(crate) async fn respond_interaction(
     target_id: String,
     request: RespondInteractionInput,
 ) -> Result<InteractionDto, CommandErrorDto> {
+    let discovery_proof = request.discovery_proof.clone();
     let mut request = request.into_sdk()?;
     let target = target(&state, &target_id).await?;
-    require_run_binding(&state, &target, &request.run_id).await?;
-    require_desktop_control(&target.target, &request.run_id)?;
     let _unary_slot = unary_slot(&target.target)?;
+    let source =
+        require_run_binding_with_proof(&state, &target, &request.run_id, discovery_proof.clone())
+            .await?;
+    require_desktop_control(source)?;
     let target_epoch = target.epoch();
     let handle = target.target.clone();
     // Do not hold a selection read lease while the operator reviews a command.
@@ -880,7 +932,9 @@ pub(crate) async fn respond_interaction(
             "The selected target changed during approval. Refresh the run.",
         ));
     }
-    require_run_binding(&state, &target, &request.run_id).await?;
+    ensure_run_target(&state, &target, &request.run_id).await?;
+    require_desktop_control(source)?;
+    state.bind_runs(&target, vec![request.run_id.clone()]).await;
     let response = target
         .target
         .client
@@ -1018,19 +1072,69 @@ pub(crate) async fn target<'a>(
     })
 }
 
-async fn require_run_binding(
+pub(crate) async fn ensure_run_target(
     state: &AppState,
     target: &SelectedTargetLease<'_>,
     run_id: &str,
-) -> Result<(), CommandErrorDto> {
-    if state.run_is_bound(target, run_id).await {
-        Ok(())
-    } else {
-        Err(CommandErrorDto::invalid(
+) -> Result<bool, CommandErrorDto> {
+    match state.run_binding_target(run_id).await {
+        Some(binding) if AppState::binding_matches_target(target, &binding) => Ok(true),
+        Some(_) => Err(CommandErrorDto::invalid(
             "runId",
-            "Refresh this target's work before controlling or watching the run.",
-        ))
+            "Open this run from its current runtime target.",
+        )),
+        None => Ok(false),
     }
+}
+
+#[cfg(test)]
+pub(crate) async fn require_run_binding(
+    state: &AppState,
+    target: &SelectedTargetLease<'_>,
+    run_id: &str,
+) -> Result<ConversationSource, CommandErrorDto> {
+    require_run_binding_with_proof(state, target, run_id, None).await
+}
+
+pub(crate) async fn require_run_binding_with_proof(
+    state: &AppState,
+    target: &SelectedTargetLease<'_>,
+    run_id: &str,
+    discovery_proof: Option<String>,
+) -> Result<ConversationSource, CommandErrorDto> {
+    if discovery_proof
+        .as_ref()
+        .is_some_and(|proof| proof.len() > 4096)
+    {
+        return Err(CommandErrorDto::invalid(
+            "discoveryProof",
+            "The conversation receipt is oversized. Reload history.",
+        ));
+    }
+    if ensure_run_target(state, target, run_id).await?
+        && let Some(source) = target.target.conversation_source(run_id)
+    {
+        return Ok(source);
+    }
+    // Discovery metadata can expire while the row or active run remains open.
+    // Revalidate only against this immutable native-selected target lease.
+    let verified = target
+        .target
+        .get_conversation_with_proofs(
+            GetRunRequest {
+                run_id: run_id.to_owned(),
+            },
+            crate::conversation_runs::ConversationProofs {
+                discovery: discovery_proof,
+                continuation: None,
+            },
+        )
+        .await
+        .map_err(CommandErrorDto::from_api)?;
+    state
+        .bind_runs(target, vec![verified.response.run.run_id])
+        .await;
+    Ok(verified.source)
 }
 
 fn target_selection_changed() -> CommandErrorDto {

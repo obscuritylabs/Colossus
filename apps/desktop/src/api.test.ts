@@ -59,6 +59,7 @@ import {
   managedMcpOAuthStatus,
   listWorkspaceDirectory,
   listRuns,
+  listSessionActivity,
   notifyBackground,
   openTerminal,
   pauseAlwaysOn,
@@ -354,25 +355,33 @@ describe("desktop API target routing", () => {
       maxTurns: 4,
       idempotencyKey: "create-key",
     };
-    const get: GetRunRequest = { runId: "run-1" };
-    const list: ListRunsRequest = { pageToken: "" };
+    const get: GetRunRequest = {
+      runId: "run-1",
+      discoveryProof: "opaque-discovery",
+      continuationProof: "opaque-continuation",
+    };
+    const list: ListRunsRequest = { pageToken: "", historyReplacement: true };
     const cancel: CancelRunRequest = {
       runId: "run-1",
       idempotencyKey: "cancel-key",
+      discoveryProof: "opaque-discovery",
     };
     const archive: ThreadLifecycleRequest = {
       runId: "run-1",
       idempotencyKey: "archive-key",
+      discoveryProof: "opaque-discovery",
     };
     const restore: ThreadLifecycleRequest = {
       runId: "run-1",
       idempotencyKey: "restore-key",
+      discoveryProof: "opaque-discovery",
     };
     const respond: RespondInteractionRequest = {
       runId: "run-1",
       interactionId: "interaction-1",
       etag: "etag-1",
       idempotencyKey: "response-key",
+      discoveryProof: "opaque-discovery",
       response: {
         type: "approval",
         approved: false,
@@ -399,8 +408,29 @@ describe("desktop API target routing", () => {
     ]);
   });
 
+  it("forwards opaque receipts for session activity and map inspection", async () => {
+    const request = {
+      sourceRunId: "old-source",
+      pageToken: "activity-cursor",
+      discoveryProof: "opaque-discovery",
+    };
+    await listSessionActivity("selected-target", request);
+    await getSessionMap("old-source", "opaque-discovery");
+    expect(tauri.invoke.mock.calls).toEqual([
+      ["list_session_activity", { targetId: "selected-target", request }],
+      [
+        "get_session_map",
+        { sourceRunId: "old-source", discoveryProof: "opaque-discovery" },
+      ],
+    ]);
+  });
+
   it("routes a watch through the selected target and a private event channel", async () => {
-    const request: WatchRunRequest = { runId: "run-9", afterSequence: 17 };
+    const request: WatchRunRequest = {
+      runId: "run-9",
+      afterSequence: 17,
+      discoveryProof: "opaque-discovery",
+    };
     const handleEvent = vi.fn();
 
     await watchRun("target-opaque-9", request, handleEvent);

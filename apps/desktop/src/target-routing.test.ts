@@ -163,6 +163,21 @@ describe("TargetRouteRegistry", () => {
     expect(routes.routeForRun("run-0")).toBeNull();
     expect(routes.routeForRun("run-519")).toBe(route);
   });
+
+  it("preserves active control routes while thousands of older summaries are discovered", () => {
+    const routes = new TargetRouteRegistry();
+    const route = routes.activate("managed-local", "managed_local");
+    routes.bindRun("active", route);
+    routes.retainRuns(["active"]);
+    for (let index = 0; index < 4505; index += 1)
+      routes.bindRun(`old-${index}`, route);
+    expect(routes.routeForRun("active")).toBe(route);
+    expect(routes.routeForRun("old-0")).toBeNull();
+    expect(routes.routeForRun("old-4504")).toBe(route);
+    routes.bindRun("old-0", route);
+    expect(routes.routeForRun("old-0")).toBe(route);
+    expect(routes.routeForRun("active")).toBe(route);
+  });
 });
 
 describe("selectedTargetRouteChanged", () => {

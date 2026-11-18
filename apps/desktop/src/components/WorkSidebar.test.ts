@@ -351,9 +351,9 @@ describe("WorkSidebar", () => {
     }));
     const markup = renderSidebar({ runs: completedRuns, hasMore: true });
 
-    expect(markup).toContain("View 1 more recent thread");
+    expect(markup).toContain("Completed thread 4");
     expect(markup).not.toContain(">Load more<");
-    expect(markup).not.toContain(">Load older threads<");
+    expect(markup.match(/Load older threads/g)).toHaveLength(1);
   });
 
   it("uses the recent group as the single older-thread pagination surface", () => {

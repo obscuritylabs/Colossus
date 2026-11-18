@@ -89,7 +89,11 @@ The permission selector beside the composer controls what happens when an effect
 
 ## Return to a conversation
 
-Select a thread in the sidebar to read its released messages and continue it. Use **Search threads** to find a conversation in **This Workspace** or **All Workspaces**. The search can include archived workspaces and threads when you enable that option. **Load older threads** retrieves more history as needed.
+Select a thread in the sidebar to read its released messages and continue it. The expanded thread list loads older available pages as you scroll. Long histories show a limited number of rows at once; scrolling moves through the loaded summaries and continues loading older pages. Opening Desktop starts with recent threads and loads a conversation's messages when you select it.
+
+**Load older threads** also works from the keyboard. If a page fails, the threads already loaded stay available; use the displayed retry action to resume. Search pauses automatic history loading. Use **Search threads** to find indexed conversation metadata in **This Workspace** or **All Workspaces**, including archived work when enabled. See [search scope and organization](workspaces.md#find-and-organize-work).
+
+Desktop verifies a thread's connection and access before enabling controls. A shared source run can remain read-only while the conversation allows continuation under your own grant. Older indexed results can remain read-only when ownership cannot be confirmed. Reopening a thread checks its current access again.
 
 Open a thread's **More actions** menu to rename, pin or unpin, and archive it. Pinned threads stay easy to reach; archived threads remain searchable and can be restored. You can also rename or archive a workspace from its menu, then restore it from **Manage Workspaces**. Switching workspaces changes the active managed runtime and closes local terminal sessions tied to the previous workspace.
 

@@ -1,28 +1,76 @@
 //! Read-only reconciliation of Desktop and Control Plane runs in one selected runtime.
-use crate::run_list::RunList;
-use colossus_sdk::{AgentRunClient, ApiError, ApiErrorReason, Colossus, ListRunsRequest, Run};
+use crate::{run_bindings::RunBindings, run_list::RunList};
+use colossus_sdk::{
+    AgentRunClient, ApiError, ApiErrorCode, ApiErrorReason, Colossus, GetRunRequest,
+    GetRunResponse, ListRunsRequest, Run,
+};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     io::{self, Write},
     sync::{Arc, Mutex, PoisonError},
 };
+
+#[path = "conversation_runs/discovery_proof.rs"]
+mod discovery_proof;
+pub(crate) use discovery_proof::ConversationProofs;
+use discovery_proof::{DiscoveryPage, DiscoveryProof};
 
 const PREFIX: &str = "desktop-conversations-v2:";
 // Match the public run discovery ceiling; each owner returns at most three runs.
 const MAX_PAGE_SIZE: u32 = 3;
 const MAX_CURSORS: usize = 32;
 const MAX_CURSOR_BYTES: usize = 8 * 1024 * 1024;
-const MAX_BINDINGS: usize = 4096;
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct ConversationRuns {
-    sources: Arc<Mutex<HashMap<String, bool>>>,
-    desktop_sessions: Arc<Mutex<HashSet<String>>>,
+    sources: Arc<Mutex<RunBindings<SourceBinding>>>,
+    desktop_sessions: Arc<Mutex<RunBindings<()>>>,
     cursors: Arc<Mutex<CursorCache>>,
+    proof_scope: Arc<Mutex<String>>,
+    head_bindings: Arc<Mutex<HashMap<String, SourceBinding>>>,
+}
+impl Default for ConversationRuns {
+    fn default() -> Self {
+        Self {
+            sources: Arc::default(),
+            desktop_sessions: Arc::default(),
+            cursors: Arc::default(),
+            proof_scope: Arc::new(Mutex::new(uuid::Uuid::new_v4().to_string())),
+            head_bindings: Arc::default(),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConversationSource {
+    Primary,
+    Cloud,
+    PrimarySharedReadOnly,
+}
+impl ConversationSource {
+    pub(crate) fn uses_connector(self) -> bool {
+        self == Self::Cloud
+    }
+    pub(crate) fn can_control(self) -> bool {
+        self == Self::Primary
+    }
+}
+#[derive(Clone)]
+struct SourceBinding {
+    source: ConversationSource,
+    session_id: String,
+}
+pub(crate) struct VerifiedConversation {
+    pub(crate) response: GetRunResponse,
+    pub(crate) reader: Arc<dyn AgentRunClient>,
+    pub(crate) source: ConversationSource,
+    pub(crate) continuable: bool,
+    pub(crate) discovery_proof: Option<String>,
 }
 pub(crate) struct ConversationPage {
     pub(crate) runs: Vec<Run>,
+    pub(crate) sources: HashMap<String, ConversationSource>,
+    pub(crate) proofs: HashMap<String, String>,
     pub(crate) next_page_token: Option<String>,
 }
 #[derive(Clone, Default, PartialEq, Serialize)]
@@ -30,6 +78,7 @@ struct SourcePage {
     token: Option<String>,
     done: bool,
     pending: VecDeque<Run>,
+    proof: Option<DiscoveryPage>,
 }
 #[derive(Clone, Default, PartialEq, Serialize)]
 struct Cursor {
@@ -107,79 +156,362 @@ fn invalid() -> ApiError {
     )
 }
 impl ConversationRuns {
-    pub(crate) fn is_cloud(&self, run_id: &str) -> bool {
+    fn use_instance_scope(&self, instance: Option<String>) {
+        if let Some(instance) = instance {
+            *self
+                .proof_scope
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = instance;
+        }
+    }
+    fn binding(&self, run_id: &str) -> Option<SourceBinding> {
         self.sources
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(run_id)
-            .copied()
-            .unwrap_or(false)
+            .cloned()
+            .or_else(|| {
+                self.head_bindings
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(run_id)
+                    .cloned()
+            })
+    }
+    pub(crate) fn source(&self, run_id: &str) -> Option<ConversationSource> {
+        self.binding(run_id).map(|binding| binding.source)
     }
     pub(crate) fn can_continue(&self, session_id: &str) -> bool {
         self.desktop_sessions
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .contains(session_id)
+            .get(session_id)
+            .is_some()
+            || self
+                .head_bindings
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .values()
+                .any(|binding| binding.source.can_control() && binding.session_id == session_id)
     }
     fn remember(&self, runs: &[Run], cloud: bool) -> Result<(), ApiError> {
+        let source = if cloud {
+            ConversationSource::Cloud
+        } else {
+            ConversationSource::Primary
+        };
+        self.remember_source(runs, source)
+    }
+    fn remember_source(&self, runs: &[Run], source: ConversationSource) -> Result<(), ApiError> {
+        // Snapshot the fixed foreground heads before taking the LRU/session
+        // locks. Evicting ordinary metadata must not hide a conflicting owner.
+        let heads = self
+            .head_bindings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         let mut sources = self.sources.lock().unwrap_or_else(PoisonError::into_inner);
+        let conflicts = |existing: &SourceBinding, run: &Run| {
+            existing.session_id != run.session_id
+                || (existing.source != source
+                    && existing.source != ConversationSource::PrimarySharedReadOnly)
+        };
         if runs.iter().any(|run| {
             sources
                 .get(&run.run_id)
-                .is_some_and(|source| *source != cloud)
+                .is_some_and(|existing| conflicts(existing, run))
+                || heads
+                    .get(&run.run_id)
+                    .is_some_and(|existing| conflicts(existing, run))
         }) {
-            return Err(ApiError::failed_precondition(
-                ApiErrorReason::InternalInvariant,
-                "Conversation source identity changed.",
-            ));
-        }
-        if sources.len()
-            + runs
-                .iter()
-                .filter(|run| !sources.contains_key(&run.run_id))
-                .count()
-            > MAX_BINDINGS
-        {
-            return Err(ApiError::resource_exhausted(
-                ApiErrorReason::CapacityExceeded,
-                "Reconnect the selected workspace before loading more conversations.",
-            ));
+            return Err(source_changed());
         }
         let mut sessions = self
             .desktop_sessions
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         for run in runs {
-            sources.insert(run.run_id.clone(), cloud);
-            if !cloud {
-                sessions.insert(run.session_id.clone());
+            sources.insert(
+                run.run_id.clone(),
+                SourceBinding {
+                    source,
+                    session_id: run.session_id.clone(),
+                },
+            );
+            if source.can_control() {
+                sessions.insert(run.session_id.clone(), ());
             }
         }
         Ok(())
     }
+    pub(crate) fn remember_primary(&self, run: &Run) -> Result<(), ApiError> {
+        self.remember(std::slice::from_ref(run), false)
+    }
     pub(crate) fn reader(
+        client: &Colossus,
+        source: ConversationSource,
+    ) -> Result<Arc<dyn AgentRunClient>, ApiError> {
+        reader_for(source, client.agent_runs(), client.connector_runs())
+    }
+    pub(crate) async fn get(
         &self,
         client: &Colossus,
-        run_id: &str,
-    ) -> Result<Arc<dyn AgentRunClient>, ApiError> {
-        if self.is_cloud(run_id) {
-            client.connector_runs().ok_or_else(|| {
-                ApiError::failed_precondition(
-                    ApiErrorReason::InternalInvariant,
-                    "The Control Plane conversation reader is unavailable.",
-                )
-            })
+        list: &RunList,
+        request: GetRunRequest,
+    ) -> Result<VerifiedConversation, ApiError> {
+        self.use_instance_scope(client.instance_id().map(|id| id.to_string()));
+        self.get_readers(client.agent_runs(), client.connector_runs(), list, request)
+            .await
+    }
+    pub(crate) async fn get_with_proofs(
+        &self,
+        client: &Colossus,
+        list: &RunList,
+        request: GetRunRequest,
+        proofs: ConversationProofs,
+    ) -> Result<VerifiedConversation, ApiError> {
+        self.use_instance_scope(client.instance_id().map(|id| id.to_string()));
+        self.get_readers_with_proofs(
+            client.agent_runs(),
+            client.connector_runs(),
+            list,
+            request,
+            proofs,
+        )
+        .await
+    }
+    async fn get_readers(
+        &self,
+        primary: Arc<dyn AgentRunClient>,
+        cloud: Option<Arc<dyn AgentRunClient>>,
+        list: &RunList,
+        request: GetRunRequest,
+    ) -> Result<VerifiedConversation, ApiError> {
+        self.get_readers_with_proofs(primary, cloud, list, request, ConversationProofs::default())
+            .await
+    }
+    async fn get_readers_with_proofs(
+        &self,
+        primary: Arc<dyn AgentRunClient>,
+        cloud: Option<Arc<dyn AgentRunClient>>,
+        list: &RunList,
+        request: GetRunRequest,
+        proofs: ConversationProofs,
+    ) -> Result<VerifiedConversation, ApiError> {
+        let proof_scope = self
+            .proof_scope
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let discovery = proofs
+            .discovery
+            .as_deref()
+            .map(|value| DiscoveryProof::decode(value, &proof_scope))
+            .transpose()?;
+        let (discovery_binding, accepted_discovery) = self
+            .revalidate_discovery(
+                primary.clone(),
+                cloud.clone(),
+                list,
+                &request.run_id,
+                discovery.as_ref(),
+            )
+            .await?;
+        // A cache miss is not primary authority. Only a typed absence allows
+        // trying the independent connector grant; denial and transport errors stop.
+        let binding = discovery_binding.or_else(|| self.binding(&request.run_id));
+        let known = binding.as_ref().map(|binding| binding.source);
+        let (mut source, reader, response) = if let Some(source) = known {
+            let reader = reader_for(source, primary.clone(), cloud.clone())?;
+            let response = reader.get_run(request.clone()).await?;
+            (source, reader, response)
         } else {
-            Ok(client.agent_runs())
+            match primary.get_run(request.clone()).await {
+                Ok(response) => (ConversationSource::Primary, primary.clone(), response),
+                Err(error)
+                    if error.code == ApiErrorCode::NotFound
+                        && error.reason == ApiErrorReason::RunNotFound =>
+                {
+                    let Some(reader) = cloud.clone() else {
+                        return Err(error);
+                    };
+                    let response = reader.get_run(request.clone()).await?;
+                    (ConversationSource::Cloud, reader, response)
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        if response.run.run_id != request.run_id
+            || response.run.session_id.is_empty()
+            || response.run.session_id.len() > 128
+            || binding
+                .as_ref()
+                .is_some_and(|binding| binding.session_id != response.run.session_id)
+        {
+            return Err(source_changed());
         }
+        // GetRun also permits shared reads. Only owned ListRuns/CreateRun
+        // provenance, or an exact owned-run discovery proof, grants control.
+        if !source.uses_connector() && known != Some(ConversationSource::Primary) {
+            source = if self
+                .owned_proof(primary.as_ref(), list, &response.run, true)
+                .await?
+            {
+                ConversationSource::Primary
+            } else {
+                ConversationSource::PrimarySharedReadOnly
+            };
+        }
+        self.remember_source(std::slice::from_ref(&response.run), source)?;
+        let continuation = proofs
+            .continuation
+            .as_deref()
+            .map(|value| DiscoveryProof::decode(value, &proof_scope))
+            .transpose()?;
+        let continued = if let Some(proof) = &continuation {
+            if proof.page.connector || proof.session_id != response.run.session_id {
+                return Err(invalid());
+            }
+            if !source.can_control() && !self.can_continue(&response.run.session_id) {
+                match self.replay_proof(primary.clone(), None, list, proof).await {
+                    Ok(_) => true,
+                    Err(error) if error.reason == ApiErrorReason::InternalInvariant => {
+                        return Err(error);
+                    }
+                    Err(_) => false,
+                }
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+        let continuable = source.can_control()
+            || continued
+            || self.can_continue(&response.run.session_id)
+            || (source.uses_connector()
+                && self
+                    .owned_proof(primary.as_ref(), list, &response.run, false)
+                    .await?);
+        Ok(VerifiedConversation {
+            response,
+            reader,
+            source,
+            continuable,
+            discovery_proof: proofs.discovery.filter(|_| accepted_discovery),
+        })
+    }
+    async fn revalidate_discovery(
+        &self,
+        primary: Arc<dyn AgentRunClient>,
+        cloud: Option<Arc<dyn AgentRunClient>>,
+        list: &RunList,
+        run_id: &str,
+        proof: Option<&DiscoveryProof>,
+    ) -> Result<(Option<SourceBinding>, bool), ApiError> {
+        let Some(proof) = proof else {
+            return Ok((None, false));
+        };
+        if proof.run_id != run_id {
+            return Err(invalid());
+        }
+        let binding = self.binding(run_id);
+        if let Some(binding) = &binding
+            && (binding.session_id != proof.session_id
+                || (binding.source != ConversationSource::PrimarySharedReadOnly
+                    && binding.source != proof.source()))
+        {
+            return Err(source_changed());
+        }
+        if binding
+            .as_ref()
+            .is_some_and(|binding| binding.source != ConversationSource::PrimarySharedReadOnly)
+        {
+            return Ok((binding, true));
+        }
+        match self.replay_proof(primary, cloud, list, proof).await {
+            Ok(binding) => Ok((Some(binding), true)),
+            Err(error) if error.reason == ApiErrorReason::InternalInvariant => Err(error),
+            // Optional stale receipts and proof outages cannot revoke an
+            // authenticated read. No hint authority reaches the read below.
+            Err(_) => Ok((None, false)),
+        }
+    }
+    async fn owned_proof(
+        &self,
+        primary: &dyn AgentRunClient,
+        list: &RunList,
+        run: &Run,
+        exact_run: bool,
+    ) -> Result<bool, ApiError> {
+        match self.probe_owned(primary, list, run, exact_run).await {
+            Ok(proved) => Ok(proved),
+            Err(error) if error.reason == ApiErrorReason::InternalInvariant => Err(error),
+            // A failed optional ownership proof cannot grant control or remove
+            // a read that GetRun already authenticated successfully.
+            Err(_) => Ok(false),
+        }
+    }
+    async fn probe_owned(
+        &self,
+        primary: &dyn AgentRunClient,
+        list: &RunList,
+        run: &Run,
+        exact_run: bool,
+    ) -> Result<bool, ApiError> {
+        let session_id = &run.session_id;
+        let mut token = String::new();
+        // Filtered public discovery may yield empty advancing pages. Bound the
+        // proof search; an incomplete scan grants no continuation authority.
+        for _ in 0..16 {
+            let page = list
+                .list_client(
+                    primary,
+                    ListRunsRequest {
+                        session_id: Some(session_id.to_owned()),
+                        statuses: vec![],
+                        include_archived: true,
+                        page: Some(colossus_sdk::PageRequest {
+                            page_size: if exact_run { MAX_PAGE_SIZE } else { 1 },
+                            page_token: token.clone(),
+                        }),
+                    },
+                )
+                .await?;
+            if page
+                .runs
+                .iter()
+                .any(|run| run.session_id.as_str() != session_id.as_str())
+            {
+                return Err(source_changed());
+            }
+            if !page.runs.is_empty() {
+                self.remember(&page.runs, false)?;
+                if !exact_run || page.runs.iter().any(|owned| owned.run_id == run.run_id) {
+                    return Ok(true);
+                }
+            }
+            let next = page
+                .page
+                .map(|page| page.next_page_token)
+                .filter(|next| !next.is_empty());
+            let Some(next) = next else { return Ok(false) };
+            if next == token {
+                return Err(invalid());
+            }
+            token = next;
+        }
+        Ok(false)
     }
     pub(crate) async fn list(
         &self,
         client: &Colossus,
         list: &RunList,
         request: ListRunsRequest,
+        history_replacement: bool,
     ) -> Result<ConversationPage, ApiError> {
-        self.list_readers(
+        self.use_instance_scope(client.instance_id().map(|id| id.to_string()));
+        self.list_readers_with_history(
             client
                 .instance_id()
                 .map(|id| id.to_string())
@@ -188,18 +520,40 @@ impl ConversationRuns {
             client.connector_runs(),
             list,
             request,
+            history_replacement,
         )
         .await
     }
 
+    #[cfg(test)]
     async fn list_readers(
         &self,
         instance: String,
         primary: Arc<dyn AgentRunClient>,
         cloud_reader: Option<Arc<dyn AgentRunClient>>,
         list: &RunList,
-        mut request: ListRunsRequest,
+        request: ListRunsRequest,
     ) -> Result<ConversationPage, ApiError> {
+        self.list_readers_with_history(instance, primary, cloud_reader, list, request, false)
+            .await
+    }
+    async fn list_readers_with_history(
+        &self,
+        instance: String,
+        primary: Arc<dyn AgentRunClient>,
+        cloud_reader: Option<Arc<dyn AgentRunClient>>,
+        list: &RunList,
+        mut request: ListRunsRequest,
+        history_replacement: bool,
+    ) -> Result<ConversationPage, ApiError> {
+        let history_replacement = history_replacement
+            && request.session_id.is_none()
+            && request.statuses.is_empty()
+            && request
+                .page
+                .as_ref()
+                .is_none_or(|page| page.page_token.is_empty());
+        let mut staged_heads = HashMap::new();
         let page_size = request.page.as_ref().map_or(MAX_PAGE_SIZE, |page| {
             if page.page_size == 0 {
                 MAX_PAGE_SIZE
@@ -222,7 +576,75 @@ impl ConversationRuns {
         ));
         // Pending rows stay in native custody. A renderer cannot forge a row or
         // source binding by editing a serialized continuation token.
-        let mut cursor = if let Some(token) = token {
+        let mut cursor = self.restore_cursor(scope, token, cloud_reader.is_some())?;
+        let mut runs = Vec::with_capacity(page_size as usize);
+        let mut sources = HashMap::new();
+        let mut proofs = HashMap::new();
+        for _ in 0..page_size {
+            if !self
+                .refill(
+                    &mut cursor.primary,
+                    primary.as_ref(),
+                    list,
+                    &request,
+                    false,
+                    history_replacement.then_some(&mut staged_heads),
+                )
+                .await?
+            {
+                break;
+            }
+            if let Some(cloud) = cloud_reader.as_ref()
+                && !self
+                    .refill(
+                        &mut cursor.cloud,
+                        cloud.as_ref(),
+                        list,
+                        &request,
+                        true,
+                        history_replacement.then_some(&mut staged_heads),
+                    )
+                    .await?
+            {
+                break;
+            }
+            // Upstream cursors preserve run creation/discovery order, not live
+            // update order. Keep that order and prefer Desktop for equal times.
+            let (source, identity) =
+                match (cursor.primary.pending.front(), cursor.cloud.pending.front()) {
+                    (Some(left), Some(right)) if left.created_at >= right.created_at => {
+                        (&mut cursor.primary, ConversationSource::Primary)
+                    }
+                    (_, Some(_)) => (&mut cursor.cloud, ConversationSource::Cloud),
+                    (Some(_), None) => (&mut cursor.primary, ConversationSource::Primary),
+                    (None, None) => break,
+                };
+            if let Some(run) = source.pending.pop_front() {
+                // Replayed cursors can outlive their discovery metadata.
+                self.remember(std::slice::from_ref(&run), identity.uses_connector())?;
+                sources.insert(run.run_id.clone(), identity);
+                if let Some(page) = &source.proof {
+                    proofs.insert(run.run_id.clone(), DiscoveryProof::encode(page, &run)?);
+                }
+                runs.push(run);
+            }
+        }
+        self.finish_page(
+            cursor,
+            runs,
+            sources,
+            proofs,
+            history_replacement.then_some(staged_heads),
+        )
+    }
+
+    fn restore_cursor(
+        &self,
+        scope: String,
+        token: Option<String>,
+        cloud_available: bool,
+    ) -> Result<Cursor, ApiError> {
+        if let Some(token) = token {
             let cache = self.cursors.lock().unwrap_or_else(PoisonError::into_inner);
             let cursor = cache
                 .entries
@@ -232,46 +654,27 @@ impl ConversationRuns {
             if cursor.scope != scope {
                 return Err(invalid());
             }
-            cursor
+            Ok(cursor)
         } else {
-            Cursor {
+            Ok(Cursor {
                 scope,
                 cloud: SourcePage {
-                    done: cloud_reader.is_none(),
+                    done: !cloud_available,
                     ..SourcePage::default()
                 },
                 ..Cursor::default()
-            }
-        };
-        let mut runs = Vec::with_capacity(page_size as usize);
-        for _ in 0..page_size {
-            if !self
-                .refill(&mut cursor.primary, primary.as_ref(), list, &request, false)
-                .await?
-            {
-                break;
-            }
-            if let Some(cloud) = cloud_reader.as_ref()
-                && !self
-                    .refill(&mut cursor.cloud, cloud.as_ref(), list, &request, true)
-                    .await?
-            {
-                break;
-            }
-            // Upstream cursors preserve run creation/discovery order, not live
-            // update order. Keep that order and prefer Desktop for equal times.
-            let source = match (cursor.primary.pending.front(), cursor.cloud.pending.front()) {
-                (Some(left), Some(right)) if left.created_at >= right.created_at => {
-                    &mut cursor.primary
-                }
-                (_, Some(_)) => &mut cursor.cloud,
-                (Some(_), None) => &mut cursor.primary,
-                (None, None) => break,
-            };
-            if let Some(run) = source.pending.pop_front() {
-                runs.push(run);
-            }
+            })
         }
+    }
+
+    fn finish_page(
+        &self,
+        cursor: Cursor,
+        runs: Vec<Run>,
+        sources: HashMap<String, ConversationSource>,
+        proofs: HashMap<String, String>,
+        staged_heads: Option<HashMap<String, SourceBinding>>,
+    ) -> Result<ConversationPage, ApiError> {
         let more = !cursor.primary.done
             || !cursor.cloud.done
             || !cursor.primary.pending.is_empty()
@@ -286,8 +689,16 @@ impl ConversationRuns {
         } else {
             None
         };
+        if let Some(staged_heads) = staged_heads {
+            *self
+                .head_bindings
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = staged_heads;
+        }
         Ok(ConversationPage {
             runs,
+            sources,
+            proofs,
             next_page_token,
         })
     }
@@ -299,6 +710,7 @@ impl ConversationRuns {
         list: &RunList,
         request: &ListRunsRequest,
         cloud: bool,
+        mut staged_heads: Option<&mut HashMap<String, SourceBinding>>,
     ) -> Result<bool, ApiError> {
         // Filtered upstream scans can legitimately produce empty pages. Bound
         // admission work and return a continuation without guessing their order.
@@ -308,7 +720,57 @@ impl ConversationRuns {
             }
             let mut request = request.clone();
             set_token(&mut request, source.token.clone());
-            let page = list.list_client(reader, request).await?;
+            let proof = DiscoveryPage {
+                scope: self
+                    .proof_scope
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone(),
+                connector: cloud,
+                request: request.clone(),
+            };
+            let mut page = list.list_client(reader, request).await?;
+            if page.runs.len() > MAX_PAGE_SIZE as usize {
+                return Err(source_changed());
+            }
+            if let Some(head) = staged_heads.as_deref_mut()
+                && proof
+                    .request
+                    .page
+                    .as_ref()
+                    .is_some_and(|page| page.page_token.is_empty())
+            {
+                let identity = if cloud {
+                    ConversationSource::Cloud
+                } else {
+                    ConversationSource::Primary
+                };
+                if page.runs.iter().any(|run| {
+                    head.get(&run.run_id).is_some_and(|binding| {
+                        binding.source != identity || binding.session_id != run.session_id
+                    })
+                }) {
+                    return Err(source_changed());
+                }
+                head.retain(|_, binding| binding.source != identity);
+                head.extend(page.runs.iter().map(|run| {
+                    (
+                        run.run_id.clone(),
+                        SourceBinding {
+                            source: identity,
+                            session_id: run.session_id.clone(),
+                        },
+                    )
+                }));
+            }
+            source.proof = Some(proof);
+            for run in &mut page.runs {
+                // Desktop history retains result metadata; full released output
+                // is fetched only when opening a run through GetRun.
+                if let Some(colossus_sdk::RunTerminal::Result(result)) = &mut run.terminal {
+                    result.output = String::new();
+                }
+            }
             let next = page
                 .page
                 .map(|page| page.next_page_token)
@@ -322,6 +784,28 @@ impl ConversationRuns {
             source.done = source.token.is_none();
         }
         Ok(!source.pending.is_empty() || source.done)
+    }
+}
+
+fn source_changed() -> ApiError {
+    ApiError::failed_precondition(
+        ApiErrorReason::InternalInvariant,
+        "Conversation source identity changed. Reload the selected workspace.",
+    )
+}
+fn reader_for(
+    source: ConversationSource,
+    primary: Arc<dyn AgentRunClient>,
+    cloud: Option<Arc<dyn AgentRunClient>>,
+) -> Result<Arc<dyn AgentRunClient>, ApiError> {
+    match source {
+        ConversationSource::Primary | ConversationSource::PrimarySharedReadOnly => Ok(primary),
+        ConversationSource::Cloud => cloud.ok_or_else(|| {
+            ApiError::failed_precondition(
+                ApiErrorReason::InternalInvariant,
+                "The Control Plane conversation reader is unavailable.",
+            )
+        }),
     }
 }
 
@@ -483,8 +967,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first.runs.len(), 2);
-        assert!(!broker.is_cloud("desktop"));
-        assert!(broker.is_cloud("cloud"));
+        assert!(broker.source("desktop") == Some(ConversationSource::Primary));
+        assert!(broker.source("cloud") == Some(ConversationSource::Cloud));
         assert!(broker.can_continue("same-session"));
         let token = first.next_page_token.unwrap();
         assert!(
@@ -533,7 +1017,7 @@ mod tests {
         broker.remember(&[run("web", "cloud-only")], true).unwrap();
         assert!(!broker.can_continue("cloud-only"));
         assert!(broker.remember(&[run("web", "cloud-only")], false).is_err());
-        assert!(broker.is_cloud("web"));
+        assert!(broker.source("web") == Some(ConversationSource::Cloud));
     }
     fn rows(prefix: &str, newest: u32) -> Vec<Run> {
         (0..4)
@@ -641,7 +1125,7 @@ mod tests {
             ["remote2", "remote3"]
         );
         assert!(final_page.next_page_token.is_none());
-        assert!(broker.is_cloud("remote3"));
+        assert!(broker.source("remote3") == Some(ConversationSource::Cloud));
         assert!(!broker.can_continue("remote"));
     }
 
@@ -667,3 +1151,7 @@ mod tests {
         assert!(cache.insert(oversized).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "conversation_runs/revalidation_tests.rs"]
+mod revalidation_tests;

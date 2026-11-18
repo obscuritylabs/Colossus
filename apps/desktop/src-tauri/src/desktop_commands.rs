@@ -2154,6 +2154,7 @@ pub(crate) async fn get_thread_delegate(
 pub(crate) async fn get_session_map(
     state: State<'_, AppState>,
     source_run_id: String,
+    discovery_proof: Option<String>,
 ) -> Result<WorkerSessionMap, CommandErrorDto> {
     if source_run_id.is_empty() || source_run_id.len() > 128 {
         return Err(CommandErrorDto::invalid(
@@ -2182,23 +2183,30 @@ pub(crate) async fn get_session_map(
             true,
         )
     })?;
-    if !state.run_is_bound(&target, &source_run_id).await {
-        return Err(CommandErrorDto::invalid(
-            "sourceRunId",
-            "Refresh this Workspace's work before inspecting the session map.",
-        ));
-    }
-    let _unary_slot = target.target.try_unary_slot().ok_or_else(|| {
-        CommandErrorDto::busy("The desktop request limit is active. Wait and retry.")
-    })?;
-    let response = target
+    let _unary_slot = crate::commands::unary_slot(&target.target)?;
+    crate::commands::ensure_run_target(&state, &target, &source_run_id).await?;
+    let verified = target
         .target
-        .client
-        .get_run(GetRunRequest {
-            run_id: source_run_id,
-        })
+        .get_conversation_with_proofs(
+            GetRunRequest {
+                run_id: source_run_id,
+            },
+            crate::conversation_runs::ConversationProofs {
+                discovery: discovery_proof,
+                continuation: None,
+            },
+        )
         .await
         .map_err(CommandErrorDto::from_api)?;
+    if !verified.source.can_control() {
+        return Err(CommandErrorDto::invalid(
+            "sourceRunId",
+            "Open a Desktop-owned run before inspecting its session map.",
+        ));
+    }
+    state
+        .bind_runs(&target, vec![verified.response.run.run_id.clone()])
+        .await;
     let worker = state.managed_worker_for(space_id).await.ok_or_else(|| {
         CommandErrorDto::local_sanitized(
             "session_map_unavailable",
@@ -2207,7 +2215,7 @@ pub(crate) async fn get_session_map(
         )
     })?;
     worker
-        .inspect_session_map(&response.run.session_id)
+        .inspect_session_map(&verified.response.run.session_id)
         .await
         .map_err(|_| {
             CommandErrorDto::local_sanitized(

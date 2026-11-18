@@ -1393,6 +1393,23 @@ p {
   text-align: left;
 }
 
+.virtual-thread-list {
+  position: relative;
+  overflow-anchor: none;
+}
+
+.virtual-thread-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+.work-history-notice {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-caption);
+}
+
 .work-group-more:hover {
   color: var(--accent-text);
 }
@@ -8339,6 +8356,10 @@ textarea {
     background: transparent;
     color: var(--text);
     line-height: 0;
+  }
+
+  .work-sidebar .space-shelves-heading {
+    padding-right: calc(var(--control-height-compact) + 12px);
   }
 
   .work-layout {

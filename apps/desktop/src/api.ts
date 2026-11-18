@@ -991,8 +991,14 @@ export function getThreadDelegate(
   return call("get_thread_delegate", { parentRunId, jobId });
 }
 
-export function getSessionMap(sourceRunId: string): Promise<SessionMap> {
-  return call("get_session_map", { sourceRunId });
+export function getSessionMap(
+  sourceRunId: string,
+  discoveryProof?: string,
+): Promise<SessionMap> {
+  return call("get_session_map", {
+    sourceRunId,
+    ...(discoveryProof ? { discoveryProof } : {}),
+  });
 }
 
 export function setApprovalMode(

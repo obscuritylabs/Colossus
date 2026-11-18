@@ -222,6 +222,20 @@ describe("selectRecentWork", () => {
     );
   });
 
+  it("presents all loaded summaries to a virtualized host beyond 4096 runs", () => {
+    const runs = Array.from({ length: 4505 }, (_, index) =>
+      runFixture({ runId: `history-${index}`, sessionId: `session-${index}` }),
+    );
+    expect(
+      selectRecentWork(runs, { virtualized: true }).flatMap(
+        (group) => group.items,
+      ),
+    ).toHaveLength(4505);
+    expect(selectRecentWork(runs).flatMap((group) => group.items)).toHaveLength(
+      MAX_PRESENTED_WORK_ITEMS,
+    );
+  });
+
   it("presents continuation runs as one work item with its opening title", () => {
     const groups = selectRecentWork(
       [

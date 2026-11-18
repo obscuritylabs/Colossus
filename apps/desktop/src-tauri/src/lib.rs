@@ -96,6 +96,7 @@ mod plugin_selection;
 mod provider_catalog;
 mod provider_enrollment;
 mod remembered_approvals;
+mod run_bindings;
 mod run_list;
 mod setup_package;
 mod space_search;
