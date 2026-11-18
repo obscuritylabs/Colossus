@@ -577,6 +577,23 @@ pub(super) async fn worker_line_runner(
                     })
                     .await?,
             )?;
+        } else if let Some(arguments) = crate::transcript_export::interactive_export_line(line) {
+            let result = async {
+                let (output, format) =
+                    crate::transcript_export::interactive_export_arguments(arguments)?;
+                crate::transcript_export::export_transcript(
+                    crate::transcript_export::TranscriptSource::Worker(client),
+                    &active_session_id,
+                    &output,
+                    format,
+                )
+                .await
+            }
+            .await;
+            match result {
+                Ok(()) => println!("Conversation exported."),
+                Err(error) => println!("Conversation export failed: {error}"),
+            }
         } else if line == "/session" || line == "/session show" {
             print_json(
                 &client

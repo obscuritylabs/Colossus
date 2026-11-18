@@ -342,7 +342,10 @@ impl EmbeddedInteractiveHost {
                     .map_err(|error| error.to_string())?,
                 Some("Sessions"),
             ),
-            "session" => self.session_command(arguments, session_id, events).await,
+            "session" => {
+                self.session_command(arguments, session_id, events, control)
+                    .await
+            }
             "resume" => self.resume_session(arguments, session_id, events).await,
             "work" => Ok(HostCommandResult::document(work_state_document(
                 &self
@@ -505,6 +508,7 @@ impl EmbeddedInteractiveHost {
         arguments: &str,
         session_id: &str,
         events: &mpsc::Sender<HostEvent>,
+        control: &RunControl,
     ) -> Result<HostCommandResult, String> {
         match arguments.trim() {
             "" | "show" => self.result(
@@ -522,11 +526,19 @@ impl EmbeddedInteractiveHost {
                 self.switch_session(session.id).await
             }
             "resume" => self.resume_session("", session_id, events).await,
+            arguments if arguments == "export" || arguments.starts_with("export ") => {
+                let (output, format) = crate::transcript_export::interactive_export_arguments(arguments.strip_prefix("export").unwrap_or_default())?;
+                crate::transcript_export::export_transcript_controlled(
+                    crate::transcript_export::TranscriptSource::Embedded(&self.runtime),
+                    session_id, &output, format, control,
+                ).await?;
+                Ok(HostCommandResult::document(crate::transcript_export::interactive_export_status()))
+            }
             arguments if arguments.starts_with("resume ") => {
                 self.switch_session(arguments.trim_start_matches("resume ").trim().into())
                     .await
             }
-            _ => Err("/session expects show, new, resume, or resume SESSION_ID".into()),
+            _ => Err("/session expects show, new, resume [SESSION_ID], or export PATH [--format markdown|text|json]".into()),
         }
     }
 

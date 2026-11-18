@@ -2,6 +2,8 @@
 
 #[path = "support/process.rs"]
 mod process_support;
+#[path = "support/transcript.rs"]
+mod transcript_support;
 
 use process_support::tempdir;
 use serde_json::Value;
@@ -199,6 +201,12 @@ sandbox:
     assert_eq!(messages.as_array().map(Vec::len), Some(6));
     assert_eq!(messages[0]["message"]["content"], "offline agent");
     assert_eq!(messages[5]["message"]["content"], "third turn");
+    transcript_support::assert_transcript_exports(
+        |arguments| run(binary, &config, arguments),
+        &session_id,
+        "third turn",
+        directory.path(),
+    );
 
     let telemetry = run(
         binary,

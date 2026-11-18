@@ -327,6 +327,7 @@ export interface DesktopCapabilities {
   artifacts: boolean;
   planContinuation: boolean;
   sessionActivity?: boolean;
+  conversationExport?: boolean;
   agentInboxes?: boolean;
   updateAvailable: boolean;
   agentWorkflows: boolean;

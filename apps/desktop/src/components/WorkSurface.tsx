@@ -98,6 +98,8 @@ import {
 import { TerminalDock, type TerminalDockRequest } from "./tools/TerminalDock";
 import { useBrowser } from "./browser/useBrowser";
 import { BrowserLinkContext } from "./browser/BrowserLink";
+import { ConversationExport } from "./ConversationExport";
+import type { ConversationExportHost } from "../transcript-export";
 
 const BrowserPane = lazy(() =>
   import("./browser/BrowserPane").then((module) => ({
@@ -106,6 +108,7 @@ const BrowserPane = lazy(() =>
 );
 
 interface WorkSurfaceProps {
+  conversationExport?: ConversationExportHost;
   onLoadViewedImage?: ImagePreviewLoader | undefined;
   onInspectSchedule?:
     import("./ScheduleActivityCard").InspectSchedule | undefined;
@@ -205,6 +208,7 @@ interface WorkSurfaceProps {
 const IGNORE_SESSION_WORKSPACE_VIEW = () => undefined;
 
 export function WorkSurface({
+  conversationExport,
   onInspectSchedule,
   onLoadViewedImage,
   gitWorkspaceId = null,
@@ -1215,6 +1219,13 @@ export function WorkSurface({
               <>
                 {!composerVisible ? gitControl : null}
                 {alwaysOnControl}
+                {view && conversationExport ? (
+                  <ConversationExport
+                    key={`${connection.targetId}:${view.run.sessionId}`}
+                    host={conversationExport}
+                    onOpen={() => setActiveDrawer(null)}
+                  />
+                ) : null}
                 <button
                   ref={workNavigationTriggerRef}
                   className="button secondary compact work-navigation-button"

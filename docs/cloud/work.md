@@ -107,9 +107,37 @@ to include more of the saved conversation.
 Open **Conversation actions** and choose **Copy loaded conversation** or
 **Download loaded conversation** to save a Markdown snapshot. The snapshot includes
 only the user and assistant text released to this view, with its author and time.
-Run activity, tools, attachments, and private agent context are excluded. Unloaded
-history is excluded too; the file reports incomplete history and responses still
-in progress. These actions also work when viewing saved history from an offline agent.
+Run activity, tools, attachment references, and private agent context are excluded.
+Text attachment content already part of the released message text is included.
+Unloaded history is excluded too; the file reports incomplete history and responses
+still in progress. These actions also work when viewing saved history from an offline agent.
+
+## Export the retained conversation
+
+In an open Hosted Chat or Fleet conversation, choose **Conversation actions →
+Export conversation…**. Select **Markdown**, **Plain text**, or **JSON**, then choose
+**Save transcript** to start a browser download. For the clipboard, choose
+**Prepare copy**, then **Copy transcript** when it is ready. This reads the
+conversation's canonical snapshot across its runs, including history
+that is not loaded in the browser. See [what an export includes](../use/sessions.md#export-a-conversation).
+
+Full export requires Read access and a reachable runtime that supports it. Personal
+Hosted conversations remain visible only to their account owner. Export may load
+your retained Hosted runtime to read its journal; it does not start an agent turn.
+A disconnected Fleet agent's saved Cloud history cannot supply a full export. Use
+the loaded-conversation actions above for an explicitly incomplete offline excerpt.
+
+Save supports up to 64 MiB; Copy supports up to 2 MiB. Reading must complete within
+20 seconds. The server releases the formatted bytes only after the whole snapshot
+has been read and access checked again. **Cancel export**, Escape, or leaving the
+conversation cancels the browser operation. The browser reports that a download
+started; check your browser's downloads for completion and its chosen destination.
+
+If Copy exceeds its limit, choose Save. For a larger download, use the CLI against
+the same source where available. If reading times out, capacity is busy, or access
+changes, reconnect or reopen the conversation and retry. Failed reads do not produce
+a shortened successful export. Downloading does not create a public share URL;
+review the file for sensitive text before sharing it yourself.
 
 ## Open a shell on a connected host
 

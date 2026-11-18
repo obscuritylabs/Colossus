@@ -38,6 +38,7 @@ mod settings_matrix;
 mod telemetry;
 mod terminal;
 mod thread_metadata;
+mod transcript_export;
 mod user_inventory;
 
 #[derive(Default)]
@@ -228,7 +229,7 @@ async fn oidc_to_runtime_prompt_approval_cancel_rotate_and_recover() {
     )
     .await
     {
-        acceptance(false).await;
+        acceptance(false, AcceptanceCase::Lifecycle).await;
     }
 }
 
@@ -241,11 +242,18 @@ async fn postgres_oidc_to_runtime_and_recover() {
     )
     .await
     {
-        acceptance(true).await;
+        acceptance(true, AcceptanceCase::Lifecycle).await;
     }
 }
 
-async fn acceptance(postgres: bool) {
+#[derive(Clone, Copy)]
+enum AcceptanceCase {
+    Lifecycle,
+    Transcript(colossus_presentation::TranscriptFormat),
+}
+
+async fn acceptance(postgres: bool, case: AcceptanceCase) {
+    let started = std::time::Instant::now();
     let (auth, issuer, oidc) = fixture().await;
     let directory = isolated::directory();
     let root = directory.path().canonicalize().unwrap();
@@ -285,6 +293,7 @@ async fn acceptance(postgres: bool) {
     let server = crate::server::CloudServer::with_store(config.clone(), cloud_store.clone())
         .await
         .unwrap();
+    let export_state = server.state.clone();
     let (stop, shutdown) = watch::channel(false);
     let host = tokio::spawn(server.serve_listeners(browser, grpc, shutdown));
     let client = reqwest::Client::builder()
@@ -462,6 +471,7 @@ async fn acceptance(postgres: bool) {
                 default_roles: vec!["primary".into()],
             }],
             capabilities: vec![
+                colossus_cloud_protocol::TRANSCRIPT_CAPABILITY.into(),
                 "agent_runs.model_selection".into(),
                 "workflows.read".into(),
                 "workflows.register".into(),
@@ -549,6 +559,39 @@ async fn acceptance(postgres: bool) {
         std::fs::read_to_string(workspace.join("approved.txt")).unwrap(),
         "cloud-approved"
     );
+    if let AcceptanceCase::Transcript(format) = case {
+        eprintln!(
+            "transcript scenario setup_complete elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
+        let provider_calls_before_export = turns.load(Ordering::SeqCst);
+        transcript_export::fleet(
+            &export_state,
+            &client,
+            &origin,
+            &headers,
+            &runtime,
+            &completed,
+            format,
+        )
+        .await;
+        assert_eq!(
+            turns.load(Ordering::SeqCst),
+            provider_calls_before_export,
+            "reading canonical exports must not invoke the provider"
+        );
+        disconnect.send_replace(true);
+        connected.await.unwrap().unwrap();
+        stop.send_replace(true);
+        host.await.unwrap().unwrap();
+        model.abort();
+        oidc.abort();
+        eprintln!(
+            "transcript scenario cleanup_complete elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
+        return;
+    }
     retained::exercise(&client, &origin, &headers, id).await;
     let mut events = client
         .get(format!(

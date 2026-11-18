@@ -290,6 +290,11 @@ impl BoundPublicGrpcServer {
         } else {
             system
         };
+        let system = if agent_runs.supports_session_transcript() {
+            system.with_session_transcript()
+        } else {
+            system
+        };
         let system = if agent_runs.supports_runtime_policy_posture() {
             system.with_policy_posture()
         } else {

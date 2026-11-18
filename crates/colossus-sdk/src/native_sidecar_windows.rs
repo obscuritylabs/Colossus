@@ -680,6 +680,16 @@ impl AgentRunClient for WindowsAgentRuns {
         self.transports.primary.list_session_activity(request).await
     }
 
+    async fn read_session_transcript(
+        &self,
+        request: crate::ReadSessionTranscriptRequest,
+    ) -> ApiResult<crate::TranscriptPage> {
+        self.transports
+            .primary
+            .read_session_transcript(request)
+            .await
+    }
+
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream> {
         self.transports.watch_run(request).await
     }

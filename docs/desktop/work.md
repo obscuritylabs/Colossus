@@ -97,6 +97,27 @@ Desktop verifies a thread's connection and access before enabling controls. A sh
 
 Open a thread's **More actions** menu to rename, pin or unpin, and archive it. Pinned threads stay easy to reach; archived threads remain searchable and can be restored. You can also rename or archive a workspace from its menu, then restore it from **Manage Workspaces**. Switching workspaces changes the active managed runtime and closes local terminal sessions tied to the previous workspace.
 
+## Export a conversation
+
+Open a thread, then choose **Conversation actions → Export conversation…**. Select
+**Markdown**, **Plain text**, or **JSON**. Choose **Save transcript…** for a file.
+For the clipboard, choose **Prepare copy**, then **Copy transcript** when it is
+ready. Export reads the retained conversation across all its runs, including
+messages outside loaded history. See
+[export scope and snapshot behavior](../use/sessions.md#export-a-conversation).
+
+Desktop shows progress while it reads. **Cancel export** or Escape cancels the
+operation. Save opens the native file dialog after the snapshot has been read;
+choose a new filename in a writable location. Existing files are kept. The save
+limit is 256 MiB, 10,000 source pages, or five minutes of reading. Copy is limited
+to 2 MiB; choose Save for a larger transcript.
+
+Switching conversations or runtimes cancels an in-progress export. Reopen the
+conversation and retry if its source or access changes. An unsupported runtime
+shows an explanation; update it and reconnect. A failed or cancelled read does
+not publish a partial transcript. Review exported text before sharing it because
+it can contain sensitive information you supplied.
+
 ## Use a Desktop command
 
 Type `/` at the start of the composer to open Desktop's command menu. Use **Up/Down** to choose a suggestion, **Tab** to complete it, **Escape** to close the menu, and **Enter** to run a complete command. Commands such as `/plan`, `/execute`, `/research`, `/new`, `/resume`, `/work`, `/agents`, `/artifacts`, `/connections`, `/settings`, and `/tui` navigate or change Desktop's local UI state. Desktop handles them itself; it does not send an unknown slash command to the model.

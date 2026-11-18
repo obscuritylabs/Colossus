@@ -6,6 +6,9 @@ use std::{
     time::Instant,
 };
 
+mod transcript;
+pub(crate) use transcript::TranscriptAdmission;
+
 const DEFAULT_MAX_ACTIVE_GLOBAL: usize = 32;
 const DEFAULT_MAX_ACTIVE_PER_APPLICATION: usize = 8;
 const DEFAULT_GLOBAL_RATE_PER_SECOND: u32 = 4;

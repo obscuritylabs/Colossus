@@ -7,6 +7,13 @@ use colossus_tui::{
 #[test]
 fn every_terminal_catalog_entry_preserves_its_command_route_and_arguments() {
     let local_commands = BTreeMap::from([
+        (
+            "/export",
+            InteractiveCommand::Runtime(RuntimeCommand::Known {
+                name: "session".into(),
+                arguments: "export".into(),
+            }),
+        ),
         ("/help", InteractiveCommand::Local(LocalCommand::Help)),
         (
             "/tui prefs",

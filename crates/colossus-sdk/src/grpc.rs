@@ -16,6 +16,9 @@ use crate::{
     UploadArtifactRequest, WatchRunRequest,
 };
 mod communication;
+#[cfg(test)]
+#[path = "grpc_transcript_tests.rs"]
+mod transcript_tests;
 use async_trait::async_trait;
 use colossus_api::{RequestId, validate_public_approval_display};
 use colossus_api_proto::{
@@ -1103,6 +1106,36 @@ impl AgentRunClient for GrpcAgentRunClient {
             projected_through_sequence: response.projected_through_sequence,
             caught_up: response.caught_up,
         })
+    }
+
+    async fn read_session_transcript(
+        &self,
+        request: crate::ReadSessionTranscriptRequest,
+    ) -> ApiResult<crate::TranscriptPage> {
+        validate_identifier(&request.source_run_id)?;
+        if request.page_size > 32
+            || request.page_token.as_ref().is_some_and(|token| {
+                token.is_empty() || token.len() > 4096 || token.chars().any(char::is_control)
+            })
+        {
+            return Err(invalid_request("page", "invalid transcript page"));
+        }
+        let request = self
+            .request(proto::ReadSessionTranscriptRequest {
+                source_run_id: request.source_run_id,
+                page: Some(proto::PageRequest {
+                    page_size: request.page_size,
+                    page_token: request.page_token.unwrap_or_default(),
+                }),
+            })
+            .await?;
+        let response = self
+            .client()
+            .read_session_transcript(request)
+            .await
+            .map_err(read_error_from_status)?
+            .into_inner();
+        colossus_grpc::transcript_wire::page_from_proto(response)
     }
 
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream> {

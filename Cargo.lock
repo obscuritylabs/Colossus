@@ -1135,6 +1135,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "hex",
+ "hmac 0.12.1",
  "image",
  "serde",
  "serde_json",
@@ -1462,6 +1463,7 @@ dependencies = [
  "colossus-observability",
  "colossus-policy",
  "colossus-ports",
+ "colossus-presentation",
  "colossus-runtime",
  "colossus-sdk",
  "colossus-testkit",
@@ -2352,6 +2354,7 @@ dependencies = [
  "colossus-contracts",
  "colossus-ports",
  "colossus-testkit",
+ "serde",
  "serde_json",
  "time",
 ]

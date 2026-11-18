@@ -119,6 +119,7 @@ export async function browserFixture(
     projectName?: string;
     hostLabel?: string;
     managedChat?: boolean;
+    hostedChat?: boolean;
     branches?: boolean;
     permissions?: Me["memberships"][number]["permissions"];
     settingsOverride?: Partial<ChatSettingsSnapshot>;
@@ -165,6 +166,9 @@ export async function browserFixture(
     node: {
       ...node.node,
       node_id: options.managedChat ? `chat-${"a".repeat(64)}` : "browser-node",
+      ...(options.hostedChat
+        ? { execution_kind: "hosted" as const, owner_user_id: me.user.id }
+        : {}),
       ...(host
         ? {
             host_id: host.host_id,

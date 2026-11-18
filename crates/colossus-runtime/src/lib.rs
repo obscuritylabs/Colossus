@@ -76,6 +76,7 @@ mod prelude;
 mod presentation_work_effects;
 mod process_sessions;
 mod prompt_predictions;
+mod transcript;
 pub use prompt_predictions::RuntimePromptPrediction;
 mod provider_continuation;
 #[cfg(test)]

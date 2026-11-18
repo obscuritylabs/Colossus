@@ -27,10 +27,16 @@ mod process_sessions;
 mod repository;
 mod runs;
 mod sharing;
+mod transcript;
+pub use colossus_contracts::{
+    TranscriptActivity, TranscriptMessage, TranscriptPage, TranscriptPart, TranscriptRole,
+    TranscriptSnapshot,
+};
 pub use posture::*;
 pub use sharing::{
     ListVisibleRunsResponse, SetWorkspaceSharingRequest, VisibleRun, WorkspaceSharingState,
 };
+pub use transcript::*;
 mod validation;
 mod workflows;
 pub use workflows::*;

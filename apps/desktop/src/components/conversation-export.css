@@ -1,0 +1,40 @@
+.conversation-export-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  padding: 0;
+  color: var(--text);
+}
+.conversation-export-dialog:not([open]) {
+  display: none;
+}
+.conversation-export-dialog::backdrop {
+  background: var(--surface-overlay);
+}
+.conversation-export-dialog h3 {
+  font-size: var(--font-size-heading);
+}
+.conversation-export-content {
+  display: grid;
+  gap: 12px;
+  padding: 16px 20px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.conversation-export-content p {
+  margin: 0;
+}
+.conversation-export-content label {
+  font-weight: 600;
+}
+.conversation-export-dialog > footer {
+  flex-wrap: wrap;
+}
+@media (max-width: 480px) {
+  .conversation-export-dialog > footer {
+    justify-content: stretch;
+  }
+  .conversation-export-dialog > footer button {
+    flex: 1 1 100%;
+  }
+}

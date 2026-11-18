@@ -11,6 +11,7 @@ const SIDECAR_FILE_STEM: &str = "colossus-sidecar";
 const CLI_FILE_STEM: &str = "colossus";
 
 const COMMANDS: &[&str] = &[
+    "export_conversation",
     "desktop_features_context",
     "save_desktop_features",
     "appshot_preview",

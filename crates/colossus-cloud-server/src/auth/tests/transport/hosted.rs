@@ -328,6 +328,7 @@ async fn hosted_chat_child() {
     let history = get(&client, &origin, &alice, &thread_path).await;
     assert!(history["messages"].as_array().unwrap().len() >= 4);
     assert!(!history["thread"]["session_id"].is_null());
+    super::transcript_export::hosted(&state, &client, &origin, &alice, &bob, &thread_path).await;
     view::history(&client, &origin, &alice, &bob).await;
     let bob_threads = get(
         &client,

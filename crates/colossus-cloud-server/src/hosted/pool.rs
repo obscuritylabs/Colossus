@@ -20,6 +20,7 @@ pub(super) fn capabilities() -> Vec<String> {
         "attachments.text_input",
         colossus_cloud_protocol::RESOURCE_CAPABILITY,
         colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY,
+        colossus_cloud_protocol::TRANSCRIPT_CAPABILITY,
     ]
     .into_iter()
     .map(str::to_owned)

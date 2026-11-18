@@ -28,6 +28,7 @@ const (
 	AgentRunService_GetRun_FullMethodName                  = "/colossus.api.v1alpha1.AgentRunService/GetRun"
 	AgentRunService_ListRuns_FullMethodName                = "/colossus.api.v1alpha1.AgentRunService/ListRuns"
 	AgentRunService_ListSessionActivity_FullMethodName     = "/colossus.api.v1alpha1.AgentRunService/ListSessionActivity"
+	AgentRunService_ReadSessionTranscript_FullMethodName   = "/colossus.api.v1alpha1.AgentRunService/ReadSessionTranscript"
 	AgentRunService_WatchRun_FullMethodName                = "/colossus.api.v1alpha1.AgentRunService/WatchRun"
 	AgentRunService_CancelRun_FullMethodName               = "/colossus.api.v1alpha1.AgentRunService/CancelRun"
 	AgentRunService_ArchiveThread_FullMethodName           = "/colossus.api.v1alpha1.AgentRunService/ArchiveThread"
@@ -62,6 +63,8 @@ type AgentRunServiceClient interface {
 	ListRuns(ctx context.Context, in *ListRunsRequest, opts ...grpc.CallOption) (*ListRunsResponse, error)
 	// ListSessionActivity returns caller-scoped policy-released canonical activity.
 	ListSessionActivity(ctx context.Context, in *ListSessionActivityRequest, opts ...grpc.CallOption) (*ListSessionActivityResponse, error)
+	// ReadSessionTranscript reads original released conversation text at a fixed snapshot.
+	ReadSessionTranscript(ctx context.Context, in *ReadSessionTranscriptRequest, opts ...grpc.CallOption) (*ReadSessionTranscriptResponse, error)
 	// WatchRun replays updates after an exclusive cursor and then tails live updates.
 	WatchRun(ctx context.Context, in *WatchRunRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchRunResponse], error)
 	// CancelRun requests idempotent cooperative cancellation.
@@ -172,6 +175,16 @@ func (c *agentRunServiceClient) ListSessionActivity(ctx context.Context, in *Lis
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListSessionActivityResponse)
 	err := c.cc.Invoke(ctx, AgentRunService_ListSessionActivity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentRunServiceClient) ReadSessionTranscript(ctx context.Context, in *ReadSessionTranscriptRequest, opts ...grpc.CallOption) (*ReadSessionTranscriptResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadSessionTranscriptResponse)
+	err := c.cc.Invoke(ctx, AgentRunService_ReadSessionTranscript_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -291,6 +304,8 @@ type AgentRunServiceServer interface {
 	ListRuns(context.Context, *ListRunsRequest) (*ListRunsResponse, error)
 	// ListSessionActivity returns caller-scoped policy-released canonical activity.
 	ListSessionActivity(context.Context, *ListSessionActivityRequest) (*ListSessionActivityResponse, error)
+	// ReadSessionTranscript reads original released conversation text at a fixed snapshot.
+	ReadSessionTranscript(context.Context, *ReadSessionTranscriptRequest) (*ReadSessionTranscriptResponse, error)
 	// WatchRun replays updates after an exclusive cursor and then tails live updates.
 	WatchRun(*WatchRunRequest, grpc.ServerStreamingServer[WatchRunResponse]) error
 	// CancelRun requests idempotent cooperative cancellation.
@@ -343,6 +358,9 @@ func (UnimplementedAgentRunServiceServer) ListRuns(context.Context, *ListRunsReq
 }
 func (UnimplementedAgentRunServiceServer) ListSessionActivity(context.Context, *ListSessionActivityRequest) (*ListSessionActivityResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListSessionActivity not implemented")
+}
+func (UnimplementedAgentRunServiceServer) ReadSessionTranscript(context.Context, *ReadSessionTranscriptRequest) (*ReadSessionTranscriptResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadSessionTranscript not implemented")
 }
 func (UnimplementedAgentRunServiceServer) WatchRun(*WatchRunRequest, grpc.ServerStreamingServer[WatchRunResponse]) error {
 	return status.Error(codes.Unimplemented, "method WatchRun not implemented")
@@ -551,6 +569,24 @@ func _AgentRunService_ListSessionActivity_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentRunService_ReadSessionTranscript_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadSessionTranscriptRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunServiceServer).ReadSessionTranscript(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunService_ReadSessionTranscript_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunServiceServer).ReadSessionTranscript(ctx, req.(*ReadSessionTranscriptRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentRunService_WatchRun_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(WatchRunRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -730,6 +766,10 @@ var AgentRunService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListSessionActivity",
 			Handler:    _AgentRunService_ListSessionActivity_Handler,
+		},
+		{
+			MethodName: "ReadSessionTranscript",
+			Handler:    _AgentRunService_ReadSessionTranscript_Handler,
 		},
 		{
 			MethodName: "CancelRun",

@@ -18,6 +18,10 @@ import {
   historyOperationProof,
   historyDiscoveryRequest,
 } from "./history-discovery";
+import {
+  MAX_TRANSCRIPT_COPY_BYTES,
+  copyPreparedTranscript,
+} from "./transcript-export";
 import { syncSavedSettings } from "./managed-settings-updates";
 import { terminalRequestForScope } from "./components/tools/TerminalDock";
 
@@ -39,6 +43,8 @@ import {
   desktopReleaseMetadata,
   desktopStatus,
   exportDiagnostics,
+  exportConversation,
+  cancelConversationExport,
   getRun,
   getSessionMap,
   getThreadDelegate,
@@ -487,6 +493,8 @@ const INITIAL_DESKTOP: DesktopStatus = {
     planContinuation: FIXTURE_MODE,
     modelSelection: FIXTURE_MODE,
     sessionActivity: FIXTURE_MODE,
+    conversationExport:
+      FIXTURE_MODE && FIXTURE_QUERY.get("exportUnsupported") !== "1",
     agentInboxes: FIXTURE_MODE && FIXTURE_QUERY.get("inboxUnavailable") !== "1",
     updateAvailable: false,
     agentWorkflows: false,
@@ -6379,6 +6387,94 @@ export default function App() {
         </Suspense>
       ) : surface === "work" ? (
         <WorkSurface
+          conversationExport={{
+            scopeKey: JSON.stringify([
+              activeRoute?.targetId,
+              activeRoute?.generation,
+              activeRun?.runId,
+              activeRun?.sessionId,
+              desktop.capabilities.conversationExport,
+              connection.state,
+            ]),
+            available:
+              desktop.capabilities.conversationExport === true &&
+              connection.state === "connected" &&
+              activeRun !== undefined,
+            start: async (options) => {
+              const route = activeRoute;
+              const run = activeRun;
+              if (
+                !route ||
+                !run ||
+                targetRoutes.current?.isCurrent(route) !== true
+              )
+                throw new Error(
+                  "Reopen this conversation from its current runtime before exporting.",
+                );
+              const result = await exportConversation(
+                route.targetId,
+                run.runId,
+                historyOperationProof(run.runId, chatRef.current.recentRuns)
+                  .discoveryProof ?? run.discoveryProof,
+                options,
+              );
+              if (result.status !== "copy") return result;
+              if (options.signal.aborted)
+                return { status: "cancelled", messages: 0 };
+              const selected = chatRef.current.views.get(
+                chatRef.current.activeRunId ?? "",
+              )?.run;
+              if (
+                targetRoutes.current?.isCurrent(route) !== true ||
+                selected?.sessionId !== run.sessionId
+              )
+                throw new Error(
+                  "The selected conversation changed. Nothing was copied.",
+                );
+              if (
+                typeof result.text !== "string" ||
+                new TextEncoder().encode(result.text).byteLength >
+                  MAX_TRANSCRIPT_COPY_BYTES
+              )
+                throw new Error(
+                  "The transcript exceeds the copy limit. Choose Save instead.",
+                );
+              return result;
+            },
+            copy: (text, signal) => {
+              const route = activeRoute;
+              const run = activeRun;
+              return copyPreparedTranscript(
+                text,
+                signal,
+                () => {
+                  const selected = chatRef.current.views.get(
+                    chatRef.current.activeRunId ?? "",
+                  )?.run;
+                  return (
+                    route !== null &&
+                    run !== undefined &&
+                    targetRoutes.current?.isCurrent(route) === true &&
+                    selected?.runId === run.runId &&
+                    selected.sessionId === run.sessionId &&
+                    desktopRef.current.selectedTargetId === route.targetId &&
+                    desktopRef.current.connection.state === "connected" &&
+                    desktopRef.current.capabilities.conversationExport === true
+                  );
+                },
+                (value) => navigator.clipboard.writeText(value),
+              ).catch(() => {
+                throw new Error(
+                  "The clipboard could not be written. Choose Save instead.",
+                );
+              });
+            },
+            cancel: (operationId) =>
+              cancelConversationExport(
+                desktop.selectedTargetId ?? "",
+                operationId,
+              ),
+          }}
           onLoadViewedImage={loadViewedImage}
           onInspectSchedule={(scheduleId, showRun) => {
             if (desktop.selectedTargetId) {

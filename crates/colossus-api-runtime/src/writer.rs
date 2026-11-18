@@ -10,10 +10,15 @@ pub(super) struct RunWriter {
     feeds: Arc<RunFeeds>,
     caller: CallerContext,
     run_id: String,
+    session_id: String,
     sequence: Mutex<u64>,
 }
 
 impl RunWriter {
+    pub(super) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
     pub(super) fn new(
         repository: Arc<dyn RunRepository>,
         feeds: Arc<RunFeeds>,
@@ -25,6 +30,7 @@ impl RunWriter {
             feeds,
             caller,
             run_id: run.id.clone(),
+            session_id: run.session_id.clone(),
             sequence: Mutex::new(run.last_sequence),
         }
     }

@@ -198,6 +198,17 @@ pub trait AgentRunClient: Send + Sync {
         ))
     }
 
+    /// Read original released conversation messages at a fixed canonical snapshot.
+    async fn read_session_transcript(
+        &self,
+        _request: crate::ReadSessionTranscriptRequest,
+    ) -> ApiResult<crate::TranscriptPage> {
+        Err(crate::ApiError::failed_precondition(
+            crate::ApiErrorReason::InvalidRunTransition,
+            "the connected backend does not support conversation transcript export",
+        ))
+    }
+
     /// Replay and then tail durable run updates.
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream>;
 
@@ -486,6 +497,15 @@ impl AgentRunClient for ContextBoundAgentRunClient {
             )
             .await?;
         Ok(crate::embedded_projection::activity_response(response))
+    }
+
+    async fn read_session_transcript(
+        &self,
+        request: crate::ReadSessionTranscriptRequest,
+    ) -> ApiResult<crate::TranscriptPage> {
+        self.api
+            .read_session_transcript(&self.caller, request)
+            .await
     }
 
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream> {

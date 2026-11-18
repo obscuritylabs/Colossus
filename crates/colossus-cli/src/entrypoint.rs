@@ -734,6 +734,13 @@ async fn runtime_command(
             SessionsAction::Messages { session_id } => {
                 print_json(&runtime.session_messages(&session_id)?)?;
             }
+            SessionsAction::Export { session_id, output, format } => {
+                crate::transcript_export::export_transcript(
+                    crate::transcript_export::TranscriptSource::Embedded(&runtime),
+                    &session_id, &output, format,
+                ).await.map_err(cli_error)?;
+                if output != Path::new("-") { eprintln!("Conversation exported."); }
+            }
             SessionsAction::New { title } => {
                 print_json(&runtime.create_session(title.as_deref())?)?;
             }

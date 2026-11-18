@@ -47,6 +47,7 @@ mod semantic;
 mod terminal;
 mod themes;
 mod tool_activity;
+mod transcript_export;
 mod usage;
 
 pub use command_approval::{approval_risk_summary, command_approval_document};
@@ -68,6 +69,10 @@ pub use tool_activity::{
     TOOL_ACTIVITY_DETAIL_ROWS, TOOL_ACTIVITY_SUMMARY_CHARS, ToolActivityKind, ToolActivityPhase,
     ToolActivityPresentation, retained_tool_activity_document, tool_activity_document,
     tool_activity_json_preview, tool_activity_presentation,
+};
+pub use transcript_export::{
+    MAX_TRANSCRIPT_EXPORT_BYTES, MAX_TRANSCRIPT_EXPORT_PAGES, TranscriptFormat, TranscriptWriter,
+    transcript_filename,
 };
 pub use usage::run_token_usage_document;
 

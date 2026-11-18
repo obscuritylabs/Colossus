@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 pub const RESOURCE_CAPABILITY: &str = "runtime.resources.v1";
 /// Additive configured-model read; clients discover this before sending the new operation.
 pub const MODEL_CATALOG_CAPABILITY: &str = "runtime.model_catalog.v1";
+/// Additive canonical transcript reads; older connectors must reject before dispatch.
+pub const TRANSCRIPT_CAPABILITY: &str = "conversations.transcript.v1";
 /// Independent unary management admission, leaving run watches unaffected.
 pub const MAX_RESOURCE_REQUESTS: usize = 4;
 /// Definition and immutable-input request budget, including the JSON envelope.
@@ -23,6 +25,12 @@ pub enum ResourceOperation {
     Context,
     /// Credential-free configured choices from this application's authenticated SDK.
     ModelCatalog {},
+    /// Original released human conversation, resolved through one visible source run.
+    ReadSessionTranscript {
+        source_run_id: String,
+        page_token: Option<String>,
+        page_size: u32,
+    },
     ListWorkflows {
         after: Option<String>,
     },
@@ -99,6 +107,11 @@ impl ResourceOperation {
         let yaml = |s: &str| !s.trim().is_empty() && s.len() <= 192 * 1024;
         match self {
             Self::Context | Self::ModelCatalog {} | Self::ListPlugins => true,
+            Self::ReadSessionTranscript {
+                source_run_id,
+                page_token,
+                page_size,
+            } => id(source_run_id) && cursor(page_token) && *page_size <= 32,
             Self::ListWorkflows { after } | Self::ListSchedules { after } => cursor(after),
             Self::GetWorkflow { id: value }
             | Self::GetSchedule { id: value }

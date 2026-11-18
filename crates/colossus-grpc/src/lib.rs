@@ -21,6 +21,7 @@ mod server;
 mod status;
 mod system;
 mod tls_identity;
+pub mod transcript_wire;
 pub mod workflow_wire;
 mod workflows;
 

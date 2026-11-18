@@ -73,6 +73,11 @@ class AgentRuns:
 
         return await self._stub.ListVisibleRuns(request)
 
+    async def read_session_transcript(self, request: Any) -> Any:
+        """Read one original released snapshot page without implicit retry or truncation."""
+
+        return await self._stub.ReadSessionTranscript(request)
+
     async def set_workspace_sharing(self, request: Any) -> Any:
         """Change source-owned disclosure once, without retrying this mutation."""
 

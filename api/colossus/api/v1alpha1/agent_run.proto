@@ -4,6 +4,7 @@ package colossus.api.v1alpha1;
 
 import "colossus/api/v1alpha1/common.proto";
 import "colossus/api/v1alpha1/session.proto";
+import "colossus/api/v1alpha1/transcript.proto";
 import "google/protobuf/timestamp.proto";
 
 option csharp_namespace = "ObscurityLabs.Colossus.Api.V1Alpha1";
@@ -36,6 +37,9 @@ service AgentRunService {
 
   // ListSessionActivity returns caller-scoped policy-released canonical activity.
   rpc ListSessionActivity(ListSessionActivityRequest) returns (ListSessionActivityResponse);
+
+  // ReadSessionTranscript reads original released conversation text at a fixed snapshot.
+  rpc ReadSessionTranscript(ReadSessionTranscriptRequest) returns (ReadSessionTranscriptResponse);
 
   // WatchRun replays updates after an exclusive cursor and then tails live updates.
   rpc WatchRun(WatchRunRequest) returns (stream WatchRunResponse);

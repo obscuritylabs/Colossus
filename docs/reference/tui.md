@@ -134,6 +134,7 @@ Use `/help` for arguments and commands available in your installed version.
 | --- | --- |
 | Help and exit | `/help`, `/exit` |
 | Sessions | `/sessions`, `/session show`, `/session new`, `/session resume [SESSION_ID]`, `/resume [SESSION_ID]` |
+| Conversation export | `/session export PATH [--format FORMAT]`, `/export PATH [--format FORMAT]` export the current session to a new file; quote paths containing spaces. |
 | Permissions | `/permissions` opens a chooser; `/permissions deny\|ask\|risk-auto\|full-access` sets a mode directly |
 | Model selection | `/model` and `/effort` open searchable pickers; `/model PROFILE` and `/effort high` set a value directly. Use `default` to restore the configured setting. |
 | Tools and work | `/tools`, `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/goal resume GOAL_ID`, `/agents`, `/agents drain` |
@@ -158,6 +159,11 @@ including during a run; the previous session keeps working. `/research QUESTION`
 uses standard depth with
 repository, web, and MCP sources; use the CLI `research run` route to choose depth
 or sources explicitly.
+
+Conversation export reads the retained canonical snapshot across runs, including
+messages outside the viewport. `FORMAT` accepts `markdown` (default), `text`, or
+`json`. It requires a file destination; standard output is
+available only through the CLI. See [export formats, scope, and recovery](../use/sessions.md#export-a-conversation).
 
 `/context status` shows the current session's model input budget and active
 snapshot. See [Context and snapshots](../use/sessions-context.md) to interpret it.

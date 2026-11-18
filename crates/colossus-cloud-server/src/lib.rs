@@ -27,3 +27,4 @@ mod telemetry_host;
 mod terminal;
 mod terminal_relay;
 mod tls;
+mod transcript_export;

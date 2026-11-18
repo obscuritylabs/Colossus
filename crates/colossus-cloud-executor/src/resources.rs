@@ -18,6 +18,36 @@ pub struct ExecutionResources {
     pub model_profiles: Vec<colossus_sdk::ConfiguredModelProfile>,
 }
 impl ExecutionResources {
+    /// Read a transcript with the same dedicated caller-bound run client as Cloud work.
+    /// Other management operations keep their existing independently injected resources.
+    pub async fn execute_with_runs(
+        &self,
+        operation: ResourceOperation,
+        runs: &dyn colossus_sdk::AgentRunClient,
+    ) -> ResourceReply {
+        if let ResourceOperation::ReadSessionTranscript {
+            source_run_id,
+            page_token,
+            page_size,
+        } = operation
+        {
+            if !self
+                .capabilities
+                .iter()
+                .any(|capability| capability == colossus_cloud_protocol::TRANSCRIPT_CAPABILITY)
+            {
+                return ResourceReply::Failed {
+                    error: unsupported(),
+                };
+            }
+            return match crate::transcript::read(runs, source_run_id, page_token, page_size).await {
+                Ok(value) => ResourceReply::Result { value },
+                Err(error) => ResourceReply::Failed { error },
+            };
+        }
+        self.execute(operation).await
+    }
+
     /// Execute a bounded resource operation beneath the injected SDK clients' grants.
     pub async fn execute(&self, operation: ResourceOperation) -> ResourceReply {
         let result = self.perform(operation).await;
@@ -95,6 +125,7 @@ impl ExecutionResources {
                 run_json(client.start_run(request).await?)
             }
             ResourceOperation::Context
+            | ResourceOperation::ReadSessionTranscript { .. }
             | ResourceOperation::ModelCatalog {}
             | ResourceOperation::ListPlugins => Err(unsupported()),
         }

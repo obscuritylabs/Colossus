@@ -96,6 +96,7 @@ mod public_api_admin;
 mod run_usage;
 mod service_args;
 mod terminal_io;
+mod transcript_export;
 mod update_commands;
 mod webhooks;
 mod work_args;

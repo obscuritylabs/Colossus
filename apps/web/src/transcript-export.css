@@ -1,0 +1,52 @@
+.web-transcript-export {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  background: var(--surface);
+  font: inherit;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.web-transcript-export[open] {
+  display: grid;
+}
+.web-transcript-export::backdrop {
+  background: var(--surface-overlay);
+}
+.web-transcript-export > header,
+.web-transcript-export > footer {
+  padding: 16px 20px;
+}
+.web-transcript-export > footer button {
+  min-height: var(--control-height-touch);
+}
+.web-transcript-export h2 {
+  margin: 0;
+  font-size: var(--font-size-heading);
+}
+.web-transcript-export-content {
+  display: grid;
+  gap: 12px;
+  padding: 0 20px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.web-transcript-export-content p {
+  margin: 0;
+}
+.web-transcript-export-content label {
+  font-weight: 600;
+}
+.web-transcript-export > footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+@media (max-width: 480px) {
+  .web-transcript-export > footer button {
+    flex: 1 1 100%;
+  }
+}

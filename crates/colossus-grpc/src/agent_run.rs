@@ -613,6 +613,51 @@ impl AgentRunService for AgentRunServiceAdapter {
         result
     }
 
+    async fn read_session_transcript(
+        &self,
+        request: Request<colossus_api_proto::v1alpha1::ReadSessionTranscriptRequest>,
+    ) -> Result<Response<colossus_api_proto::v1alpha1::ReadSessionTranscriptResponse>, Status> {
+        let caller = caller_context(&request)?.clone();
+        let span = public_rpc_span(&request, &caller, "ReadSessionTranscript");
+        let result = async {
+            let request = request.into_inner();
+            validate_identifier(&caller, "source_run_id", &request.source_run_id)?;
+            let (page_size, page_token) = request.page.map_or((0, None), |page| {
+                (
+                    page.page_size,
+                    (!page.page_token.is_empty()).then_some(page.page_token),
+                )
+            });
+            if page_token
+                .as_ref()
+                .is_some_and(|token| token.len() > 4096 || token.chars().any(char::is_control))
+            {
+                return Err(invalid(
+                    &caller,
+                    "page.page_token",
+                    "invalid transcript cursor",
+                ));
+            }
+            let page = self
+                .api
+                .read_session_transcript(
+                    &caller,
+                    colossus_api::ReadSessionTranscriptRequest {
+                        source_run_id: request.source_run_id,
+                        page_size,
+                        page_token,
+                    },
+                )
+                .await
+                .map_err(api_status)?;
+            Ok(Response::new(crate::transcript_wire::page_to_proto(page)))
+        }
+        .instrument(span.clone())
+        .await;
+        record_rpc_result(&span, &result);
+        result
+    }
+
     type WatchRunStream =
         Pin<Box<dyn Stream<Item = Result<WatchRunResponse, Status>> + Send + 'static>>;
 

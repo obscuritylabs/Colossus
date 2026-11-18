@@ -762,6 +762,89 @@ unrelated journal growth.
 
 ## Durable run contract
 
+### Canonical conversation export
+
+`AgentRunService.ReadSessionTranscript` is an optional read-only capability,
+advertised as `conversations.transcript.v1` only when the host implements it and
+the authenticated caller has `runs:read`. The Rust SDK exposes
+`client.runs().read_session_transcript(ReadSessionTranscriptRequest)`. Custom
+backends default to unavailable; the capability does not imply that the worker
+hosts the broader `SessionService`.
+
+The request addresses a canonical session through `source_run_id`, an owned or
+explicitly shared visible run. The service checks both run visibility and the
+original session's current sharing rules on every page, including before releasing
+the response. Owning a continuation run does not bypass revocation of the original
+session. The caller does not supply a session path, owner, transcript text, or
+attachment authority.
+
+The canonical DTOs live in `colossus-contracts::transcript`, with request validation
+in `colossus-api::transcript` and protobuf messages in
+`api/colossus/api/v1alpha1/transcript.proto`. `TranscriptPage` contains fixed
+`TranscriptSnapshot` metadata, chronological `TranscriptMessage` records and an
+optional opaque continuation. The public page size defaults to 32 and accepts at
+most 32 messages. Each canonical page is bounded to 1.5 MiB; the indexed reader
+scans at most 128 events in batches of eight without replaying the entire session.
+Filtered pages can be empty and still carry a continuation. Follow every token
+until it is absent; message sequence gaps from excluded records are valid.
+
+Transcript pages have separate admission from metadata lists: at most two active
+reads globally and one per application, with four global waiters and one per
+application. The global token bucket allows 16 pages per second with a burst of
+eight; the application bucket allows eight per second with a burst of four.
+Admission waits for at most two seconds and releases queued capacity on
+cancellation. A full queue or expired wait returns `CapacityExceeded`. Source,
+session-sharing and cursor checks run again after admission and after reading;
+waiting never reserves metadata-list capacity.
+
+The first page fixes the session stream boundary, title, capture time and activity
+for that traversal. `active` means session activity was established; `idle` requires
+proof of inactivity; `unknown` must remain unknown. Appends after capture are
+excluded. Signed public cursors bind the application, source run, session, sharing
+revision and snapshot, expire 30 minutes after capture, and can become invalid
+after a service restart or sharing change. Start a new traversal after an invalid
+or expired cursor rather than combining pages from different snapshots. An
+individual message that does not fit the page's JSON byte budget fails instead
+of being shortened, even if the total export is below its limit. JSON escaping
+can make a message exceed that budget; changing output format or using the CLI
+does not bypass the canonical reader's bound.
+
+The [user export guide](../use/sessions.md#export-a-conversation) owns disclosure
+scope, formats and recovery. The session reader projects only the released
+human/application conversation; it never uses provider working context, run-feed
+excerpts or UI caches as the export source. Existing run-input handling expands
+supported text attachments into canonical user text and can merge adjacent text
+parts before saving. Export preserves that saved text, including attachment
+contents and their labels; it does not infer or remove attachment text from those
+labels. Image and opaque attachment references remain metadata placeholders.
+Export fetches no attachment file and embeds no image bytes. It reads existing
+journal events and indexes without a SQL migration.
+`colossus-presentation::TranscriptWriter` owns
+Markdown, text and JSON formatting. Hosts must stage bytes, require a stable
+snapshot, advancing cursors and complete traversal, and publish only after
+`finish()` succeeds. The shared formatter caps output at 256 MiB and 10,000 pages.
+
+Desktop's narrow `export_conversation` command resolves the source natively and
+accepts operation/target/run identities, format and Save/Copy choice. It accepts no
+renderer-provided path or transcript. Native code reads and stages the snapshot,
+uses the native Save dialog and publishes without replacing an existing file.
+Only Copy releases bounded formatted text to the renderer. The dialog prepares
+that text first; a separate user click invokes the host's clipboard write directly,
+preserving browser user activation. Cancellation and target generation checks
+fence preparation and the final save or clipboard handoff. See the
+[Desktop workflow](../desktop/work.md#export-a-conversation) for its limits.
+
+Cloud's `POST /api/projects/{project}/threads/{thread}/transcript/export` derives the
+source from an authorized thread. It requires CSRF protection, project Read access
+and personal-thread visibility. The server pins the connected runtime generation,
+checks access throughout traversal and before response, and returns `no-store`
+attachment bytes only after complete formatting. The endpoint allows two concurrent
+exports per server process, a 20-second total deadline and 64 MiB output. Hosted
+read-only hydration uses the existing fenced personal runtime; it cannot admit a
+run. Arbitrary transcript reads through the generic resource endpoint are rejected.
+The [Cloud workflow](../cloud/work.md#export-the-retained-conversation) retains the
+loaded-history fallback and distinguishes a started download from a saved file.
+
 ### Workflow resources
 
 The worker hosts authenticated `AutomationService` alongside chat services. The Rust
@@ -870,7 +953,7 @@ justification separately as agent-provided. Missing command context means a hist
 or non-command interaction, not a reason to synthesize task intent. Full-details views
 must not silently truncate accepted commands. Command context participates in immutable
 challenge validation and durable replay. Public protobuf field 8 is additive; removed
-fields 1 and 7 remain reserved. Private worker protocol 27 requires matching clients
+fields 1 and 7 remain reserved. Private worker protocol 28 requires matching clients
 and a worker restart; configuration stays schema version 3.
 The server revalidates responses against the private request and applies current scope
 checks to cancellation and response operations.

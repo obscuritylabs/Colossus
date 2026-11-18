@@ -95,6 +95,7 @@ pub struct SystemServiceAdapter {
     workflows: bool,
     policy_posture: bool,
     prompt_prediction: bool,
+    session_transcript: bool,
     agent_communication: bool,
     human_terminals: bool,
     model_catalog: Option<Arc<dyn ModelCatalogProvider>>,
@@ -111,6 +112,7 @@ impl SystemServiceAdapter {
             workflows: false,
             policy_posture: false,
             prompt_prediction: false,
+            session_transcript: false,
             agent_communication: false,
             human_terminals: false,
             model_catalog: None,
@@ -151,6 +153,10 @@ impl SystemServiceAdapter {
         self.prompt_prediction = true;
         self
     }
+    pub(crate) fn with_session_transcript(mut self) -> Self {
+        self.session_transcript = true;
+        self
+    }
     pub(crate) fn with_agent_communication(mut self) -> Self {
         self.agent_communication = true;
         self
@@ -183,6 +189,10 @@ impl SystemService for SystemServiceAdapter {
             ("runtime.policy_posture.v1", scopes::RUNS_READ),
             (colossus_api::NEXT_PROMPT_CAPABILITY, scopes::RUNS_EXECUTE),
             (SESSION_ACTIVITY_CAPABILITY, scopes::RUNS_READ),
+            (
+                colossus_api::SESSION_TRANSCRIPT_CAPABILITY,
+                scopes::RUNS_READ,
+            ),
             ("process_sessions.v1", scopes::RUNS_READ),
             ("agent_runs.cancel", scopes::RUNS_CONTROL),
             ("prompts.respond", scopes::PROMPTS_RESPOND),
@@ -196,6 +206,7 @@ impl SystemService for SystemServiceAdapter {
             enabled: caller.principal().has_scope(scope)
                 && (name != colossus_api::HUMAN_TERMINAL_CAPABILITY || self.human_terminals)
                 && (name != "runtime.policy_posture.v1" || self.policy_posture)
+                && (name != colossus_api::SESSION_TRANSCRIPT_CAPABILITY || self.session_transcript)
                 && (name != colossus_api::NEXT_PROMPT_CAPABILITY
                     || (self.prompt_prediction && caller.principal().has_scope(scopes::RUNS_READ)))
                 && (!matches!(
@@ -634,6 +645,43 @@ mod tests {
                 info.capabilities
                     .iter()
                     .find(|capability| capability.name == colossus_api::NEXT_PROMPT_CAPABILITY)
+                    .unwrap()
+                    .enabled,
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn transcript_capability_requires_implementation_and_only_read_authority() {
+        for (implemented, scopes, expected) in [
+            (false, vec![scopes::RUNS_READ], false),
+            (true, vec![], false),
+            (
+                true,
+                vec![scopes::RUNS_EXECUTE, scopes::RUNS_CONTROL],
+                false,
+            ),
+            (true, vec![scopes::RUNS_READ], true),
+        ] {
+            let service = if implemented {
+                service().with_session_transcript()
+            } else {
+                service()
+            };
+            let info = service
+                .get_server_info(request_with(GetServerInfoRequest {}, scopes, Vec::new()))
+                .await
+                .unwrap()
+                .into_inner()
+                .server_info
+                .unwrap();
+            assert_eq!(
+                info.capabilities
+                    .iter()
+                    .find(
+                        |capability| capability.name == colossus_api::SESSION_TRANSCRIPT_CAPABILITY
+                    )
                     .unwrap()
                     .enabled,
                 expected

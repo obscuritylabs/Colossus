@@ -5,6 +5,7 @@
   "local": true,
   "webviews": ["main"],
   "permissions": [
+    "allow-export-conversation",
     "allow-report-renderer-failure",
     "allow-sync-client-identity-appearance",
     "allow-workflow-context",

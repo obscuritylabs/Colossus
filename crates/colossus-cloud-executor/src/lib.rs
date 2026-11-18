@@ -5,6 +5,7 @@ mod history;
 mod inboxes;
 mod released;
 mod resources;
+mod transcript;
 pub use resources::ExecutionResources;
 
 pub use commands::execute;

@@ -25,6 +25,8 @@ import {
   beginManagedMcpOAuth,
   archiveThread,
   cancelRun,
+  cancelConversationExport,
+  exportConversation,
   checkDesktopUpdate,
   closeTerminal,
   codexAuthLogin,
@@ -908,6 +910,50 @@ describe("workspace inspection requests", () => {
     await searchWorkspaceFiles("workspace", "src/main");
     expect(tauri.invoke).toHaveBeenLastCalledWith("search_workspace_files", {
       request: { workspaceId: "workspace", query: "src/main" },
+    });
+  });
+});
+
+describe("conversation transcript export boundary", () => {
+  it("sends a run receipt and format without paths or renderer transcript content", async () => {
+    const progress = vi.fn();
+    await exportConversation(
+      "selected-target",
+      "discovered-run",
+      "opaque-receipt",
+      {
+        operationId: "operation-one",
+        format: "markdown",
+        destination: "save",
+        signal: new AbortController().signal,
+        onProgress: progress,
+      },
+    );
+    expect(tauri.invoke).toHaveBeenLastCalledWith("export_conversation", {
+      targetId: "selected-target",
+      request: {
+        action: "start",
+        operationId: "operation-one",
+        runId: "discovered-run",
+        discoveryProof: "opaque-receipt",
+        format: "markdown",
+        destination: "save",
+      },
+      onProgress: tauri.channels.at(-1),
+    });
+    tauri.channels
+      .at(-1)
+      ?.onmessage?.({ phase: "reading", pagesRead: 20, messagesRead: 45 });
+    expect(progress).toHaveBeenCalledWith({
+      phase: "reading",
+      pagesRead: 20,
+      messagesRead: 45,
+    });
+    await cancelConversationExport("selected-target", "operation-one");
+    expect(tauri.invoke).toHaveBeenLastCalledWith("export_conversation", {
+      targetId: "selected-target",
+      request: { action: "cancel", operationId: "operation-one" },
+      onProgress: tauri.channels.at(-1),
     });
   });
 });

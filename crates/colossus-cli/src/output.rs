@@ -298,6 +298,11 @@ fn terminal_help_document(preferences: &TerminalPreferences) -> PresentationDocu
             "Resume or manage durable conversations",
         ],
         [
+            "Export conversation",
+            "/session export PATH [--format markdown|text|json] · /export PATH",
+            "Save a complete released snapshot; Markdown is the default",
+        ],
+        [
             "Work",
             "/work · /tasks · /decisions · /plans · /goals · /goal resume GOAL_ID · /agents",
             "Inspect and drive durable work",

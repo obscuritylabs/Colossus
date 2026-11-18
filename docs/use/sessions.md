@@ -1,6 +1,6 @@
 ---
 title: Sessions
-description: Start, find, and resume durable conversations in the terminal UI or CLI.
+description: Start, find, resume, and export durable conversations.
 audience: user
 type: how-to
 icon: lucide/messages-square
@@ -110,7 +110,7 @@ includes the title, timestamps, message count, and last run ID. Use
 `colossus run --resume "Continue the review"` for the most recently updated session
 when its exact ID does not matter. A plain `colossus run "..."` starts a fresh one.
 
-To read the retained transcript, run:
+To inspect saved message records, run:
 
 ```bash
 colossus sessions messages SESSION_ID
@@ -119,6 +119,82 @@ colossus sessions messages SESSION_ID
 Messages remain in the canonical journal even if Colossus later compacts the model's
 working context. See [Context and snapshots](sessions-context.md) for long sessions
 and [TUI commands and keys](../reference/tui.md) for the full interactive command list.
+
+## Export a conversation
+
+Choose a session with `colossus sessions list`, then export it to a new file:
+
+```bash
+colossus sessions export SESSION_ID --output conversation.md
+colossus sessions export SESSION_ID --output conversation.txt --format text
+colossus sessions export SESSION_ID --output conversation.json --format json
+```
+
+Markdown is the default. Plain text retains the message text, including any Markdown
+or code it contains, with readable author and time separators. JSON includes versioned
+snapshot metadata and ordered messages. Export preserves original visible text and
+multipart order across the session's runs, including retained messages from before
+context compaction. It reads saved history rather than the messages currently loaded
+on screen. Export each branch as its own session; parent lineage metadata is unavailable.
+
+The export contains human or application inputs and released visible assistant text.
+It excludes peer-agent messages, system instructions, hidden reasoning, tool calls and
+results, and private agent context. Text attachment content already inserted into
+saved user or assistant messages is included. Images and opaque attachment
+references appear as metadata placeholders with a display filename, media type,
+and byte size. Export does not fetch attachment files or embed image bytes. Saved
+text can still contain sensitive information, including file contents and paths.
+Review the file before sharing it.
+
+An export captures a fixed snapshot when reading begins. If work is running, later
+messages and uncommitted output are excluded. The file reports active work when it
+can be established, or unknown activity when it cannot. A completed export means the
+captured snapshot is complete; it does not mean the conversation's work has finished.
+
+In the TUI, export the current conversation with either command:
+
+```text
+/session export "conversation notes.md"
+/export conversation.json --format json
+```
+
+Quote paths containing spaces. The TUI requires a file destination. The CLI can write
+the completed transcript to standard output with `--output -`:
+
+```bash
+colossus sessions export SESSION_ID --output - --format text
+```
+
+File exports require an existing writable parent directory and a new filename.
+Existing files are kept, including when another process creates the destination
+during export. Colossus stages the output until the whole snapshot has been read;
+failed reads do not publish a shortened file. CLI and TUI exports stop at 256 MiB
+or 10,000 source pages rather than truncate the conversation. Standard output is
+also staged before delivery; a broken pipe can still interrupt that final delivery.
+
+[Desktop](../desktop/work.md#export-a-conversation) and
+[Cloud](../cloud/work.md#export-the-retained-conversation) offer the same formats
+through **Export conversation**, with their own save and clipboard limits. Full
+export requires a runtime that supports it and current read access. The VS Code
+extension has no conversation export command.
+
+If export fails, keep the conversation open and check the reported cause:
+
+- **Destination exists or is unwritable:** choose a new filename in a writable
+  directory and retry.
+- **Runtime unavailable or export unsupported:** reconnect to the conversation's
+  runtime and update it if needed. Cloud's loaded-conversation actions can save
+  an explicitly incomplete excerpt while its source is offline.
+- **Access changed, cursor expired, or runtime restarted:** reopen the conversation
+  and start a new export. It captures a new snapshot.
+- **Total size or page limit:** the export fails without shortening the snapshot.
+  Use Save instead of Copy for the clipboard limit, or the CLI for Cloud's smaller
+  total download limit.
+- **Individual message limit:** a retained message must fit the canonical reader's
+  1.5 MiB page budget, including JSON encoding overhead. A message with extensive
+  escaping can fail even when the whole conversation is below the total export
+  limit. This fails explicitly without truncation. Switching to the CLI or another
+  format does not bypass this reader limit.
 
 ## If you can't find a session
 

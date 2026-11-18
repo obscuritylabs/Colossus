@@ -60,6 +60,18 @@ export async function request<T>(
   signal?: AbortSignal,
   method?: "PATCH" | "DELETE" | "PUT",
 ): Promise<T> {
+  const response = await requestResponse(path, body, signal, method);
+  if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
+}
+
+/** Authenticated requests for released binary responses retain ordinary browser authority. */
+export async function requestResponse(
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+  method?: "PATCH" | "DELETE" | "PUT",
+): Promise<Response> {
   const response = await fetch(path, {
     method: method ?? (body === undefined ? "GET" : "POST"),
     credentials: "same-origin",
@@ -92,8 +104,7 @@ export async function request<T>(
         "The request could not be completed.",
     );
   }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+  return response;
 }
 export function projectPath(project: string) {
   return `/api/projects/${encodeURIComponent(project)}`;

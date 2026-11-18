@@ -18,6 +18,7 @@ the owning crates and tests.
 | Durable journal, projections, recovery, and audit export | journal, projection, audit, telemetry crates | [State and recovery](state-recovery.md), [Audit and recovery](../admin/audit-telemetry-recovery.md) | Shared conformance, tamper, crash, outage, and export tests |
 | Providers, model routing, and normalized turns | `colossus-provider`, `colossus-agent`, `colossus-runtime` | [Choose a provider](../use/providers/index.md), [Providers and models](../reference/configuration/providers-models.md) | Provider and agent suites plus CLI provider smoke tests |
 | Sessions and context | `colossus-session`, `colossus-context`, `colossus-runtime` | [Sessions](../use/sessions.md), [context and snapshots](../use/sessions-context.md) | Repository, snapshot, compaction, and branch tests |
+| Human conversation export | `colossus-session` indexed reader, `colossus-contracts` DTOs, `colossus-api-runtime` disclosure and `colossus-presentation` formatter; client host adapters | [Export a conversation](../use/sessions.md#export-a-conversation), [API contract](application-sdk.md#canonical-conversation-export) | Fixed-snapshot, disclosure, cursor, byte-bound, shared-formatting, staging and host-adapter tests; client browser tests cover their rendered workflows |
 | Tasks, decisions, plans, goals, and subagents | `colossus-work`, `colossus-agent`, `colossus-runtime` | [Tasks, decisions, and plans](../use/tasks-decisions-plans.md), [Goals and subagents](../use/goals-subagents.md) | Lifecycle, lineage, budget, cancellation, and recovery tests |
 | Memory and lexical projection | `colossus-memory` | [Memories](../use/memories.md), [Context and memory configuration](../reference/configuration/context-memory-research.md) | Canonical lifecycle, Tantivy, fallback, and recovery tests |
 | Search and source-backed research | `colossus-search`, `colossus-research`, `colossus-runtime` | [Web search](../use/web-search.md), [Deep research](../use/deep-research.md) | Search adapter, evidence/citation, and CLI research tests |
@@ -67,6 +68,7 @@ Their pending native checks remain separate from implementation and historical t
 | Capability | Public API / SDK | CLI / TUI | Desktop | VS Code | Web |
 | --- | --- | --- | --- | --- | --- |
 | Progressive Desktop thread history | Existing authenticated run discovery and bounded pages; full run reads retain their contract | Existing session browsers and history commands retain their workflows | Supported: older pages load while scrolling, thin summaries survive beyond the former 200-entry cutoff, and a virtual list bounds rendered rows; reopening an evicted native binding revalidates its source | Existing extension history workflow; no host change | Existing web history workflow; no host change |
+| Human conversation export | Supported: optional `conversations.transcript.v1` read-only paging through an authorized source run; broader `SessionService` remains unhosted | Supported: `sessions export`, `/session export` and `/export` in embedded and worker hosts | Implemented: native Save and bounded Copy with progress/cancellation; installed native Save/clipboard acceptance pending | Missing: no human export command | Implemented: full Hosted/Fleet export with bounded download/Copy and authorized live source; loaded-history actions remain the offline excerpt fallback |
 | Standalone Goal creation | Supported; bounded iterations and caller tool ceiling | Supported; CLI and full-screen TUI `/goal` creation/completion acceptance in embedded and worker hosts | Supported; composer and native request validation evidence | Missing; composer exposes Plan, Execute, and Research | Supported on connected runtimes; capability and budget-bound composer |
 | Always On check-ins in an owned local conversation | Standing-chat controls use authenticated local worker IPC. Desktop wake runs use the existing owned run API. | CLI enrollment, status, pause, and manual wake. TUI opens the same session using its ordinary session selector. | Managed Local conversation enrollment and wake controls. Workspace worker must be running. | No Always On control. | No Always On control. |
 | Anthropic tool replay recovery | Ordinary Execute can continue a verified oversized replay using saved tool evidence. The keyless missing-checkpoint path also remains available. | Existing CLI resume and TUI continuation use the same runtime recovery. | Managed Local inherits protected replay overflow recovery. | Existing Execute conversations inherit the runtime behavior. | Connected runtimes inherit the ordinary Execute recovery. |
@@ -82,6 +84,31 @@ Their pending native checks remain separate from implementation and historical t
 
 Evidence and owned follow-ups:
 
+- **Conversation export:** The [canonical guide](../use/sessions.md#export-a-conversation)
+  and [SDK contract](application-sdk.md#canonical-conversation-export) own behavior.
+  `crates/colossus-session/src/transcript/tests.rs` covers indexed work bounds,
+  original text and multipart order, private/peer filtering, fixed appends, archive
+  and reader recreation. `crates/colossus-api-runtime/src/service_tests/transcript.rs`
+  covers original-session disclosure, revocation and caller/source-bound cursors;
+  gRPC and SDK tests cover wire fidelity and capability discovery.
+  `crates/colossus-presentation/src/transcript_export/tests.rs` covers all formats,
+  completion, bounds and safe metadata. CLI smoke tests in `agent_smoke.rs` and
+  `worker_smoke.rs` cover the command in embedded/worker hosts; interactive and
+  staging tests cover quoted paths, cancellation and no-clobber publication.
+  Desktop native `conversation_export/tests.rs` covers full-source paging,
+  substituted/changed snapshots, bounded Copy and destination collisions;
+  `apps/desktop/tests/browser/conversation-export.spec.ts` covers format choices,
+  cancellation, stale results, keyboard focus and compact themed layouts.
+  Cloud server `transcript_export/tests.rs` and transport authorization tests cover
+  bounds and source selection; `apps/web/src/transcript-export.test.ts` and
+  `apps/web/tests/browser/transcript-export.browser.ts` cover complete response
+  handling, formats, cancellation and keyboard/layout behavior. These renderer
+  fixtures do not establish installed native or deployed full-stack acceptance.
+  `desktop_owner` and `test_owner` own installed native Save/clipboard acceptance;
+  `test_owner` owns deployed Hosted/Fleet end-to-end acceptance. `vscode_owner`
+  owns a future export command through the public read capability, including
+  safe destination handling and explicit failures. No extension workflow is
+  established by generated contracts alone.
 - **Desktop thread history:** The [Desktop guide](../desktop/work.md#return-to-a-conversation)
   describes progressive paging and retry. Native adapter tests in
   `apps/desktop/src-tauri/src/conversation_runs/revalidation_tests.rs` cover bounded

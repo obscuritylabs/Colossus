@@ -513,6 +513,7 @@ export function Chat({
                 key={selected.thread_id}
                 initial={selected}
                 project={project}
+                identity={identity}
                 nodes={node ? [node] : []}
                 permissions={personalChatPermissions(
                   permissions,

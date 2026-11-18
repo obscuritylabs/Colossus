@@ -104,6 +104,7 @@ import {
 import { useRunModeCapabilities } from "./research-capability";
 import { ThreadPlanDecision } from "./ThreadPlanDecision";
 import type { PlanContinuation, PlanStrategy } from "./plan-continuation";
+import { ConversationExportDialog } from "./ConversationExportDialog";
 
 function mergeMessages(current: ThreadMessage[], incoming: ThreadMessage[]) {
   const byId = new Map(current.map((item) => [item.message_id, item]));
@@ -127,6 +128,7 @@ function mergeTasks(current: Task[], incoming: Task[]) {
 export function ThreadDetail({
   initial,
   project,
+  identity = "",
   nodes,
   permissions,
   onBack,
@@ -142,6 +144,7 @@ export function ThreadDetail({
 }: {
   initial: Thread;
   project: string;
+  identity?: string;
   nodes: FleetNode[];
   permissions: Permission[];
   onBack: () => void;
@@ -360,6 +363,7 @@ export function ThreadDetail({
   }, [project, thread.thread_id, thread.active_task_id, thread.queued_task_ids?.length, predictionTask, projection.messages]);
   const loadPromptPrediction = useCallback((signal: AbortSignal) => predictionTask?.run_id ? loadNextPrompt(`/api/projects/${encodeURIComponent(project)}/tasks/${encodeURIComponent(predictionTask.task_id)}`, predictionTask.run_id, signal) : Promise.resolve(null), [project, predictionTask?.task_id, predictionTask?.run_id]);
   const textScope = JSON.stringify([
+    identity,
     project,
     initial.thread_id,
     initial.node_id,
@@ -369,6 +373,7 @@ export function ThreadDetail({
   ]);
   const textScopeRef = useRef(textScope);
   textScopeRef.current = textScope;
+  const [exportScope, setExportScope] = useState<string | null>(null);
   const textMessages = useMemo<ConversationTextMessage[]>(
     () =>
       detail.thread.thread_id !== initial.thread_id ||
@@ -425,6 +430,7 @@ export function ThreadDetail({
   useEffect(() => {
     setFind({ scope: textScope, open: false, query: "", selectedId: null });
     setTextFeedback(null);
+    setExportScope(null);
   }, [textScope]);
   useEffect(() => {
     if (find.open) findInput.current?.focus();
@@ -904,6 +910,7 @@ export function ThreadDetail({
                 embedded
                 initial={child}
                 project={project}
+                identity={identity}
                 nodes={composerNodes}
                 permissions={permissions}
                 onBack={() => setAsideChild(null)}
@@ -1106,6 +1113,17 @@ export function ThreadDetail({
                     }
                   }}
                 >
+                  {permissions.includes("read") ? (
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        skipActionsFocus.current = true;
+                        setExportScope(textScope);
+                      }}
+                    >
+                      <IconDownload size={16} aria-hidden="true" />
+                      Export conversation…
+                    </DropdownMenuItem>
+                  ) : null}
                   <DropdownMenuItem
                     disabled={
                       !textMessages.length || copyingScope === textScope
@@ -1655,6 +1673,15 @@ export function ThreadDetail({
                   ? "This agent’s enrollment was revoked. Saved history remains available."
                   : "Your project access does not allow messages to this agent."}
         </p>
+      ) : null}
+      {exportScope === textScope ? (
+        <ConversationExportDialog
+          key={textScope}
+          threadPath={path}
+          allowed={permissions.includes("read")}
+          returnFocus={actionsMenu.triggerRef.current}
+          onClose={() => setExportScope(null)}
+        />
       ) : null}
     </section>
   );

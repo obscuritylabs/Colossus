@@ -70,6 +70,7 @@ use workflow_commands::{
 };
 mod configuration_import;
 mod connection;
+mod conversation_export;
 mod conversation_runs;
 mod desktop_commands;
 mod desktop_credentials;
@@ -269,6 +270,7 @@ pub fn run() {
         .manage(client_identity_review::ClientIdentityReviewState::default())
         .manage(workspace_git::commands::GitState::default())
         .manage(workspace_search::SearchState::default())
+        .manage(conversation_export::ConversationExports::default())
         .setup(|app| {
             status_bar::setup(app)?;
             desktop_extras::install(app.handle())?;
@@ -300,6 +302,8 @@ pub fn run() {
             {
                 use tauri::Manager as _;
                 view.state::<dictation::DictationState>().cancel();
+                view.state::<conversation_export::ConversationExports>()
+                    .cancel();
                 desktop_extras::controller_loading(view.app_handle());
                 client_identity_review::controller_loading(view.app_handle());
                 view.state::<state::AppState>().browser.controller_loading();
@@ -315,6 +319,9 @@ pub fn run() {
             {
                 use tauri::Manager as _;
                 window.state::<dictation::DictationState>().cancel();
+                window
+                    .state::<conversation_export::ConversationExports>()
+                    .cancel();
             }
             desktop_extras::handle_window_event(window, event);
             browser::handle_window_event(window, event);
@@ -322,6 +329,7 @@ pub fn run() {
             status_bar::handle_window_event(window, event);
         })
         .invoke_handler(tauri::generate_handler![
+            conversation_export::export_conversation,
             desktop_extras::desktop_features_context,
             desktop_extras::save_desktop_features,
             desktop_extras::capture::appshot_preview,

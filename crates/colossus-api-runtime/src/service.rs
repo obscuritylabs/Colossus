@@ -4,7 +4,7 @@ use crate::run_failures::runtime_failure;
 use crate::{
     admission::{
         AdmissionLimitReached, ListAdmission, ReserveRun, RunAdmissionConfig, RunAdmissionState,
-        WatchAdmission,
+        TranscriptAdmission, WatchAdmission,
     },
     feed::RunFeeds,
     interactions::PublicInteractionRouter,
@@ -55,6 +55,7 @@ mod prompt_predictions;
 mod sharing;
 mod telemetry;
 mod tool_activity;
+mod transcript;
 use tool_activity::ToolActivityContexts;
 mod watch;
 use telemetry::{ExecutionSource, RunTelemetry};
@@ -149,6 +150,7 @@ pub struct RuntimeAgentRunApi {
     execution: Arc<Mutex<ExecutionRegistry>>,
     watches: Arc<WatchAdmission>,
     lists: Arc<ListAdmission>,
+    transcript_pages: Arc<TranscriptAdmission>,
     shell_queries: Arc<ListAdmission>,
     shell_reads: Arc<ListAdmission>,
     shell_controls: Arc<ListAdmission>,
@@ -158,6 +160,7 @@ pub struct RuntimeAgentRunApi {
     default_role: String,
     instructions: String,
     telemetry: RunTelemetry,
+    transcript_key: Arc<Mutex<Option<[u8; 32]>>>,
     #[cfg(test)]
     next_execution_fault: Arc<Mutex<Option<ExecutionTestFault>>>,
 }
@@ -253,6 +256,7 @@ impl RuntimeAgentRunApi {
             })),
             watches,
             lists,
+            transcript_pages: TranscriptAdmission::new(),
             shell_queries,
             shell_reads,
             shell_controls,
@@ -262,6 +266,7 @@ impl RuntimeAgentRunApi {
             default_role: default_role.into(),
             instructions: instructions.into(),
             telemetry: RunTelemetry::default(),
+            transcript_key: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             next_execution_fault: Arc::new(Mutex::new(None)),
         }
@@ -1691,6 +1696,18 @@ impl RuntimeAgentRunApi {
 
 #[async_trait]
 impl AgentRunApi for RuntimeAgentRunApi {
+    fn supports_session_transcript(&self) -> bool {
+        true
+    }
+
+    async fn read_session_transcript(
+        &self,
+        caller: &CallerContext,
+        request: colossus_api::ReadSessionTranscriptRequest,
+    ) -> ApiResult<colossus_api::TranscriptPage> {
+        self.transcript_page(caller, request).await
+    }
+
     fn supports_next_prompt_prediction(&self) -> bool {
         true
     }
