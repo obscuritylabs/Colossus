@@ -1031,6 +1031,7 @@ fn managed_runtime_config(
                         .collect(),
                     allow_stateless: server.allow_stateless,
                     protocol_version: server.protocol_version,
+                    enable_tasks: false,
                     oauth: server.oauth.as_ref().map(|oauth| McpOAuthConfig {
                         client_id: oauth.client_id.clone(),
                         client_secret_reference: oauth

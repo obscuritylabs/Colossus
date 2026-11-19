@@ -179,6 +179,15 @@ pub(super) enum SessionsAction {
     Show { session_id: String },
     /// Show append-only messages for one session.
     Messages { session_id: String },
+    /// Export released user and assistant messages from a durable snapshot.
+    Export {
+        session_id: String,
+        /// New output file, or - to write the completed export to stdout.
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, value_enum, default_value_t = crate::transcript_export::TranscriptFormatArg::Markdown)]
+        format: crate::transcript_export::TranscriptFormatArg,
+    },
     /// Create an empty session.
     New { title: Option<String> },
 }

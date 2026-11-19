@@ -34,6 +34,7 @@ pub(crate) fn router(state: Arc<State>) -> Router {
         .route("/api/projects/{project}/threads",get(threads).post(create_thread))
         .route("/api/projects/{project}/threads/{thread}",get(thread_detail).patch(edit_thread))
         .route("/api/projects/{project}/threads/{thread}/metadata",get(thread_metadata::read))
+        .route("/api/projects/{project}/threads/{thread}/transcript/export",post(crate::transcript_export::export))
         .route("/api/projects/{project}/threads/{thread}/messages",post(send_message))
         .route("/api/projects/{project}/threads/{thread}/branches",get(branches::list).post(branches::create))
         .route("/api/projects/{project}/threads/{thread}/events",get(thread_events))

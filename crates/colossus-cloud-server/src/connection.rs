@@ -143,6 +143,10 @@ impl RuntimeConnection for Connection {
             .capabilities
             .iter()
             .any(|cap| cap == colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY);
+        let transcript_enabled = hello
+            .capabilities
+            .iter()
+            .any(|cap| cap == colossus_cloud_protocol::TRANSCRIPT_CAPABILITY);
         let terminal_enabled = hello
             .capabilities
             .iter()
@@ -259,6 +263,7 @@ impl RuntimeConnection for Connection {
                     discovery_enabled,
                     resource_enabled,
                     model_catalog_enabled,
+                    transcript_enabled,
                 },
                 inbound,
                 &sender,
@@ -298,6 +303,7 @@ struct ConnectionScope {
     discovery_enabled: bool,
     resource_enabled: bool,
     model_catalog_enabled: bool,
+    transcript_enabled: bool,
 }
 async fn serve_connection(
     state: Arc<State>,
@@ -313,9 +319,8 @@ async fn serve_connection(
         discovery_enabled,
         resource_enabled,
         model_catalog_enabled,
+        transcript_enabled,
     } = scope;
-    let mut interval = tokio::time::interval(Duration::from_millis(500));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_heartbeat = Instant::now();
     let mut sent = HashSet::new();
     let mut watched = HashSet::new();
@@ -398,7 +403,9 @@ async fn serve_connection(
                     _=>return Err(Status::invalid_argument("unexpected runtime frame")),
                 }
             },
-            _=interval.tick()=>{},
+            // Anchor the wakeup to the last actual dispatch. A phase-locked
+            // interval can wake just before the elapsed gate and skip a cycle.
+            _=tokio::time::sleep_until(tokio::time::Instant::from_std(last_dispatch + Duration::from_millis(500)))=>{},
             _=hints.recv()=>{},
         }
         if last_dispatch.elapsed() < Duration::from_millis(500) {
@@ -445,6 +452,7 @@ async fn serve_connection(
                     &lease,
                     request,
                     model_catalog_enabled,
+                    transcript_enabled,
                     sender,
                 )
                 .await?;

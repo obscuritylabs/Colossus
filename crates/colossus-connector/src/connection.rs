@@ -25,6 +25,8 @@ use tonic::{
 use zeroize::Zeroizing;
 
 #[cfg(test)]
+mod capability_tests;
+#[cfg(test)]
 mod readiness_tests;
 #[cfg(test)]
 mod watcher_tests;
@@ -269,20 +271,11 @@ impl RuntimeConnector {
                 protocol_major: PROTOCOL_MAJOR,
                 node_id: self.config.node_id.clone(),
                 instance_id: self.config.instance_id.clone(),
-                capabilities: {
-                    let mut capabilities = self.config.capabilities.clone();
-                    capabilities.retain(|c| c != colossus_cloud_protocol::RESOURCE_CAPABILITY);
-                    capabilities.push(colossus_cloud_protocol::RESOURCE_CAPABILITY.into());
-                    capabilities.retain(|c| c != colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY);
-                    capabilities.push(colossus_cloud_protocol::MODEL_CATALOG_CAPABILITY.into());
-                    capabilities.retain(|capability| {
-                        capability != colossus_cloud_protocol::TERMINAL_CAPABILITY
-                    });
-                    if terminal_available {
-                        capabilities.push(colossus_cloud_protocol::TERMINAL_CAPABILITY.into());
-                    }
-                    capabilities
-                },
+                capabilities: connection_capabilities(
+                    &self.config.capabilities,
+                    &self.resources.capabilities,
+                    terminal_available,
+                ),
                 project_id: self.config.project_id.clone(),
                 inventory_json: self
                     .config
@@ -389,9 +382,10 @@ impl RuntimeConnector {
                             let operation: colossus_cloud_protocol::ResourceOperation = decode(&request.operation_json).map_err(|_| Status::invalid_argument("invalid resource operation"))?;
                             let permit = resource_permits.clone().try_acquire_owned().map_err(|_| Status::resource_exhausted("resource request bound"))?;
                             let resources = self.resources.clone(); let sender = sender.clone();
+                            let runs = self.runs.clone();
                             watchers.spawn(async move {
                                 let _permit = permit;
-                                let reply = resources.execute(operation).await;
+                                let reply = resources.execute_with_runs(operation, runs.as_ref()).await;
                                 send(&sender, runtime_frame::Body::ResourceResponse(wire::ResourceResponse { request_id: request.request_id, reply_json: encode(&reply).map_err(|_| Status::resource_exhausted("resource response too large"))? })).await
                             });
                         },
@@ -422,6 +416,39 @@ impl RuntimeConnector {
             }
         }
     }
+}
+fn connection_capabilities(
+    configured: &[String],
+    resources: &[String],
+    terminal_available: bool,
+) -> Vec<String> {
+    use colossus_cloud_protocol::{
+        MODEL_CATALOG_CAPABILITY, RESOURCE_CAPABILITY, TERMINAL_CAPABILITY, TRANSCRIPT_CAPABILITY,
+    };
+    let mut capabilities = configured.to_vec();
+    capabilities.retain(|capability| {
+        ![
+            RESOURCE_CAPABILITY,
+            MODEL_CATALOG_CAPABILITY,
+            TERMINAL_CAPABILITY,
+            TRANSCRIPT_CAPABILITY,
+        ]
+        .contains(&capability.as_str())
+    });
+    capabilities.push(RESOURCE_CAPABILITY.into());
+    capabilities.push(MODEL_CATALOG_CAPABILITY.into());
+    if terminal_available {
+        capabilities.push(TERMINAL_CAPABILITY.into());
+    }
+    // The executor uses these same caller-bound resources. Persisted enrollment
+    // metadata alone cannot claim support after the local client changes.
+    if resources
+        .iter()
+        .any(|capability| capability == TRANSCRIPT_CAPABILITY)
+    {
+        capabilities.push(TRANSCRIPT_CAPABILITY.into());
+    }
+    capabilities
 }
 
 // An external daemon's SDK client stays open across daemon outages. Probe its

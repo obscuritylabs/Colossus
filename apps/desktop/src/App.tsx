@@ -13,6 +13,15 @@ import {
 import type { CSSProperties, FormEvent, ReactNode } from "react";
 import { DesktopStartup } from "./components/DesktopStartup";
 import { refreshConversation } from "./conversation-refresh";
+import { HistoryPager } from "./history-pager";
+import {
+  historyOperationProof,
+  historyDiscoveryRequest,
+} from "./history-discovery";
+import {
+  MAX_TRANSCRIPT_COPY_BYTES,
+  copyPreparedTranscript,
+} from "./transcript-export";
 import { syncSavedSettings } from "./managed-settings-updates";
 import { terminalRequestForScope } from "./components/tools/TerminalDock";
 
@@ -34,6 +43,8 @@ import {
   desktopReleaseMetadata,
   desktopStatus,
   exportDiagnostics,
+  exportConversation,
+  cancelConversationExport,
   getRun,
   getSessionMap,
   getThreadDelegate,
@@ -266,6 +277,7 @@ const FIXTURE_MODE =
     FIXTURE_SCENARIO === "command-approval" ||
     FIXTURE_SCENARIO === "activity-comparison" ||
     FIXTURE_SCENARIO === "interaction-question" ||
+    FIXTURE_SCENARIO === "thread-history" ||
     FIXTURE_SCENARIO === "plan-workflow");
 const FIXTURE_TERMINAL_CONSENT_PENDING =
   FIXTURE_MODE && FIXTURE_QUERY.get("terminalConsentPending") === "1";
@@ -295,6 +307,10 @@ const FIXTURE_CONNECTION_STARTUP =
 const DEVELOPMENT_FIXTURES = import.meta.env.DEV
   ? await import("./dev/operations-studio-fixture")
   : null;
+const HISTORY_FIXTURE =
+  import.meta.env.DEV && FIXTURE_SCENARIO === "thread-history"
+    ? await import("./dev/thread-history-fixture")
+    : null;
 
 function developmentFixtures() {
   if (DEVELOPMENT_FIXTURES === null) {
@@ -477,6 +493,8 @@ const INITIAL_DESKTOP: DesktopStatus = {
     planContinuation: FIXTURE_MODE,
     modelSelection: FIXTURE_MODE,
     sessionActivity: FIXTURE_MODE,
+    conversationExport:
+      FIXTURE_MODE && FIXTURE_QUERY.get("exportUnsupported") !== "1",
     agentInboxes: FIXTURE_MODE && FIXTURE_QUERY.get("inboxUnavailable") !== "1",
     updateAvailable: false,
     agentWorkflows: false,
@@ -930,28 +948,30 @@ export default function App() {
   const [chat, dispatch] = useReducer(
     chatReducer,
     FIXTURE_MODE
-      ? FIXTURE_SCENARIO === "provider-retry"
-        ? developmentFixtures().buildProviderRetryFixture()
-        : FIXTURE_SCENARIO === "activity-comparison"
-          ? FIXTURE_QUERY.get("imageViews") === "1"
-            ? developmentFixtures().buildImageViewFixture(
-                FIXTURE_QUERY.get("computerScreenshot") === "1"
-                  ? "computer"
-                  : FIXTURE_QUERY.get("browserScreenshot") === "1"
-                    ? "browser"
-                    : undefined,
-              )
-            : developmentFixtures().buildActivityComparisonFixture()
-          : FIXTURE_SCENARIO === "plan-workflow"
-            ? developmentFixtures().buildPlanWorkflowFixture()
-            : FIXTURE_QUERY.get("scheduleActivity") === "1"
-              ? developmentFixtures().buildWorkflowScheduleFixture()
-              : developmentFixtures().buildOperationsStudioFixture(
-                  FIXTURE_SCENARIO === "interaction-question"
-                    ? "user_prompt"
-                    : "approval",
-                  FIXTURE_SCENARIO === "command-approval",
+      ? FIXTURE_SCENARIO === "thread-history"
+        ? initialChatState
+        : FIXTURE_SCENARIO === "provider-retry"
+          ? developmentFixtures().buildProviderRetryFixture()
+          : FIXTURE_SCENARIO === "activity-comparison"
+            ? FIXTURE_QUERY.get("imageViews") === "1"
+              ? developmentFixtures().buildImageViewFixture(
+                  FIXTURE_QUERY.get("computerScreenshot") === "1"
+                    ? "computer"
+                    : FIXTURE_QUERY.get("browserScreenshot") === "1"
+                      ? "browser"
+                      : undefined,
                 )
+              : developmentFixtures().buildActivityComparisonFixture()
+            : FIXTURE_SCENARIO === "plan-workflow"
+              ? developmentFixtures().buildPlanWorkflowFixture()
+              : FIXTURE_QUERY.get("scheduleActivity") === "1"
+                ? developmentFixtures().buildWorkflowScheduleFixture()
+                : developmentFixtures().buildOperationsStudioFixture(
+                    FIXTURE_SCENARIO === "interaction-question"
+                      ? "user_prompt"
+                      : "approval",
+                    FIXTURE_SCENARIO === "command-approval",
+                  )
       : initialChatState,
   );
   const chatRef = useRef(chat);
@@ -1124,6 +1144,8 @@ export default function App() {
   );
   const [listBusy, setListBusy] = useState(false);
   const [listError, setListError] = useState("");
+  const [historyNotice, setHistoryNotice] = useState("");
+  const [historyNeedsRefresh, setHistoryNeedsRefresh] = useState(false);
   const [runLoadError, setRunLoadError] = useState("");
   const [draft, commitDraft] = useState(composerDraft);
   const draftRef = useRef(draft);
@@ -1251,6 +1273,62 @@ export default function App() {
   const responseAttempts = useRef(new Map<string, IdempotentAttempt>());
   const threadLifecycleAttempts = useRef(new Map<string, IdempotentAttempt>());
   const listRequest = useRef<symbol | null>(null);
+  const historyPager = useRef(new HistoryPager());
+  const historyScope = useRef<TargetRoute | null>(null);
+  const operationDiscoveryProof = useCallback(
+    (targetId: string, runId: string) => {
+      const scope = historyScope.current;
+      const currentScope =
+        scope?.targetId === targetId &&
+        targetRoutes.current?.isCurrent(scope) === true;
+      return historyOperationProof(
+        runId,
+        currentScope
+          ? [
+              ...chatRef.current.recentRuns,
+              ...[...chatRef.current.views.values()].map((view) => view.run),
+            ]
+          : [],
+      );
+    },
+    [],
+  );
+  const readDiscoveredRun = useCallback(
+    (targetId: string, request: import("./types").GetRunRequest) => {
+      const scope = historyScope.current;
+      const currentScope =
+        scope?.targetId === targetId &&
+        targetRoutes.current?.isCurrent(scope) === true;
+      const known = currentScope
+        ? [
+            ...chatRef.current.recentRuns,
+            ...[...chatRef.current.views.values()].map((view) => view.run),
+          ]
+        : [];
+      return getRun(targetId, historyDiscoveryRequest(request, known));
+    },
+    [],
+  );
+  const routeForKnownRun = useCallback((runId: string): TargetRoute | null => {
+    const registry = targetRoutes.current;
+    const bound = registry?.routeForRun(runId) ?? null;
+    if (bound !== null && registry?.isCurrent(bound)) return bound;
+    const scope = historyScope.current;
+    if (scope === null || registry?.isCurrent(scope) !== true) return null;
+    const known =
+      chatRef.current.views.has(runId) ||
+      chatRef.current.recentRuns.some((run) => run.runId === runId);
+    if (!known) return null;
+    registry.bindRun(runId, scope);
+    return scope;
+  }, []);
+  targetRoutes.current?.retainRuns([
+    ...(chat.activeRunId ? [chat.activeRunId] : []),
+    ...[...chat.views.values()]
+      .filter((view) => !isTerminalStatus(view.run.status))
+      .map((view) => view.run.runId),
+    ...chat.views.keys(),
+  ]);
   const cancelRequest = useRef<symbol | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
@@ -1297,7 +1375,7 @@ export default function App() {
         run,
         resolveThreadTitle(desktop.selectedSpaceId, run.sessionId, run.title),
         chat.views.get(runId)?.output ?? "",
-        () => getRun(targetId ?? "", { runId }),
+        () => readDiscoveredRun(targetId ?? "", { runId }),
       )
         .then((content) => notifyBackground(kind, runId, content))
         .catch(() => {
@@ -1424,7 +1502,7 @@ export default function App() {
         if (source !== undefined)
           preview = chatReducer(preview, { type: "upsert_run", run: source });
       } else {
-        const details = await getRun(route.targetId, {
+        const details = await readDiscoveredRun(route.targetId, {
           runId: draft.sourceRunId,
         });
         if (targetRoutes.current?.isCurrent(route) !== true) return;
@@ -1443,7 +1521,9 @@ export default function App() {
           )
           .slice(0, MAX_CONVERSATION_RUNS - 1)) {
           if (targetRoutes.current?.isCurrent(route) !== true) return;
-          const historical = await getRun(route.targetId, { runId: run.runId });
+          const historical = await readDiscoveredRun(route.targetId, {
+            runId: run.runId,
+          });
           preview = chatReducer(preview, {
             type: "hydrate_run",
             details: historical,
@@ -1615,11 +1695,31 @@ export default function App() {
   const invalidateTargetRoute = useCallback(() => {
     targetRoutes.current?.invalidate();
     watchedRuns.current.clear();
+    historyPager.current.reset();
+    historyScope.current = null;
+    listRequest.current = null;
+    setListBusy(false);
+    setListError("");
+    setHistoryNotice("");
+    setHistoryNeedsRefresh(false);
   }, []);
 
+  useEffect(
+    () => () => {
+      historyPager.current.reset();
+      targetRoutes.current?.invalidate();
+    },
+    [],
+  );
+
   const loadRuns = useCallback(
-    async (pageToken: string, append: boolean, explicitRoute?: TargetRoute) => {
-      if (FIXTURE_MODE) {
+    async (
+      pageToken: string,
+      append: boolean,
+      explicitRoute?: TargetRoute,
+      automatic = false,
+    ) => {
+      if (FIXTURE_MODE && HISTORY_FIXTURE === null) {
         return true;
       }
       const route = explicitRoute ?? targetRoutes.current?.capture() ?? null;
@@ -1627,15 +1727,31 @@ export default function App() {
         setListError("Select a connected Colossus target first.");
         return false;
       }
+      if (!automatic) historyPager.current.resume();
+      const historyRequest = historyPager.current.begin(
+        pageToken,
+        !append,
+        automatic,
+      );
+      if (!historyRequest) return false;
       const requestToken = Symbol("list-runs");
       listRequest.current = requestToken;
       setListBusy(true);
       setListError("");
+      setHistoryNotice("");
+      setHistoryNeedsRefresh(false);
       try {
-        const page = await listRuns(route.targetId, { pageToken });
+        const page =
+          HISTORY_FIXTURE !== null
+            ? await HISTORY_FIXTURE.readThreadHistoryFixture(pageToken)
+            : await listRuns(route.targetId, {
+                pageToken,
+                ...(!append ? { historyReplacement: true } : {}),
+              });
         if (
           targetRoutes.current?.isCurrent(route) !== true ||
-          listRequest.current !== requestToken
+          listRequest.current !== requestToken ||
+          !historyPager.current.isCurrent(historyRequest)
         ) {
           return false;
         }
@@ -1643,6 +1759,17 @@ export default function App() {
           page.runs.map((run) => run.runId),
           route,
         );
+        historyScope.current = route;
+        const sessions = new Set(
+          chatRef.current.recentRuns.map((run) => run.sessionId),
+        );
+        const notice = historyPager.current.accept(
+          historyRequest,
+          page.nextPageToken,
+          page.runs.some((run) => !sessions.has(run.sessionId)),
+        );
+        setHistoryNotice(notice);
+        setHistoryNeedsRefresh(notice.includes("Refresh threads"));
         dispatch({
           type: append ? "append_recent" : "replace_recent",
           runs: page.runs,
@@ -1652,16 +1779,23 @@ export default function App() {
       } catch (error: unknown) {
         if (
           targetRoutes.current?.isCurrent(route) !== true ||
-          listRequest.current !== requestToken
+          listRequest.current !== requestToken ||
+          !historyPager.current.isCurrent(historyRequest)
         ) {
           return false;
         }
         const failure = commandError(error);
+        historyPager.current.fail(historyRequest);
         markConnectionFailure(failure, route);
         setListError(failure.message);
+        setHistoryNeedsRefresh(historyRequest.replace || !failure.retryable);
         return false;
       } finally {
-        if (listRequest.current === requestToken) {
+        if (
+          targetRoutes.current?.isCurrent(route) === true &&
+          listRequest.current === requestToken &&
+          historyPager.current.finish(historyRequest)
+        ) {
           listRequest.current = null;
           setListBusy(false);
         }
@@ -1670,10 +1804,37 @@ export default function App() {
     [markConnectionFailure],
   );
 
+  const loadOlderHistory = useCallback(
+    (automatic = false) => {
+      if (automatic && historyNeedsRefresh) return;
+      void loadRuns(
+        historyNeedsRefresh ? "" : chatRef.current.nextPageToken,
+        !historyNeedsRefresh,
+        undefined,
+        automatic,
+      );
+    },
+    [historyNeedsRefresh, loadRuns],
+  );
+  const loadOlderHistoryAutomatically = useCallback(
+    () => loadOlderHistory(true),
+    [loadOlderHistory],
+  );
+  useEffect(() => {
+    if (HISTORY_FIXTURE !== null) void loadRuns("", false);
+  }, [loadRuns]);
+  const resumeHistoryOnScroll = useCallback(() => {
+    // Errors and no-progress pauses require an explicit action. Ordinary wheel
+    // input renews only the finite successful automatic-loading budget.
+    if (historyPager.current.pauseReason === "budget") {
+      historyPager.current.resume();
+      setHistoryNotice("");
+    } else if (!listError && !historyNotice) historyPager.current.resume();
+  }, [listError, historyNotice]);
+
   const startWatch = useCallback(
     (runId: string, afterSequence: number, explicitRoute?: TargetRoute) => {
-      const route =
-        explicitRoute ?? targetRoutes.current?.routeForRun(runId) ?? null;
+      const route = explicitRoute ?? routeForKnownRun(runId) ?? null;
       if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
         return;
       }
@@ -1694,11 +1855,15 @@ export default function App() {
         watch: (targetId, watchedRunId, cursor, onEvent) =>
           watchRun(
             targetId,
-            { runId: watchedRunId, afterSequence: cursor },
+            {
+              runId: watchedRunId,
+              afterSequence: cursor,
+              ...operationDiscoveryProof(targetId, watchedRunId),
+            },
             onEvent,
           ),
         getRun: (targetId, watchedRunId) =>
-          getRun(targetId, { runId: watchedRunId }),
+          readDiscoveredRun(targetId, { runId: watchedRunId }),
         normalizeError: commandError,
         canRecover: (failure, candidate) =>
           candidate.kind === "managed_local" &&
@@ -1722,7 +1887,9 @@ export default function App() {
           if (result.type === "complete") {
             dispatch({ type: "watch_complete", runId });
             try {
-              const details = await getRun(route.targetId, { runId });
+              const details = await readDiscoveredRun(route.targetId, {
+                runId,
+              });
               if (targetRoutes.current?.isCurrent(route) === true) {
                 dispatch({ type: "hydrate_run", details });
               }
@@ -1764,11 +1931,15 @@ export default function App() {
         watch: (targetId, watchedRunId, cursor, onEvent) =>
           watchRun(
             targetId,
-            { runId: watchedRunId, afterSequence: cursor },
+            {
+              runId: watchedRunId,
+              afterSequence: cursor,
+              ...operationDiscoveryProof(targetId, watchedRunId),
+            },
             onEvent,
           ),
         getRun: (targetId, watchedRunId) =>
-          getRun(targetId, { runId: watchedRunId }),
+          readDiscoveredRun(targetId, { runId: watchedRunId }),
         normalizeError: commandError,
         canRecover: (failure, candidate) =>
           candidate.kind === "managed_local" &&
@@ -1790,7 +1961,9 @@ export default function App() {
           if (result.type === "complete") {
             dispatchAside({ type: "watch_complete", runId });
             try {
-              const details = await getRun(route.targetId, { runId });
+              const details = await readDiscoveredRun(route.targetId, {
+                runId,
+              });
               if (targetRoutes.current?.isCurrent(route) === true) {
                 dispatchAside({ type: "hydrate_run", details });
               }
@@ -1813,6 +1986,10 @@ export default function App() {
   const acceptDesktopStatus = useCallback(
     async (status: DesktopStatus, resetWork: boolean) => {
       const previousStatus = desktopRef.current;
+      const resetScope =
+        resetWork ||
+        previousStatus.selectedTargetId !== status.selectedTargetId ||
+        previousStatus.selectedSpaceId !== status.selectedSpaceId;
       desktopRef.current = status;
       setDesktop(status);
       setReleaseChannel(status.releaseChannel);
@@ -1827,7 +2004,7 @@ export default function App() {
         status.selectedTargetId === null
       ) {
         invalidateTargetRoute();
-        if (resetWork) {
+        if (resetScope) {
           dispatch({ type: "reset" });
         }
         return;
@@ -1842,14 +2019,14 @@ export default function App() {
       ) {
         invalidateTargetRoute();
         setListError("The selected Colossus target is unavailable.");
-        if (resetWork) {
+        if (resetScope) {
           dispatch({ type: "reset" });
         }
         return;
       }
       const currentRoute = targetRoutes.current?.capture() ?? null;
       if (
-        !resetWork &&
+        !resetScope &&
         currentRoute !== null &&
         currentRoute.targetId === selectedTarget.targetId &&
         currentRoute.kind === selectedTarget.kind &&
@@ -1861,11 +2038,18 @@ export default function App() {
         selectedTarget.targetId,
         selectedTarget.kind,
       );
+      historyPager.current.reset();
+      historyScope.current = null;
+      listRequest.current = null;
+      setListBusy(false);
+      setListError("");
+      setHistoryNotice("");
+      setHistoryNeedsRefresh(false);
       watchedRuns.current.clear();
       if (route === undefined) {
         return;
       }
-      if (resetWork) {
+      if (resetScope) {
         dispatch({ type: "reset" });
       } else {
         targetRoutes.current?.bindRuns(chatRef.current.views.keys(), route);
@@ -1873,7 +2057,7 @@ export default function App() {
       const runsLoaded = await loadRuns("", false, route);
       if (
         runsLoaded &&
-        !resetWork &&
+        !resetScope &&
         targetRoutes.current?.isCurrent(route) === true
       ) {
         const activeRunId = chatRef.current.activeRunId;
@@ -2048,7 +2232,7 @@ export default function App() {
               pageToken: "",
               ...(sessionId ? { sessionId } : {}),
             }),
-          hydrate: (runId) => getRun(route.targetId, { runId }),
+          hydrate: (runId) => readDiscoveredRun(route.targetId, { runId }),
           changed: (run) => {
             const known = chatRef.current.views.get(run.runId);
             return (
@@ -2064,9 +2248,8 @@ export default function App() {
               route,
             );
             dispatch({
-              type: "append_recent",
+              type: "reconcile_recent",
               runs: page.runs,
-              nextPageToken: page.nextPageToken,
             });
           },
           onRun: (details) => {
@@ -2339,7 +2522,16 @@ export default function App() {
         void loadForkPreview(origin, route);
       return;
     }
-    const route = targetRoutes.current?.routeForRun(run.runId) ?? null;
+    const remembered = routeForKnownRun(run.runId) ?? null;
+    const scope = historyScope.current;
+    const discoveredHere =
+      scope !== null &&
+      targetRoutes.current?.isCurrent(scope) === true &&
+      chatRef.current.recentRuns.some(
+        (known) =>
+          known.runId === run.runId && known.sessionId === run.sessionId,
+      );
+    const route = remembered ?? (discoveredHere ? scope : null);
     if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
       setRunLoadError("Select a connected Colossus target first.");
       return;
@@ -2361,7 +2553,9 @@ export default function App() {
     const existingCursor =
       chatRef.current.views.get(run.runId)?.lastSequence ?? 0;
     try {
-      const details = await getRun(route.targetId, { runId: run.runId });
+      const details = await readDiscoveredRun(route.targetId, {
+        runId: run.runId,
+      });
       if (targetRoutes.current?.isCurrent(route) !== true) {
         return;
       }
@@ -2980,8 +3174,7 @@ export default function App() {
     const route =
       continuationView === undefined
         ? (targetRoutes.current?.capture() ?? null)
-        : (targetRoutes.current?.routeForRun(continuationView.run.runId) ??
-          null);
+        : (routeForKnownRun(continuationView.run.runId) ?? null);
     if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
       setComposerError({
         ...FALLBACK_ACTION_ERROR,
@@ -3302,8 +3495,7 @@ export default function App() {
     ) {
       return;
     }
-    const route =
-      targetRoutes.current?.routeForRun(activeView.run.runId) ?? null;
+    const route = routeForKnownRun(activeView.run.runId) ?? null;
     if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
       setComposerError({
         ...FALLBACK_ACTION_ERROR,
@@ -3370,7 +3562,7 @@ export default function App() {
       return;
     }
     const source = chatRef.current.views.get(sourceRunId);
-    const route = targetRoutes.current?.routeForRun(sourceRunId) ?? null;
+    const route = routeForKnownRun(sourceRunId) ?? null;
     if (
       source === undefined ||
       !isTerminalStatus(source.run.status) ||
@@ -3661,7 +3853,7 @@ export default function App() {
       return false;
     }
     const runId = activeView.run.runId;
-    const route = targetRoutes.current?.routeForRun(runId) ?? null;
+    const route = routeForKnownRun(runId) ?? null;
     if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
       setActionError({
         ...FALLBACK_ACTION_ERROR,
@@ -3714,6 +3906,7 @@ export default function App() {
       const run = await cancelRun(route.targetId, {
         runId,
         idempotencyKey: attempt.key,
+        ...operationDiscoveryProof(route.targetId, runId),
       });
       if (targetRoutes.current?.isCurrent(route) !== true) {
         return false;
@@ -3754,8 +3947,7 @@ export default function App() {
           message: "Wait for the current connection operation to finish.",
         });
       }
-      const route =
-        targetRoutes.current?.routeForRun(interaction.runId) ?? null;
+      const route = routeForKnownRun(interaction.runId) ?? null;
       if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
         throw new CommandFailure({
           ...FALLBACK_ACTION_ERROR,
@@ -3788,6 +3980,7 @@ export default function App() {
           etag: interaction.etag,
           idempotencyKey: attempt.key,
           response,
+          ...operationDiscoveryProof(route.targetId, interaction.runId),
         });
         if (targetRoutes.current?.isCurrent(route) !== true) {
           return;
@@ -3947,7 +4140,7 @@ export default function App() {
     promptText: string,
     current: RunView,
   ): Promise<boolean> {
-    const route = targetRoutes.current?.routeForRun(current.run.runId) ?? null;
+    const route = routeForKnownRun(current.run.runId) ?? null;
     if (
       route === null ||
       targetRoutes.current?.isCurrent(route) !== true ||
@@ -4035,7 +4228,7 @@ export default function App() {
     try {
       const details = FIXTURE_MODE
         ? { run: aside.run, pendingInteractions: [] }
-        : await getRun(route.targetId, { runId: aside.run.runId });
+        : await readDiscoveredRun(route.targetId, { runId: aside.run.runId });
       if (targetRoutes.current?.isCurrent(route) !== true) {
         return;
       }
@@ -4060,7 +4253,7 @@ export default function App() {
       setAsideReadOnly(false);
       return true;
     }
-    const route = targetRoutes.current?.routeForRun(current.run.runId) ?? null;
+    const route = routeForKnownRun(current.run.runId) ?? null;
     if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
       return false;
     }
@@ -4069,17 +4262,23 @@ export default function App() {
     try {
       let run = current.run;
       if (!isTerminalStatus(run.status) && !FIXTURE_MODE) {
-        run = await cancelRun(route.targetId, {
-          runId: run.runId,
+        const sourceRun = run;
+        const cancelled = await cancelRun(route.targetId, {
+          runId: sourceRun.runId,
           idempotencyKey: crypto.randomUUID(),
+          ...historyOperationProof(sourceRun.runId, [sourceRun]),
         });
+        if (targetRoutes.current?.isCurrent(route) !== true) return false;
+        run = cancelled;
         for (
           let attempt = 0;
           attempt < 40 && !isTerminalStatus(run.status);
           attempt += 1
         ) {
           await new Promise((resolve) => window.setTimeout(resolve, 250));
-          run = (await getRun(route.targetId, { runId: run.runId })).run;
+          if (targetRoutes.current?.isCurrent(route) !== true) return false;
+          run = (await readDiscoveredRun(route.targetId, { runId: run.runId }))
+            .run;
         }
       }
       if (!isTerminalStatus(run.status) && !FIXTURE_MODE) {
@@ -4088,10 +4287,13 @@ export default function App() {
         );
       }
       if (!FIXTURE_MODE) {
+        const sourceRun = run;
         await archiveThread(route.targetId, {
-          runId: run.runId,
+          runId: sourceRun.runId,
           idempotencyKey: crypto.randomUUID(),
+          ...historyOperationProof(sourceRun.runId, [sourceRun, current.run]),
         });
+        if (targetRoutes.current?.isCurrent(route) !== true) return false;
       }
       dispatchAside({ type: "reset" });
       setAsideReadOnly(false);
@@ -4118,7 +4320,7 @@ export default function App() {
       });
       return;
     }
-    const route = targetRoutes.current?.routeForRun(interaction.runId) ?? null;
+    const route = routeForKnownRun(interaction.runId) ?? null;
     if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
       return;
     }
@@ -4128,7 +4330,12 @@ export default function App() {
       etag: interaction.etag,
       idempotencyKey: crypto.randomUUID(),
       response,
+      ...historyOperationProof(
+        interaction.runId,
+        [...asideChat.views.values()].map((view) => view.run),
+      ),
     });
+    if (targetRoutes.current?.isCurrent(route) !== true) return;
     dispatchAside({ type: "interaction_resolved", interaction: resolved });
     const cursor = asideChat.views.get(interaction.runId)?.lastSequence ?? 0;
     startAsideWatch(interaction.runId, cursor, route);
@@ -4740,7 +4947,9 @@ export default function App() {
           message: "The Workspace changed before the thread could be opened.",
         });
       }
-      const details = await getRun(route.targetId, { runId: result.runId });
+      const details = await readDiscoveredRun(route.targetId, {
+        runId: result.runId,
+      });
       if (targetRoutes.current?.isCurrent(route) !== true) {
         return;
       }
@@ -4823,7 +5032,7 @@ export default function App() {
       dispatch({ type: "remove_session", sessionId: run.sessionId });
       return;
     }
-    const route = targetRoutes.current?.routeForRun(run.runId) ?? null;
+    const route = routeForKnownRun(run.runId) ?? null;
     if (route === null || targetRoutes.current?.isCurrent(route) !== true) {
       setActionError({
         ...FALLBACK_ACTION_ERROR,
@@ -4848,6 +5057,7 @@ export default function App() {
       await archiveThread(route.targetId, {
         runId: run.runId,
         idempotencyKey: attempt.key,
+        ...operationDiscoveryProof(route.targetId, run.runId),
       });
       threadLifecycleAttempts.current = withoutEntry(
         threadLifecycleAttempts.current,
@@ -4922,7 +5132,10 @@ export default function App() {
           message: "The Workspace changed before the thread could be restored.",
         });
       }
-      const before = await getRun(route.targetId, { runId: result.runId });
+      const before = await readDiscoveredRun(route.targetId, {
+        runId: result.runId,
+      });
+      if (targetRoutes.current?.isCurrent(route) !== true) return;
       targetRoutes.current.bindRun(before.run.runId, route);
       const attemptKey = `${route.targetId}:${result.sessionId}:restore`;
       const attempt = stableIdempotentAttempt(
@@ -4937,6 +5150,7 @@ export default function App() {
       await restoreThread(route.targetId, {
         runId: result.runId,
         idempotencyKey: attempt.key,
+        ...operationDiscoveryProof(route.targetId, result.runId),
       });
       threadLifecycleAttempts.current = withoutEntry(
         threadLifecycleAttempts.current,
@@ -4945,7 +5159,9 @@ export default function App() {
       if (targetRoutes.current?.isCurrent(route) !== true) {
         return;
       }
-      const details = await getRun(route.targetId, { runId: result.runId });
+      const details = await readDiscoveredRun(route.targetId, {
+        runId: result.runId,
+      });
       targetRoutes.current.bindRun(details.run.runId, route);
       dispatch({ type: "hydrate_run", details });
       dispatch({ type: "select_run", runId: details.run.runId });
@@ -5369,9 +5585,12 @@ export default function App() {
   const activeRoute =
     activeRun === undefined
       ? null
-      : (targetRoutes.current?.routeForRun(activeRun.runId) ?? null);
+      : (routeForKnownRun(activeRun.runId) ?? null);
   const requestSessionMap = useCallback(
     async (runId: string, sessionId: string, showLoading: boolean) => {
+      const route = routeForKnownRun(runId);
+      if (route === null || targetRoutes.current?.isCurrent(route) !== true)
+        return;
       if (sessionMapRequest.current !== null) {
         return;
       }
@@ -5382,22 +5601,32 @@ export default function App() {
       }
       setSessionMapError("");
       try {
-        const next = await getSessionMap(runId);
+        const next = await getSessionMap(
+          runId,
+          operationDiscoveryProof(route.targetId, runId).discoveryProof,
+        );
         if (
+          targetRoutes.current?.isCurrent(route) === true &&
           sessionMapRequest.current === request &&
           next.sessionId === sessionId
         ) {
           setSessionMap(next);
         }
       } catch (error: unknown) {
-        if (sessionMapRequest.current === request) {
+        if (
+          targetRoutes.current?.isCurrent(route) === true &&
+          sessionMapRequest.current === request
+        ) {
           if (showLoading) {
             setSessionMap(null);
           }
           setSessionMapError(commandError(error).message);
         }
       } finally {
-        if (sessionMapRequest.current === request) {
+        if (
+          targetRoutes.current?.isCurrent(route) === true &&
+          sessionMapRequest.current === request
+        ) {
           sessionMapRequest.current = null;
           setSessionMapLoading(false);
         }
@@ -5635,7 +5864,7 @@ export default function App() {
       return;
     }
 
-    const route = targetRoutes.current?.routeForRun(parentRunId) ?? null;
+    const route = routeForKnownRun(parentRunId) ?? null;
     if (
       route === null ||
       targetRoutes.current?.isCurrent(route) !== true ||
@@ -6027,6 +6256,7 @@ export default function App() {
 
       {onboardingActive || surface === "settings" ? null : (
         <WorkSidebar
+          key={`${desktop.selectedSpaceId ?? "external"}:${targetRoutes.current?.captureGeneration() ?? 0}`}
           runs={[
             ...threadForkDrafts
               .filter(
@@ -6075,7 +6305,17 @@ export default function App() {
           onSelectSearchResult={(result) =>
             void handleSelectSearchResult(result)
           }
-          onLoadMore={() => void loadRuns(chat.nextPageToken, true)}
+          historyNotice={historyNotice}
+          historyAction={
+            historyNeedsRefresh
+              ? "Refresh threads"
+              : listError
+                ? "Retry"
+                : "Load older threads"
+          }
+          onLoadMore={() => loadOlderHistory()}
+          onAutoLoadMore={loadOlderHistoryAutomatically}
+          onHistoryScroll={resumeHistoryOnScroll}
           onLoadMoreSearch={() => void loadMoreSpaceSearch()}
           onLoadSpaceThreadPreview={(spaceId) =>
             void loadSpaceThreadPreview(spaceId)
@@ -6147,6 +6387,94 @@ export default function App() {
         </Suspense>
       ) : surface === "work" ? (
         <WorkSurface
+          conversationExport={{
+            scopeKey: JSON.stringify([
+              activeRoute?.targetId,
+              activeRoute?.generation,
+              activeRun?.runId,
+              activeRun?.sessionId,
+              desktop.capabilities.conversationExport,
+              connection.state,
+            ]),
+            available:
+              desktop.capabilities.conversationExport === true &&
+              connection.state === "connected" &&
+              activeRun !== undefined,
+            start: async (options) => {
+              const route = activeRoute;
+              const run = activeRun;
+              if (
+                !route ||
+                !run ||
+                targetRoutes.current?.isCurrent(route) !== true
+              )
+                throw new Error(
+                  "Reopen this conversation from its current runtime before exporting.",
+                );
+              const result = await exportConversation(
+                route.targetId,
+                run.runId,
+                historyOperationProof(run.runId, chatRef.current.recentRuns)
+                  .discoveryProof ?? run.discoveryProof,
+                options,
+              );
+              if (result.status !== "copy") return result;
+              if (options.signal.aborted)
+                return { status: "cancelled", messages: 0 };
+              const selected = chatRef.current.views.get(
+                chatRef.current.activeRunId ?? "",
+              )?.run;
+              if (
+                targetRoutes.current?.isCurrent(route) !== true ||
+                selected?.sessionId !== run.sessionId
+              )
+                throw new Error(
+                  "The selected conversation changed. Nothing was copied.",
+                );
+              if (
+                typeof result.text !== "string" ||
+                new TextEncoder().encode(result.text).byteLength >
+                  MAX_TRANSCRIPT_COPY_BYTES
+              )
+                throw new Error(
+                  "The transcript exceeds the copy limit. Choose Save instead.",
+                );
+              return result;
+            },
+            copy: (text, signal) => {
+              const route = activeRoute;
+              const run = activeRun;
+              return copyPreparedTranscript(
+                text,
+                signal,
+                () => {
+                  const selected = chatRef.current.views.get(
+                    chatRef.current.activeRunId ?? "",
+                  )?.run;
+                  return (
+                    route !== null &&
+                    run !== undefined &&
+                    targetRoutes.current?.isCurrent(route) === true &&
+                    selected?.runId === run.runId &&
+                    selected.sessionId === run.sessionId &&
+                    desktopRef.current.selectedTargetId === route.targetId &&
+                    desktopRef.current.connection.state === "connected" &&
+                    desktopRef.current.capabilities.conversationExport === true
+                  );
+                },
+                (value) => navigator.clipboard.writeText(value),
+              ).catch(() => {
+                throw new Error(
+                  "The clipboard could not be written. Choose Save instead.",
+                );
+              });
+            },
+            cancel: (operationId) =>
+              cancelConversationExport(
+                desktop.selectedTargetId ?? "",
+                operationId,
+              ),
+          }}
           onLoadViewedImage={loadViewedImage}
           onInspectSchedule={(scheduleId, showRun) => {
             if (desktop.selectedTargetId) {
@@ -6317,7 +6645,10 @@ export default function App() {
                 ),
               );
             }
-            return listSessionActivity(targetId, request);
+            return listSessionActivity(targetId, {
+              ...request,
+              ...operationDiscoveryProof(targetId, request.sourceRunId),
+            });
           }}
           activityComparisonEnabled={FIXTURE_SCENARIO === "activity-comparison"}
           planWorkflowAvailable={

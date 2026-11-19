@@ -56,7 +56,10 @@ fn tokens(state: &TuiState) -> Option<u64> {
 
 #[tokio::test]
 async fn background_usage_stays_with_its_session_when_focus_changes() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     start(&mut workspace, "alpha");
     open_snapshot(&mut workspace, "beta");
     start(&mut workspace, "beta");

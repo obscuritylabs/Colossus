@@ -40,7 +40,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     }
     let picker = preview_picker(screen_mode);
     state.preview_cache.set_picker(picker);
-    let (mut state, mut event_rx) = crate::workspace::Workspace::new(state);
+    let (mut state, mut event_rx) = crate::workspace::Workspace::new(screen_mode, state);
     let event_tx = state.sender();
     if let Some(provider) = background_notice {
         let notices = event_tx.clone();
@@ -64,7 +64,8 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         let event_tx = state.sender();
         state.refresh_catalog(Arc::clone(&host));
         state.sync_rows();
-        terminal.draw(&mut state)?;
+        let (active, companion) = state.draw_parts();
+        terminal.draw(active, companion)?;
         agent_refresh.schedule(&state, Arc::clone(&host), event_tx.clone());
         crate::next_prompt::schedule_next_prompt(&mut state, Arc::clone(&host), event_tx.clone());
         crate::dictation::tick(&mut state, event_tx.clone());
@@ -436,6 +437,12 @@ pub(super) fn handle_mouse(state: &mut TuiState, mouse: MouseEvent) -> bool {
         return false;
     }
     if state.overlay.is_some() || state.selecting_text {
+        return false;
+    }
+    if state
+        .companion_area
+        .is_some_and(|area| area.contains(Position::new(mouse.column, mouse.row)))
+    {
         return false;
     }
     if state.agents.handle_mouse(mouse) {

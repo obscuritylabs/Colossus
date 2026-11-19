@@ -111,4 +111,18 @@ pub(super) async fn exercise(
     assert_eq!(old.status(), 409);
     let arbitrary=client.post(format!("{origin}{path}")).headers(headers.clone()).json(&json!({"connection_id":connection,"operation":{"operation":"invoke_sdk","method":"worker.inspect_session_map"}})).send().await.unwrap();
     assert_eq!(arbitrary.status(), 422);
+    let arbitrary_transcript = client
+        .post(format!("{origin}{path}"))
+        .headers(headers.clone())
+        .json(&json!({"connection_id":connection,
+            "operation":{"operation":"read_session_transcript","source_run_id":"other-private-run",
+                "page_token":null,"page_size":32}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        arbitrary_transcript.status(),
+        400,
+        "only an authorized thread export may derive the runtime source"
+    );
 }

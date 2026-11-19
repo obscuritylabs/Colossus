@@ -18,6 +18,7 @@ the owning crates and tests.
 | Durable journal, projections, recovery, and audit export | journal, projection, audit, telemetry crates | [State and recovery](state-recovery.md), [Audit and recovery](../admin/audit-telemetry-recovery.md) | Shared conformance, tamper, crash, outage, and export tests |
 | Providers, model routing, and normalized turns | `colossus-provider`, `colossus-agent`, `colossus-runtime` | [Choose a provider](../use/providers/index.md), [Providers and models](../reference/configuration/providers-models.md) | Provider and agent suites plus CLI provider smoke tests |
 | Sessions and context | `colossus-session`, `colossus-context`, `colossus-runtime` | [Sessions](../use/sessions.md), [context and snapshots](../use/sessions-context.md) | Repository, snapshot, compaction, and branch tests |
+| Human conversation export | `colossus-session` indexed reader, `colossus-contracts` DTOs, `colossus-api-runtime` disclosure and `colossus-presentation` formatter; client host adapters | [Export a conversation](../use/sessions.md#export-a-conversation), [API contract](application-sdk.md#canonical-conversation-export) | Fixed-snapshot, disclosure, cursor, byte-bound, shared-formatting, staging and host-adapter tests; client browser tests cover their rendered workflows |
 | Tasks, decisions, plans, goals, and subagents | `colossus-work`, `colossus-agent`, `colossus-runtime` | [Tasks, decisions, and plans](../use/tasks-decisions-plans.md), [Goals and subagents](../use/goals-subagents.md) | Lifecycle, lineage, budget, cancellation, and recovery tests |
 | Memory and lexical projection | `colossus-memory` | [Memories](../use/memories.md), [Context and memory configuration](../reference/configuration/context-memory-research.md) | Canonical lifecycle, Tantivy, fallback, and recovery tests |
 | Search and source-backed research | `colossus-search`, `colossus-research`, `colossus-runtime` | [Web search](../use/web-search.md), [Deep research](../use/deep-research.md) | Search adapter, evidence/citation, and CLI research tests |
@@ -33,7 +34,7 @@ the owning crates and tests.
 | Hosted execution, Web Chat and managed attachments | `colossus-cloud`, `colossus-cloud-chat`, `colossus-cloud-executor`, server `hosted` modules and `apps/web` | [Hosted execution](adr/0009-hosted-execution.md), [Hosted operation](../cloud/work.md#start-a-hosted-conversation), [Cloud development](cloud-control-plane.md#develop-hosted-personal-chat) | Owner-bound migration and lease tests, HTTP attachment/isolation acceptance, shared SQL two-replica recovery and Web browser tests; arbitrary hosted workspace provisioning remains unavailable |
 | Single-host Compose deployment with Chat by default | `deploy/compose`, shared `deploy/control-plane/controlled-project.ps1`, release bundle workflow | [Install with Compose](../cloud/deployment/compose.md) | Windows/Linux initialization, PKI and retained-secret checks; published-image HTTPS, authentication, Echo/SSE and retained conversation after ordinary Compose restart |
 | Agent messages, durable inboxes, and incoming A2A | `colossus-communication`, agent/runtime/API/SDK crates, `apps/ui`, `colossus-a2a-server` | [ADR 0007](adr/0007-agent-communication.md), [Inspect agent messages](../use/agent-communication.md), [Host A2A](agent-communication.md) | Canonical replay and attempt tests, provider input/hash and budget tests, owner/scope/recovery tests, A2A wire tests, host checks and rendered inbox tests |
-| Owned browser control and native Chromium development adapters | `colossus-contracts`, `colossus-ports`, `colossus-browser`, `colossus-browser-bridge`, `colossus-browser-presentation`, `colossus-sandbox`, runtime/worker/SDK browser adapters, `native/browser`, Desktop native adapter | [Owned Chromium browser](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work) | Shared authority, private transport, host cleanup, artifact release and Linux profile protection tests; actual Core open/snapshot/run-finish, four-channel read-only presentation, five-host profile restart/reset and per-request PKI conformance. The Mac temporary HTTP Core diagnostic passed real page control, screenshots, Retina frames and direct-host shutdown; its complete helper/crash/HTTPS/PKI and Desktop foreground acceptance remain outstanding. Linux native NSS TLS and macOS human preview retain their own scopes. Linux direct-key-denial and Windows/broker acceptance, same-page agent-to-human transfer, encrypted/quota-bound persistent profiles and management, multi-origin human SSO and publisher-accepted packages remain incomplete. Production browser availability stays disabled. |
+| Owned browser control and native Chromium development adapters | `colossus-contracts`, `colossus-ports`, `colossus-browser`, `colossus-browser-bridge`, `colossus-browser-presentation`, `colossus-sandbox`, runtime/worker/SDK browser adapters, `native/browser`, Desktop native adapter | [Owned Chromium browser](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work) | Shared authority, private transport, host cleanup, artifact release and Linux profile protection tests; actual Core open/snapshot/run-finish, four-channel read-only presentation, five-host profile restart/reset and per-request PKI conformance. The Mac temporary HTTP Core diagnostic passed real page control, screenshots, Retina frames and direct-host shutdown; its complete helper/crash/HTTPS/PKI and Desktop foreground acceptance remain outstanding. Linux native NSS TLS and macOS human preview retain their own scopes. Linux direct-key-denial and Windows/broker acceptance, same-page agent-to-human transfer, encrypted/quota-bound persistent profiles and management, multi-origin human SSO and production-accepted packages remain incomplete. Windows x64 stable and preview installers select the ordinary-user functional edition; exact signed installed acceptance remains separate. Production component modes stay disabled. |
 | Offline Desktop and local TUI dictation | `crates/colossus-native-dictation`, `apps/desktop/src-tauri/src/dictation.rs` | [Evaluate offline Desktop dictation](desktop-dictation.md) | Bounded model/audio/revision tests; continuous send and cancellation tests; native macOS/Windows measurements and permission acceptance still required |
 | Terminal and presentation | `colossus-presentation`, `colossus-tui`, interface adapters | [Terminal UI](../use/terminal-ui.md), [Extensions and presentation](extensions-presentation.md) | Semantic document, reducer, layout, PTY, and restoration tests |
 | Fleet human terminals | `colossus-terminal`, API/SDK/gRPC, connector/Control Plane, `apps/web` | [Enable a web shell](../cloud/connect-runtimes.md#enable-a-web-shell), [ADR 0011](adr/0011-fleet-human-terminals.md) | Native PTY input, ownership and replay tests; authenticated two-replica Fleet transport and web terminal acceptance |
@@ -48,6 +49,16 @@ Linux. Client installation and runtime behavior are unchanged. Evidence is in
 registry publication remains a hosted release operation.
 
 ## Interface coverage
+
+Remote MCP Tasks first targets ordinary Execute runs through the local CLI and
+TUI with file-backed redb. Existing tool activity shows the call as pending
+and delivers its released terminal outcome. The `colossus-mcp` and runtime owners
+maintain the authorized follow-up and restart receipts. The CLI owner tracks
+standalone `mcp call` support. The
+Desktop and VS Code owners track dedicated controls or acceptance for connected
+clients. The application SDK and web owners track hosted/Fleet placement under
+[#372](https://github.com/obscuritylabs/Colossus/issues/372). The first placement
+uses the existing run and tool result contracts.
 
 The [client owners and daily coordinator](agent-maintenance.md) maintain material
 coverage differences here. These records were reviewed against
@@ -66,8 +77,12 @@ Their pending native checks remain separate from implementation and historical t
 
 | Capability | Public API / SDK | CLI / TUI | Desktop | VS Code | Web |
 | --- | --- | --- | --- | --- | --- |
+| Packaged owned Chromium functional edition | Existing typed browser contracts, caller authority and capability discovery; installed edition determines availability | Standalone archives do not include a browser host; this change adds no separate CLI/TUI browser payload | Windows x64 stable and preview installers select the functional edition with sandbox and compiler-bound signed component; exact signed installed acceptance remains separate. Human WebView2 sign-in stays separate. macOS/Linux retain their existing boundaries. | No browser host or native presenter is shipped | No native browser host is shipped; the user's browser remains separate |
+| Progressive Desktop thread history | Existing authenticated run discovery and bounded pages; full run reads retain their contract | Existing session browsers and history commands retain their workflows | Supported: older pages load while scrolling, thin summaries survive beyond the former 200-entry cutoff, and a virtual list bounds rendered rows; reopening an evicted native binding revalidates its source | Existing extension history workflow; no host change | Existing web history workflow; no host change |
+| Human conversation export | Supported: optional `conversations.transcript.v1` read-only paging through an authorized source run; broader `SessionService` remains unhosted | Supported: `sessions export`, `/session export` and `/export` in embedded and worker hosts | Implemented: native Save and bounded Copy with progress/cancellation; installed native Save/clipboard acceptance pending | Missing: no human export command | Implemented: full Hosted/Fleet export with bounded download/Copy and authorized live source; loaded-history actions remain the offline excerpt fallback |
 | Standalone Goal creation | Supported; bounded iterations and caller tool ceiling | Supported; CLI and full-screen TUI `/goal` creation/completion acceptance in embedded and worker hosts | Supported; composer and native request validation evidence | Missing; composer exposes Plan, Execute, and Research | Supported on connected runtimes; capability and budget-bound composer |
 | Always On check-ins in an owned local conversation | Standing-chat controls use authenticated local worker IPC. Desktop wake runs use the existing owned run API. | CLI enrollment, status, pause, and manual wake. TUI opens the same session using its ordinary session selector. | Managed Local conversation enrollment and wake controls. Workspace worker must be running. | No Always On control. | No Always On control. |
+| Read-only live tail of an open background conversation | Existing transcript and ordered run-feed contracts supply released messages and status. Pinning is local presentation state. | Full-screen TUI supports one same-workspace, same-runtime companion. Intentional difference for one-shot CLI and inline TUI: both keep a single transcript and use ordinary inspection or terminal scrollback. | Partial: live Asides support separate follow-up conversations. Pinning a peer conversation is missing. | Missing: the extension follows the selected conversation. | Partial: Side Chat shows a related conversation alongside its parent. Pinning an arbitrary open peer is missing. |
 | Anthropic tool replay recovery | Ordinary Execute can continue a verified oversized replay using saved tool evidence. The keyless missing-checkpoint path also remains available. | Existing CLI resume and TUI continuation use the same runtime recovery. | Managed Local inherits protected replay overflow recovery. | Existing Execute conversations inherit the runtime behavior. | Connected runtimes inherit the ordinary Execute recovery. |
 | Revision-bound Plan workflow | Supported; source-run-bound Draft continuation | Supported; revision-bound refinement, approval, and execution | Supported; exact-revision Plan continuation | Partial; canonical Plan inspection exists, continuation controls missing | Supported; source-run and revision-bound continuation |
 | Human managed-shell discovery, read, and Stop | Supported; scoped process-session requests | Unverified; dedicated human controls not evidenced by agent-tool tests | Supported; active-shell inspection and Stop | Missing; process-supervision controls unimplemented | Unverified; Fleet human terminals are a distinct workflow |
@@ -81,6 +96,64 @@ Their pending native checks remain separate from implementation and historical t
 
 Evidence and owned follow-ups:
 
+- **Windows functional browser:** [Release packaging](releasing.md#developer-previews-and-desktop)
+  and [ADR 0008](adr/0008-owned-chromium-browser.md) distinguish application channel
+  from browser authority. `scripts/ci/browser-release-policy.test.ps1` exercises
+  the actual stable/preview signing, unsigned validation and compiler-seal
+  admission guards; `scripts/ci/desktop-contract.test.mjs` covers release step
+  ordering and explicit selection. Sidecar `windows_browser_release_policy`
+  tests cover the shared Release/channel/development admission rule. These fixtures
+  establish source contracts, not installed browser acceptance. `desktop_owner`
+  and `test_owner` own exact signed installed input, screenshots, background/restore
+  and cleanup acceptance; `ci_cd_owner` owns publisher evidence. `cli_owner`,
+  `vscode_owner` and `maintenance_coordinator` retain any future client distribution
+  assessment; no additional client payload is established by these Windows changes.
+- **Conversation export:** The [canonical guide](../use/sessions.md#export-a-conversation)
+  and [SDK contract](application-sdk.md#canonical-conversation-export) own behavior.
+  `crates/colossus-session/src/transcript/tests.rs` covers indexed work bounds,
+  original text and multipart order, private/peer filtering, fixed appends, archive
+  and reader recreation. `crates/colossus-api-runtime/src/service_tests/transcript.rs`
+  covers original-session disclosure, revocation and caller/source-bound cursors;
+  gRPC and SDK tests cover wire fidelity and capability discovery.
+  `crates/colossus-presentation/src/transcript_export/tests.rs` covers all formats,
+  completion, bounds and safe metadata. CLI smoke tests in `agent_smoke.rs` and
+  `worker_smoke.rs` cover the command in embedded/worker hosts; interactive and
+  staging tests cover quoted paths, cancellation and no-clobber publication.
+  Desktop native `conversation_export/tests.rs` covers full-source paging,
+  substituted/changed snapshots, bounded Copy and destination collisions;
+  `apps/desktop/tests/browser/conversation-export.spec.ts` covers format choices,
+  cancellation, stale results, keyboard focus and compact themed layouts.
+  Cloud server `transcript_export/tests.rs` and transport authorization tests cover
+  bounds and source selection; `apps/web/src/transcript-export.test.ts` and
+  `apps/web/tests/browser/transcript-export.browser.ts` cover complete response
+  handling, formats, cancellation and keyboard/layout behavior. These renderer
+  fixtures do not establish installed native or deployed full-stack acceptance.
+  `desktop_owner` and `test_owner` own installed native Save/clipboard acceptance;
+  `test_owner` owns deployed Hosted/Fleet end-to-end acceptance. `vscode_owner`
+  owns a future export command through the public read capability, including
+  safe destination handling and explicit failures. No extension workflow is
+  established by generated contracts alone.
+- **Desktop thread history:** The [Desktop guide](../desktop/work.md#return-to-a-conversation)
+  describes progressive paging and retry. Native adapter tests in
+  `apps/desktop/src-tauri/src/conversation_runs/revalidation_tests.rs` cover bounded
+  source recovery and thin history output. Renderer regressions cover paging,
+  metadata retention, and routing; `apps/desktop/tests/browser/thread-history.spec.ts`
+  exercises long histories and a bounded rendered window. `desktop_owner` and
+  `test_owner` own native packaged acceptance. Renderer fixtures and native adapter
+  tests establish their stated contracts; installed application startup remains a
+  separate platform check.
+  `desktop_owner` and the public API owner retain the follow-up for deep persisted
+  search and archived results without a reusable discovery receipt; released
+  history can remain read-only when bounded ownership checks are inconclusive.
+- **Pinned TUI transcript:** [Sessions](../use/sessions.md#follow-another-open-session)
+  and [TUI keys](../reference/tui.md#workspace-sessions) document F2 and the compact
+  fallback. `crates/colossus-tui/src/workspace/tests/companion_tests.rs` covers
+  viewport and draft preservation, a waiting decision, archival, and late
+  events. `crates/colossus-cli/tests/concurrent_sessions_tui.rs` exercises the
+  rendered workflow with the embedded runtime and an authenticated worker.
+  `desktop_owner` and `vscode_owner` own assessing equivalent peer-conversation
+  controls using the existing feed. `maintenance_coordinator` owns evaluating
+  that workflow for Web Chat.
 - **Always On:** Runtime tests cover stable wake identity, schedule advancement,
   owner checks, and pause. The CLI worker smoke covers manual wake and continuation
   in one session. `desktop_owner` owns packaged Desktop acceptance. `cli_owner`

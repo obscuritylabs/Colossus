@@ -139,6 +139,60 @@ async fn command(
     .expect("preference command")
 }
 
+async fn assert_read_only_transcript_export(host: &dyn InteractiveHost, root: &Path) {
+    let session = host
+        .bootstrap(BootstrapRequest::default())
+        .await
+        .expect("export session");
+    let output = root.join("active-conversation.json");
+    let result = command(
+        host,
+        &session.session_id,
+        "session",
+        &format!("export '{}' --format json", output.display()),
+    )
+    .await;
+    assert_eq!(
+        result.document,
+        crate::transcript_export::interactive_export_status()
+    );
+    let document: Value = serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+    assert_eq!(document["complete"], true);
+    assert_eq!(document["snapshot"]["session_id"], session.session_id);
+    assert_eq!(document["messages"].as_array().unwrap().len(), 0);
+    let cancelled_output = root.join("cancelled-conversation.md");
+    let control = RunControl::default();
+    control.cancel();
+    let (events, _receiver) = mpsc::channel(1);
+    assert!(
+        host.execute_command(
+            RuntimeCommand::Known {
+                name: "session".into(),
+                arguments: format!("export '{}'", cancelled_output.display()),
+            },
+            &session.session_id,
+            &[],
+            events,
+            control
+        )
+        .await
+        .is_err()
+    );
+    assert!(!cancelled_output.exists());
+}
+
+#[tokio::test]
+async fn full_tui_exports_without_provider_credentials_in_embedded_and_worker_hosts() {
+    let embedded = tempfile::tempdir().unwrap();
+    let host = embedded_host(embedded.path());
+    assert_read_only_transcript_export(host.as_ref(), embedded.path()).await;
+    drop(host);
+    let worker = tempfile::tempdir().unwrap();
+    let fixture = WorkerFixture::open(worker.path()).await;
+    assert_read_only_transcript_export(fixture.host.as_ref(), worker.path()).await;
+    fixture.stop().await;
+}
+
 async fn acknowledged_session(host: Arc<dyn InteractiveHost>) -> String {
     let snapshot = host
         .bootstrap(BootstrapRequest::default())

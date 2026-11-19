@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 
-function verifySources(t, files) {
+function verifySources(t, files, { policyExit = 0 } = {}) {
   const root = mkdtempSync(join(tmpdir(), "colossus-release-readiness."));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const bin = join(root, "bin");
@@ -35,6 +35,21 @@ function verifySources(t, files) {
       { mode: 0o755 },
     );
   }
+  // The source guard uses real Git. This controlled policy boundary proves the
+  // exact root-only invocation and failure propagation without running scanners.
+  writeFileSync(
+    join(bin, "python3"),
+    [
+      "#!/bin/sh",
+      'if [ "$#" -ne 3 ] || [ "$1" != -B ] || [ "$2" != scripts/ci/dependency-policy.py ] || [ "$3" != --root-only ]; then',
+      "  printf 'unexpected dependency policy invocation\\n' >&2",
+      "  exit 91",
+      "fi",
+      'exit "$COLOSSUS_RELEASE_POLICY_FIXTURE_EXIT"',
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
   for (const file of files) {
     const path = join(root, file);
     mkdirSync(dirname(path), { recursive: true });
@@ -49,7 +64,12 @@ function verifySources(t, files) {
   return spawnSync("sh", ["release/verify-release-readiness.sh"], {
     cwd: root,
     encoding: "utf8",
-    env: { ...process.env, PATH: bin + delimiter + process.env.PATH },
+    env: {
+      ...process.env,
+      PATH: bin + delimiter + process.env.PATH,
+      PYTHON: "python3",
+      COLOSSUS_RELEASE_POLICY_FIXTURE_EXIT: String(policyExit),
+    },
     timeout: 10_000,
   });
 }
@@ -59,6 +79,8 @@ test("release readiness permits maintained SDK, build, and plugin Python sources
     "sdk/python/src/colossus_sdk/client.py",
     "deploy/documentation/build-config.py",
     "scripts/ci/normalize_python_sdist.py",
+    "scripts/ci/dependency-policy.py",
+    "scripts/ci/test-dependency-policy.py",
     "native/browser/scripts/component.py",
     "native/browser/scripts/test_component.py",
     "native/browser/scripts/run_probe.py",
@@ -129,6 +151,21 @@ test("release readiness permits maintained SDK, build, and plugin Python sources
   ]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /local release-readiness verification passed/u);
+  assert.match(
+    result.stdout,
+    /\+ python3 -B scripts\/ci\/dependency-policy\.py --root-only/u,
+  );
+});
+
+test("release readiness stops when the shared root-only policy fails", (t) => {
+  const result = verifySources(t, [], { policyExit: 17 });
+  assert.equal(result.status, 17, result.stderr);
+  assert.match(
+    result.stdout,
+    /cargo deny --locked check -A license-not-encountered licenses sources bans/u,
+  );
+  assert.doesNotMatch(result.stdout, /cargo deny --manifest-path fuzz\/Cargo\.toml/u);
+  assert.doesNotMatch(result.stdout, /local release-readiness verification passed/u);
 });
 
 for (const file of [
@@ -136,6 +173,7 @@ for (const file of [
   "colossus/runtime.py",
   "bundled-plugins/colossus/skills/security-review/scripts/unapproved.py",
   "scripts/tests/unapproved.py",
+  "scripts/ci/unapproved.py",
   "native/browser/scripts/unapproved.py",
 ]) {
   test("release readiness rejects unapproved source " + file, (t) => {

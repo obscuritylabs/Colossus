@@ -227,6 +227,27 @@ impl Colossus {
             .await
     }
 
+    /// Read a fixed snapshot of original released user/assistant conversation text.
+    pub async fn read_session_transcript(
+        &self,
+        request: crate::ReadSessionTranscriptRequest,
+    ) -> ApiResult<crate::TranscriptPage> {
+        if !self
+            .backend
+            .capabilities()
+            .contains(crate::SESSION_TRANSCRIPT_CAPABILITY)
+        {
+            return Err(ApiError::failed_precondition(
+                ApiErrorReason::InvalidRunTransition,
+                "the connected backend does not support conversation transcript export",
+            ));
+        }
+        self.backend
+            .agent_runs()
+            .read_session_transcript(request)
+            .await
+    }
+
     /// Replay and tail run updates in order.
     pub async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdates> {
         self.watch_with_client(self.backend.agent_runs(), request)

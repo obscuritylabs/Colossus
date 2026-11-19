@@ -4,6 +4,8 @@
 mod audit_support;
 #[path = "support/process.rs"]
 mod process_support;
+#[path = "support/transcript.rs"]
+mod transcript_support;
 
 use colossus_worker_protocol::{
     AlwaysOnCommand, PROTOCOL_VERSION, WorkerApprovalMode, WorkerControlClient, worker_ipc_endpoint,
@@ -509,6 +511,29 @@ sandbox:
     assert!(export_reset.status.success());
 
     let session_id = result["session_id"].as_str().expect("session id");
+    transcript_support::assert_transcript_exports(
+        |arguments| run(binary, &config, arguments),
+        session_id,
+        "worker-stream",
+        directory.path(),
+    );
+    for (prefix, extension) in [("/session export", "json"), ("/export", "text")] {
+        let path = directory
+            .path()
+            .join(format!("worker-interactive-{extension}.txt"));
+        let input = format!(
+            "{prefix} '{}' --format {extension}\n/exit\n",
+            path.display()
+        );
+        let output = run_with_input(binary, &config, &["tui", "--session", session_id], &input);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Conversation exported."));
+        assert!(fs::read_to_string(path).unwrap().contains("worker-stream"));
+    }
     let task = run(
         binary,
         &config,
@@ -1150,6 +1175,12 @@ steps:
     assert!(embedded_stdout.contains(session_id));
     assert!(embedded_stdout.contains("Current work"));
     assert!(embedded_stdout.contains("unknown terminal command: /session bogus"));
+    let path = directory.path().join("embedded-interactive-transcript.md");
+    let input = format!("/export '{}'\n/exit\n", path.display());
+    let output = run_with_input(binary, &config, &["tui", "--session", session_id], &input);
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Conversation exported."));
+    assert!(fs::read_to_string(path).unwrap().contains("worker-stream"));
 
     let embedded_history = run(
         binary,

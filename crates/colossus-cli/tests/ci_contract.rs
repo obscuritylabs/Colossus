@@ -1663,13 +1663,94 @@ fn xtask_centralizes_portable_development_and_ci_checks() {
         "scripts/docs-site",
         "scripts/ci/test-contracts.sh",
         "actionlint",
-        "apps/desktop/src-tauri/Cargo.lock",
     ] {
         assert!(
             surfaces.contains(required),
             "surface xtask is missing {required}"
         );
     }
+
+    let dependencies = surfaces
+        .split_once("pub(super) fn dependencies(")
+        .expect("dependency recipe")
+        .1
+        .split_once("\nfn cargo<const")
+        .expect("end of dependency recipe")
+        .0;
+    for invocation in [
+        ".args([\"-B\", \"scripts/ci/test-dependency-policy.py\"])",
+        ".args([\"-B\", \"scripts/ci/dependency-policy.py\"])",
+    ] {
+        assert!(
+            dependencies.contains(invocation),
+            "dependency recipe must invoke its canonical policy owner: {invocation}"
+        );
+    }
+    let policy = fs::read_to_string(root.join("scripts/ci/dependency-policy.py"))
+        .expect("read canonical dependency policy");
+    for required in [
+        "GRAPHS = {\"root\": \"Cargo.toml\", \"desktop\": \"apps/desktop/src-tauri/Cargo.toml\"}",
+        "graphs = {\"root\": GRAPHS[\"root\"]} if arguments.root_only else GRAPHS",
+        "str(Path(GRAPHS[graph]).with_name(\"Cargo.lock\"))",
+        "for graph, manifest in graphs.items():\n            audits[graph] = run_raw(root, evidence, f\"{graph}-audit\", audit_command(cargo, database, graph))",
+    ] {
+        assert!(
+            policy.contains(required),
+            "canonical dependency policy must audit both default graphs: {required}"
+        );
+    }
+    let policy_tests = fs::read_to_string(root.join("scripts/ci/test-dependency-policy.py"))
+        .expect("read dependency policy fixtures");
+    let literal_audits = policy_tests
+        .split_once(
+            "    def test_generated_audit_commands_match_independent_literal_graph_flags(self):",
+        )
+        .expect("independent literal audit argument fixture")
+        .1
+        .split("\n    def ")
+        .next()
+        .expect("literal audit fixture body");
+    for required in [
+        "self.assertEqual(POLICY.audit_command(\"cargo\", database, \"root\"), [",
+        "self.assertEqual(POLICY.audit_command(\"cargo\", database, \"desktop\"), [",
+        "\"-D\", \"warnings\", \"--ignore\", \"RUSTSEC-2023-0071\", \"--file\", \"Cargo.lock\"",
+        "\"--file\", str(Path(\"apps/desktop/src-tauri/Cargo.lock\"))",
+    ] {
+        assert!(
+            literal_audits.contains(required),
+            "literal argv fixture must preserve each delegated graph's audit policy: {required}"
+        );
+    }
+
+    let audit_arguments: Vec<Vec<&str>> = dependencies
+        .split("\"audit\"")
+        .skip(1)
+        .map(|command| {
+            command
+                .split_once(']')
+                .expect("Cargo audit argument array")
+                .0
+                .split('"')
+                .skip(1)
+                .step_by(2)
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        audit_arguments,
+        [
+            vec!["-D", "warnings", "--file", "fuzz/Cargo.lock"],
+            vec![
+                "--no-fetch",
+                "-D",
+                "warnings",
+                "--file",
+                "native/browser/driver/Cargo.lock",
+            ],
+            vec!["--no-fetch", "-D", "warnings", "--file"],
+        ],
+        "fuzz must initialize the default database before later native audits reuse it with unchanged warning flags"
+    );
 
     assert_eq!(
         fs::read_to_string(root.join(".gitattributes"))

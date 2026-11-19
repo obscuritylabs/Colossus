@@ -89,9 +89,34 @@ The permission selector beside the composer controls what happens when an effect
 
 ## Return to a conversation
 
-Select a thread in the sidebar to read its released messages and continue it. Use **Search threads** to find a conversation in **This Workspace** or **All Workspaces**. The search can include archived workspaces and threads when you enable that option. **Load older threads** retrieves more history as needed.
+Select a thread in the sidebar to read its released messages and continue it. The expanded thread list loads older available pages as you scroll. Long histories show a limited number of rows at once; scrolling moves through the loaded summaries and continues loading older pages. Opening Desktop starts with recent threads and loads a conversation's messages when you select it.
+
+**Load older threads** also works from the keyboard. If a page fails, the threads already loaded stay available; use the displayed retry action to resume. Search pauses automatic history loading. Use **Search threads** to find indexed conversation metadata in **This Workspace** or **All Workspaces**, including archived work when enabled. See [search scope and organization](workspaces.md#find-and-organize-work).
+
+Desktop verifies a thread's connection and access before enabling controls. A shared source run can remain read-only while the conversation allows continuation under your own grant. Older indexed results can remain read-only when ownership cannot be confirmed. Reopening a thread checks its current access again.
 
 Open a thread's **More actions** menu to rename, pin or unpin, and archive it. Pinned threads stay easy to reach; archived threads remain searchable and can be restored. You can also rename or archive a workspace from its menu, then restore it from **Manage Workspaces**. Switching workspaces changes the active managed runtime and closes local terminal sessions tied to the previous workspace.
+
+## Export a conversation
+
+Open a thread, then choose **Conversation actions → Export conversation…**. Select
+**Markdown**, **Plain text**, or **JSON**. Choose **Save transcript…** for a file.
+For the clipboard, choose **Prepare copy**, then **Copy transcript** when it is
+ready. Export reads the retained conversation across all its runs, including
+messages outside loaded history. See
+[export scope and snapshot behavior](../use/sessions.md#export-a-conversation).
+
+Desktop shows progress while it reads. **Cancel export** or Escape cancels the
+operation. Save opens the native file dialog after the snapshot has been read;
+choose a new filename in a writable location. Existing files are kept. The save
+limit is 256 MiB, 10,000 source pages, or five minutes of reading. Copy is limited
+to 2 MiB; choose Save for a larger transcript.
+
+Switching conversations or runtimes cancels an in-progress export. Reopen the
+conversation and retry if its source or access changes. An unsupported runtime
+shows an explanation; update it and reconnect. A failed or cancelled read does
+not publish a partial transcript. Review exported text before sharing it because
+it can contain sensitive information you supplied.
 
 ## Use a Desktop command
 

@@ -48,6 +48,30 @@ jobs:
           toolchain: 1.96.0
           components: clippy,rustfmt
 
+      - name: Install Python 3.12 for release contracts
+        id: contract_python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: 3.12.16
+
+      - name: Provision release-contract Python prerequisites
+        env:
+          PYTHON: ${{ steps.contract_python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          "$PYTHON" -m pip install --disable-pip-version-check --only-binary=:all: "cryptography==50.0.2"
+          "$PYTHON" - <<'PY'
+          import hashlib
+          import sys
+          import cryptography
+          from cryptography import x509
+          if (sys.version_info < (3, 11)
+              or not callable(getattr(hashlib, "file_digest", None))
+              or cryptography.__version__ != "50.0.2"):
+              raise SystemExit("release contracts require Python 3.11+ and cryptography 50.0.2")
+          PY
+          printf 'PYTHON=%s\n' "$PYTHON" >> "$GITHUB_ENV"
+
       - name: Enable shared compiler cache
         id: sccache
         continue-on-error: true
@@ -191,6 +215,21 @@ jobs:
       - name: Run local release-readiness verifier
         run: ./release/verify-release-readiness.sh
 
+      - name: Retain raw dependency policy evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-policy-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .local/dependency-policy/*/*.json
+            .local/dependency-policy/*/*.stdout
+            .local/dependency-policy/*/*.stderr
+            .local/dependency-policy/*/deny.toml
+            !.local/dependency-policy/*/advisory-dbs/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+
   artifacts:
     name: Release ${{ matrix.target }}
     needs: validate
@@ -198,8 +237,8 @@ jobs:
     environment:
       name: ${{ needs.validate.outputs.publish_draft == 'true' && vars.SCCACHE_R2_ENABLED == 'true' && 'sccache-r2-write' || 'release-validation' }}
       deployment: false
-    # Cold Intel macOS native acceptance plus optimized compilation can exceed one hour.
-    timeout-minutes: ${{ matrix.target == 'x86_64-apple-darwin' && 90 || 60 }}
+    # Cold macOS native acceptance plus optimized compilation can exceed one hour.
+    timeout-minutes: 90
     env:
       SCCACHE_GHA_ENABLED: "true"
       COLOSSUS_RELEASE_JOURNAL_KEY: "5555555555555555555555555555555555555555555555555555555555555555"
@@ -1081,7 +1120,9 @@ jobs:
       COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC
       COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ""
       COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ""
-      COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW: ${{ needs.validate.outputs.release_channel == 'developer_preview' && '1' || '0' }}
+      # Stable and preview Windows installers carry the explicit functional
+      # edition; its containment and certificate-custody claims remain false.
+      COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW: "1"
       SCCACHE_GHA_ENABLED: "true"
     steps:
       - name: Check out repository

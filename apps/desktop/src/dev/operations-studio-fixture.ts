@@ -1,4 +1,4 @@
-import { MAX_FEED_ITEMS, MAX_RECENT_RUNS } from "../state";
+import { MAX_FEED_ITEMS } from "../state";
 import type { ChatState, RunView } from "../state";
 import type {
   ArtifactReference,
@@ -1428,7 +1428,7 @@ The reviewed patch is ready and waiting for your approval.`,
       "2026-07-20T11:24:55Z",
       28,
     ),
-  ].slice(0, MAX_RECENT_RUNS);
+  ];
 
   return {
     activeRunId: SELECTED_RUN_ID,

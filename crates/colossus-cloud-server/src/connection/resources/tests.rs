@@ -53,6 +53,24 @@ async fn legacy_connector_never_receives_additive_model_catalog_operation() {
         (ResourceOperation::ModelCatalog {}, false, false),
         (ResourceOperation::Context, false, true),
         (ResourceOperation::ModelCatalog {}, true, true),
+        (
+            ResourceOperation::ReadSessionTranscript {
+                source_run_id: "run-1".into(),
+                page_token: None,
+                page_size: 32,
+            },
+            false,
+            false,
+        ),
+        (
+            ResourceOperation::ReadSessionTranscript {
+                source_run_id: "run-1".into(),
+                page_token: None,
+                page_size: 32,
+            },
+            true,
+            true,
+        ),
     ] {
         let id = store
             .resource_submit(&caller, &lease, operation.clone(), now)
@@ -64,9 +82,16 @@ async fn legacy_connector_never_receives_additive_model_catalog_operation() {
             .unwrap()
             .pop()
             .unwrap();
-        dispatch(store.as_ref(), &lease, request, supported, &sender)
-            .await
-            .unwrap();
+        dispatch(
+            store.as_ref(),
+            &lease,
+            request,
+            supported,
+            supported,
+            &sender,
+        )
+        .await
+        .unwrap();
         if forwarded {
             let frame = receiver.next().await.unwrap().unwrap();
             let Some(control_frame::Body::ResourceRequest(frame)) = frame.body else {

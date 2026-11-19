@@ -52,6 +52,7 @@ import type {
   SpaceSummary,
 } from "../types";
 import { isThreadForkDraft } from "../thread-fork";
+import { VirtualThreadList } from "./VirtualThreadList";
 const ThreadActionsMenu = lazy(() =>
   import("./ThreadActionsMenu").then((module) => ({
     default: module.ThreadActionsMenu,
@@ -115,6 +116,10 @@ interface WorkSidebarProps {
   onSelect: (run: Run) => void;
   onSelectSearchResult: (result: SpaceSearchResult) => void;
   onLoadMore: () => void;
+  onAutoLoadMore?: () => void;
+  onHistoryScroll?: () => void;
+  historyNotice?: string;
+  historyAction?: string;
   onLoadMoreSearch: () => void;
   onLoadSpaceThreadPreview: (spaceId: string) => void;
   onSelectSpace: (spaceId: string) => void;
@@ -212,6 +217,10 @@ export function WorkSidebar({
   onSelect,
   onSelectSearchResult,
   onLoadMore,
+  onAutoLoadMore,
+  onHistoryScroll,
+  historyNotice = "",
+  historyAction = "Load older threads",
   onLoadMoreSearch,
   onLoadSpaceThreadPreview,
   onSelectSpace,
@@ -252,7 +261,37 @@ export function WorkSidebar({
   >(null);
   const [renameThreadDraft, setRenameThreadDraft] = useState("");
   const [threadShelfOpen, setThreadShelfOpen] = useState(true);
-  const [showAllRecent, setShowAllRecent] = useState(false);
+  const [showAllRecent, setShowAllRecent] = useState(true);
+  const historyScroll = useRef<HTMLDivElement>(null);
+  const historyBoundary = useRef<HTMLDivElement>(null);
+  const [nearHistoryEnd, setNearHistoryEnd] = useState(false);
+  const historyTouchY = useRef(0);
+  const historyInputFrame = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(historyInputFrame.current), []);
+  function historyInput() {
+    onHistoryScroll?.();
+    cancelAnimationFrame(historyInputFrame.current);
+    historyInputFrame.current = requestAnimationFrame(() => {
+      const boundary = historyBoundary.current?.getBoundingClientRect();
+      const scroll = historyScroll.current?.getBoundingClientRect();
+      if (!boundary || !scroll) return;
+      const near =
+        boundary.top <= scroll.bottom + 160 && boundary.bottom >= scroll.top;
+      setNearHistoryEnd(near);
+      if (
+        near &&
+        hasMore &&
+        !busy &&
+        !error &&
+        !disabled &&
+        connectionState === "connected" &&
+        query.trim() === "" &&
+        threadShelfOpen &&
+        showAllRecent
+      )
+        onAutoLoadMore?.();
+    });
+  }
   const [expandedSpaceIds, setExpandedSpaceIds] = useState<ReadonlySet<string>>(
     new Set(),
   );
@@ -269,10 +308,86 @@ export function WorkSidebar({
     [resolveThreadTitle, runs, selectedSpaceId],
   );
   const groups = useMemo(
-    () => selectRecentWork(displayRuns, { query: "", pinnedSessionIds }),
+    () =>
+      selectRecentWork(displayRuns, {
+        query: "",
+        pinnedSessionIds,
+        virtualized: true,
+      }),
     [displayRuns, pinnedSessionIds],
   );
   const hasRecentGroup = groups.some((group) => group.key === "recent");
+  useEffect(() => {
+    const boundary = historyBoundary.current;
+    const scroll = historyScroll.current;
+    if (
+      !boundary ||
+      !scroll ||
+      query.trim() !== "" ||
+      !threadShelfOpen ||
+      !showAllRecent
+    ) {
+      setNearHistoryEnd(false);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setNearHistoryEnd(entry?.isIntersecting === true);
+      },
+      { root: scroll, rootMargin: "160px 0px" },
+    );
+    observer.observe(boundary);
+    return () => observer.disconnect();
+  }, [query, threadShelfOpen, showAllRecent, drawerOpen]);
+  useEffect(() => {
+    if (
+      !nearHistoryEnd ||
+      !hasMore ||
+      busy ||
+      error ||
+      historyNotice ||
+      disabled ||
+      connectionState !== "connected" ||
+      query.trim() !== "" ||
+      !threadShelfOpen ||
+      !showAllRecent
+    )
+      return;
+    const bounds = historyScroll.current?.getBoundingClientRect();
+    if (
+      !bounds ||
+      bounds.right <= 0 ||
+      bounds.left >= window.innerWidth ||
+      bounds.height === 0
+    )
+      return;
+    // Yield between pages; never run a hidden eager history sweep.
+    const timer = window.setTimeout(() => {
+      const boundary = historyBoundary.current?.getBoundingClientRect();
+      const scroll = historyScroll.current?.getBoundingClientRect();
+      if (
+        boundary &&
+        scroll &&
+        boundary.top <= scroll.bottom + 160 &&
+        boundary.bottom >= scroll.top
+      )
+        onAutoLoadMore?.();
+    }, 40);
+    return () => window.clearTimeout(timer);
+  }, [
+    nearHistoryEnd,
+    hasMore,
+    busy,
+    error,
+    historyNotice,
+    disabled,
+    connectionState,
+    query,
+    threadShelfOpen,
+    showAllRecent,
+    drawerOpen,
+    onAutoLoadMore,
+  ]);
   const runsById = useMemo(
     () => new Map(runs.map((run) => [run.runId, run])),
     [runs],
@@ -746,7 +861,28 @@ export function WorkSidebar({
         ) : null}
       </section>
 
-      <div className="space-tree-scroll">
+      <div
+        className="space-tree-scroll"
+        ref={historyScroll}
+        onWheel={(event) => {
+          if (event.deltaY > 0) historyInput();
+        }}
+        onTouchStart={(event) => {
+          historyTouchY.current = event.touches[0]?.clientY ?? 0;
+        }}
+        onTouchMove={(event) => {
+          const next = event.touches[0]?.clientY ?? historyTouchY.current;
+          if (next < historyTouchY.current) historyInput();
+          historyTouchY.current = next;
+        }}
+        onKeyDownCapture={(event) => {
+          if (
+            ["ArrowDown", "PageDown", "End"].includes(event.key) ||
+            (event.key === "Tab" && !event.shiftKey)
+          )
+            historyInput();
+        }}
+      >
         {displayedSpace === undefined ? (
           <button
             className="space-empty-add"
@@ -973,177 +1109,189 @@ export function WorkSidebar({
                       }
                     />
                     <div className="work-group-items">
-                      {(group.key === "recent" && !showAllRecent
-                        ? group.items.slice(0, 3)
-                        : group.items
-                      ).map((item) => {
-                        const run = runsById.get(item.runId);
-                        if (run === undefined) {
-                          return null;
+                      <VirtualThreadList
+                        scrollRef={historyScroll}
+                        items={
+                          group.key === "recent" && !showAllRecent
+                            ? group.items.slice(0, 3)
+                            : group.items
                         }
-                        const pinned = pinnedSessionIds.has(run.sessionId);
-                        const forkDraft = isThreadForkDraft(run);
-                        const archiving =
-                          threadLifecycleBusySessionId === run.sessionId;
-                        const renaming =
-                          renameThreadSessionId === run.sessionId;
-                        return (
-                          <div
-                            className={`work-item-row${
-                              activeSessionId === run.sessionId
-                                ? " is-current"
-                                : ""
-                            }`}
-                            key={item.runId}
-                          >
-                            {renaming ? (
-                              <form
-                                className="thread-rename-form"
-                                onSubmit={(event) => {
-                                  event.preventDefault();
-                                  submitThreadRename(run);
-                                }}
-                              >
-                                <label>
-                                  <span className="sr-only">Thread name</span>
-                                  <input
-                                    autoFocus
-                                    required
-                                    maxLength={MAX_THREAD_NAME_CHARACTERS}
-                                    value={renameThreadDraft}
-                                    aria-label="Thread name"
-                                    onChange={(event) =>
-                                      setRenameThreadDraft(event.target.value)
-                                    }
-                                    onKeyDown={(event) => {
-                                      if (event.key === "Escape") {
-                                        event.preventDefault();
-                                        setRenameThreadSessionId(null);
-                                        setRenameThreadDraft("");
-                                      }
-                                    }}
-                                  />
-                                </label>
-                                <button
-                                  className="thread-rename-action"
-                                  type="button"
-                                  aria-label="Cancel thread rename"
-                                  title="Cancel"
-                                  onClick={() => {
-                                    setRenameThreadSessionId(null);
-                                    setRenameThreadDraft("");
+                      >
+                        {(item) => {
+                          const run = runsById.get(item.runId);
+                          if (run === undefined) {
+                            return null;
+                          }
+                          const pinned = pinnedSessionIds.has(run.sessionId);
+                          const forkDraft = isThreadForkDraft(run);
+                          const archiving =
+                            threadLifecycleBusySessionId === run.sessionId;
+                          const renaming =
+                            renameThreadSessionId === run.sessionId;
+                          return (
+                            <div
+                              className={`work-item-row${
+                                activeSessionId === run.sessionId
+                                  ? " is-current"
+                                  : ""
+                              }`}
+                              key={item.runId}
+                            >
+                              {renaming ? (
+                                <form
+                                  className="thread-rename-form"
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    submitThreadRename(run);
                                   }}
                                 >
-                                  <IconX
-                                    size={14}
-                                    stroke={1.8}
-                                    aria-hidden="true"
-                                  />
-                                </button>
-                                <button
-                                  className="thread-rename-action is-save"
-                                  type="submit"
-                                  aria-label="Save thread name"
-                                  title="Save"
-                                >
-                                  <IconCheck
-                                    size={14}
-                                    stroke={2}
-                                    aria-hidden="true"
-                                  />
-                                </button>
-                              </form>
-                            ) : (
-                              <>
-                                <button
-                                  className="work-item shared-workspace-thread-link is-compact"
-                                  type="button"
-                                  title={`${item.title}\n${forkDraft ? "Draft" : item.modeLabel} · ${item.updatedLabel}`}
-                                  aria-current={
-                                    activeSessionId === run.sessionId
-                                      ? "page"
-                                      : undefined
-                                  }
-                                  disabled={actionsDisabled}
-                                  onClick={() => onSelect(run)}
-                                >
-                                  <WorkspaceSidebarThreadContent
-                                    compact
-                                    title={item.title}
-                                    metadata={
-                                      <>
-                                        {forkDraft ? "Draft" : item.modeLabel} ·{" "}
-                                        {item.updatedLabel}
-                                      </>
-                                    }
-                                    status={
-                                      <span
-                                        className={`work-item-state tone-${item.statusTone}`}
-                                        title={
-                                          forkDraft
-                                            ? "Ready for your first message"
-                                            : item.statusCopy
+                                  <label>
+                                    <span className="sr-only">Thread name</span>
+                                    <input
+                                      autoFocus
+                                      required
+                                      maxLength={MAX_THREAD_NAME_CHARACTERS}
+                                      value={renameThreadDraft}
+                                      aria-label="Thread name"
+                                      onChange={(event) =>
+                                        setRenameThreadDraft(event.target.value)
+                                      }
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Escape") {
+                                          event.preventDefault();
+                                          setRenameThreadSessionId(null);
+                                          setRenameThreadDraft("");
                                         }
-                                      >
-                                        {forkDraft ? (
-                                          <IconGitFork
-                                            size={14}
-                                            aria-hidden="true"
-                                          />
-                                        ) : (
-                                          statusIcon(item.statusTone)
-                                        )}
-                                        <span className="sr-only">
-                                          {forkDraft
-                                            ? "Fork draft"
-                                            : item.statusLabel}
-                                        </span>
-                                      </span>
+                                      }}
+                                    />
+                                  </label>
+                                  <button
+                                    className="thread-rename-action"
+                                    type="button"
+                                    aria-label="Cancel thread rename"
+                                    title="Cancel"
+                                    onClick={() => {
+                                      setRenameThreadSessionId(null);
+                                      setRenameThreadDraft("");
+                                    }}
+                                  >
+                                    <IconX
+                                      size={14}
+                                      stroke={1.8}
+                                      aria-hidden="true"
+                                    />
+                                  </button>
+                                  <button
+                                    className="thread-rename-action is-save"
+                                    type="submit"
+                                    aria-label="Save thread name"
+                                    title="Save"
+                                  >
+                                    <IconCheck
+                                      size={14}
+                                      stroke={2}
+                                      aria-hidden="true"
+                                    />
+                                  </button>
+                                </form>
+                              ) : (
+                                <>
+                                  <button
+                                    className="work-item shared-workspace-thread-link is-compact"
+                                    type="button"
+                                    title={`${item.title}\n${forkDraft ? "Draft" : item.modeLabel} · ${item.updatedLabel}`}
+                                    aria-current={
+                                      activeSessionId === run.sessionId
+                                        ? "page"
+                                        : undefined
                                     }
-                                  />
-                                </button>
-                                <Suspense
-                                  fallback={
-                                    <button
-                                      type="button"
-                                      className="work-item-action thread-actions-trigger"
-                                      aria-label={`Thread actions for ${item.title}`}
-                                      aria-haspopup="menu"
-                                      aria-expanded="false"
-                                      aria-busy="true"
-                                      disabled
-                                    >
-                                      <IconDots size={17} aria-hidden="true" />
-                                    </button>
-                                  }
-                                >
-                                  <ThreadActionsMenu
-                                    run={run}
-                                    title={item.title}
-                                    pinned={pinned}
                                     disabled={actionsDisabled}
-                                    localDisabled={spaceStartup !== null}
-                                    archiving={archiving}
-                                    onRename={() =>
-                                      beginThreadRename(run, item.title)
+                                    onClick={() => onSelect(run)}
+                                  >
+                                    <WorkspaceSidebarThreadContent
+                                      compact
+                                      title={item.title}
+                                      metadata={
+                                        <>
+                                          {forkDraft ? "Draft" : item.modeLabel}{" "}
+                                          · {item.updatedLabel}
+                                        </>
+                                      }
+                                      status={
+                                        <span
+                                          className={`work-item-state tone-${item.statusTone}`}
+                                          title={
+                                            forkDraft
+                                              ? "Ready for your first message"
+                                              : item.statusCopy
+                                          }
+                                        >
+                                          {forkDraft ? (
+                                            <IconGitFork
+                                              size={14}
+                                              aria-hidden="true"
+                                            />
+                                          ) : (
+                                            statusIcon(item.statusTone)
+                                          )}
+                                          <span className="sr-only">
+                                            {forkDraft
+                                              ? "Fork draft"
+                                              : item.statusLabel}
+                                          </span>
+                                        </span>
+                                      }
+                                    />
+                                  </button>
+                                  <Suspense
+                                    fallback={
+                                      <button
+                                        type="button"
+                                        className="work-item-action thread-actions-trigger"
+                                        aria-label={`Thread actions for ${item.title}`}
+                                        aria-haspopup="menu"
+                                        aria-expanded="false"
+                                        aria-busy="true"
+                                        disabled
+                                      >
+                                        <IconDots
+                                          size={17}
+                                          aria-hidden="true"
+                                        />
+                                      </button>
                                     }
-                                    onPin={() => onToggleThreadPinned(run)}
-                                    onArchive={() => onArchiveThread(run)}
-                                    onFork={
-                                      onForkThread === undefined
-                                        ? undefined
-                                        : () => onForkThread(run)
-                                    }
-                                  />
-                                </Suspense>
-                              </>
-                            )}
-                          </div>
-                        );
-                      })}
+                                  >
+                                    <ThreadActionsMenu
+                                      run={run}
+                                      title={item.title}
+                                      pinned={pinned}
+                                      disabled={actionsDisabled}
+                                      localDisabled={spaceStartup !== null}
+                                      archiving={archiving}
+                                      onRename={() =>
+                                        beginThreadRename(run, item.title)
+                                      }
+                                      onPin={() => onToggleThreadPinned(run)}
+                                      onArchive={() => onArchiveThread(run)}
+                                      onFork={
+                                        onForkThread === undefined
+                                          ? undefined
+                                          : () => onForkThread(run)
+                                      }
+                                    />
+                                  </Suspense>
+                                </>
+                              )}
+                            </div>
+                          );
+                        }}
+                      </VirtualThreadList>
                     </div>
                     {group.key === "recent" &&
-                    (group.items.length > 3 || hasMore) ? (
+                    (group.items.length > 3 ||
+                      hasMore ||
+                      error ||
+                      historyNotice) ? (
                       <button
                         className="work-group-more"
                         type="button"
@@ -1153,7 +1301,7 @@ export function WorkSidebar({
                             setShowAllRecent(true);
                             return;
                           }
-                          if (hasMore) {
+                          if (hasMore || error || historyNotice) {
                             setShowAllRecent(true);
                             onLoadMore();
                             return;
@@ -1163,8 +1311,8 @@ export function WorkSidebar({
                       >
                         {!showAllRecent && group.items.length > 3
                           ? `View ${group.items.length - 3} more recent ${group.items.length - 3 === 1 ? "thread" : "threads"}`
-                          : hasMore
-                            ? "Load older threads"
+                          : hasMore || error || historyNotice
+                            ? historyAction
                             : "Show fewer"}
                       </button>
                     ) : null}
@@ -1181,7 +1329,7 @@ export function WorkSidebar({
             ) : null}
           </nav>
 
-          <div className="work-list-footer">
+          <div className="work-list-footer" ref={historyBoundary}>
             {busy || searchBusy ? (
               <span className="loading-copy" role="status">
                 <IconLoader2
@@ -1202,15 +1350,32 @@ export function WorkSidebar({
                 More results
               </button>
             ) : null}
-            {!searching && hasMore && !hasRecentGroup ? (
+            {!searching &&
+            (hasMore || error || historyNotice) &&
+            !hasRecentGroup ? (
               <button
                 className="text-button"
                 type="button"
                 disabled={busy || actionsDisabled}
                 onClick={onLoadMore}
               >
-                Load older threads
+                {historyAction}
               </button>
+            ) : null}
+            {!searching && historyNotice ? (
+              <p className="work-history-notice" role="status">
+                {historyNotice}
+              </p>
+            ) : null}
+            {!searching &&
+            !busy &&
+            !hasMore &&
+            !error &&
+            runs.length > 0 &&
+            showAllRecent ? (
+              <span className="work-history-notice">
+                All available threads loaded
+              </span>
             ) : null}
             {(searching ? searchError : error) !== "" ? (
               <p className="sidebar-error" role="alert">

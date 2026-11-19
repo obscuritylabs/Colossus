@@ -492,6 +492,15 @@ pub enum WorkerOperation {
         /// Maximum records, clamped to 100.
         limit: usize,
     },
+    /// Read one immutable released conversation-export page without provider work.
+    SessionTranscriptPage {
+        /// Exact durable session identifier.
+        session_id: String,
+        /// Opaque snapshot-bound continuation returned by the previous page.
+        cursor: Option<String>,
+        /// Maximum source records in one page, clamped to 100.
+        page_size: usize,
+    },
     /// Opt-in auxiliary next-prompt generation over the exact canonical tail.
     PredictNextPrompt {
         /// Exact selected session.

@@ -137,6 +137,20 @@ test(
   },
 );
 
+test(
+  "Windows stable and preview browser publication preserve signed admission",
+  { skip: process.platform !== "win32" },
+  () => {
+    const result = spawnSync(
+      "pwsh",
+      ["-NoProfile", "-NonInteractive", "-File", join(repository, "scripts/ci/browser-release-policy.test.ps1")],
+      { encoding: "utf8", timeout: 15000, maxBuffer: 32768, windowsHide: true },
+    );
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+    assert.match(result.stdout, /PASS stable and preview browser admission preserves signing and sealed inputs/u);
+  },
+);
+
 function filesUnder(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
@@ -710,16 +724,27 @@ test("delegated-agent inspection is selected-Space scoped and releases only boun
 });
 
 test("session map inspection is selected-Space scoped and releases bounded canonical records", () => {
-  const command = read("apps/desktop/src-tauri/src/desktop_commands.rs");
-  assert.match(command, /pub\(crate\) async fn get_session_map/u);
+  const command = read("apps/desktop/src-tauri/src/desktop_commands.rs").match(
+    /pub\(crate\) async fn get_session_map\([\s\S]*?\n\}/u,
+  )?.[0];
+  assert.ok(command, "session map command must remain explicit");
+  assert.match(
+    command,
+    /source_run_id\.is_empty\(\) \|\| source_run_id\.len\(\) > 128/u,
+  );
   assert.match(command, /settings\.selected_space_id/u);
   assert.match(command, /managed_lifecycle_ready_for\(space_id\)/u);
   assert.match(command, /state\.selected_target\(space_id\)\.await/u);
   assert.match(
     command,
-    /state\.run_is_bound\(&target, &source_run_id\)\.await/u,
+    /ensure_run_target\(&state, &target, &source_run_id\)\.await\?[\s\S]*?let verified = target[\s\S]*?\.get_conversation_with_proofs\([\s\S]*?run_id: source_run_id,[\s\S]*?discovery: discovery_proof,[\s\S]*?continuation: None,/u,
   );
-  assert.match(command, /inspect_session_map\(&response\.run\.session_id\)/u);
+  assert.equal(command.match(/\.get_conversation_with_proofs\(/gu)?.length, 1);
+  assert.doesNotMatch(command, /\.get_run\(/u);
+  assert.match(
+    command,
+    /if !verified\.source\.can_control\(\) \{\s*return Err\([\s\S]*?\.bind_runs\(&target, vec!\[verified\.response\.run\.run_id\.clone\(\)\]\)[\s\S]*?state\.managed_worker_for\(space_id\)[\s\S]*?\.inspect_session_map\(&verified\.response\.run\.session_id\)/u,
+  );
 
   const projection = read(
     "crates/colossus-worker/src/session_map_inspection.rs",
@@ -738,8 +763,36 @@ test("session map inspection is selected-Space scoped and releases bounded canon
   assert.match(projection, /bounded_snapshot_items/u);
 
   const renderer = read("apps/desktop/src/App.tsx");
-  assert.match(renderer, /getSessionMap\(runId\)/u);
-  assert.match(renderer, /next\.sessionId === sessionId/u);
+  const request = renderer.match(
+    /const requestSessionMap = useCallback\([\s\S]*?\n  \);/u,
+  )?.[0];
+  assert.ok(request, "session map request must remain explicit");
+  assert.match(
+    request,
+    /route === null \|\| targetRoutes\.current\?\.isCurrent\(route\) !== true\)\s*return;[\s\S]*?getSessionMap\(\s*runId,\s*operationDiscoveryProof\(route\.targetId, runId\)\.discoveryProof,/u,
+  );
+  assert.match(
+    request,
+    /targetRoutes\.current\?\.isCurrent\(route\) === true &&\s*sessionMapRequest\.current === request &&\s*next\.sessionId === sessionId\s*\) \{\s*setSessionMap\(next\)/u,
+  );
+  for (const branch of ["catch", "finally"]) {
+    assert.match(
+      request,
+      new RegExp(
+        `${branch}[^\\{]*\\{\\s*if \\(\\s*targetRoutes\\.current\\?\\.isCurrent\\(route\\) === true &&\\s*sessionMapRequest\\.current === request`,
+        "u",
+      ),
+    );
+  }
+  const api = read("apps/desktop/src/api.ts").match(
+    /export function getSessionMap\([\s\S]*?\n\}/u,
+  )?.[0];
+  assert.ok(api, "session map transport must remain explicit");
+  assert.match(
+    api,
+    /call\("get_session_map", \{\s*sourceRunId,\s*\.\.\.\(discoveryProof \? \{ discoveryProof \} : \{\}\),\s*\}\)/u,
+  );
+  assert.doesNotMatch(api, /sessionId|canControl|can_control/u);
   assert.match(
     renderer,
     /\["topology", "snapshots", "resources"\]\.includes\(\s*activeSessionWorkspaceView/u,
@@ -1519,6 +1572,8 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
   assert.match(signedWindowsJob, /environment: release-signing/u);
   assert.match(signedWindowsJob, /id-token: write/u);
   assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC/u);
+  assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW: "1"/u);
+  assert.doesNotMatch(signedWindowsJob, /release_channel == 'developer_preview' && '1' \|\| '0'/u);
   const signedSteps = signedWindowsJob
     .replaceAll("\r\n", "\n")
     .split(/^      - /mu)

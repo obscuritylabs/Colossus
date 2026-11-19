@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildOperationsStudioFixture } from "./dev/operations-studio-fixture";
-import { MAX_FEED_ITEMS, MAX_RECENT_RUNS } from "./state";
+import { MAX_FEED_ITEMS } from "./state";
 
 describe("buildOperationsStudioFixture", () => {
   afterEach(() => {
@@ -84,7 +84,6 @@ describe("buildOperationsStudioFixture", () => {
     const second = buildOperationsStudioFixture();
     const selected = first.views.get(first.activeRunId ?? "");
 
-    expect(first.recentRuns.length).toBeLessThanOrEqual(MAX_RECENT_RUNS);
     expect(selected?.updates.length).toBeLessThanOrEqual(MAX_FEED_ITEMS);
     expect(first.views).not.toBe(second.views);
     expect(selected?.seenSequences).not.toBe(

@@ -656,6 +656,25 @@ pub(super) async fn dispatch_to_worker_if_active(
             Ok(true)
         }
         Command::Sessions(command) => {
+            if let SessionsAction::Export {
+                session_id,
+                output,
+                format,
+            } = &command.command
+            {
+                crate::transcript_export::export_transcript(
+                    crate::transcript_export::TranscriptSource::Worker(&client),
+                    session_id,
+                    output,
+                    *format,
+                )
+                .await
+                .map_err(cli_error)?;
+                if output != Path::new("-") {
+                    eprintln!("Conversation exported.");
+                }
+                return Ok(true);
+            }
             let operation = match &command.command {
                 SessionsAction::List { limit } => WorkerOperation::SessionList { limit: *limit },
                 SessionsAction::Show { session_id } => WorkerOperation::SessionGet {
@@ -667,6 +686,9 @@ pub(super) async fn dispatch_to_worker_if_active(
                 SessionsAction::New { title } => WorkerOperation::SessionCreate {
                     title: title.clone(),
                 },
+                SessionsAction::Export { .. } => {
+                    unreachable!("handled before worker operation dispatch")
+                }
             };
             let result = client.call(operation).await?;
             if matches!(&command.command, SessionsAction::Show { .. }) && result.is_null() {

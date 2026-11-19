@@ -120,7 +120,7 @@ test("slash commands complete and change Desktop modes without becoming prompts"
   await prompt.fill("/work");
   await prompt.press("Enter");
   await expect(
-    page.getByRole("button", { name: "Conversation" }),
+    page.getByRole("button", { name: "Conversation", exact: true }),
   ).toHaveAttribute("aria-current", "page");
 });
 

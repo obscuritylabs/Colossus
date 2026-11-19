@@ -226,6 +226,11 @@ impl PolicyDecisionPoint for BuiltInPolicy {
                     DecisionOutcome::Deny
                 }
             });
+        if mcp_tasks::is_follow_up(&request.action)
+            && self.actions.get("mcp.invoke") == Some(&DecisionOutcome::Deny)
+        {
+            outcome = DecisionOutcome::Deny;
+        }
         if outcome == DecisionOutcome::RequireApproval
             && (request.approval.is_some() || request.phase == EffectPhase::PostEffect)
         {

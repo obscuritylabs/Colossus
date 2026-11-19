@@ -52,6 +52,7 @@ mod prompt_predictions;
 mod schedule_approval;
 mod sharing;
 mod standalone_goal;
+mod transcript;
 
 struct RuntimeFixture {
     runtime: Arc<Runtime>,

@@ -1056,6 +1056,7 @@ export function AuthenticatedApp({
                 key={`${project}:${selectedThread.thread_id}`}
                 initial={selectedThread}
                 project={project}
+                identity={me.user.id}
                 nodes={scopedNodes}
                 permissions={permissions}
                 onBack={() =>

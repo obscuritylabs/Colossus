@@ -328,6 +328,10 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                     "Mouse wheel or PageUp/PageDown scroll the full-screen transcript; --no-alt-screen uses native scrollback".into(),
                 ),
                 (
+                    "Pinned session".into(),
+                    "In full-screen mode, press F2, select another open session, then press p to pin or unpin its read-only live tail.".into(),
+                ),
+                (
                     "Agents".into(),
                     "The right sidebar shows current run usage, open tasks, goals, retained memory count, configured MCP servers and subagents. The footer keeps a compact token total when the sidebar cannot fit. A green MCP bubble means successful use in this session. Wheel over it or Alt+PageUp/PageDown to scroll; /tasks, /goals and /agents show full lists.".into(),
                 ),

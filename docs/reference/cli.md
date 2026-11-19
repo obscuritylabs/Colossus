@@ -80,7 +80,7 @@ model output.
 | `models` | Inspect role-to-profile routing |
 | `artifacts` | Upload, inspect, and download caller-owned released artifacts |
 | `tools` | Inspect the resolved strict tool catalog |
-| `sessions` | Create and inspect durable sessions; `run` and TUI attach or resume |
+| `sessions` | Create, inspect, and export durable sessions; `run` and TUI attach or resume |
 | `always-on` | Schedule and control an existing session in the current workspace worker |
 | `work` | Render bounded actionable work for a session |
 | `preferences` | Inspect or reset presentation preferences |
@@ -129,7 +129,7 @@ positional:
 | `models` | `profiles`, `doctor [PROFILE] [--include-provider-response]`, `routes`, `route [ROLE]` |
 | `artifacts` | `upload PATH`, `show ARTIFACT_ID`, `download ARTIFACT_ID OUTPUT` |
 | `tools` | `list` |
-| `sessions` | `list`, `show SESSION_ID`, `messages SESSION_ID`, `new [TITLE]` |
+| `sessions` | `list`, `show SESSION_ID`, `messages SESSION_ID`, `new [TITLE]`, `export SESSION_ID --output PATH [--format FORMAT]` |
 | `always-on` | `enable SESSION_ID`, `status`, `pause`, `wake` |
 | `work` | `work [--session SESSION_ID]` |
 | `preferences` | `show`, `history`, `reset` |
@@ -166,6 +166,7 @@ positional:
 | `workflow webhook serve` | `--bind 127.0.0.1:8787` |
 | `search query` | `--role agent`; `--limit 10` |
 | `sessions list`, `research list`, `telemetry runs` | `--limit 20` |
+| `sessions export` | `--format FORMAT` accepts `markdown` (default), `text`, or `json`; a new file or `--output -` for staged standard output; fails above 256 MiB or 10,000 source pages. See [export scope and recovery](../use/sessions.md#export-a-conversation). |
 | `always-on enable` | An existing owned session in a durable workspace. Scheduled checks require a running worker. |
 | Most record lists | `--limit 100` |
 | `goals run` | `--role primary`; `--max-iterations 5` in `1..=50` |

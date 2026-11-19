@@ -127,6 +127,8 @@ pub(super) const TERMINAL_COMPLETIONS: &[&str] = &[
     "/session show",
     "/session new",
     "/session resume",
+    "/session export",
+    "/export",
     "/work",
     "/tasks",
     "/decisions",

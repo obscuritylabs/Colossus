@@ -366,23 +366,31 @@ pub(super) async fn invoke_mcp_tool(
     )
     .await?;
     validate_tool_arguments(&tool_spec, &arguments)?;
-    let request = executor.request(
-        actor,
-        context,
-        McpOperation::CallTool {
-            server: server.into(),
-            tool: tool.into(),
-            description: tool_spec.description.clone(),
-            annotations: tool_spec.annotations.clone(),
-            arguments,
-            input_schema: Box::new(tool_spec.input_schema.clone()),
-            output_schema: tool_spec.output_schema.clone().map(Box::new),
-            schema_sha256: tool_spec.schema_sha256.clone(),
-        },
-    )?;
-    let released = gateway.execute(request, effect_executor).await?;
-    let output: McpCallOutput = serde_json::from_slice(&released.bytes)
-        .map_err(|error| RuntimeError::Config(format!("invalid MCP call output: {error}")))?;
+    let operation = McpOperation::CallTool {
+        server: server.into(),
+        tool: tool.into(),
+        description: tool_spec.description,
+        annotations: tool_spec.annotations,
+        arguments,
+        input_schema: Box::new(tool_spec.input_schema),
+        output_schema: tool_spec.output_schema.map(Box::new),
+        schema_sha256: tool_spec.schema_sha256,
+    };
+    let task_output = executor
+        .invoke_task_call(gateway, effect_executor, &actor, &context, &operation)
+        .await
+        .map_err(|error| match error {
+            colossus_mcp::McpTaskCallError::Config(error) => RuntimeError::Mcp(error),
+            colossus_mcp::McpTaskCallError::Gateway(error) => RuntimeError::Gateway(error),
+        })?;
+    let output: McpCallOutput = if let Some(output) = task_output {
+        output
+    } else {
+        let request = executor.request(actor, context, operation)?;
+        let released = gateway.execute(request, effect_executor).await?;
+        serde_json::from_slice(&released.bytes)
+            .map_err(|error| RuntimeError::Config(format!("invalid MCP call output: {error}")))?
+    };
     if output.server != server || output.tool != tool {
         return Err(RuntimeError::Config(
             "released MCP result does not match its requested server and tool".into(),

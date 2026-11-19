@@ -138,7 +138,10 @@ fn draw(workspace: &mut Workspace) -> String {
 
 #[tokio::test]
 async fn app_mouse_routing_switches_sessions_and_preserves_inactive_approval_and_draft() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.composer.insert("Alpha unsent draft");
     workspace.operation = Some(OperationKind::Run);
     workspace.control = Some(RunControl::default());
@@ -182,7 +185,10 @@ async fn app_mouse_routing_switches_sessions_and_preserves_inactive_approval_and
 
 #[tokio::test]
 async fn sidebar_click_clears_rendered_selection_and_navigates_in_one_click() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     open_snapshot(&mut workspace, "beta");
     workspace.switch("alpha");
     draw(&mut workspace);
@@ -221,7 +227,10 @@ async fn sidebar_click_clears_rendered_selection_and_navigates_in_one_click() {
 
 #[tokio::test]
 async fn history_preview_restores_messages_and_work_without_switching_the_running_session() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.operation = Some(OperationKind::Run);
     workspace.composer.insert("Keep Alpha draft");
     workspace.catalog = vec![summary("beta", "Saved Beta")];
@@ -282,7 +291,10 @@ async fn history_preview_restores_messages_and_work_without_switching_the_runnin
 
 #[tokio::test]
 async fn reopened_manager_applies_async_work_after_switches_and_a_rejected_archive() {
-    let (mut workspace, mut events) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, mut events) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.composer.insert("Alpha unsent draft");
     open_snapshot(&mut workspace, "beta");
     workspace.composer.insert("Beta unsent draft");
@@ -344,7 +356,10 @@ async fn reopened_manager_applies_async_work_after_switches_and_a_rejected_archi
 
 #[tokio::test]
 async fn stale_preview_and_catalog_replies_cannot_cross_selection_or_tab_generation() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.catalog = vec![summary("alpha", "Alpha"), summary("beta", "Beta")];
     workspace.open_manager(SessionTab::History);
     let old = workspace.workspace_manager.preview.generation;
@@ -386,7 +401,10 @@ async fn stale_preview_and_catalog_replies_cannot_cross_selection_or_tab_generat
 
 #[tokio::test]
 async fn selected_open_preview_tracks_background_released_stream_updates() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     open_snapshot(&mut workspace, "beta");
     workspace.open_manager(SessionTab::Open);
     workspace.workspace_manager.select(Some("alpha".into()));
@@ -410,7 +428,10 @@ async fn selected_open_preview_tracks_background_released_stream_updates() {
 
 #[tokio::test]
 async fn healthy_history_does_not_repeat_an_unavailable_archive_error() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     for _ in 0..3 {
         workspace.receive(
             WorkspaceEvent::Catalog {
@@ -462,7 +483,10 @@ async fn healthy_history_does_not_repeat_an_unavailable_archive_error() {
 #[tokio::test]
 async fn archive_rejects_unsent_draft_queue_and_running_work_without_starting_a_host_mutation() {
     for scenario in ["draft", "queue", "running"] {
-        let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+        let (mut workspace, _) = Workspace::new(
+            ScreenMode::Alternate,
+            TuiState::from_snapshot(source("alpha")),
+        );
         match scenario {
             "draft" => workspace.composer.insert("Retain my work"),
             "queue" => workspace.queue.push_back("Retain queued turn".into()),
@@ -483,7 +507,10 @@ async fn archive_rejects_unsent_draft_queue_and_running_work_without_starting_a_
 
 #[tokio::test]
 async fn archived_current_session_uses_prepared_replacement_and_releases_its_open_slot() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.catalog = vec![summary("alpha", "Archive Alpha")];
     workspace.workspace_archiving = true;
     workspace.receive_archive("alpha", true, Ok(Some(source("replacement"))));
@@ -514,7 +541,10 @@ async fn archived_current_session_uses_prepared_replacement_and_releases_its_ope
 
 #[tokio::test]
 async fn opening_and_archival_cannot_install_the_same_session_in_conflicting_states() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.opening = true;
     workspace.archive_session("beta".into(), true, host());
     assert!(workspace.archive_task.is_none());
@@ -533,7 +563,10 @@ async fn opening_and_archival_cannot_install_the_same_session_in_conflicting_sta
 
 #[tokio::test]
 async fn archiving_idle_background_state_does_not_cancel_another_sessions_microphone() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     open_snapshot(&mut workspace, "beta");
     let microphone = Arc::new(SharedMicrophone::default());
     workspace.dictation.port = Some(microphone.clone());

@@ -8,6 +8,105 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-19
+
+### Highlights
+
+- Export a fixed snapshot of a saved conversation as Markdown, plain text or JSON
+  from the CLI, TUI, Desktop and connected Hosted/Fleet Web Chat. Export reads
+  retained history across runs, including messages from before context compaction,
+  and reports failures instead of a successful shortened transcript.
+- Follow one other open conversation in the full-screen TUI. Pin its read-only
+  live transcript from the Sessions browser while keeping the active draft and
+  reading position. Embedded and worker-backed terminals support this workflow.
+- Opt in to remote MCP Tasks during ordinary local CLI/TUI Execute runs with a
+  file-backed redb store. Explicitly selected tools on pinned 2026 Streamable HTTP
+  servers can remain pending until their result is released; observations and
+  cancellation requests remain subject to the originating run's policy.
+- Browse older Desktop conversations as you scroll beyond the former 200-entry
+  cutoff. Progressive paging retains lightweight history summaries while a
+  virtual list bounds the rendered rows.
+- Windows x64 stable Desktop packaging now selects the owned Chromium functional
+  edition previously selected for previews. Chromium's sandbox and supervised
+  cleanup remain enabled. Whole-host restrictive egress and private certificate
+  custody remain unavailable.
+
+### Scope and limitations
+
+- Conversation export includes saved human/application input and released visible
+  assistant text. It excludes hidden reasoning, system instructions, peer-agent
+  messages, and tool calls/results. Images and opaque attachment references use
+  metadata placeholders; text already saved in messages remains included. Export
+  requires a supporting source runtime and current read access; the VS Code
+  extension has no human export command.
+- Remote Tasks remain unavailable in standalone `mcp call`, OAuth-based servers,
+  Agent Plugins, stdio, legacy protocols and hosted/Fleet runs. Stop requests
+  remote cancellation when policy and time allow; only an observed terminal state
+  confirms it. Interrupted or unconfirmed work can remain unknown.
+- The browser packaging change applies to the Windows x64 Desktop installer.
+  Standalone CLI/TUI archives gain no browser payload, and macOS/Linux browser
+  boundaries are unchanged. This functional edition does not establish
+  production browser acceptance.
+- SDK candidate archives use version 0.12.1, but this release disables SDK
+  registry publication. It does not publish npm/PyPI packages or a Go module tag.
+
+### Dependency support risk
+
+`chrono 0.4.45` remains unmaintained
+([RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html)).
+An explicitly approved temporary exception accepts this support risk only within
+the unchanged reviewed advisory, dependency and application-source scope. It
+expires at `2026-12-19T00:00:00Z`, without automatic renewal; changes to those
+bindings fail closed pending review. This exception does not fix chrono. Other
+dependency checks and blocking findings remain enforced. `dependency_owner` owns
+migration from the remaining chrono dependency paths.
+
+<!-- colossus:release-notes base=v0.12.0 -->
+
+### Merged changes
+
+#### Added
+
+- **tui:** pin a second live conversation ([4d07415](https://github.com/obscuritylabs/Colossus/commit/4d074157f3389baee54edc8d978f0e2fec23fdba))
+- **mcp:** follow remote tasks in local Execute runs ([0bf1e8f](https://github.com/obscuritylabs/Colossus/commit/0bf1e8fa6e041988c808736338e1f3a7c9977bce))
+- export saved conversations across clients ([26b211a](https://github.com/obscuritylabs/Colossus/commit/26b211a9d8460405fad644720d6ad4a5d399dc59))
+
+#### Fixed
+
+- **desktop:** load older threads while scrolling ([5b8aa0b](https://github.com/obscuritylabs/Colossus/commit/5b8aa0b8cb5dea0d6a6ce28a8064b27853e2c8a6))
+- **desktop:** keep history replacement retries recoverable ([0c9285c](https://github.com/obscuritylabs/Colossus/commit/0c9285c4a2100e2b60ec3b42cf5963065274af28))
+- **worktrees:** release catalog lock with its mutation lease ([d287470](https://github.com/obscuritylabs/Colossus/commit/d2874701ce18f1d3670437f1a510d6a7ec19ea14))
+- **desktop:** contain conversation pane controls ([d3ecf09](https://github.com/obscuritylabs/Colossus/commit/d3ecf0959c82294952d3b51ff622abe652fa6576))
+
+#### Security
+
+- **deps:** enforce approved temporary chrono support-risk policy ([1c69e41](https://github.com/obscuritylabs/Colossus/commit/1c69e4127d9c538876856210fb545732b4f1bb17))
+
+#### Documentation
+
+- **mcp:** explain how to check server health ([06da53b](https://github.com/obscuritylabs/Colossus/commit/06da53b990e66740ecebc6c20612b946eb8b403b))
+- **release:** record v0.12.1 changelog ([281b67d](https://github.com/obscuritylabs/Colossus/commit/281b67d7b4c68cf1949e44da60f451bce26913db))
+- **release:** refresh v0.12.1 history after dependency policy ([b6226fc](https://github.com/obscuritylabs/Colossus/commit/b6226fc9ec70623553864cd393c3c34efe6398d0))
+- **release:** refresh history after sidecar fixture validation ([b2a20fa](https://github.com/obscuritylabs/Colossus/commit/b2a20fa3d961b8cb1768c315fae345a6d160de09))
+- **release:** include history retry recovery in v0.12.1 ([a0ec433](https://github.com/obscuritylabs/Colossus/commit/a0ec43392e2b37a0c901d2b14f58d722cc9b623c))
+- **release:** record validator setup correction ([ba7205c](https://github.com/obscuritylabs/Colossus/commit/ba7205c763cc9247a6e3693d563598ee953824ea))
+- **release:** include worktree lease recovery fix ([65ca965](https://github.com/obscuritylabs/Colossus/commit/65ca965b7430a6271d643864c6f2a9c54a2d450e))
+- **release:** record cold CLI build deadline ([c140ff1](https://github.com/obscuritylabs/Colossus/commit/c140ff12efb37a33f05045ea10e36e096b9bdd9b))
+
+#### Maintenance
+
+- **ubuntu:** validate Ubuntu 26.04 on x64 and arm64 ([1195294](https://github.com/obscuritylabs/Colossus/commit/1195294aeffbb269de44134195c91b7c13e86718))
+- **release:** prepare v0.12.1 with signed browser builds ([eaec0c9](https://github.com/obscuritylabs/Colossus/commit/eaec0c9100397cd6f0ad06536a0529be4a99063c))
+- **sidecar:** use canonical executable in inspection fixtures ([5390e9b](https://github.com/obscuritylabs/Colossus/commit/5390e9bef7629509b84a35548d664af172bc4f62))
+- **release:** provision Python contract prerequisites ([7de1926](https://github.com/obscuritylabs/Colossus/commit/7de19262750d6282f4ac804f6202d5f9f4879810))
+- **release:** allow cold CLI builds ninety minutes ([238aea0](https://github.com/obscuritylabs/Colossus/commit/238aea0e4c0a98c12edb580455f24f6d4a943f98))
+
+**Source:** [d3ecf09](https://github.com/obscuritylabs/Colossus/commit/d3ecf0959c82294952d3b51ff622abe652fa6576)
+
+**Full changelog:** [v0.12.0...v0.12.1](https://github.com/obscuritylabs/Colossus/compare/v0.12.0...v0.12.1)
+
+<!-- /colossus:release-notes -->
+
 ## [0.12.0] - 2026-11-16
 
 ### Highlights

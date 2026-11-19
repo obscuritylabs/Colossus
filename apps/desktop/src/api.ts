@@ -1,5 +1,46 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type {
+  TranscriptExportOptions,
+  TranscriptExportResult,
+} from "./transcript-export";
+
+export function exportConversation(
+  targetId: string,
+  runId: string,
+  discoveryProof: string | undefined,
+  options: TranscriptExportOptions,
+): Promise<TranscriptExportResult> {
+  const onProgress = new Channel<
+    import("./transcript-export").TranscriptExportProgress
+  >();
+  onProgress.onmessage = options.onProgress;
+  return call("export_conversation", {
+    targetId,
+    request: {
+      action: "start",
+      operationId: options.operationId,
+      runId,
+      discoveryProof,
+      format: options.format,
+      destination: options.destination,
+    },
+    onProgress,
+  });
+}
+
+export async function cancelConversationExport(
+  targetId: string,
+  operationId: string,
+): Promise<void> {
+  await call("export_conversation", {
+    targetId,
+    request: { action: "cancel", operationId },
+    onProgress: new Channel<
+      import("./transcript-export").TranscriptExportProgress
+    >(),
+  });
+}
 
 import type { AlwaysOnProfile, AlwaysOnStatus } from "./types";
 
@@ -991,8 +1032,14 @@ export function getThreadDelegate(
   return call("get_thread_delegate", { parentRunId, jobId });
 }
 
-export function getSessionMap(sourceRunId: string): Promise<SessionMap> {
-  return call("get_session_map", { sourceRunId });
+export function getSessionMap(
+  sourceRunId: string,
+  discoveryProof?: string,
+): Promise<SessionMap> {
+  return call("get_session_map", {
+    sourceRunId,
+    ...(discoveryProof ? { discoveryProof } : {}),
+  });
 }
 
 export function setApprovalMode(

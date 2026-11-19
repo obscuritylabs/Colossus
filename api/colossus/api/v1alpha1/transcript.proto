@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package colossus.api.v1alpha1;
+
+import "colossus/api/v1alpha1/common.proto";
+
+option csharp_namespace = "ObscurityLabs.Colossus.Api.V1Alpha1";
+option java_multiple_files = true;
+option java_package = "com.obscuritylabs.colossus.api.v1alpha1";
+
+// TranscriptActivity describes the session at the captured canonical boundary.
+enum TranscriptActivity {
+  // TRANSCRIPT_ACTIVITY_UNSPECIFIED is never emitted.
+  TRANSCRIPT_ACTIVITY_UNSPECIFIED = 0;
+  // TRANSCRIPT_ACTIVITY_ACTIVE means the session has active work.
+  TRANSCRIPT_ACTIVITY_ACTIVE = 1;
+  // TRANSCRIPT_ACTIVITY_IDLE means no active work was observed.
+  TRANSCRIPT_ACTIVITY_IDLE = 2;
+  // TRANSCRIPT_ACTIVITY_UNKNOWN means activity could not be established.
+  TRANSCRIPT_ACTIVITY_UNKNOWN = 3;
+}
+
+// TranscriptMessageRole excludes private system, tool and peer messages.
+enum TranscriptMessageRole {
+  // TRANSCRIPT_MESSAGE_ROLE_UNSPECIFIED is never emitted.
+  TRANSCRIPT_MESSAGE_ROLE_UNSPECIFIED = 0;
+  // TRANSCRIPT_MESSAGE_ROLE_USER is human/application input.
+  TRANSCRIPT_MESSAGE_ROLE_USER = 1;
+  // TRANSCRIPT_MESSAGE_ROLE_ASSISTANT is released visible assistant prose.
+  TRANSCRIPT_MESSAGE_ROLE_ASSISTANT = 2;
+}
+
+// TranscriptSnapshot fixes identity, time and the immutable session stream boundary.
+message TranscriptSnapshot {
+  // schema_version identifies the allowlisted released transcript schema.
+  uint32 schema_version = 1;
+  // session_id identifies only the selected conversation, never a database path.
+  string session_id = 2;
+  // title is the canonical title when present.
+  optional string title = 3;
+  // stream_version is the inclusive immutable snapshot boundary.
+  uint64 stream_version = 4;
+  // exported_at is the RFC 3339 snapshot creation time.
+  string exported_at = 5;
+  // activity describes session-level work, independently of the source run status.
+  TranscriptActivity activity = 6;
+}
+
+// TranscriptAttachment is display metadata, never bytes, paths or download authority.
+message TranscriptAttachment {
+  // file_name is a released display name.
+  string file_name = 1;
+  // media_type is the released content type.
+  string media_type = 2;
+  // size_bytes is the recorded attachment size.
+  uint64 size_bytes = 3;
+}
+
+// TranscriptPart preserves the order of visible text and attachment placeholders.
+message TranscriptPart {
+  // content contains exactly one released representation.
+  oneof content {
+    // text preserves the original visible text without display shortening.
+    string text = 1;
+    // attachment contains authorized display metadata only.
+    TranscriptAttachment attachment = 2;
+  }
+}
+
+// TranscriptMessage is one allowlisted canonical conversation entry.
+message TranscriptMessage {
+  // sequence is the stable session stream order.
+  uint64 sequence = 1;
+  // run_id is the recorded run provenance when available.
+  string run_id = 2;
+  // created_at is the RFC 3339 canonical event time.
+  string created_at = 3;
+  // role is human/application input or visible assistant output.
+  TranscriptMessageRole role = 4;
+  // parts preserve canonical multipart text order.
+  repeated TranscriptPart parts = 5;
+}
+
+// ReadSessionTranscriptRequest selects a conversation through an authorized source run.
+message ReadSessionTranscriptRequest {
+  // source_run_id is resolved under the authenticated caller and sharing rules.
+  string source_run_id = 1;
+  // page contains a bounded size and caller/session/snapshot-bound opaque token.
+  PageRequest page = 2;
+}
+
+// ReadSessionTranscriptResponse returns an oldest-first, non-truncated snapshot page.
+message ReadSessionTranscriptResponse {
+  // snapshot remains identical throughout this export.
+  TranscriptSnapshot snapshot = 1;
+  // messages contains released records; a filtered page may be empty and advance.
+  repeated TranscriptMessage messages = 2;
+  // page has an empty next token only when this snapshot is complete.
+  PageResponse page = 3;
+}

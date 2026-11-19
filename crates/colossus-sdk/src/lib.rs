@@ -68,6 +68,10 @@ pub use colossus_api::{
     HumanTerminalSignal, HumanTerminalStatus,
 };
 pub use colossus_api::{NEXT_PROMPT_CAPABILITY, NextPromptPrediction, PredictNextPromptRequest};
+pub use colossus_api::{
+    ReadSessionTranscriptRequest, SESSION_TRANSCRIPT_CAPABILITY, TranscriptActivity,
+    TranscriptMessage, TranscriptPage, TranscriptPart, TranscriptRole, TranscriptSnapshot,
+};
 pub use plugins::*;
 pub use workflows::*;
 

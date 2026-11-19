@@ -723,6 +723,8 @@ pub(crate) struct RunDto {
     pub(crate) archived: bool,
     pub(crate) controllable: bool,
     pub(crate) continuable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) discovery_proof: Option<String>,
 }
 
 impl From<Run> for RunDto {
@@ -745,6 +747,7 @@ impl From<Run> for RunDto {
             archived: value.archived,
             controllable: true,
             continuable: true,
+            discovery_proof: None,
         }
     }
 }
@@ -1730,11 +1733,24 @@ pub(crate) struct ListAsidesInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct GetRunInput {
     run_id: String,
+    pub(crate) discovery_proof: Option<String>,
+    pub(crate) continuation_proof: Option<String>,
 }
 
 impl GetRunInput {
     pub(crate) fn into_sdk(self) -> Result<GetRunRequest, CommandErrorDto> {
         validate_identifier(&self.run_id, "runId")?;
+        for (proof, field) in [
+            (&self.discovery_proof, "discoveryProof"),
+            (&self.continuation_proof, "continuationProof"),
+        ] {
+            if proof.as_ref().is_some_and(|proof| proof.len() > 4096) {
+                return Err(CommandErrorDto::invalid(
+                    field,
+                    "The conversation receipt is oversized. Reload history.",
+                ));
+            }
+        }
         Ok(GetRunRequest {
             run_id: self.run_id,
         })
@@ -1749,6 +1765,8 @@ pub(crate) struct ListRunsInput {
     page_token: String,
     #[serde(default)]
     include_archived: bool,
+    #[serde(default)]
+    pub(crate) history_replacement: bool,
 }
 
 impl ListRunsInput {
@@ -1772,6 +1790,7 @@ impl ListRunsInput {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ListSessionActivityInput {
+    pub(crate) discovery_proof: Option<String>,
     source_run_id: String,
     #[serde(default)]
     query: String,
@@ -1793,6 +1812,7 @@ const fn activity_page_size() -> u32 {
 
 impl ListSessionActivityInput {
     pub(crate) fn into_sdk(self) -> Result<ListSessionActivityRequest, CommandErrorDto> {
+        validate_optional_receipt(self.discovery_proof.as_deref())?;
         validate_identifier(&self.source_run_id, "sourceRunId")?;
         if self.query.len() > 256 || self.query.chars().any(char::is_control) {
             return Err(CommandErrorDto::invalid(
@@ -1824,12 +1844,14 @@ impl ListSessionActivityInput {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ThreadLifecycleInput {
+    pub(crate) discovery_proof: Option<String>,
     run_id: String,
     idempotency_key: String,
 }
 
 impl ThreadLifecycleInput {
     pub(crate) fn into_archive_sdk(self) -> Result<ArchiveThreadRequest, CommandErrorDto> {
+        validate_optional_receipt(self.discovery_proof.as_deref())?;
         validate_identifier(&self.run_id, "runId")?;
         Ok(ArchiveThreadRequest {
             run_id: self.run_id,
@@ -1839,6 +1861,7 @@ impl ThreadLifecycleInput {
     }
 
     pub(crate) fn into_restore_sdk(self) -> Result<RestoreThreadRequest, CommandErrorDto> {
+        validate_optional_receipt(self.discovery_proof.as_deref())?;
         validate_identifier(&self.run_id, "runId")?;
         Ok(RestoreThreadRequest {
             run_id: self.run_id,
@@ -1858,6 +1881,7 @@ pub(crate) struct ThreadLifecycleDto {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct WatchRunInput {
+    pub(crate) discovery_proof: Option<String>,
     run_id: String,
     #[serde(default)]
     after_sequence: u64,
@@ -1865,6 +1889,7 @@ pub(crate) struct WatchRunInput {
 
 impl WatchRunInput {
     pub(crate) fn into_sdk(self) -> Result<WatchRunRequest, CommandErrorDto> {
+        validate_optional_receipt(self.discovery_proof.as_deref())?;
         validate_identifier(&self.run_id, "runId")?;
         Ok(WatchRunRequest {
             run_id: self.run_id,
@@ -1876,12 +1901,14 @@ impl WatchRunInput {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct CancelRunInput {
+    pub(crate) discovery_proof: Option<String>,
     run_id: String,
     idempotency_key: String,
 }
 
 impl CancelRunInput {
     pub(crate) fn into_sdk(self) -> Result<CancelRunRequest, CommandErrorDto> {
+        validate_optional_receipt(self.discovery_proof.as_deref())?;
         validate_identifier(&self.run_id, "runId")?;
         let idempotency_key =
             IdempotencyKey::new(self.idempotency_key).map_err(CommandErrorDto::from_api)?;
@@ -1941,6 +1968,7 @@ impl InteractionResponseInput {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct RespondInteractionInput {
+    pub(crate) discovery_proof: Option<String>,
     run_id: String,
     interaction_id: String,
     etag: String,
@@ -1950,6 +1978,7 @@ pub(crate) struct RespondInteractionInput {
 
 impl RespondInteractionInput {
     pub(crate) fn into_sdk(self) -> Result<RespondInteractionRequest, CommandErrorDto> {
+        validate_optional_receipt(self.discovery_proof.as_deref())?;
         validate_identifier(&self.run_id, "runId")?;
         validate_identifier(&self.interaction_id, "interactionId")?;
         validate_opaque(&self.etag, "etag")?;
@@ -1963,6 +1992,16 @@ impl RespondInteractionInput {
             response: self.response.into_sdk()?,
         })
     }
+}
+
+fn validate_optional_receipt(value: Option<&str>) -> Result<(), CommandErrorDto> {
+    if value.is_some_and(|value| value.len() > 4096) {
+        return Err(CommandErrorDto::invalid(
+            "discoveryProof",
+            "The conversation receipt is oversized. Reload history.",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_identifier(value: &str, field: &str) -> Result<(), CommandErrorDto> {

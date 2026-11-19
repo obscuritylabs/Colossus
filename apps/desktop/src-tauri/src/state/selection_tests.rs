@@ -125,3 +125,41 @@ async fn certificate_target_lookup_requires_an_available_registered_open_client(
     backend.close().await.expect("fixture client close");
     assert!(state.try_selected_target(MANAGED_TARGET_ID).is_none());
 }
+
+#[tokio::test]
+async fn history_admission_preserves_recent_active_binding_and_rejects_wrong_target() {
+    let state = AppState::default();
+    register_selected_target(&state).await;
+    let lease = state.selected_target(MANAGED_TARGET_ID).await.unwrap();
+    state.bind_runs(&lease, vec!["active".into()]).await;
+    for page in 0..crate::run_bindings::MAX_BINDINGS / 3 + 2 {
+        assert!(state.run_is_bound(&lease, "active").await);
+        state
+            .bind_runs(
+                &lease,
+                (0..3)
+                    .map(|offset| format!("history-{}", page * 3 + offset))
+                    .collect(),
+            )
+            .await;
+    }
+    assert_eq!(
+        state.run_targets.read().await.len(),
+        crate::run_bindings::MAX_BINDINGS
+    );
+    assert!(state.run_is_bound(&lease, "active").await);
+    assert!(!state.run_is_bound(&lease, "history-0").await);
+    state
+        .run_targets
+        .write()
+        .await
+        .insert("foreign".into(), "another-target".into());
+    // The fixture panics on SDK calls, proving mismatch is rejected before any
+    // attempt to rediscover or rebind it against the current target.
+    let result = crate::commands::require_run_binding(&state, &lease, "foreign").await;
+    assert!(result.is_err());
+    assert_eq!(
+        state.run_binding_target("foreign").await.as_deref(),
+        Some("another-target")
+    );
+}

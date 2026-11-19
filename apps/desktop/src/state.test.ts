@@ -8,7 +8,6 @@ import {
   MAX_FEED_TEXT_CHARACTERS,
   MAX_OUTPUT_CHARACTERS,
   MAX_PROMPT_BYTES,
-  MAX_RECENT_RUNS,
   chatReducer,
   clampMaxTurns,
   connectionStateForError,
@@ -514,7 +513,7 @@ describe("chatReducer", () => {
     expect(state.views.has(active.runId)).toBe(true);
     expect(state.views.has(live.runId)).toBe(true);
 
-    const summaries = Array.from({ length: MAX_RECENT_RUNS + 25 }, (_, index) =>
+    const summaries = Array.from({ length: 225 }, (_, index) =>
       runFixture(`summary-${index}`, "completed", index + 1),
     );
     state = chatReducer(state, {
@@ -522,13 +521,161 @@ describe("chatReducer", () => {
       runs: summaries,
       nextPageToken: "",
     });
-    expect(state.recentRuns).toHaveLength(MAX_RECENT_RUNS);
+    expect(state.recentRuns).toHaveLength(summaries.length);
     for (const summary of state.recentRuns) {
       if (summary.terminal?.type === "result") {
         expect(summary.terminal.result.output).toBe("");
       }
     }
   });
+
+  it("retains more than 4096 thin summaries while polling preserves the older cursor", () => {
+    const runs = Array.from({ length: 4505 }, (_, index) =>
+      runFixture(`history-${index}`),
+    );
+    let state = chatReducer(initialChatState, {
+      type: "replace_recent",
+      runs,
+      nextPageToken: "older-4505",
+    });
+    expect(state.recentRuns).toHaveLength(4505);
+    expect(state.views.size).toBe(0);
+    expect(
+      state.recentRuns.every(
+        (run) =>
+          run.terminal?.type !== "result" || run.terminal.result.output === "",
+      ),
+    ).toBe(true);
+    state = chatReducer(state, {
+      type: "reconcile_recent",
+      runs: [{ ...runs[0]!, lastSequence: 99, title: "New title" }],
+    });
+    expect(state.nextPageToken).toBe("older-4505");
+    expect(
+      state.recentRuns.find((run) => run.runId === runs[0]!.runId)?.title,
+    ).toBe("New title");
+    state = chatReducer(state, {
+      type: "append_recent",
+      runs: [runs[0]!],
+      nextPageToken: "",
+    });
+    state = chatReducer(state, { type: "reconcile_recent", runs: [runs[0]!] });
+    expect(state.nextPageToken).toBe("");
+    expect(state.recentRuns).toHaveLength(4505);
+    expect(
+      state.recentRuns.find((run) => run.runId === runs[0]!.runId)?.title,
+    ).toBe("New title");
+  });
+
+  it("bounds failure details independently from progressively retained metadata", () => {
+    const run: Run = {
+      ...runFixture("failed", "failed"),
+      terminal: {
+        type: "failure",
+        failure: {
+          reason: "failure",
+          message: "x".repeat(65_536),
+          outcomeCertainty: "known",
+        },
+      },
+    };
+    const state = chatReducer(initialChatState, {
+      type: "append_recent",
+      runs: [run],
+      nextPageToken: "older",
+    });
+    const terminal = state.recentRuns[0]!.terminal;
+    expect(
+      terminal?.type === "failure" && terminal.failure.message.length,
+    ).toBe(512);
+  });
+
+  it("preserves an opaque history receipt across newer snapshots that omit it", () => {
+    const run = {
+      ...runFixture("old-history"),
+      discoveryProof: "native-opaque-proof",
+    };
+    let state = chatReducer(initialChatState, {
+      type: "append_recent",
+      runs: [run],
+      nextPageToken: "older",
+    });
+    state = chatReducer(state, {
+      type: "reconcile_recent",
+      runs: [runFixture("old-history", "completed", 99)],
+    });
+    expect(state.recentRuns[0]?.discoveryProof).toBe("native-opaque-proof");
+    expect(state.recentRuns[0]?.lastSequence).toBe(99);
+  });
+
+  it("retains a selected deep view receipt after newer snapshots and history replacement", () => {
+    const run = {
+      ...runFixture("deep-history", "completed", 1),
+      discoveryProof: "opaque-deep-proof",
+    };
+    let state = chatReducer(initialChatState, {
+      type: "hydrate_run",
+      details: { run, pendingInteractions: [] },
+    });
+    state = chatReducer(state, { type: "select_run", runId: run.runId });
+    state = chatReducer(state, {
+      type: "upsert_run",
+      run: runFixture(run.runId, "completed", 2),
+    });
+    state = chatReducer(state, {
+      type: "replace_recent",
+      runs: [runFixture("new-history-head")],
+      nextPageToken: "fresh-chain",
+    });
+    expect(
+      state.recentRuns.some((summary) => summary.runId === run.runId),
+    ).toBe(false);
+    expect(state.views.get(run.runId)?.run.discoveryProof).toBe(
+      "opaque-deep-proof",
+    );
+    state = chatReducer(state, {
+      type: "hydrate_run",
+      details: {
+        run: runFixture(run.runId, "completed", 3),
+        pendingInteractions: [],
+      },
+    });
+    expect(state.views.get(run.runId)?.run.discoveryProof).toBe(
+      "opaque-deep-proof",
+    );
+  });
+
+  it.each(["upsert_run", "hydrate_run"] as const)(
+    "does not inherit a receipt across conflicting session identity in %s",
+    (type) => {
+      const run = {
+        ...runFixture("old-history"),
+        discoveryProof: "old-session-proof",
+      };
+      let state = chatReducer(initialChatState, {
+        type: "hydrate_run",
+        details: { run, pendingInteractions: [] },
+      });
+      const conflicting = {
+        ...runFixture(run.runId, "completed", 99),
+        sessionId: "different-session",
+      };
+      state = chatReducer(
+        state,
+        type === "upsert_run"
+          ? { type, run: conflicting }
+          : { type, details: { run: conflicting, pendingInteractions: [] } },
+      );
+      expect(state.views.get(run.runId)?.run.sessionId).toBe(
+        "different-session",
+      );
+      expect(state.views.get(run.runId)?.run.discoveryProof).toBeUndefined();
+      expect(
+        state.recentRuns.find((summary) => summary.runId === run.runId)
+          ?.discoveryProof,
+      ).toBeUndefined();
+    },
+  );
 
   it("removes every cached run in an archived session and clears its selection", () => {
     const first = { ...runFixture("archive-1"), sessionId: "session-archive" };

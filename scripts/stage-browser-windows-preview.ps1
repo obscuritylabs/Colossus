@@ -13,11 +13,11 @@ Set-StrictMode -Version Latest
 if (-not $IsWindows -or [Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'X64') {
     throw 'Windows functional-preview staging requires PowerShell7 on Windowsx64.'
 }
-if ($env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -notin @('developer_preview', 'validation_only')) {
-    throw 'The functional browser belongs only to the explicit preview edition.'
+if ($env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -notin @('stable', 'developer_preview', 'validation_only')) {
+    throw 'The functional browser requires an explicit Windows release channel.'
 }
-if ($env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -eq 'developer_preview' -and $Phase -eq 'seal' -and -not $RequireSignatures) {
-    throw 'A published preview requires signatures before inventory sealing.'
+if ($env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -in @('stable', 'developer_preview') -and $Phase -eq 'seal' -and -not $RequireSignatures) {
+    throw 'A published browser requires signatures before inventory sealing.'
 }
 $Repository = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $AllocationRoot) {

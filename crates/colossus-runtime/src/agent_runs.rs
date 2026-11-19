@@ -623,6 +623,8 @@ impl Runtime {
                     // thread stack while polling interactive worker runs.
                     let (events, receiver) = mpsc::channel(64);
                     let mut buffered_observer = self.buffered_run_observer(events.clone());
+                    let tasks_enabled =
+                        self.writer_lease.is_some() && matches!(&mode, AgentRunMode::Execute);
                     let run = Box::pin(
                         self.agent
                             .run_in_session_with_mode_stream_controlled_content(
@@ -641,8 +643,13 @@ impl Runtime {
                     scope_run_snapshots(
                         prepared.snapshot,
                         prepared.plugins,
-                        self.forward_run_with_subagent_scheduling(
-                            run, events, receiver, observer, control,
+                        colossus_mcp::with_mcp_task_run(
+                            tasks_enabled,
+                            control.clone(),
+                            Arc::clone(&self.journal),
+                            Box::pin(self.forward_run_with_subagent_scheduling(
+                                run, events, receiver, observer, control,
+                            )),
                         ),
                     )
                     .await

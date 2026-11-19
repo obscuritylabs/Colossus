@@ -62,6 +62,8 @@ export interface RecentWorkOptions {
   now?: Date;
   limit?: number;
   pinnedSessionIds?: ReadonlySet<string>;
+  /** Only a virtualized history host may request all loaded summaries. */
+  virtualized?: boolean;
 }
 
 export interface PresentedArtifact {
@@ -224,17 +226,19 @@ export function agentRoleLabel(role: string): string {
   return humanizeIdentifier(role, "Default agent", 56);
 }
 
+const shortDateFormatter = new Intl.DateTimeFormat([], {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 export function shortDateLabel(timestamp: string): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) {
     return "Recent";
   }
-  return date.toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  return shortDateFormatter.format(date);
 }
 
 function timestampValue(timestamp: string): number {
@@ -281,14 +285,18 @@ function toRecentWorkItem(run: Run): RecentWorkItem {
   };
 }
 
-function collapseSessionRuns(runs: readonly Run[]): Run[] {
+function collapseSessionRuns(
+  runs: readonly Run[],
+  virtualized: boolean,
+): Run[] {
   const sessions = new Map<
     string,
     { opening: Run; latest: Run; firstIndex: number }
   >();
-  for (const [index, run] of runs
-    .slice(0, MAX_PRESENTED_WORK_ITEMS)
-    .entries()) {
+  for (const [index, run] of (virtualized
+    ? runs
+    : runs.slice(0, MAX_PRESENTED_WORK_ITEMS)
+  ).entries()) {
     const current = sessions.get(run.sessionId);
     if (current === undefined) {
       sessions.set(run.sessionId, {
@@ -331,8 +339,8 @@ export function selectRecentWork(
 ): RecentWorkGroup[] {
   const limit = boundedLimit(
     options.limit,
-    MAX_PRESENTED_WORK_ITEMS,
-    MAX_PRESENTED_WORK_ITEMS,
+    options.virtualized ? runs.length : MAX_PRESENTED_WORK_ITEMS,
+    options.virtualized ? runs.length : MAX_PRESENTED_WORK_ITEMS,
   );
   const query = safeDisplayLabel(
     options.query ?? "",
@@ -341,7 +349,7 @@ export function selectRecentWork(
   ).toLocaleLowerCase();
   const seen = new Set<string>();
   const groups = new Map<WorkGroupKey, RecentWorkItem[]>();
-  const sorted = collapseSessionRuns(runs)
+  const sorted = collapseSessionRuns(runs, options.virtualized === true)
     .map((run, index) => ({ run, index }))
     .sort(
       (left, right) =>

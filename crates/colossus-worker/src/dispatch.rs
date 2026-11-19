@@ -225,6 +225,15 @@ async fn dispatch_general(
             before_sequence,
             limit.clamp(1, 100),
         )?)?),
+        WorkerOperation::SessionTranscriptPage {
+            session_id,
+            cursor,
+            page_size,
+        } => Ok(serde_json::to_value(runtime.read_session_transcript(
+            &session_id,
+            cursor.as_deref(),
+            page_size.clamp(1, 100),
+        )?)?),
         WorkerOperation::PredictNextPrompt {
             session_id,
             source_run_id,

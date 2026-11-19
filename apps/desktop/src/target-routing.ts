@@ -32,6 +32,12 @@ export class TargetRouteRegistry {
   private generation = 0;
   private current: TargetRoute | null = null;
   private readonly runs = new Map<string, TargetRoute>();
+  private retainedRuns = new Set<string>();
+
+  retainRuns(runIds: Iterable<string>): void {
+    // Active detailed views only, never the progressively loaded history index.
+    this.retainedRuns = new Set([...runIds].slice(0, 64));
+  }
 
   activate(targetId: string, kind: RuntimeTargetKind): TargetRoute {
     this.generation += 1;
@@ -42,6 +48,7 @@ export class TargetRouteRegistry {
     });
     this.current = route;
     this.runs.clear();
+    this.retainedRuns.clear();
     return route;
   }
 
@@ -49,6 +56,7 @@ export class TargetRouteRegistry {
     this.generation += 1;
     this.current = null;
     this.runs.clear();
+    this.retainedRuns.clear();
   }
 
   capture(): TargetRoute | null {
@@ -77,11 +85,13 @@ export class TargetRouteRegistry {
     this.runs.delete(runId);
     this.runs.set(runId, route);
     while (this.runs.size > MAX_ROUTED_RUNS) {
-      const oldest = this.runs.keys().next();
-      if (oldest.done) {
+      const oldest = [...this.runs.keys()].find(
+        (id) => !this.retainedRuns.has(id),
+      );
+      if (oldest === undefined) {
         break;
       }
-      this.runs.delete(oldest.value);
+      this.runs.delete(oldest);
     }
     return true;
   }

@@ -26,7 +26,9 @@ defaults, CLI commands, archive behavior and safe removal.
 
 ## Find and organize work
 
-Use **Search threads** in the sidebar. **This Workspace** narrows results to the selected folder; **All Workspaces** searches across your Desktop workspaces. Enable **Include archived Workspaces and threads** when searching older work. Select a result to open it, or restore it if archived.
+Use **Search threads** in the sidebar to match indexed titles, modes, statuses, and workspace names. **This Workspace** narrows results to the selected folder; **All Workspaces** searches the saved index across your Desktop workspaces. With **All Workspaces** selected, enable **Include archived Workspaces and threads** when searching older work. Select a result to open it, or restore it if archived.
+
+Search uses conversation metadata accumulated from authorized discovery. A workspace that has been offline, a refresh that has not finished, or an External runtime can have incomplete indexed history. To browse older available conversations in the selected runtime, clear the search and [scroll the thread list](work.md#return-to-a-conversation).
 
 Each workspace row can start a new thread, expand or collapse its threads, and open a menu for renaming or archiving. Thread menus also support rename, pin or unpin, and archive. Pinned threads are grouped for quick access. Archived items are kept in Desktop state and can be restored from search or workspace management; archiving is different from deleting the project folder.
 

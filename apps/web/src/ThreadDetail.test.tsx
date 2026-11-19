@@ -384,6 +384,280 @@ describe("loaded conversation actions", () => {
     );
   });
 });
+
+describe("complete conversation export", () => {
+  const saved =
+    "# Canonical conversation\n\nEarlier history outside loaded messages.\n";
+  function exportResponse(text = saved, type = "text/markdown") {
+    return new Response(text, {
+      headers: {
+        "Content-Type": type,
+        "Content-Disposition":
+          "attachment; filename*=UTF-8''conversation-session.md",
+      },
+    });
+  }
+  async function open() {
+    await act(async () =>
+      (await conversationMenuItem("Export conversation…")).click(),
+    );
+    expect(container.querySelector("dialog")?.open).toBe(true);
+  }
+  it("requests Markdown only on Save, downloads exact canonical bytes and keeps loaded-only fallbacks", async () => {
+    const requests: RequestInit[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, options: RequestInit) => {
+        if (path.endsWith("/transcript/export")) {
+          requests.push(options);
+          return exportResponse();
+        }
+        return response(history);
+      }),
+    );
+    const urls = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:complete-transcript");
+    const revoke = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => {});
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+    await render(thread, [node], ["read"]);
+    await open();
+    expect(requests).toHaveLength(0);
+    expect(
+      container.querySelector('dialog [role="combobox"]')?.textContent,
+    ).toContain("Markdown");
+    await act(async () => button("Save transcript").click());
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.credentials).toBe("same-origin");
+    expect(JSON.parse(requests[0]?.body as string)).toEqual({
+      format: "markdown",
+    });
+    expect(await (urls.mock.calls[0]![0] as Blob).text()).toBe(saved);
+    expect((click.mock.instances[0] as HTMLAnchorElement).download).toBe(
+      "conversation-session.md",
+    );
+    expect(container.textContent).toContain("Download started.");
+    await act(() => button("Close").click());
+    await act(async () => {
+      expect(
+        await conversationMenuItem("Download loaded conversation"),
+      ).toBeTruthy();
+    });
+    await vi.waitFor(() =>
+      expect(revoke).toHaveBeenCalledWith("blob:complete-transcript"),
+    );
+  });
+  it("prepares the server transcript before a separate Copy click and reports source failures", async () => {
+    let rejected = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) =>
+        path.endsWith("/transcript/export")
+          ? rejected
+            ? response({ error: "storage" }, 503)
+            : exportResponse()
+          : response(history),
+      ),
+    );
+    const write = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockResolvedValue();
+    await render(thread, [node], ["read"]);
+    await open();
+    await act(async () => button("Prepare copy").click());
+    expect(write).not.toHaveBeenCalled();
+    await act(async () => button("Copy transcript").click());
+    expect(write).toHaveBeenCalledWith(saved);
+    expect(container.textContent).toContain("Transcript copied.");
+    rejected = true;
+    await act(async () => button("Prepare copy").click());
+    expect(write).toHaveBeenCalledOnce();
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+  });
+  it("waits for delayed preparation, then invokes clipboard synchronously in the second click", async () => {
+    let resolve!: (response: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) =>
+        path.endsWith("/transcript/export")
+          ? new Promise<Response>((done) => {
+              resolve = done;
+            })
+          : response(history),
+      ),
+    );
+    let activated = false;
+    const activations: boolean[] = [];
+    const write = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockImplementation(async () => {
+        activations.push(activated);
+      });
+    await render(thread, [node], ["read"]);
+    await open();
+    await act(() => button("Prepare copy").click());
+    expect(write).not.toHaveBeenCalled();
+    await act(() => resolve(exportResponse()));
+    expect(write).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Transcript ready.");
+    await act(() => {
+      activated = true;
+      button("Copy transcript").click();
+      expect(activations).toEqual([true]);
+      activated = false;
+    });
+    expect(write).toHaveBeenCalledWith(saved);
+    expect(container.textContent).toContain("Transcript copied.");
+  });
+  it.each([
+    "close",
+    "format",
+    "conversation",
+    "identity",
+    "read access",
+    "navigation",
+  ])("clears an already prepared snapshot after %s changes", async (scope) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) =>
+        path.endsWith("/transcript/export")
+          ? exportResponse()
+          : response(history),
+      ),
+    );
+    const write = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockResolvedValue();
+    await render(thread, [node], ["read"], undefined, "alice");
+    await open();
+    await act(async () => button("Prepare copy").click());
+    expect(button("Copy transcript").disabled).toBe(false);
+    expect(write).not.toHaveBeenCalled();
+    if (scope === "close") {
+      await act(() => button("Close").click());
+      await open();
+    } else if (scope === "navigation") {
+      await act(() => {
+        const previous = window.location.href;
+        window.history.pushState({}, "", "/settings?project=project-a");
+        window.dispatchEvent(new Event("colossus:web:navigation"));
+        window.history.replaceState({}, "", previous);
+      });
+      expect(container.querySelector("dialog")).toBeNull();
+      await open();
+    } else if (scope === "format") {
+      await act(() =>
+        container
+          .querySelector<HTMLButtonElement>('dialog [role="combobox"]')!
+          .click(),
+      );
+      await act(() =>
+        [...document.querySelectorAll<HTMLElement>('[role="option"]')]
+          .find((option) => option.textContent?.trim() === "Plain text (.txt)")!
+          .click(),
+      );
+    } else {
+      await render(
+        scope === "conversation"
+          ? {
+              ...thread,
+              thread_id: "thread-next",
+              session_id: "session-next",
+            }
+          : thread,
+        [node],
+        scope === "read access" ? [] : ["read"],
+        undefined,
+        scope === "identity" ? "bob" : "alice",
+      );
+      if (scope === "read access") {
+        expect(button("Prepare copy").disabled).toBe(true);
+        await render(thread, [node], ["read"], undefined, "alice");
+      } else await open();
+    }
+    expect(container.querySelector("dialog")?.textContent).not.toContain(
+      "Transcript ready.",
+    );
+    expect(button("Prepare copy").disabled).toBe(false);
+    expect(write).not.toHaveBeenCalled();
+  });
+  it("retains a prepared copy for an explicit clipboard retry only while read access remains", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string) =>
+        path.endsWith("/transcript/export")
+          ? exportResponse()
+          : response(history),
+      ),
+    );
+    const write = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockRejectedValueOnce(new Error("clipboard denied"))
+      .mockResolvedValue();
+    await render(thread, [node], ["read"]);
+    await open();
+    await act(async () => button("Prepare copy").click());
+    await act(async () => button("Copy transcript").click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Click Copy transcript to retry",
+    );
+    expect(button("Copy transcript").disabled).toBe(false);
+    await act(async () => button("Copy transcript").click());
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Transcript copied.");
+    expect(button("Prepare copy").disabled).toBe(false);
+  });
+  it.each(["conversation", "identity", "read access"])(
+    "aborts and discards late bytes on cancellation or %s replacement",
+    async (scope) => {
+      let resolve!: (response: Response) => void;
+      let signal: AbortSignal | undefined;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (path: string, options: RequestInit) => {
+          if (path.endsWith("/transcript/export")) {
+            signal = options.signal as AbortSignal;
+            return new Promise<Response>((done) => {
+              resolve = done;
+            });
+          }
+          return response(history);
+        }),
+      );
+      const write = vi
+        .spyOn(navigator.clipboard, "writeText")
+        .mockResolvedValue();
+      await render(thread, [node], ["read"], undefined, "alice");
+      await open();
+      await act(() => button("Prepare copy").click());
+      await act(() => button("Cancel export").click());
+      expect(signal?.aborted).toBe(true);
+      await act(() => resolve(exportResponse()));
+      expect(write).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("Export cancelled.");
+      await act(() => button("Prepare copy").click());
+      await render(
+        scope === "conversation"
+          ? { ...thread, thread_id: "thread-next", session_id: "session-next" }
+          : thread,
+        [node],
+        scope === "read access" ? [] : ["read"],
+        undefined,
+        scope === "identity" ? "bob" : "alice",
+      );
+      expect(signal?.aborted).toBe(true);
+      await act(() => resolve(exportResponse()));
+      expect(write).not.toHaveBeenCalled();
+      if (scope !== "read access")
+        expect(container.querySelector("dialog")).toBeNull();
+      else expect(button("Prepare copy").disabled).toBe(true);
+    },
+  );
+});
 const response = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
 async function render(
@@ -391,12 +665,14 @@ async function render(
   nodes = [node],
   permissions: Permission[] = ["read", "execute", "control", "approve"],
   personalChat?: { owner: string; node: string },
+  identity?: string,
 ) {
   await act(async () => {
     root.render(
       <ThreadDetail
         initial={initial}
         project="project-a"
+        {...(identity ? { identity } : {})}
         nodes={nodes}
         permissions={permissions}
         onBack={() => {}}

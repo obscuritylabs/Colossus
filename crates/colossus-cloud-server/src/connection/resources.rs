@@ -9,8 +9,29 @@ pub(super) async fn dispatch(
     lease: &ConnectionLease,
     request: RuntimeResourceRequest,
     model_catalog_enabled: bool,
+    transcript_enabled: bool,
     sender: &super::FrameSender,
 ) -> Result<(), Status> {
+    if matches!(
+        request.operation,
+        ResourceOperation::ReadSessionTranscript { .. }
+    ) && !transcript_enabled
+    {
+        return store
+            .resource_complete(
+                lease,
+                &request.request_id,
+                ResourceReply::Failed {
+                    error: colossus_sdk::ApiError::failed_precondition(
+                        colossus_sdk::ApiErrorReason::InvalidArgument,
+                        "This runtime needs an update before it can export complete conversations.",
+                    ),
+                },
+                crate::http::now(),
+            )
+            .await
+            .map_err(status);
+    }
     if matches!(request.operation, ResourceOperation::ModelCatalog {}) && !model_catalog_enabled {
         // HTTP admission can happen on another replica. Only this connection's
         // authenticated Hello can prove it understands the additive operation.

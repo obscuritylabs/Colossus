@@ -399,6 +399,12 @@ pub fn parse_interactive_command(input: &str) -> InteractiveCommand {
         command if command.starts_with('/') => {
             let command = command.trim_start_matches('/');
             let (name, arguments) = command.split_once(' ').unwrap_or((command, ""));
+            if name == "export" {
+                return InteractiveCommand::Runtime(RuntimeCommand::Known {
+                    name: "session".into(),
+                    arguments: format!("export {}", arguments.trim()).trim_end().into(),
+                });
+            }
             InteractiveCommand::Runtime(RuntimeCommand::Known {
                 name: name.to_owned(),
                 arguments: arguments.trim().to_owned(),

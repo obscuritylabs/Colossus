@@ -80,12 +80,20 @@ selects a browser row for preview; Enter opens it. Compact terminals show the li
 | `Home` / `End` | Select the first or last session. |
 | `PageUp` / `PageDown` | Scroll the selected session's preview. |
 | `Enter` | Open the highlighted unarchived session. |
+| `p` | Pin an inactive session from Open or unpin the highlighted pinned session. Available in the full-screen TUI. |
 | `n` | Start a new session. |
 | `r` | Refresh the saved-session catalogue. |
 | `s` | Stop the highlighted running or waiting session; other sessions continue. |
 | `a` | Archive an idle session with no unsent draft or queued turns. |
 | `u` | Restore the highlighted session from Archived to History. |
 | `Esc` / `F2` | Return to the conversation. While editing a search, Esc first leaves search editing. |
+
+The pinned transcript follows recent output in the sidebar at widths of 100
+columns or more when there is enough vertical space. It occupies the usual right
+sidebar while visible. PageUp, PageDown, and End
+still control the active transcript. The pane disappears in compact layouts and
+returns when there is room. Open the pinned session to read older output or act
+on a decision.
 
 Working and decision indicators describe sessions retained by this terminal.
 Saved sessions that are not open here show **ready**; this is not a live status
@@ -134,6 +142,7 @@ Use `/help` for arguments and commands available in your installed version.
 | --- | --- |
 | Help and exit | `/help`, `/exit` |
 | Sessions | `/sessions`, `/session show`, `/session new`, `/session resume [SESSION_ID]`, `/resume [SESSION_ID]` |
+| Conversation export | `/session export PATH [--format FORMAT]`, `/export PATH [--format FORMAT]` export the current session to a new file; quote paths containing spaces. |
 | Permissions | `/permissions` opens a chooser; `/permissions deny\|ask\|risk-auto\|full-access` sets a mode directly |
 | Model selection | `/model` and `/effort` open searchable pickers; `/model PROFILE` and `/effort high` set a value directly. Use `default` to restore the configured setting. |
 | Tools and work | `/tools`, `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/goal resume GOAL_ID`, `/agents`, `/agents drain` |
@@ -158,6 +167,11 @@ including during a run; the previous session keeps working. `/research QUESTION`
 uses standard depth with
 repository, web, and MCP sources; use the CLI `research run` route to choose depth
 or sources explicitly.
+
+Conversation export reads the retained canonical snapshot across runs, including
+messages outside the viewport. `FORMAT` accepts `markdown` (default), `text`, or
+`json`. It requires a file destination; standard output is
+available only through the CLI. See [export formats, scope, and recovery](../use/sessions.md#export-a-conversation).
 
 `/context status` shows the current session's model input budget and active
 snapshot. See [Context and snapshots](../use/sessions-context.md) to interpret it.

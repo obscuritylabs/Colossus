@@ -20,6 +20,7 @@ use tokio::sync::{
 
 use crate::{
     desktop_dto::{DesktopApprovalModeDto, ManagedRuntimeStateDto, RuntimeFailureCodeDto},
+    run_bindings::RunBindings,
     run_list::RunList,
     terminal::{TerminalKind, TerminalManager, TerminalPlanContext, TerminalWorkspace},
 };
@@ -31,7 +32,6 @@ const MAX_NATIVE_WATCHES_PER_TARGET: usize = 8;
 const MAX_NATIVE_UNARY_CALLS_PER_TARGET: usize = 16;
 const MAX_CONCURRENT_EXTERNAL_PROBES: usize = 4;
 const MAX_CONCURRENT_EXTERNAL_CREDENTIAL_READS: usize = 4;
-const MAX_RUN_TARGET_BINDINGS: usize = 4_096;
 const EXTERNAL_PROBE_COOLDOWN: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
@@ -114,20 +114,54 @@ impl TargetHandle {
     pub(crate) async fn list_conversations(
         &self,
         request: ListRunsRequest,
+        history_replacement: bool,
     ) -> Result<crate::conversation_runs::ConversationPage, ApiError> {
         self.limits
             .conversations
-            .list(&self.client, &self.limits.run_list, request)
+            .list(
+                &self.client,
+                &self.limits.run_list,
+                request,
+                history_replacement,
+            )
             .await
     }
     pub(crate) fn conversation_reader(
         &self,
-        run_id: &str,
+        source: crate::conversation_runs::ConversationSource,
     ) -> Result<Arc<dyn colossus_sdk::AgentRunClient>, ApiError> {
-        self.limits.conversations.reader(&self.client, run_id)
+        crate::conversation_runs::ConversationRuns::reader(&self.client, source)
     }
-    pub(crate) fn is_cloud_conversation(&self, run_id: &str) -> bool {
-        self.limits.conversations.is_cloud(run_id)
+    pub(crate) fn conversation_source(
+        &self,
+        run_id: &str,
+    ) -> Option<crate::conversation_runs::ConversationSource> {
+        self.limits.conversations.source(run_id)
+    }
+    pub(crate) async fn get_conversation(
+        &self,
+        request: colossus_sdk::GetRunRequest,
+    ) -> Result<crate::conversation_runs::VerifiedConversation, ApiError> {
+        self.limits
+            .conversations
+            .get(&self.client, &self.limits.run_list, request)
+            .await
+    }
+    pub(crate) async fn get_conversation_with_proofs(
+        &self,
+        request: colossus_sdk::GetRunRequest,
+        proofs: crate::conversation_runs::ConversationProofs,
+    ) -> Result<crate::conversation_runs::VerifiedConversation, ApiError> {
+        self.limits
+            .conversations
+            .get_with_proofs(&self.client, &self.limits.run_list, request, proofs)
+            .await
+    }
+    pub(crate) fn remember_primary_conversation(
+        &self,
+        run: &colossus_sdk::Run,
+    ) -> Result<(), ApiError> {
+        self.limits.conversations.remember_primary(run)
     }
     pub(crate) fn can_continue_conversation(&self, session_id: &str) -> bool {
         self.limits.conversations.can_continue(session_id)
@@ -306,7 +340,7 @@ pub(crate) struct AppState {
     selected_target_id: RwLock<Option<String>>,
     selection_epoch: AtomicU64,
     selection_updates: watch::Sender<u64>,
-    run_targets: RwLock<HashMap<String, String>>,
+    run_targets: RwLock<RunBindings<String>>,
     #[cfg(test)]
     managed_health: RwLock<ManagedHealth>,
     #[cfg(test)]
@@ -478,7 +512,7 @@ impl Default for AppState {
             outlook_companions: Mutex::new(HashMap::new()),
             selection_epoch: AtomicU64::new(0),
             selection_updates,
-            run_targets: RwLock::new(HashMap::new()),
+            run_targets: RwLock::new(RunBindings::default()),
             #[cfg(test)]
             managed_health: RwLock::new(ManagedHealth::default()),
             #[cfg(test)]
@@ -604,24 +638,21 @@ impl AppState {
 
     pub(crate) async fn bind_runs(&self, lease: &SelectedTargetLease<'_>, run_ids: Vec<String>) {
         let mut bindings = self.run_targets.write().await;
-        let new_bindings = run_ids
-            .iter()
-            .filter(|run_id| !bindings.contains_key(run_id.as_str()))
-            .count();
-        if bindings.len().saturating_add(new_bindings) > MAX_RUN_TARGET_BINDINGS {
-            bindings.clear();
-        }
         for run_id in run_ids {
             bindings.insert(run_id, lease.target_id.clone());
         }
     }
 
+    pub(crate) async fn run_binding_target(&self, run_id: &str) -> Option<String> {
+        self.run_targets.write().await.get(run_id).cloned()
+    }
+
     pub(crate) async fn run_is_bound(&self, lease: &SelectedTargetLease<'_>, run_id: &str) -> bool {
-        self.run_targets
-            .read()
-            .await
-            .get(run_id)
-            .is_some_and(|target_id| target_id == &lease.target_id)
+        self.run_binding_target(run_id).await.as_deref() == Some(lease.target_id.as_str())
+    }
+
+    pub(crate) fn binding_matches_target(lease: &SelectedTargetLease<'_>, target_id: &str) -> bool {
+        lease.target_id == target_id
     }
 
     pub(crate) fn subscribe_selection(&self) -> watch::Receiver<u64> {

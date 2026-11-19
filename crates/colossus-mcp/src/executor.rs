@@ -1,5 +1,8 @@
 use super::*;
+#[cfg(test)]
 pub(super) use crate::remote::execute_remote_operation;
+use crate::remote::execute_with_tasks;
+mod task_transport;
 use colossus_contracts::{
     McpDiagnosticCode, McpDiagnosticConfiguration, McpDiagnosticStage, McpDiagnosticTransport,
 };
@@ -62,6 +65,7 @@ impl McpExecutor {
         let mut servers = BTreeMap::new();
         let mut unavailable_servers = BTreeMap::new();
         for (name, server) in &config.servers {
+            let allowed_tools = server.validate_allowlist(name)?;
             let command = match server.transport {
                 McpTransportKind::Stdio if sandbox_backend == "oci" => server.command.clone(),
                 McpTransportKind::Stdio => match fs::canonicalize(&server.command) {
@@ -77,11 +81,7 @@ impl McpExecutor {
                                 transport: server.transport.as_str().into(),
                                 allow_stateless: server.allow_stateless,
                                 protocol_version: server.protocol_version,
-                                allowed_tools: ToolAllowlist::from_config(
-                                    name,
-                                    &server.allowed_tools,
-                                )?
-                                .summary(),
+                                allowed_tools: allowed_tools.summary(),
                                 research_tools: server
                                     .research_tools
                                     .iter()
@@ -119,8 +119,9 @@ impl McpExecutor {
                 credential_headers: server.credential_headers.clone(),
                 allow_stateless: server.allow_stateless,
                 protocol_version: server.protocol_version,
+                enable_tasks: server.enable_tasks,
                 oauth: server.oauth.clone(),
-                allowed_tools: ToolAllowlist::from_config(name, &server.allowed_tools)?,
+                allowed_tools,
                 research_tools: server.research_tools.clone(),
                 timeout_ms: server.timeout_ms,
                 max_output_bytes: server.max_output_bytes,
@@ -481,6 +482,12 @@ impl McpExecutor {
         !self.servers.is_empty() || !self.unavailable_servers.is_empty()
     }
 
+    pub(super) fn supports_task_calls(&self, name: &str) -> bool {
+        self.servers
+            .get(name)
+            .is_some_and(|server| server.enable_tasks)
+    }
+
     /// Safe configured discovery metadata.
     pub fn servers(&self) -> Vec<McpServerSummary> {
         let mut servers = self
@@ -555,6 +562,16 @@ impl McpExecutor {
         context: ExecutionContext,
         operation: McpOperation,
     ) -> Result<EffectRequest, McpError> {
+        self.request_step(actor, context, operation, None)
+    }
+
+    pub(super) fn request_step(
+        &self,
+        actor: Actor,
+        context: ExecutionContext,
+        operation: McpOperation,
+        task_step: Option<crate::tasks::TaskStep>,
+    ) -> Result<EffectRequest, McpError> {
         if self.unavailable_servers.contains_key(operation.server()) {
             return Err(McpError::Invalid(format!(
                 "server {} executable is unavailable",
@@ -588,15 +605,10 @@ impl McpExecutor {
             )?;
             validate_arguments(input_schema, arguments)?;
         }
-        let action = server.effect_action_prefix.as_ref().map_or_else(
-            || operation.action().to_owned(),
-            |prefix| match &operation {
-                McpOperation::ListTools { .. } => format!("{prefix}.tools"),
-                McpOperation::CallTool { .. } => format!("{prefix}.call"),
-            },
-        );
+        let action = Self::operation_action(server, &operation, task_step.as_ref());
         let input = McpEffectInput {
             operation,
+            task_step,
             transport: server.transport,
             cwd: server.cwd.clone(),
             args: server.args.clone(),
@@ -650,6 +662,23 @@ impl McpExecutor {
         Ok(request)
     }
 
+    fn operation_action(
+        server: &ConfiguredServer,
+        operation: &McpOperation,
+        task_step: Option<&crate::tasks::TaskStep>,
+    ) -> String {
+        if let Some(step) = task_step {
+            return step.action().to_owned();
+        }
+        server.effect_action_prefix.as_ref().map_or_else(
+            || operation.action().to_owned(),
+            |prefix| match operation {
+                McpOperation::ListTools { .. } => format!("{prefix}.tools"),
+                McpOperation::CallTool { .. } => format!("{prefix}.call"),
+            },
+        )
+    }
+
     fn configured(
         &self,
         input: &McpEffectInput,
@@ -659,13 +688,8 @@ impl McpExecutor {
             .servers
             .get(input.operation.server())
             .ok_or_else(|| failed("MCP server is not configured"))?;
-        let expected_action = server.effect_action_prefix.as_ref().map_or_else(
-            || input.operation.action().to_owned(),
-            |prefix| match &input.operation {
-                McpOperation::ListTools { .. } => format!("{prefix}.tools"),
-                McpOperation::CallTool { .. } => format!("{prefix}.call"),
-            },
-        );
+        let expected_action =
+            Self::operation_action(server, &input.operation, input.task_step.as_ref());
         let expected_resource = match server.transport {
             McpTransportKind::Stdio => server.command.display().to_string(),
             McpTransportKind::StreamableHttp => server.url.clone().unwrap_or_default(),
@@ -686,6 +710,7 @@ impl McpExecutor {
             || input.timeout_ms != server.timeout_ms
             || input.max_output_bytes != server.max_output_bytes
             || input.provenance != server.provenance
+            || input.task_step.is_some() && (!server.enable_tasks || !input.operation.is_call())
         {
             return Err(failed(
                 "MCP effect does not match its configured server identity",
@@ -1448,6 +1473,7 @@ pub(super) fn validate_call_output(
 pub(super) enum RemoteOperationResult {
     Tools(ListToolsResult),
     Call(CallToolResult),
+    Task(crate::remote_tasks::TaskStart),
 }
 
 fn confirmed_protocol_error_result(error: ErrorData) -> CallToolResult {
@@ -1569,7 +1595,7 @@ pub(super) fn remote_timeout_error(
     }
 }
 
-fn bounded_result(
+pub(super) fn bounded_result(
     value: &impl Serialize,
     max_output_bytes: u64,
 ) -> Result<QuarantinedEffectResult, ExecutionError> {
@@ -1658,14 +1684,20 @@ impl EffectExecutor for McpExecutor {
         request: &EffectRequest,
         permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
-        if !matches!(request.action.as_str(), "mcp.tools" | "mcp.call")
-            && !request.action.starts_with("plugin.mcp.")
+        let call_started = tokio::time::Instant::now();
+        if !matches!(
+            request.action.as_str(),
+            "mcp.tools" | "mcp.call" | "mcp.tasks.get" | "mcp.tasks.cancel"
+        ) && !request.action.starts_with("plugin.mcp.")
         {
             return Err(failed("MCP executor received another action"));
         }
         let input: McpEffectInput = serde_json::from_value(request.content.clone())
             .map_err(|error| failed(format!("invalid MCP effect input: {error}")))?;
         let mut server = self.configured(&input, request)?.clone();
+        if let Some(step) = &input.task_step {
+            crate::tasks::verify_step(request, step)?;
+        }
         let max_output_bytes = server
             .max_output_bytes
             .unwrap_or(permit.obligations().max_output_bytes)
@@ -1677,6 +1709,15 @@ impl EffectExecutor for McpExecutor {
         server.max_output_bytes = Some(max_output_bytes);
         server.timeout_ms = Some(timeout_ms);
         if server.transport == McpTransportKind::StreamableHttp {
+            let diagnostics = McpDiagnosticCapture::current();
+            if let Some(
+                step @ (crate::tasks::TaskStep::Get { .. } | crate::tasks::TaskStep::Cancel { .. }),
+            ) = &input.task_step
+            {
+                return self
+                    .execute_task_observation(request, &permit, &input.operation, step, &server)
+                    .await;
+            }
             let endpoint = server
                 .url
                 .as_deref()
@@ -1690,11 +1731,13 @@ impl EffectExecutor for McpExecutor {
                 max_output_bytes,
             )
             .await?;
-            let diagnostics = McpDiagnosticCapture::current();
             diagnostics.stage(McpDiagnosticStage::Credentials);
             let (headers, mut secrets) =
                 resolve_http_headers(&server, &permit, self.credentials.as_ref())?;
             let timeout = Duration::from_millis(timeout_ms);
+            let deadline = call_started
+                .checked_add(timeout)
+                .ok_or_else(|| failed("MCP effect deadline is invalid"))?;
             let call_dispatched = AtomicBool::new(false);
             let result = if server.oauth.is_some() {
                 let _oauth_guard = self
@@ -1720,24 +1763,30 @@ impl EffectExecutor for McpExecutor {
                 secrets.push(access_token);
                 tokio::time::timeout(
                     timeout,
-                    execute_remote_operation(
+                    execute_with_tasks(
                         http,
                         &server,
                         &input.operation,
-                        headers,
+                        headers.clone(),
                         &call_dispatched,
+                        None,
+                        false,
                     ),
                 )
                 .await
             } else {
                 tokio::time::timeout(
                     timeout,
-                    execute_remote_operation(
-                        http,
+                    execute_with_tasks(
+                        http.clone(),
                         &server,
                         &input.operation,
-                        headers,
+                        headers.clone(),
                         &call_dispatched,
+                        (input.task_step.is_some()
+                            || server.enable_tasks && !input.operation.is_call())
+                        .then_some(&http),
+                        server.enable_tasks && crate::tasks::eligible(request),
                     ),
                 )
                 .await
@@ -1759,12 +1808,26 @@ impl EffectExecutor for McpExecutor {
                     bounded_result(&page, max_output_bytes)
                 }
                 (McpOperation::CallTool { tool, .. }, RemoteOperationResult::Call(result)) => {
+                    if input.task_step.is_some() {
+                        task_transport::reject_task_secret_keys(&result, &secrets)?;
+                    }
                     validate_call_output(&result, &input.operation)
                         .map_err(|error| operation_error(&input.operation, error))?;
                     let output = parse_call_result(result, &server, tool, &secrets)
                         .map_err(|error| operation_error(&input.operation, error))?;
                     bounded_call_result(&output, max_output_bytes)
                         .map_err(|error| operation_error(&input.operation, error))
+                }
+                (McpOperation::CallTool { .. }, RemoteOperationResult::Task(started)) => {
+                    crate::tasks::adopt(
+                        request,
+                        &permit,
+                        &headers,
+                        started,
+                        max_output_bytes,
+                        call_started,
+                        deadline,
+                    )
                 }
                 _ => Err(operation_error(
                     &input.operation,

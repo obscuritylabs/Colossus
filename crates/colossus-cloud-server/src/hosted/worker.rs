@@ -145,7 +145,7 @@ async fn serve(
             }
             for request in store.resource_take(&lease, now()).await? {
                 live.touch();
-                let reply = resources.execute(request.operation).await;
+                let reply = resources.execute_with_runs(request.operation, runs.as_ref()).await;
                 store.resource_complete(&lease, &request.request_id, reply, now()).await?;
             }
             if watched.len() >= 8 { continue; }

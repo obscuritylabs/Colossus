@@ -1903,7 +1903,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 27);
+    assert_eq!(PROTOCOL_VERSION, 28);
     let key = [13_u8; 32];
     for incompatible_version in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
         let mut frame =

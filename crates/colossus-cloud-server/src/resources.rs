@@ -29,6 +29,29 @@ struct Output {
     #[serde(flatten)]
     reply: ResourceReply,
 }
+
+/// Reuse membership, exact-lease and post-read revocation checks for full exports.
+pub(crate) async fn transcript_page(
+    state: Arc<State>,
+    headers: HeaderMap,
+    project: String,
+    node: String,
+    connection_id: Option<String>,
+    operation: ResourceOperation,
+) -> Result<(String, ResourceReply), Error> {
+    let Json(output) = request_bound(
+        Extract(state),
+        Path((project, node)),
+        headers,
+        Json(Input {
+            connection_id,
+            operation,
+        }),
+    )
+    .await?;
+    Ok((output.connection_id, output.reply))
+}
+
 pub(crate) fn router() -> Router<Arc<State>> {
     Router::new().route(
         "/api/projects/{project}/nodes/{node}/resources",
@@ -36,6 +59,24 @@ pub(crate) fn router() -> Router<Arc<State>> {
     )
 }
 async fn request(
+    state: Extract<Arc<State>>,
+    path: Path<(String, String)>,
+    headers: HeaderMap,
+    Json(input): Json<Input>,
+) -> Result<Json<Output>, Error> {
+    // Browser callers cannot nominate an arbitrary runtime run: one connector
+    // application may own several private cloud conversations. Only the thread
+    // export handler can derive this operation after exact personal visibility.
+    if matches!(
+        input.operation,
+        ResourceOperation::ReadSessionTranscript { .. }
+    ) {
+        return Err(CloudError::InvalidArgument.into());
+    }
+    request_bound(state, path, headers, Json(input)).await
+}
+
+async fn request_bound(
     Extract(state): Extract<Arc<State>>,
     Path((project, node)): Path<(String, String)>,
     headers: HeaderMap,
@@ -48,11 +89,16 @@ async fn request(
         ResourcePermission::Execute => CloudPermission::Execute,
         ResourcePermission::Control => CloudPermission::Control,
     })?;
+    if !input.operation.validate() {
+        return Err(CloudError::InvalidArgument.into());
+    }
     if let Some(host) = &state.hosted
         && host.node_id(&caller)?.as_deref() == Some(node.as_str())
         && matches!(
             input.operation,
-            ResourceOperation::Context | ResourceOperation::ModelCatalog {}
+            ResourceOperation::Context
+                | ResourceOperation::ModelCatalog {}
+                | ResourceOperation::ReadSessionTranscript { .. }
         )
     {
         let (generation, resources) = host.context(&caller).await?;
@@ -63,9 +109,48 @@ async fn request(
         {
             return Err(CloudError::Conflict.into());
         }
+        let reads_transcript = matches!(
+            input.operation,
+            ResourceOperation::ReadSessionTranscript { .. }
+        );
+        let reply = if let ResourceOperation::ReadSessionTranscript {
+            source_run_id,
+            page_token,
+            page_size,
+        } = input.operation
+        {
+            if state.repo.get_node(&caller, &node).await?.revoked {
+                return Err(CloudError::PermissionDenied.into());
+            }
+            let page = host
+                .read_transcript(
+                    &state,
+                    &caller,
+                    colossus_sdk::ReadSessionTranscriptRequest {
+                        source_run_id,
+                        page_token,
+                        page_size,
+                    },
+                )
+                .await?;
+            ResourceReply::Result {
+                value: serde_json::to_value(page).map_err(|_| CloudError::Storage)?,
+            }
+        } else {
+            resources.execute(input.operation).await
+        };
+        // Hosted data follows the same current membership and configuration generation.
+        let current = state.auth.caller(&headers, &project, true).await?;
+        current.require(CloudPermission::Read)?;
+        if reads_transcript && state.repo.get_node(&current, &node).await?.revoked {
+            return Err(CloudError::PermissionDenied.into());
+        }
+        if host.context(&current).await?.0 != generation {
+            return Err(CloudError::Conflict.into());
+        }
         return Ok(Json(Output {
             connection_id: generation,
-            reply: resources.execute(input.operation).await,
+            reply,
         }));
     }
     let identity = state.repo.get_node(&caller, &node).await?;

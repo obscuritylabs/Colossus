@@ -54,6 +54,40 @@ docs_required=false
 dependency_required=true
 sdk_required=true
 desktop_required=false' sdk/python/pyproject.toml sdk/python/requirements-dev.txt
+
+# Each policy input must select scanners independently of a simultaneous lockfile
+# change. These shared CI helpers retain their SDK/Desktop selection as well.
+for dependency_policy_helper in scripts/ci/dependency-policy.py scripts/ci/test-dependency-policy.py
+do
+    expect_classification 'rust_required=true
+docs_required=false
+dependency_required=true
+sdk_required=true
+desktop_required=true' "$dependency_policy_helper"
+done
+for dependency_policy_input in ci/dependency-policy/chrono-2026-0543.json \
+    ci/dependency-policy/reviewed-advisory.md \
+    ci/dependency-policy/chrono-2026-0543/advisory.md
+do
+    expect_classification 'rust_required=true
+docs_required=false
+dependency_required=true
+sdk_required=false
+desktop_required=false' "$dependency_policy_input"
+done
+expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=false
+desktop_required=false' ci/dependency-policy-other/chrono-2026-0543.json
+for unrelated_ci_helper in scripts/ci/dependency-policy-extra.py scripts/ci/test-dependency-policy-extra.py
+do
+    expect_classification 'rust_required=true
+docs_required=false
+dependency_required=false
+sdk_required=true
+desktop_required=true' "$unrelated_ci_helper"
+done
 expect_classification 'rust_required=true
 docs_required=false
 dependency_required=false
@@ -285,6 +319,78 @@ if $script_dir/require-success.sh eligibility=skipped >/dev/null 2>&1; then
     printf 'skipped eligibility unexpectedly satisfied the pre-merge gate\n' >&2
     exit 1
 fi
+
+# Policy-only jobs keep Python 3.10.18; release readiness also runs portable
+# contracts requiring Python 3.11+ and cryptography. Each consumer provisions
+# its own runtime on Ubuntu 24.04; actual 26.04 platform acceptance is separate.
+"${NODE:-node}" --input-type=module - "$script_dir/../../.github/workflows/pr.yml" "$script_dir/../../.github/workflows/premerge.yml" "$script_dir/../../.github/workflows/release.yml" <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+for (const [path, name, command, version] of [
+  [process.argv[2], 'dependency-policy', 'run: cargo xtask check dependencies', '3.10.18'],
+  [process.argv[3], 'supply-chain', 'run: cargo xtask check dependencies', '3.10.18'],
+  [process.argv[4], 'validate', 'run: ./release/verify-release-readiness.sh', '3.12.16'],
+]) {
+  const source = readFileSync(path, 'utf8').replaceAll('\r\n', '\n');
+  const start = source.indexOf('\n  ' + name + ':\n');
+  assert.ok(start >= 0, 'Missing consuming job: ' + name);
+  const rest = source.slice(start + 1);
+  const end = rest.slice(1).search(/^  [\w-]+:$/mu);
+  const job = end < 0 ? rest : rest.slice(0, end + 1);
+  assert.match(job, /^    runs-on: ubuntu-24\.04$/mu,
+    name + ' requires the reviewed Python host');
+  const steps = job.split(/(?=^      - )/mu);
+  const python = steps.filter(step => step.includes('uses: actions/setup-python@'));
+  assert.equal(python.length, 1, name + ' must provision its own Python, independent of SDK jobs');
+  assert.match(python[0], /uses: actions\/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5\.6\.0/u);
+  assert.match(python[0], new RegExp('^          python-version: ' + version.replaceAll('.', '\\.') + '$', 'mu'));
+  assert.doesNotMatch(python[0], /continue-on-error:|^        if:/mu);
+  const setup = job.indexOf(python[0]);
+  const use = job.indexOf(command);
+  assert.ok(setup >= 0 && use > setup + python[0].length,
+    name + ' must finish mandatory Python provisioning before the policy consumer');
+  if (name === 'validate') {
+    assert.match(python[0], /^        id: contract_python$/mu);
+    const prerequisites = steps.filter(step => step.startsWith('      - name: Provision release-contract Python prerequisites\n'));
+    assert.equal(prerequisites.length, 1, 'release validation must provision portable-contract prerequisites');
+    const provision = prerequisites[0];
+    assert.match(provision, /^          PYTHON: \$\{\{ steps\.contract_python\.outputs\.python-path \}\}$/mu);
+    assert.match(provision, /"\$PYTHON" -m pip install --disable-pip-version-check --only-binary=:all: "cryptography==50\.0\.2"/u);
+    for (const required of ['set -euo pipefail', 'import cryptography', 'from cryptography import x509', 'sys.version_info < (3, 11)', 'getattr(hashlib, "file_digest", None)', 'cryptography.__version__ != "50.0.2"', 'raise SystemExit(', 'printf \'PYTHON=%s\\n\' "$PYTHON" >> "$GITHUB_ENV"']) {
+      assert.ok(provision.includes(required), 'missing fail-fast release Python prerequisite: ' + required);
+    }
+    assert.doesNotMatch(provision, /continue-on-error:|^        if:/mu);
+    assert.ok(job.indexOf(provision) > setup && job.indexOf(provision) + provision.length < use,
+      'runtime install/import checks and PYTHON export must finish before expensive readiness Cargo checks');
+    const firstCargo = job.search(/\bcargo (?:metadata|build|test|run|clippy|fmt|xtask)\b/u);
+    assert.ok(firstCargo >= 0 && job.indexOf(provision) + provision.length < firstCargo,
+      'release Python preflight must finish before even the first inline Cargo invocation');
+  }
+  const retained = steps.filter(step => step.startsWith('      - name: Retain raw dependency policy evidence\n'));
+  assert.equal(retained.length, 1, name + ' must retain its own raw policy diagnostics');
+  const evidence = retained[0];
+  assert.ok(job.indexOf(evidence) > use, name + ' must collect evidence after policy execution');
+  assert.match(evidence, /^        if: always\(\)$/mu);
+  assert.match(evidence, /uses: actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7\.0\.1/u);
+  assert.match(evidence, /^          name: dependency-policy-\$\{\{ github\.job \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}$/mu);
+  assert.doesNotMatch(evidence, /^          name: colossus-/mu,
+    name + ' diagnostics must stay outside draft-release colossus-* candidate ingestion');
+  const paths = evidence.split('          path: |\n')[1]?.split('\n')
+    .filter(line => line.startsWith('            ')).map(line => line.trim());
+  assert.deepEqual(paths, [
+    '.local/dependency-policy/*/*.json',
+    '.local/dependency-policy/*/*.stdout',
+    '.local/dependency-policy/*/*.stderr',
+    '.local/dependency-policy/*/deny.toml',
+    '!.local/dependency-policy/*/advisory-dbs/**',
+  ], name + ' must retain only direct run evidence, excluding the advisory database checkout');
+  assert.match(evidence, /^          include-hidden-files: true$/mu);
+  assert.match(evidence, /^          if-no-files-found: warn$/mu);
+  assert.match(evidence, /^          retention-days: 30$/mu);
+  assert.doesNotMatch(evidence, /continue-on-error:/u);
+}
+NODE
 
 # rust-cache uses shared-key instead of key, so the bundle recipe must be part
 # of the effective shared namespace in the trusted producer and every consumer.

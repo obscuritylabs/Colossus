@@ -1566,6 +1566,17 @@ impl AgentRunClient for SwitchingAgentRunClient {
             .await
     }
 
+    async fn read_session_transcript(
+        &self,
+        request: crate::ReadSessionTranscriptRequest,
+    ) -> ApiResult<crate::TranscriptPage> {
+        self.current()
+            .await?
+            .primary
+            .read_session_transcript(request)
+            .await
+    }
+
     async fn watch_run(&self, request: WatchRunRequest) -> ApiResult<RunUpdateStream> {
         self.current().await?.watch_run(request).await
     }

@@ -5976,7 +5976,7 @@ var File_colossus_api_v1alpha1_agent_run_proto protoreflect.FileDescriptor
 
 const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\n" +
-	"%colossus/api/v1alpha1/agent_run.proto\x12\x15colossus.api.v1alpha1\x1a\"colossus/api/v1alpha1/common.proto\x1a#colossus/api/v1alpha1/session.proto\x1a\x1fgoogle/protobuf/timestamp.proto\">\n" +
+	"%colossus/api/v1alpha1/agent_run.proto\x12\x15colossus.api.v1alpha1\x1a\"colossus/api/v1alpha1/common.proto\x1a#colossus/api/v1alpha1/session.proto\x1a&colossus/api/v1alpha1/transcript.proto\x1a\x1fgoogle/protobuf/timestamp.proto\">\n" +
 	"\x18PredictNextPromptRequest\x12\"\n" +
 	"\rsource_run_id\x18\x01 \x01(\tR\vsourceRunId\"D\n" +
 	"\x19PredictNextPromptResponse\x12'\n" +
@@ -6478,7 +6478,7 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	" PROVIDER_RETRY_STATE_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cPROVIDER_RETRY_STATE_BACKOFF\x10\x01\x12!\n" +
 	"\x1dPROVIDER_RETRY_STATE_RETRYING\x10\x02\x12\"\n" +
-	"\x1ePROVIDER_RETRY_STATE_RECOVERED\x10\x032\x88\x0f\n" +
+	"\x1ePROVIDER_RETRY_STATE_RECOVERED\x10\x032\x8d\x10\n" +
 	"\x0fAgentRunService\x12v\n" +
 	"\x11PredictNextPrompt\x12/.colossus.api.v1alpha1.PredictNextPromptRequest\x1a0.colossus.api.v1alpha1.PredictNextPromptResponse\x12j\n" +
 	"\rHumanTerminal\x12+.colossus.api.v1alpha1.HumanTerminalRequest\x1a,.colossus.api.v1alpha1.HumanTerminalResponse\x12|\n" +
@@ -6488,7 +6488,8 @@ const file_colossus_api_v1alpha1_agent_run_proto_rawDesc = "" +
 	"\tCreateRun\x12'.colossus.api.v1alpha1.CreateRunRequest\x1a(.colossus.api.v1alpha1.CreateRunResponse\x12U\n" +
 	"\x06GetRun\x12$.colossus.api.v1alpha1.GetRunRequest\x1a%.colossus.api.v1alpha1.GetRunResponse\x12[\n" +
 	"\bListRuns\x12&.colossus.api.v1alpha1.ListRunsRequest\x1a'.colossus.api.v1alpha1.ListRunsResponse\x12|\n" +
-	"\x13ListSessionActivity\x121.colossus.api.v1alpha1.ListSessionActivityRequest\x1a2.colossus.api.v1alpha1.ListSessionActivityResponse\x12]\n" +
+	"\x13ListSessionActivity\x121.colossus.api.v1alpha1.ListSessionActivityRequest\x1a2.colossus.api.v1alpha1.ListSessionActivityResponse\x12\x82\x01\n" +
+	"\x15ReadSessionTranscript\x123.colossus.api.v1alpha1.ReadSessionTranscriptRequest\x1a4.colossus.api.v1alpha1.ReadSessionTranscriptResponse\x12]\n" +
 	"\bWatchRun\x12&.colossus.api.v1alpha1.WatchRunRequest\x1a'.colossus.api.v1alpha1.WatchRunResponse0\x01\x12^\n" +
 	"\tCancelRun\x12'.colossus.api.v1alpha1.CancelRunRequest\x1a(.colossus.api.v1alpha1.CancelRunResponse\x12j\n" +
 	"\rArchiveThread\x12+.colossus.api.v1alpha1.ArchiveThreadRequest\x1a,.colossus.api.v1alpha1.ArchiveThreadResponse\x12j\n" +
@@ -6603,6 +6604,8 @@ var file_colossus_api_v1alpha1_agent_run_proto_goTypes = []any{
 	(*PageRequest)(nil),                     // 86: colossus.api.v1alpha1.PageRequest
 	(*PageResponse)(nil),                    // 87: colossus.api.v1alpha1.PageResponse
 	(*SessionMessage)(nil),                  // 88: colossus.api.v1alpha1.SessionMessage
+	(*ReadSessionTranscriptRequest)(nil),    // 89: colossus.api.v1alpha1.ReadSessionTranscriptRequest
+	(*ReadSessionTranscriptResponse)(nil),   // 90: colossus.api.v1alpha1.ReadSessionTranscriptResponse
 }
 var file_colossus_api_v1alpha1_agent_run_proto_depIdxs = []int32{
 	3,   // 0: colossus.api.v1alpha1.RunResult.plan_status:type_name -> colossus.api.v1alpha1.PlanStatus
@@ -6702,33 +6705,35 @@ var file_colossus_api_v1alpha1_agent_run_proto_depIdxs = []int32{
 	29,  // 94: colossus.api.v1alpha1.AgentRunService.GetRun:input_type -> colossus.api.v1alpha1.GetRunRequest
 	31,  // 95: colossus.api.v1alpha1.AgentRunService.ListRuns:input_type -> colossus.api.v1alpha1.ListRunsRequest
 	35,  // 96: colossus.api.v1alpha1.AgentRunService.ListSessionActivity:input_type -> colossus.api.v1alpha1.ListSessionActivityRequest
-	37,  // 97: colossus.api.v1alpha1.AgentRunService.WatchRun:input_type -> colossus.api.v1alpha1.WatchRunRequest
-	39,  // 98: colossus.api.v1alpha1.AgentRunService.CancelRun:input_type -> colossus.api.v1alpha1.CancelRunRequest
-	42,  // 99: colossus.api.v1alpha1.AgentRunService.ArchiveThread:input_type -> colossus.api.v1alpha1.ArchiveThreadRequest
-	44,  // 100: colossus.api.v1alpha1.AgentRunService.RestoreThread:input_type -> colossus.api.v1alpha1.RestoreThreadRequest
-	55,  // 101: colossus.api.v1alpha1.AgentRunService.RespondInteraction:input_type -> colossus.api.v1alpha1.RespondInteractionRequest
-	75,  // 102: colossus.api.v1alpha1.AgentRunService.SetWorkspaceSharing:input_type -> colossus.api.v1alpha1.SetWorkspaceSharingRequest
-	77,  // 103: colossus.api.v1alpha1.AgentRunService.ListVisibleRuns:input_type -> colossus.api.v1alpha1.ListVisibleRunsRequest
-	80,  // 104: colossus.api.v1alpha1.AgentRunService.GetRuntimePolicyPosture:input_type -> colossus.api.v1alpha1.GetRuntimePolicyPostureRequest
-	16,  // 105: colossus.api.v1alpha1.AgentRunService.PredictNextPrompt:output_type -> colossus.api.v1alpha1.PredictNextPromptResponse
-	18,  // 106: colossus.api.v1alpha1.AgentRunService.HumanTerminal:output_type -> colossus.api.v1alpha1.HumanTerminalResponse
-	70,  // 107: colossus.api.v1alpha1.AgentRunService.ListProcessSessions:output_type -> colossus.api.v1alpha1.ListProcessSessionsResponse
-	72,  // 108: colossus.api.v1alpha1.AgentRunService.ReadProcessSession:output_type -> colossus.api.v1alpha1.ReadProcessSessionResponse
-	74,  // 109: colossus.api.v1alpha1.AgentRunService.StopProcessSession:output_type -> colossus.api.v1alpha1.StopProcessSessionResponse
-	28,  // 110: colossus.api.v1alpha1.AgentRunService.CreateRun:output_type -> colossus.api.v1alpha1.CreateRunResponse
-	30,  // 111: colossus.api.v1alpha1.AgentRunService.GetRun:output_type -> colossus.api.v1alpha1.GetRunResponse
-	32,  // 112: colossus.api.v1alpha1.AgentRunService.ListRuns:output_type -> colossus.api.v1alpha1.ListRunsResponse
-	36,  // 113: colossus.api.v1alpha1.AgentRunService.ListSessionActivity:output_type -> colossus.api.v1alpha1.ListSessionActivityResponse
-	38,  // 114: colossus.api.v1alpha1.AgentRunService.WatchRun:output_type -> colossus.api.v1alpha1.WatchRunResponse
-	40,  // 115: colossus.api.v1alpha1.AgentRunService.CancelRun:output_type -> colossus.api.v1alpha1.CancelRunResponse
-	43,  // 116: colossus.api.v1alpha1.AgentRunService.ArchiveThread:output_type -> colossus.api.v1alpha1.ArchiveThreadResponse
-	45,  // 117: colossus.api.v1alpha1.AgentRunService.RestoreThread:output_type -> colossus.api.v1alpha1.RestoreThreadResponse
-	56,  // 118: colossus.api.v1alpha1.AgentRunService.RespondInteraction:output_type -> colossus.api.v1alpha1.RespondInteractionResponse
-	76,  // 119: colossus.api.v1alpha1.AgentRunService.SetWorkspaceSharing:output_type -> colossus.api.v1alpha1.SetWorkspaceSharingResponse
-	79,  // 120: colossus.api.v1alpha1.AgentRunService.ListVisibleRuns:output_type -> colossus.api.v1alpha1.ListVisibleRunsResponse
-	81,  // 121: colossus.api.v1alpha1.AgentRunService.GetRuntimePolicyPosture:output_type -> colossus.api.v1alpha1.GetRuntimePolicyPostureResponse
-	105, // [105:122] is the sub-list for method output_type
-	88,  // [88:105] is the sub-list for method input_type
+	89,  // 97: colossus.api.v1alpha1.AgentRunService.ReadSessionTranscript:input_type -> colossus.api.v1alpha1.ReadSessionTranscriptRequest
+	37,  // 98: colossus.api.v1alpha1.AgentRunService.WatchRun:input_type -> colossus.api.v1alpha1.WatchRunRequest
+	39,  // 99: colossus.api.v1alpha1.AgentRunService.CancelRun:input_type -> colossus.api.v1alpha1.CancelRunRequest
+	42,  // 100: colossus.api.v1alpha1.AgentRunService.ArchiveThread:input_type -> colossus.api.v1alpha1.ArchiveThreadRequest
+	44,  // 101: colossus.api.v1alpha1.AgentRunService.RestoreThread:input_type -> colossus.api.v1alpha1.RestoreThreadRequest
+	55,  // 102: colossus.api.v1alpha1.AgentRunService.RespondInteraction:input_type -> colossus.api.v1alpha1.RespondInteractionRequest
+	75,  // 103: colossus.api.v1alpha1.AgentRunService.SetWorkspaceSharing:input_type -> colossus.api.v1alpha1.SetWorkspaceSharingRequest
+	77,  // 104: colossus.api.v1alpha1.AgentRunService.ListVisibleRuns:input_type -> colossus.api.v1alpha1.ListVisibleRunsRequest
+	80,  // 105: colossus.api.v1alpha1.AgentRunService.GetRuntimePolicyPosture:input_type -> colossus.api.v1alpha1.GetRuntimePolicyPostureRequest
+	16,  // 106: colossus.api.v1alpha1.AgentRunService.PredictNextPrompt:output_type -> colossus.api.v1alpha1.PredictNextPromptResponse
+	18,  // 107: colossus.api.v1alpha1.AgentRunService.HumanTerminal:output_type -> colossus.api.v1alpha1.HumanTerminalResponse
+	70,  // 108: colossus.api.v1alpha1.AgentRunService.ListProcessSessions:output_type -> colossus.api.v1alpha1.ListProcessSessionsResponse
+	72,  // 109: colossus.api.v1alpha1.AgentRunService.ReadProcessSession:output_type -> colossus.api.v1alpha1.ReadProcessSessionResponse
+	74,  // 110: colossus.api.v1alpha1.AgentRunService.StopProcessSession:output_type -> colossus.api.v1alpha1.StopProcessSessionResponse
+	28,  // 111: colossus.api.v1alpha1.AgentRunService.CreateRun:output_type -> colossus.api.v1alpha1.CreateRunResponse
+	30,  // 112: colossus.api.v1alpha1.AgentRunService.GetRun:output_type -> colossus.api.v1alpha1.GetRunResponse
+	32,  // 113: colossus.api.v1alpha1.AgentRunService.ListRuns:output_type -> colossus.api.v1alpha1.ListRunsResponse
+	36,  // 114: colossus.api.v1alpha1.AgentRunService.ListSessionActivity:output_type -> colossus.api.v1alpha1.ListSessionActivityResponse
+	90,  // 115: colossus.api.v1alpha1.AgentRunService.ReadSessionTranscript:output_type -> colossus.api.v1alpha1.ReadSessionTranscriptResponse
+	38,  // 116: colossus.api.v1alpha1.AgentRunService.WatchRun:output_type -> colossus.api.v1alpha1.WatchRunResponse
+	40,  // 117: colossus.api.v1alpha1.AgentRunService.CancelRun:output_type -> colossus.api.v1alpha1.CancelRunResponse
+	43,  // 118: colossus.api.v1alpha1.AgentRunService.ArchiveThread:output_type -> colossus.api.v1alpha1.ArchiveThreadResponse
+	45,  // 119: colossus.api.v1alpha1.AgentRunService.RestoreThread:output_type -> colossus.api.v1alpha1.RestoreThreadResponse
+	56,  // 120: colossus.api.v1alpha1.AgentRunService.RespondInteraction:output_type -> colossus.api.v1alpha1.RespondInteractionResponse
+	76,  // 121: colossus.api.v1alpha1.AgentRunService.SetWorkspaceSharing:output_type -> colossus.api.v1alpha1.SetWorkspaceSharingResponse
+	79,  // 122: colossus.api.v1alpha1.AgentRunService.ListVisibleRuns:output_type -> colossus.api.v1alpha1.ListVisibleRunsResponse
+	81,  // 123: colossus.api.v1alpha1.AgentRunService.GetRuntimePolicyPosture:output_type -> colossus.api.v1alpha1.GetRuntimePolicyPostureResponse
+	106, // [106:124] is the sub-list for method output_type
+	88,  // [88:106] is the sub-list for method input_type
 	88,  // [88:88] is the sub-list for extension type_name
 	88,  // [88:88] is the sub-list for extension extendee
 	0,   // [0:88] is the sub-list for field type_name
@@ -6741,6 +6746,7 @@ func file_colossus_api_v1alpha1_agent_run_proto_init() {
 	}
 	file_colossus_api_v1alpha1_common_proto_init()
 	file_colossus_api_v1alpha1_session_proto_init()
+	file_colossus_api_v1alpha1_transcript_proto_init()
 	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[4].OneofWrappers = []any{}
 	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[5].OneofWrappers = []any{}
 	file_colossus_api_v1alpha1_agent_run_proto_msgTypes[6].OneofWrappers = []any{}

@@ -1,4 +1,5 @@
 use super::*;
+mod companion_tests;
 mod manager_tests;
 mod preferences_tests;
 mod usage_tests;
@@ -131,7 +132,10 @@ fn approval(id: &str) -> (HostEvent, oneshot::Receiver<PromptResponse>) {
 
 #[tokio::test]
 async fn session_channels_retain_inactive_streams_and_drafts() {
-    let (mut workspace, mut events) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, mut events) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.composer.insert("Alpha draft");
     let alpha_sender = workspace.sender();
     open_snapshot(&mut workspace, "beta");
@@ -167,7 +171,10 @@ async fn session_channels_retain_inactive_streams_and_drafts() {
 
 #[tokio::test]
 async fn background_completion_updates_its_status_without_changing_focus() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.operation = Some(OperationKind::Run);
     workspace.control = Some(RunControl::default());
     open_snapshot(&mut workspace, "beta");
@@ -216,7 +223,10 @@ async fn background_completion_updates_its_status_without_changing_focus() {
 
 #[tokio::test]
 async fn mismatched_run_envelopes_and_unknown_origin_channels_are_discarded() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.receive(
         WorkspaceEvent::Session {
             id: "alpha".into(),
@@ -238,7 +248,10 @@ async fn mismatched_run_envelopes_and_unknown_origin_channels_are_discarded() {
 
 #[tokio::test]
 async fn another_sessions_completion_cannot_release_output_into_the_origin() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.operation = Some(OperationKind::Run);
     workspace.control = Some(RunControl::default());
     let result = HostRunResult {
@@ -277,7 +290,10 @@ async fn another_sessions_completion_cannot_release_output_into_the_origin() {
 
 #[tokio::test]
 async fn inactive_approval_keeps_its_one_use_response_when_focus_switches() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.composer.insert("Unsent Alpha draft");
     open_snapshot(&mut workspace, "beta");
     let (prompt, mut answer) = approval("alpha-approval");
@@ -314,7 +330,10 @@ async fn inactive_approval_keeps_its_one_use_response_when_focus_switches() {
 
 #[tokio::test]
 async fn cross_workspace_bootstrap_cannot_replace_the_selected_session() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.composer.insert("Retain this draft");
     let mut outside = source("outside");
     outside.workspace = "/unrelated/workspace".into();
@@ -327,7 +346,10 @@ async fn cross_workspace_bootstrap_cannot_replace_the_selected_session() {
 
 #[tokio::test]
 async fn stop_one_session_preserves_other_controls_and_pending_approvals() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     let alpha_control = RunControl::default();
     workspace.control = Some(alpha_control.clone());
     workspace.operation = Some(OperationKind::Run);
@@ -353,7 +375,10 @@ async fn stop_one_session_preserves_other_controls_and_pending_approvals() {
 
 #[tokio::test]
 async fn cancel_all_cancels_each_run_and_denies_each_unanswered_prompt() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     let alpha_control = RunControl::default();
     workspace.control = Some(alpha_control.clone());
     workspace.operation = Some(OperationKind::Run);
@@ -389,7 +414,8 @@ async fn cancel_all_cancels_each_run_and_denies_each_unanswered_prompt() {
 
 #[tokio::test]
 async fn open_limit_rejects_an_extra_session_but_allows_switching_an_existing_one() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("0")));
+    let (mut workspace, _) =
+        Workspace::new(ScreenMode::Alternate, TuiState::from_snapshot(source("0")));
     for index in 1..MAX_OPEN_SESSIONS {
         open_snapshot(&mut workspace, &index.to_string());
     }
@@ -420,7 +446,10 @@ fn navigation_shortcuts_bypass_busy_queues_without_mutating_the_draft() {
 
 #[tokio::test]
 async fn permission_footer_updates_every_retained_session_without_replacing_its_route() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.footer.approval_mode = "ask".into();
     open_snapshot(&mut workspace, "beta");
     workspace.footer.approval_mode = "ask".into();
@@ -452,7 +481,10 @@ async fn permission_footer_updates_every_retained_session_without_replacing_its_
 
 #[tokio::test]
 async fn footer_from_an_unknown_origin_cannot_change_retained_permission_display() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.footer.approval_mode = "ask".into();
     let mut result = HostCommandResult::document(PresentationDocument::new());
     result.footer = Some(FooterState {
@@ -474,7 +506,10 @@ async fn footer_from_an_unknown_origin_cannot_change_retained_permission_display
 
 #[tokio::test]
 async fn pending_open_is_retained_without_stealing_focus_after_newer_navigation() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(source("alpha")));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
     workspace.composer.insert("Alpha draft");
     open_snapshot(&mut workspace, "beta");
     workspace.opening = true;
@@ -536,9 +571,10 @@ fn permission_snapshot(id: &str, mode: &str, revision: u64) -> InteractiveSnapsh
 
 #[tokio::test]
 async fn delayed_background_completion_cannot_restore_an_older_permission_revision() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(permission_snapshot(
-        "alpha", "ask", 1,
-    )));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(permission_snapshot("alpha", "ask", 1)),
+    );
     open_snapshot(&mut workspace, "beta");
     workspace.switch("alpha");
     workspace.receive(permission_completion("alpha", "full-access", 2), host());
@@ -556,9 +592,10 @@ async fn delayed_background_completion_cannot_restore_an_older_permission_revisi
 
 #[tokio::test]
 async fn delayed_bootstrap_uses_the_current_permission_revision_before_installing() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(permission_snapshot(
-        "alpha", "ask", 1,
-    )));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(permission_snapshot("alpha", "ask", 1)),
+    );
     workspace.receive(permission_completion("alpha", "full-access", 2), host());
     workspace.receive(
         WorkspaceEvent::Opened(Box::new(Ok(permission_snapshot("beta", "ask", 1)))),
@@ -575,9 +612,10 @@ async fn delayed_bootstrap_uses_the_current_permission_revision_before_installin
 
 #[tokio::test]
 async fn newer_bootstrap_revision_updates_all_retained_permission_displays() {
-    let (mut workspace, _) = Workspace::new(TuiState::from_snapshot(permission_snapshot(
-        "alpha", "ask", 1,
-    )));
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(permission_snapshot("alpha", "ask", 1)),
+    );
     workspace.receive(
         WorkspaceEvent::Opened(Box::new(Ok(permission_snapshot("beta", "full-access", 2)))),
         host(),

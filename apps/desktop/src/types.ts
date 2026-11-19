@@ -327,6 +327,7 @@ export interface DesktopCapabilities {
   artifacts: boolean;
   planContinuation: boolean;
   sessionActivity?: boolean;
+  conversationExport?: boolean;
   agentInboxes?: boolean;
   updateAvailable: boolean;
   agentWorkflows: boolean;
@@ -889,6 +890,8 @@ export interface Run {
   archived: boolean;
   controllable?: boolean;
   continuable?: boolean;
+  /** Opaque native discovery receipt; never a renderer authority decision. */
+  discoveryProof?: string;
 }
 
 export type ThreadDelegateStatus =
@@ -1255,6 +1258,7 @@ export interface SessionActivity {
 }
 
 export interface ListSessionActivityRequest {
+  discoveryProof?: string;
   sourceRunId: string;
   query?: string;
   lanes?: SessionActivityLane[];
@@ -1314,25 +1318,32 @@ export interface ArtifactContent {
 
 export interface GetRunRequest {
   runId: string;
+  discoveryProof?: string;
+  continuationProof?: string;
 }
 
 export interface ListRunsRequest {
+  /** Native hint for an explicit new history chain, never background reconciliation. */
+  historyReplacement?: boolean;
   sessionId?: string;
   pageToken: string;
   includeArchived?: boolean;
 }
 
 export interface WatchRunRequest {
+  discoveryProof?: string;
   runId: string;
   afterSequence: number;
 }
 
 export interface CancelRunRequest {
+  discoveryProof?: string;
   runId: string;
   idempotencyKey: string;
 }
 
 export interface ThreadLifecycleRequest {
+  discoveryProof?: string;
   runId: string;
   idempotencyKey: string;
 }
@@ -1348,6 +1359,7 @@ export type InteractionAnswer =
   | { type: "approval"; approved: boolean; requestHash: string };
 
 export interface RespondInteractionRequest {
+  discoveryProof?: string;
   runId: string;
   interactionId: string;
   etag: string;

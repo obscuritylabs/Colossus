@@ -29,6 +29,8 @@ mod ordering;
 
 mod repository;
 pub use repository::*;
+mod transcript;
+pub use transcript::{CanonicalTranscriptReader, MAX_TRANSCRIPT_PAGE_BYTES};
 
 #[cfg(test)]
 mod tests;

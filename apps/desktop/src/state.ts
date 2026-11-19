@@ -17,7 +17,8 @@ export const MAX_TURNS = 100;
 export const MAX_PROMPT_BYTES = 65_536;
 export const MAX_CACHED_RUN_VIEWS = 12;
 export const MAX_CONVERSATION_RUNS = MAX_CACHED_RUN_VIEWS;
-export const MAX_RECENT_RUNS = 200;
+// The browser retains only thin metadata for discovered history. Detailed views
+// and message bodies have independent bounded caches below.
 export const MAX_CACHED_IDEMPOTENCY_ATTEMPTS = 256;
 const MAX_TRACKED_SEQUENCES = 512;
 const MAX_MESSAGE_CONTENT_PARTS = 64;
@@ -70,6 +71,7 @@ export type ChatAction =
   | { type: "interaction_resolved"; interaction: Interaction }
   | { type: "replace_recent"; runs: Run[]; nextPageToken: string }
   | { type: "append_recent"; runs: Run[]; nextPageToken: string }
+  | { type: "reconcile_recent"; runs: Run[] }
   | { type: "remove_session"; sessionId: string };
 
 export const initialChatState: ChatState = {
@@ -128,10 +130,17 @@ function boundedFeedText(
   return value.slice(0, maxCharacters - TEXT_OMISSION.length) + TEXT_OMISSION;
 }
 
-function compactRun(run: Run): Run {
-  const normalizedRun = isTerminalStatus(run.status)
-    ? { ...run, pendingInteractionCount: 0 }
-    : run;
+function compactRun(run: Run, previous?: Run): Run {
+  const retainedRun =
+    run.discoveryProof === undefined &&
+    previous?.runId === run.runId &&
+    previous.sessionId === run.sessionId &&
+    previous.discoveryProof !== undefined
+      ? { ...run, discoveryProof: previous.discoveryProof }
+      : run;
+  const normalizedRun = isTerminalStatus(retainedRun.status)
+    ? { ...retainedRun, pendingInteractionCount: 0 }
+    : retainedRun;
   if (normalizedRun.terminal === null) {
     return normalizedRun;
   }
@@ -614,15 +623,44 @@ function applyUpdate(view: RunView, update: RunUpdate): RunView {
 function mergeRuns(existing: Run[], incoming: Run[]): Run[] {
   const byId = new Map(existing.map((run) => [run.runId, run]));
   for (const incomingRun of incoming) {
-    const run = compactRun(incomingRun);
-    const current = byId.get(run.runId);
+    const current = byId.get(incomingRun.runId);
+    const run = compactHistoryRun(incomingRun, current);
     if (current === undefined || run.lastSequence >= current.lastSequence) {
       byId.set(run.runId, run);
     }
   }
-  return [...byId.values()]
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-    .slice(0, MAX_RECENT_RUNS);
+  return [...byId.values()].sort((left, right) =>
+    right.createdAt.localeCompare(left.createdAt),
+  );
+}
+
+function compactHistoryRun(run: Run, previous?: Run): Run {
+  const compact = compactRun(run, previous);
+  return {
+    ...compact,
+    title: boundedFeedText(compact.title, 1024),
+    terminal:
+      compact.terminal?.type === "failure"
+        ? {
+            type: "failure",
+            failure: {
+              ...compact.terminal.failure,
+              message: boundedFeedText(compact.terminal.failure.message, 512),
+            },
+          }
+        : compact.terminal?.type === "cancellation"
+          ? {
+              type: "cancellation",
+              cancellation: {
+                ...compact.terminal.cancellation,
+                message: boundedFeedText(
+                  compact.terminal.cancellation.message,
+                  512,
+                ),
+              },
+            }
+          : compact.terminal,
+  };
 }
 
 function refreshRecentRuns(existing: Run[], incoming: Run[]): Run[] {
@@ -664,7 +702,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ? newView(action.run)
           : {
               ...current,
-              run: compactRun(action.run),
+              run: compactRun(action.run, current.run),
               ...snapshotOutput(action.run, current),
               pendingInteractions: isTerminalStatus(action.run.status)
                 ? []
@@ -715,7 +753,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             }
           : {
               ...current,
-              run: compactRun(run),
+              run: compactRun(run, current.run),
               ...snapshotOutput(run, current),
               pendingInteractions: retainedInteractions,
               localPrompt:
@@ -804,6 +842,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         recentRuns: mergeRuns(state.recentRuns, action.runs),
         nextPageToken: action.nextPageToken,
       };
+    case "reconcile_recent":
+      return { ...state, recentRuns: mergeRuns(state.recentRuns, action.runs) };
     case "remove_session": {
       const views = new Map(state.views);
       for (const [runId, view] of views) {

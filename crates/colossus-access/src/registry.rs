@@ -318,7 +318,12 @@ pub fn builtin_action_descriptors() -> Vec<ActionDescriptor> {
         &mut descriptors,
         ActionClass::ExternalNetwork,
         CapabilitySource::Mcp,
-        &["mcp.invoke", "mcp.call"],
+        &[
+            "mcp.invoke",
+            "mcp.call",
+            "mcp.tasks.get",
+            "mcp.tasks.cancel",
+        ],
     );
     push_actions(
         &mut descriptors,

@@ -126,16 +126,6 @@ tests and build. Changes confined to `native/computer/` independently select Rus
 Desktop validation. The Desktop PR gate formats, lints and tests the portable native
 bridge on Linux; it does not capture a desktop or send input.
 
-Dependency manifests and lockfiles add license, source, ban and advisory policy for the
-root sidecar and independent Desktop, browser and native-computer graphs. Tantivy and
-Ratatui use patched `lru` 0.18.2 without an advisory exception. Any new exception must
-name the exact advisory in every reporting scanner, explain unreachability and define removal.
-
-The exact `RUSTSEC-2026-0387` exception covers only OpenID Connect's remaining public
-P-256/P-384 verification stack. Application certificate signing uses patched arithmetic,
-and wrapper bans reject direct use of the legacy APIs. The reachability review and
-removal condition are recorded in [ADR 0006](adr/0006-cloud-control-plane.md#consequences).
-
 Classification, Conventional Commit title validation and aggregate decisions execute
 contracts from the **PR base revision**, never their proposed replacements. The initial
 bootstrap fallback selects every tier and requires success. If an older classifier lacks
@@ -149,6 +139,62 @@ times across formatting, lint, unit, SDK, Desktop, documentation and dependency 
 A skipped job is accepted only when classification explicitly marked it unnecessary.
 Documentation PR builds remain separate from deployment of `main` by the Documentation
 workflow. The PR tier allocates no macOS or Windows runners.
+
+### Dependency policy
+
+Dependency manifests and lockfiles add license, source, ban and advisory policy for
+the root sidecar and independent Desktop, browser and native-computer graphs.
+Tantivy and Ratatui use patched `lru` 0.18.2 without an advisory exception. Any
+exception must identify the exact advisory, reporting scanners, reviewed scope and
+removal condition. Distinguish evidence of exploit unreachability from explicit
+acceptance of temporary maintenance/support risk.
+
+OpenID Connect 4.1.0 removes the legacy P-256/P-384 verification stack, so neither
+scanner retains a `RUSTSEC-2026-0387` exception. Existing wrapper bans still constrain
+legacy API imports; they do not exempt advisories. The remaining RSA public-key
+verification exception and its removal condition are recorded in
+[ADR 0006](adr/0006-cloud-control-plane.md#consequences).
+
+The approved chrono support-risk exception covers only crates.io `chrono 0.4.45`
+and the reviewed unmaintained finding `RUSTSEC-2026-0543`. It expires at
+`2026-12-19T00:00:00Z`, without automatic renewal. The
+[policy record](https://github.com/obscuritylabs/Colossus/blob/main/ci/dependency-policy/chrono-2026-0543.json)
+owns the approval, fingerprints, parent graphs and removal obligations. Acceptance
+prints **accepted temporary support risk**: chrono remains unmaintained; this is
+neither a chrono fix nor a dependency-clean result.
+
+`cargo xtask check dependencies` runs the policy fixtures and helper for the root
+and Desktop graphs. Release readiness invokes the same helper with `--root-only`
+to retain its existing root advisory scope. Root `cargo-deny` advisories and
+`cargo-audit` retain `-D warnings` and the existing exact RSA exception. Desktop
+audit retains its existing treatment of informational/yanked findings without
+`-D warnings`; other independent graph gates retain their existing thresholds.
+The helper requires the [Python prerequisite](toolchain-inventory.md#provisioning-and-check-owners),
+using `PYTHON` when set or `python3` otherwise. Hosted dependency jobs provision
+the existing Python pin explicitly on Ubuntu 24.04. Ubuntu 26.04 compatibility,
+canary and public installer checks retain their separate coverage.
+
+Each invocation fetches a fresh authoritative advisory database and binds its
+unchanged snapshot to the scans. Raw, unfiltered scanner stdout and stderr remain
+visible; their bytes and exit statuses are retained with `policy-receipt.json` beneath
+`.local/dependency-policy/<unique-run>/`. Missing or malformed evidence, scanner
+errors, expiry, changed package/version/source, advisory content, classification,
+aliases or affected scope fail closed. No blanket chrono ignore is added to
+`deny.toml`, and new security information requires immediate reevaluation.
+
+The approved all-features reverse graphs bind parent versions, sources, features
+and normal/build/dev/target edges. The direct Cloud server consumer also binds
+all 124 Rust source files, including files without a literal chrono reference;
+even unrelated Rust edits in that crate require independent scope review before
+updating those bindings. Its lexical reference inventory is not whole-program
+proof. Revalidation cannot extend the approved expiry, package, advisory or parent
+scope by mechanically refreshing hashes.
+
+`dependency_owner` owns `chrono-unmaintained-parent-graph-migration`. Cloud
+authentication, MCP and Desktop owners must supply its scope by
+`2026-11-26T00:00:00Z`; `maintenance_coordinator` owns implementation review by
+`2026-12-12T00:00:00Z`. Remove the exception or block before its December 19 UTC
+expiry, following the canonical record rather than renewing it automatically.
 
 ## Request pre-merge acceptance
 
@@ -242,6 +288,11 @@ and satisfy the source-version/changelog rules in
 acceptance, a locked release build, archive/checksum creation, clean installation,
 offline echo/audit and signed-bundle smoke. The exact source generates changelog and
 draft notes retained in `release-history`; see [changelog generation](releasing.md#generate-the-changelog-and-release-notes).
+
+Each of the six CLI release jobs has a 90-minute deadline for native security
+acceptance, optimized compilation and packaging. Cold macOS jobs have exceeded
+60 minutes, so manual validation and tag builds use the same bounded budget with
+caches optional. The deadline bounds job wall time; billed runner usage is separate.
 
 Stable releases additionally generate/test/package TypeScript, Python and Go SDKs,
 bind candidate metadata and checksums to the source commit, and require signed Windows

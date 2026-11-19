@@ -3,16 +3,6 @@ use std::{env, ffi::OsString};
 use super::stages::{CompletedStages, Stage};
 use crate::repository::Repository;
 
-// OpenID Connect validates provider signatures with public keys only. No RSA
-// private keys are created or used; cloud certificate issuance is Ed25519.
-// Keep this exact exception aligned with deny.toml and ADR 0006.
-const OIDC_RSA_PRIVATE_KEY_ADVISORY: &str = "RUSTSEC-2023-0071";
-
-// OpenID Connect's legacy EC arithmetic only verifies public provider signatures.
-// Application secret signing uses p256 0.14 / crypto-bigint 0.7.10. Keep this exact
-// exception aligned with deny.toml and ADR 0006, including its wrapper bans.
-const OIDC_EC_PRIVATE_KEY_ADVISORY: &str = "RUSTSEC-2026-0387";
-
 pub(super) fn sidecar(repository: &Repository) -> Result<(), String> {
     repository
         .task(cargo_program())
@@ -353,24 +343,19 @@ pub(super) fn dependencies(repository: &Repository) -> Result<(), String> {
             "bans",
         ],
     )?;
-    cargo(
-        repository,
-        ["deny", "--locked", "check", "-D", "warnings", "advisories"],
-    )?;
-    cargo(
-        repository,
-        [
-            "audit",
-            "-D",
-            "warnings",
-            "--ignore",
-            OIDC_RSA_PRIVATE_KEY_ADVISORY,
-            "--ignore",
-            OIDC_EC_PRIVATE_KEY_ADVISORY,
-            "--file",
-            "Cargo.lock",
-        ],
-    )?;
+    // Keep scanner thresholds and the existing RSA public-key verification
+    // exception unchanged. The explicitly approved chrono support-risk policy
+    // requires fresh shared advisory evidence, exact scope and UTC expiry;
+    // raw diagnostics remain visible before any temporary disposition.
+    let python = env::var_os("PYTHON").unwrap_or_else(|| "python3".into());
+    repository
+        .task(&python)
+        .args(["-B", "scripts/ci/test-dependency-policy.py"])
+        .run()?;
+    repository
+        .task(python)
+        .args(["-B", "scripts/ci/dependency-policy.py"])
+        .run()?;
     cargo(
         repository,
         [
@@ -407,14 +392,7 @@ pub(super) fn dependencies(repository: &Repository) -> Result<(), String> {
     )?;
     cargo(
         repository,
-        [
-            "audit",
-            "--no-fetch",
-            "-D",
-            "warnings",
-            "--file",
-            "fuzz/Cargo.lock",
-        ],
+        ["audit", "-D", "warnings", "--file", "fuzz/Cargo.lock"],
     )?;
     cargo(
         repository,
@@ -433,15 +411,6 @@ pub(super) fn dependencies(repository: &Repository) -> Result<(), String> {
             "licenses",
             "sources",
             "bans",
-        ],
-    )?;
-    cargo(
-        repository,
-        [
-            "audit",
-            "--no-fetch",
-            "--file",
-            "apps/desktop/src-tauri/Cargo.lock",
         ],
     )?;
     cargo(

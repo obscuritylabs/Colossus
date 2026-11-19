@@ -7,6 +7,9 @@ use std::time::Duration;
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Management {
+    Transcript {
+        request: colossus_sdk::ReadSessionTranscriptRequest,
+    },
     File {
         file: super::files::FileOperation,
     },
@@ -248,6 +251,10 @@ impl HostedExecution {
             Some(live.pin())
         };
         match operation {
+            Management::Transcript { request } => {
+                let page = Self::handle_transcript(live, request).await?;
+                serde_json::to_value(page).map_err(|_| CloudError::Storage)
+            }
             Management::File { file } => Self::handle_file_operation(live, file).await,
             Management::ProviderModels { profile, revision } => {
                 self.provider_catalog(live, &profile, revision).await

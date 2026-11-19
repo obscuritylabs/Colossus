@@ -73,6 +73,11 @@ class AgentRuns:
 
         return await self._stub.ListVisibleRuns(request)
 
+    async def read_session_transcript(self, request: Any) -> Any:
+        """Read one original released snapshot page without implicit retry or truncation."""
+
+        return await self._stub.ReadSessionTranscript(request)
+
     async def set_workspace_sharing(self, request: Any) -> Any:
         """Change source-owned disclosure once, without retrying this mutation."""
 
@@ -240,7 +245,7 @@ class ColossusClient:
             # Full command context plus the bounded envelope; sends stay unchanged.
             ("grpc.max_receive_message_length", 8 * 1024 * 1024),
             ("grpc.max_send_message_length", 4 * 1024 * 1024),
-            ("grpc.primary_user_agent", "colossus-python-sdk/0.12.0"),
+            ("grpc.primary_user_agent", "colossus-python-sdk/0.12.1"),
         ]
         channel = grpc.aio.secure_channel(
             descriptor.target,

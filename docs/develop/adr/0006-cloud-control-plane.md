@@ -142,28 +142,40 @@ advertise a stable automatic update channel.
 The OpenID Connect dependency brings `rsa`, affected by
 [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071.html). The advisory
 concerns private-key timing leakage. Colossus uses this dependency only to verify
-provider signatures with public keys; it has no RSA private-key signing or decryption
-path. Keep the exact documented supply-chain exception limited to that use and remove
-it when the dependency no longer contains the affected version. Adding any RSA
-private-key operation requires revisiting this decision and exception.
+provider signatures with public keys; no application path signs or decrypts with
+private keys through this `rsa` dependency. TLS client identities use a separate
+rustls implementation. Keep the exact documented supply-chain exception limited to
+that use and remove it when the dependency no longer contains the affected version.
+Adding a private-key operation through this dependency requires revisiting this
+decision and exception.
 
-OpenID Connect 4.0.1 also retains `crypto-bigint` 0.5.5 through its P-256/P-384
-verification stack, affected by
+The Cloud authentication clock and expiry path still depends on chrono. Its
+unmaintained advisory has an explicitly approved temporary
+[support-risk exception](../ci-cd.md#dependency-policy), with exact scope and hard
+expiry in the linked policy record. This does not change authentication/session
+contracts or establish a chrono fix.
+
+OpenID Connect 4.1.0 adopts P-256/P-384 0.14 and removes the legacy `crypto-bigint`
+0.5.5 verification stack affected by
 [RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387.html).
-Colossus passes public JWKS coordinates, message hashes and supplied signatures to
-that stack; client-secret checks use HMAC and access-token hashes use SHA. No
-application path supplies EC private scalars or signing nonces to it. Local TLS
-certificate signing uses P-256 0.14 with patched `crypto-bigint` 0.7.10, and a fixed-seed
-certificate fingerprint regression preserves existing identity pins across the upgrade.
-The Desktop dependency graph contains no affected arithmetic.
+The resolved root and Desktop graphs use patched `crypto-bigint` 0.7.10, so neither
+dependency scanner retains the EC advisory exception. See the
+[upstream release](https://github.com/ramosbugs/openidconnect-rs/releases/tag/4.1.0).
+This update also adopts Ed25519 Dalek 3 for OIDC verification; application certificate
+signing remains on its existing cryptographic dependencies.
 
-Keep the exact advisory exception in both dependency scanners limited to the residual
-OIDC verification path. The `cargo-deny` wrapper bans reject direct application imports
-at each legacy arithmetic layer and constrain their parent crate names to the reviewed
-OIDC chain; wrapper rules do not pin parent versions. Review the resolved graph when
-updating these dependencies. Remove the exception and wrapper rules when OpenID Connect
-adopts patched arithmetic. Adding any legacy EC secret operation requires revisiting
-this decision and exception.
+Colossus still passes public JWKS coordinates, message hashes and supplied signatures
+to the provider verification stack; client-secret checks use HMAC and access-token
+hashes use SHA. Application code does not supply EC private scalars or signing nonces
+to that stack. Local TLS certificate signing uses P-256 0.14 with patched
+`crypto-bigint` 0.7.10, and a fixed-seed certificate fingerprint regression protects
+existing identity pins.
+
+The existing `cargo-deny` wrapper bans remain as constraints on reintroducing legacy
+arithmetic. They reject direct application imports at each legacy layer and constrain
+parent crate names to the previously reviewed OIDC chain; wrapper rules do not pin
+parent versions or exempt advisories. Review the resolved graph when updating these
+dependencies. Any future exception or legacy EC secret operation requires a new review.
 
 Sandbox provisioning, scheduling and cloud artifact/context transfer remain separate
 extensions. Registered fleet size and replica count are not capacity evidence;

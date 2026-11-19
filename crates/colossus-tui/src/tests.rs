@@ -783,6 +783,37 @@ fn parser_handles_tui_commands_without_a_repl_alias() {
 }
 
 #[test]
+fn transcript_export_alias_preserves_active_session_host_route_and_path() {
+    let arguments = r#"export "C:\Users\Alice Smith\conversation.md" --format markdown"#;
+    for input in [
+        format!("/session {arguments}"),
+        r#"/export "C:\Users\Alice Smith\conversation.md" --format markdown"#.into(),
+    ] {
+        assert_eq!(
+            parse_interactive_command(&input),
+            InteractiveCommand::Runtime(RuntimeCommand::Known {
+                name: "session".into(),
+                arguments: arguments.into(),
+            })
+        );
+    }
+    assert_eq!(
+        parse_interactive_command("/export"),
+        InteractiveCommand::Runtime(RuntimeCommand::Known {
+            name: "session".into(),
+            arguments: "export".into(),
+        })
+    );
+    assert_eq!(
+        parse_interactive_command("/exported file.md"),
+        InteractiveCommand::Runtime(RuntimeCommand::Known {
+            name: "exported".into(),
+            arguments: "file.md".into(),
+        })
+    );
+}
+
+#[test]
 fn parser_handles_bounded_image_attachment_commands() {
     assert_eq!(
         parse_interactive_command("/attach workspace/image.png"),
