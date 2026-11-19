@@ -289,6 +289,11 @@ acceptance, a locked release build, archive/checksum creation, clean installatio
 offline echo/audit and signed-bundle smoke. The exact source generates changelog and
 draft notes retained in `release-history`; see [changelog generation](releasing.md#generate-the-changelog-and-release-notes).
 
+Each of the six CLI release jobs has a 90-minute deadline for native security
+acceptance, optimized compilation and packaging. Cold macOS jobs have exceeded
+60 minutes, so manual validation and tag builds use the same bounded budget with
+caches optional. The deadline bounds job wall time; billed runner usage is separate.
+
 Stable releases additionally generate/test/package TypeScript, Python and Go SDKs,
 bind candidate metadata and checksums to the source commit, and require signed Windows
 x64 Desktop and x64/ARM64 CLI archives. SDK compatibility uses the latest reachable
