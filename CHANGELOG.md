@@ -83,13 +83,15 @@ migration from the remaining chrono dependency paths.
 
 - **mcp:** explain how to check server health ([06da53b](https://github.com/obscuritylabs/Colossus/commit/06da53b990e66740ecebc6c20612b946eb8b403b))
 - **release:** record v0.12.1 changelog ([281b67d](https://github.com/obscuritylabs/Colossus/commit/281b67d7b4c68cf1949e44da60f451bce26913db))
+- **release:** refresh v0.12.1 history after dependency policy ([b6226fc](https://github.com/obscuritylabs/Colossus/commit/b6226fc9ec70623553864cd393c3c34efe6398d0))
 
 #### Maintenance
 
 - **ubuntu:** validate Ubuntu 26.04 on x64 and arm64 ([1195294](https://github.com/obscuritylabs/Colossus/commit/1195294aeffbb269de44134195c91b7c13e86718))
 - **release:** prepare v0.12.1 with signed browser builds ([eaec0c9](https://github.com/obscuritylabs/Colossus/commit/eaec0c9100397cd6f0ad06536a0529be4a99063c))
+- **sidecar:** use canonical executable in inspection fixtures ([5390e9b](https://github.com/obscuritylabs/Colossus/commit/5390e9bef7629509b84a35548d664af172bc4f62))
 
-**Source:** [1c69e41](https://github.com/obscuritylabs/Colossus/commit/1c69e4127d9c538876856210fb545732b4f1bb17)
+**Source:** [5390e9b](https://github.com/obscuritylabs/Colossus/commit/5390e9bef7629509b84a35548d664af172bc4f62)
 
 **Full changelog:** [v0.12.0...v0.12.1](https://github.com/obscuritylabs/Colossus/compare/v0.12.0...v0.12.1)
 
