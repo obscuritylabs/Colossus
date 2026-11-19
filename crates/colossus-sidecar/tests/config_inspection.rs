@@ -5,7 +5,8 @@ use colossus_sdk::{Sha256Digest, VerifiedExecutable, inspect_sidecar_configurati
 use sha2::{Digest as _, Sha256};
 
 fn sidecar() -> VerifiedExecutable {
-    let path = std::path::PathBuf::from(env!("CARGO_BIN_EXE_colossus-sidecar"));
+    let path = std::fs::canonicalize(env!("CARGO_BIN_EXE_colossus-sidecar"))
+        .expect("canonical sidecar executable");
     let source = std::fs::read(&path).expect("read sidecar");
     let digest: [u8; 32] = Sha256::digest(source).into();
     VerifiedExecutable::new(path, Sha256Digest::from_bytes(digest)).expect("verified sidecar")
