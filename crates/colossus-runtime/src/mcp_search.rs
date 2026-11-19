@@ -281,6 +281,7 @@ mod tests {
             credential_headers: BTreeMap::new(),
             allow_stateless: false,
             protocol_version: Default::default(),
+            enable_tasks: false,
             oauth: None,
             allowed_tools: vec!["*".into()],
             research_tools: Vec::new(),

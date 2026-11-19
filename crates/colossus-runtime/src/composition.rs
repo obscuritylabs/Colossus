@@ -551,6 +551,9 @@ impl Runtime {
                 "effect_recovery",
                 || -> Result<(), RuntimeError> {
                     recover_unknown_effects(journal.as_ref())?;
+                    if writer_lease.is_some() {
+                        colossus_mcp::recover_mcp_task_receipts(journal.as_ref())?;
+                    }
                     Ok(())
                 },
             )?;

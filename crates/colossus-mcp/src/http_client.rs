@@ -32,7 +32,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 use thiserror::Error;
@@ -44,6 +44,7 @@ pub(super) struct HardenedStreamableHttpClient {
     max_response_bytes: usize,
     received_bytes: Arc<AtomicUsize>,
     call_headers: Result<HashMap<HeaderName, HeaderValue>, String>,
+    allow_task_discovery: Arc<AtomicBool>,
     diagnostics: McpDiagnosticCapture,
 }
 
@@ -96,6 +97,7 @@ impl HardenedStreamableHttpClient {
             max_response_bytes,
             received_bytes: Arc::new(AtomicUsize::new(0)),
             call_headers: Ok(HashMap::new()),
+            allow_task_discovery: Arc::new(AtomicBool::new(false)),
             diagnostics,
         }
         .with_call_headers(operation))
@@ -106,6 +108,11 @@ impl HardenedStreamableHttpClient {
         // failure until a modern call actually needs the parameter headers.
         self.call_headers = crate::param_headers::call_headers(operation);
         self
+    }
+
+    /// Shared across transport clones within a single discovery operation.
+    pub(super) fn task_discovery_gate(&self) -> Arc<AtomicBool> {
+        self.allow_task_discovery.clone()
     }
 
     #[cfg(test)]
@@ -120,6 +127,7 @@ impl HardenedStreamableHttpClient {
             max_response_bytes,
             received_bytes: Arc::new(AtomicUsize::new(0)),
             call_headers: Ok(HashMap::new()),
+            allow_task_discovery: Arc::new(AtomicBool::new(false)),
             diagnostics: McpDiagnosticCapture::current(),
         }
     }
@@ -218,6 +226,7 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
             self.max_response_bytes,
             self.received_bytes.clone(),
             self.diagnostics.clone(),
+            false,
         ))
     }
 
@@ -248,6 +257,13 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
         auth_header: Option<String>,
         mut custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        let allow_modern_tasks = self.allow_task_discovery.load(Ordering::Acquire)
+            && matches!(
+                &message,
+                ClientJsonRpcMessage::Request(request)
+                    if matches!(request.request, ClientRequest::ListToolsRequest(_))
+                    && request.request.get_meta().protocol_version() == Some(ProtocolVersion::V_2026_07_28)
+            );
         if let ClientJsonRpcMessage::Request(request) = &message
             && matches!(request.request, ClientRequest::CallToolRequest(_))
             && request
@@ -333,6 +349,44 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
                     None,
                 ));
             }
+            // A modern task operation can be rejected with a JSON-RPC error
+            // on an HTTP client-error status. Keep the verified envelope so
+            // the caller can distinguish refusal from a lost response.
+            if !session_was_attached
+                && status.is_client_error()
+                && let ClientJsonRpcMessage::Request(request) = &message
+                && matches!(
+                    request.request,
+                    ClientRequest::CallToolRequest(_)
+                        | ClientRequest::GetTaskRequest(_)
+                        | ClientRequest::CancelTaskRequest(_)
+                )
+                && request.request.get_meta().protocol_version()
+                    == Some(ProtocolVersion::V_2026_07_28)
+                && request
+                    .request
+                    .get_meta()
+                    .client_capabilities()
+                    .is_some_and(|capabilities| capabilities.supports_tasks())
+                && require_content_type(&response, JSON_MIME_TYPE).is_ok()
+            {
+                let bytes = bounded_body(
+                    response,
+                    self.max_response_bytes,
+                    &self.received_bytes,
+                    &self.diagnostics,
+                )
+                .await?;
+                if let Ok(ServerJsonRpcMessage::Error(error)) =
+                    serde_json::from_slice::<ServerJsonRpcMessage>(&bytes)
+                    && error.id.as_ref() == Some(&request.id)
+                {
+                    return Ok(StreamableHttpPostResponse::Json(
+                        ServerJsonRpcMessage::Error(error),
+                        None,
+                    ));
+                }
+            }
             return Err(self.status_error(status));
         }
         let declared_length = response.content_length();
@@ -358,6 +412,7 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
                         self.max_response_bytes,
                         self.received_bytes.clone(),
                         self.diagnostics.clone(),
+                        allow_modern_tasks,
                     ),
                     session_id,
                 ))
@@ -374,7 +429,7 @@ impl StreamableHttpClient for HardenedStreamableHttpClient {
                     return Ok(StreamableHttpPostResponse::Accepted);
                 }
                 let mut value = serde_json::from_slice(&bytes)?;
-                crate::wire::filter_unsupported_task_tools(&mut value);
+                crate::wire::filter_task_tools(&mut value, allow_modern_tasks);
                 let message = serde_json::from_value::<ServerJsonRpcMessage>(value)?;
                 Ok(StreamableHttpPostResponse::Json(message, session_id))
             }
@@ -509,6 +564,7 @@ fn bounded_sse_stream(
     limit: usize,
     received: Arc<AtomicUsize>,
     diagnostics: McpDiagnosticCapture,
+    allow_modern_tasks: bool,
 ) -> BoxStream<'static, Result<Sse, SseError>> {
     let bounded = response
         .bytes_stream()
@@ -541,12 +597,12 @@ fn bounded_sse_stream(
             std::future::ready(result)
         });
     SseStream::from_bytes_stream(bounded)
-        .map(|event| {
+        .map(move |event| {
             event.map(|mut event| {
                 if let Some(data) = &event.data
                     && let Ok(mut value) = serde_json::from_str(data)
                 {
-                    crate::wire::filter_unsupported_task_tools(&mut value);
+                    crate::wire::filter_task_tools(&mut value, allow_modern_tasks);
                     event.data = Some(value.to_string());
                 }
                 event

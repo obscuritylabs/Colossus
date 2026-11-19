@@ -579,6 +579,7 @@ impl SafetyKernel {
         // Validate the narrow approval release before policy, even in allow-all mode.
         if prepared.phase == EffectPhase::PreEffect {
             command_approval_context(&prepared)?;
+            mcp_tasks::validate_pre_effect(&prepared)?;
         }
         schema_disclosure::redact_request_content(&mut prepared)?;
         self.validate_policy_input_size(&prepared)?;
@@ -808,6 +809,15 @@ impl SafetyKernel {
         }
         if decision.outcome == DecisionOutcome::Allow
             && request.phase == EffectPhase::PreEffect
+            && mcp_tasks::is_task_step(request)
+            && !obligations.require_post_effect
+        {
+            return Err(GatewayError::Safety(
+                "MCP Tasks effects require mandatory post-effect authorization".into(),
+            ));
+        }
+        if decision.outcome == DecisionOutcome::Allow
+            && request.phase == EffectPhase::PreEffect
             && is_process_effect(request)
         {
             validate_process_obligations(request, obligations)?;
@@ -862,11 +872,16 @@ pub(super) fn is_process_action(action: &str) -> bool {
 }
 
 fn is_process_effect(request: &EffectRequest) -> bool {
-    is_process_action(&request.action) && !is_streamable_http_mcp(request)
+    // The gateway creates Tasks release requests from a validated HTTP step.
+    // Their output-only envelope preserves task_step and drops transport.
+    let remote_task_release =
+        request.phase == EffectPhase::PostEffect && mcp_tasks::is_task_step(request);
+    is_process_action(&request.action) && !is_streamable_http_mcp(request) && !remote_task_release
 }
 
 fn is_streamable_http_mcp(request: &EffectRequest) -> bool {
-    matches!(request.action.as_str(), "mcp.tools" | "mcp.call")
+    (matches!(request.action.as_str(), "mcp.tools" | "mcp.call")
+        || mcp_tasks::is_follow_up(&request.action))
         && request.content.get("transport").and_then(Value::as_str) == Some("streamable_http")
 }
 

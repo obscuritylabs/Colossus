@@ -18,6 +18,7 @@ Colossus exposes only the MCP tool surface:
 | --- | --- | --- |
 | `tools/list` | `mcp.tools` | Discovers and validates selected tool schemas |
 | `tools/call` | `mcp.call` | Rediscovers the schema, validates arguments, and invokes one selected tool |
+| `tasks/get`, `tasks/cancel` | `mcp.tasks.get`, `mcp.tasks.cancel` | Follow or request cancellation of a task inside its originating local run after opt-in |
 
 Resources, prompts, sampling, and elicitation are not exposed. MCP configuration does
 not bypass access selection, policy authorization, approval obligations, sandbox
@@ -40,7 +41,7 @@ configured server itself is trusted to publish future callable tools.
 
 ## Supported MCP surface
 
-Colossus uses `rmcp 3.5.1`. Remote Streamable HTTP supports stable MCP `2026-07-28`
+Colossus uses `rmcp 3.9.0`. Remote Streamable HTTP supports stable MCP `2026-07-28`
 through `server/discover`, per-request client metadata, standard MCP headers (including
 schema-declared `Mcp-Param-*` headers), and bounded JSON or request-scoped SSE responses.
 This protocol is sessionless and uses POST without GET streams or DELETE cleanup.
@@ -65,17 +66,43 @@ only to one-way frames.
 The following modes are not enabled:
 
 - The legacy HTTP+SSE transport with separate message and event endpoints.
-- Automatic request retry or transparent expired-session reinitialization.
-- Tasks, client-input continuations, subscriptions, and durable background execution.
+- Automatic tool invocation retry or transparent expired-session reinitialization.
+- Legacy experimental Tasks, client-input continuations, subscriptions, and durable background execution.
 
 Each complete discovery uses one permit and one connection or subprocess, including
 all pagination. Cursors never cross connections. Each call owns a separate transport.
-Task-required tools are filtered from discovery. Declared output schemas are bound
+Task-required tools are filtered from discovery outside an eligible Tasks run. Declared output schemas are bound
 into the call permit and enforced against successful `structuredContent` before release.
 Input and output schemas must be self-contained. References to embedded definitions
 are supported; external file and network references are rejected.
 If a remote call may have reached the server but completion cannot be confirmed, the
 effect becomes `OutcomeUnknown` and is not automatically retried.
+
+### Follow a remote Tasks tool
+
+For an explicitly selected tool on a top-level server, set `enableTasks: true`
+with `transport: streamable_http`, `protocolVersion: 2026-07-28`, and exact names
+in `allowedTools`. The endpoint must advertise Tasks during `server/discover`.
+Use configured credential headers when it needs authentication. OAuth, Agent
+Plugin servers, stdio, and legacy negotiation are outside this placement.
+
+In an ordinary local Execute run through the CLI or TUI with a file-backed
+redb store, a call can return its result immediately or return a task. Existing
+tool activity shows the original call as active during follow-up and reports its
+terminal outcome. Current access and release policy must authorize each
+follow-up and the originating call. For a pinned access policy, grant
+`mcp.invoke`, `mcp.tools`, `mcp.call`, and the required follow-up actions.
+Use `mcp.tasks.get` to observe and `mcp.tasks.cancel` to request cancellation.
+Both the initial call and follow-ups require post-effect release. Task results
+pass the original output schema and normal release checks.
+
+Stop requests remote cancellation when policy and time allow. Colossus reports
+confirmed cancellation only after observing the terminal remote state. A lost
+creation reply, unsupported input request, expired task, or interruption can
+leave an unknown outcome. Colossus can retry a lost observation within its
+budget. Each observation requires the same resolved credentials. The original
+tool call is sent once. Only the active run holds the remote handle, and
+restart records unresolved work as unknown.
 
 ## Top-level `mcp` fields
 
@@ -205,6 +232,7 @@ that ambient boundary.
 | `headers` | Optional non-secret literal headers; at most 64 |
 | `credentialHeaders` | Optional secret headers backed by environment references; at most 16 |
 | `protocolVersion` | Optional `auto` (default), `2026-07-28`, or `2025-11-25`; remote-only lifecycle selection |
+| `enableTasks` | Optional boolean, default `false`. Requires pinned `2026-07-28`, a top-level HTTP server, and exact tool names. Takes effect in local Execute runs with file-backed redb. |
 | `allowStateless` | Optional boolean; default `false`; accepts missing session IDs in 2025 compatibility connections; ignored for 2026 |
 | `oauth` | Optional OAuth 2.1 authorization-code configuration |
 | Stdio fields | `command`, `args`, `workingDirectory`, and `environment` must be absent |

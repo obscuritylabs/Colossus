@@ -27,6 +27,8 @@ use std::{
 const JOURNAL_KEY: &str = "7777777777777777777777777777777777777777777777777777777777777777";
 const SIGNING_KEY: &str = "8888888888888888888888888888888888888888888888888888888888888888";
 const MCP_SECRET: &str = "risk-auto-mcp-secret-value";
+const MCP_TASK_ID: &str = "cli-fixture-private-task-handle";
+const MCP_TASK_RESULT: &str = "cli-fixture-completed-echo";
 // The CLI initializes a fresh home before it contacts the provider.
 const PROVIDER_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 const PROVIDER_SEQUENCE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -279,7 +281,7 @@ fn risk_auto_network_server(invalid_assessment: bool) -> (String, thread::JoinHa
     (origin, task)
 }
 
-fn risk_auto_mcp_server() -> (String, thread::JoinHandle<Vec<String>>) {
+fn mcp_provider_server() -> (String, thread::JoinHandle<Vec<String>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
     listener
         .set_nonblocking(true)
@@ -374,6 +376,87 @@ fn risk_auto_mcp_server() -> (String, thread::JoinHandle<Vec<String>>) {
         requests
     });
     (origin, task)
+}
+
+fn mcp_task_server() -> (String, thread::JoinHandle<TcpListener>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("MCP listener");
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    let origin = format!("http://{}", listener.local_addr().expect("MCP address"));
+    let server = thread::spawn(move || {
+        let discovery = json!({
+            "resultType": "complete",
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {"tools": {}, "extensions": {"io.modelcontextprotocol/tasks": {}}},
+            "ttlMs": 0,
+            "cacheScope": "private"
+        });
+        let inventory = json!({"tools": [{
+            "name": "echo",
+            "_meta": {"io.modelcontextprotocol/tasks/taskSupport": "required"},
+            "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
+            "outputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
+        }]});
+        let started = json!({
+            "resultType": "task",
+            "taskId": MCP_TASK_ID,
+            "status": "working",
+            "createdAt": "2026-07-28T12:00:00Z",
+            "lastUpdatedAt": "2026-07-28T12:00:00Z",
+            "ttlMs": 30_000,
+            "pollIntervalMs": 100
+        });
+        let mut completed = started.clone();
+        completed["resultType"] = json!("complete");
+        completed["status"] = json!("completed");
+        completed["result"] = json!({
+            "content": [],
+            "structuredContent": {"text": MCP_TASK_RESULT}
+        });
+        let deadline = Instant::now() + PROVIDER_STARTUP_TIMEOUT;
+        for (method, result) in [
+            ("server/discover", discovery.clone()),
+            ("tools/list", inventory),
+            ("server/discover", discovery),
+            ("tools/call", started),
+            ("tasks/get", completed),
+        ] {
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("MCP fixture waiting for {method}: {error}"),
+                }
+            };
+            stream.set_nonblocking(false).expect("blocking MCP stream");
+            let request = read_request(&mut stream);
+            let (headers, body) = request.split_once("\r\n\r\n").expect("HTTP request");
+            assert!(headers.starts_with("POST /mcp HTTP/1.1\r\n"));
+            let body: Value = serde_json::from_str(body).expect("MCP request JSON");
+            assert_eq!(body["method"], method);
+            if method == "tools/call" {
+                assert_eq!(body["params"]["name"], "echo");
+                assert_eq!(
+                    body["params"]["arguments"],
+                    json!({"text": "MCP tool test"})
+                );
+            }
+            if method == "tasks/get" {
+                assert_eq!(body["params"]["taskId"], MCP_TASK_ID);
+            }
+            respond_json(
+                &mut stream,
+                &json!({"jsonrpc": "2.0", "id": body["id"], "result": result}).to_string(),
+            );
+        }
+        listener
+    });
+    (origin, server)
 }
 
 fn write_tool_config(
@@ -544,18 +627,25 @@ fn write_network_config(directory: &Path, origin: &str) -> std::path::PathBuf {
     config
 }
 
-fn write_mcp_risk_config(directory: &Path, origin: &str, mcp_server: &Path) -> std::path::PathBuf {
+enum McpFixture<'a> {
+    Stdio(&'a Path),
+    Tasks(&'a str),
+}
+
+fn write_mcp_config(directory: &Path, origin: &str, fixture: McpFixture<'_>) -> std::path::PathBuf {
     let workflows = directory.join("workflows");
     fs::create_dir_all(&workflows).expect("workflows");
     let config = directory.join("config.json");
-    let windows_full_access = cfg!(windows);
+    let windows_full_access = cfg!(windows) && matches!(&fixture, McpFixture::Stdio(_));
     let sandbox_backend = if windows_full_access {
         "danger_full_access"
+    } else if cfg!(windows) {
+        "windows_job"
     } else {
         "native"
     };
     let sandbox_timeout_ms = if cfg!(windows) { 10_000 } else { 5_000 };
-    let document = json!({
+    let mut document = json!({
         "schemaVersion": 3,
         "storage": {
             "path": directory.join("state.redb"),
@@ -602,20 +692,7 @@ fn write_mcp_risk_config(directory: &Path, origin: &str, mcp_server: &Path) -> s
         },
         "agent": {"maxTurns": 4},
         "subagents": {"maxConcurrent": 1},
-        "mcp": {
-            "servers": {
-                "fixture": {
-                    "command": mcp_server,
-                    "args": [],
-                    "workingDirectory": directory,
-                    "environment": {"MCP_TEST_SECRET": "env:MCP_TEST_SECRET"},
-                    "allowedTools": ["*"],
-                    "researchTools": [],
-                    "timeoutMs": sandbox_timeout_ms,
-                    "maxOutputBytes": 1048576
-                }
-            }
-        },
+        "mcp": {"servers": {}},
         "sandbox": {
             "backend": sandbox_backend,
             "profile": "approval-mcp-v1",
@@ -626,8 +703,8 @@ fn write_mcp_risk_config(directory: &Path, origin: &str, mcp_server: &Path) -> s
             "ociImage": null,
             "ociProxyImage": null,
             "filesystem": [{"root": directory, "mode": "read"}],
-            "executables": [mcp_server],
-            "environment": ["MCP_TEST_SECRET"],
+            "executables": [],
+            "environment": [],
             "networkDestinations": [origin],
             "timeoutMs": sandbox_timeout_ms,
             "maxOutputBytes": 1048576,
@@ -636,6 +713,40 @@ fn write_mcp_risk_config(directory: &Path, origin: &str, mcp_server: &Path) -> s
             "maxConcurrency": 1
         }
     });
+    document["mcp"]["servers"]["fixture"] = match fixture {
+        McpFixture::Stdio(mcp_server) => {
+            document["sandbox"]["executables"] = json!([mcp_server]);
+            document["sandbox"]["environment"] = json!(["MCP_TEST_SECRET"]);
+            json!({
+                "command": mcp_server,
+                "args": [],
+                "workingDirectory": directory,
+                "environment": {"MCP_TEST_SECRET": "env:MCP_TEST_SECRET"},
+                "allowedTools": ["*"],
+                "researchTools": [],
+                "timeoutMs": sandbox_timeout_ms,
+                "maxOutputBytes": 1048576
+            })
+        }
+        McpFixture::Tasks(mcp_origin) => {
+            document["access"]["actions"]["allow"] = json!([
+                "provider.openai.chat",
+                "mcp.tools",
+                "mcp.invoke",
+                "mcp.call",
+                "mcp.tasks.get"
+            ]);
+            document["access"]["actions"]["requireApproval"] = json!([]);
+            document["sandbox"]["networkDestinations"] = json!([origin, mcp_origin]);
+            json!({
+                "transport": "streamable_http",
+                "url": format!("{mcp_origin}/mcp"),
+                "allowedTools": ["echo"],
+                "protocolVersion": "2026-07-28",
+                "enableTasks": true
+            })
+        }
+    };
     fs::write(
         &config,
         serde_json::to_vec_pretty(&document).expect("config JSON"),
@@ -876,8 +987,8 @@ fn risk_auto_reviews_exact_mcp_calls_without_prompting_or_disclosing_credentials
     let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
     let mcp_server = Path::new(env!("CARGO_BIN_EXE_colossus-mcp-test-server"));
     let directory = tempdir().expect("directory");
-    let (origin, provider) = risk_auto_mcp_server();
-    let config = write_mcp_risk_config(directory.path(), &origin, mcp_server);
+    let (origin, provider) = mcp_provider_server();
+    let config = write_mcp_config(directory.path(), &origin, McpFixture::Stdio(mcp_server));
     let output = command(binary, &config)
         .current_dir(directory.path())
         .args([
@@ -926,6 +1037,71 @@ fn risk_auto_reviews_exact_mcp_calls_without_prompting_or_disclosing_credentials
     assert!(!review.contains("input_schema"), "{review}");
     assert!(!requests.iter().any(|request| request.contains(MCP_SECRET)));
     assert!(requests[2].contains(r#""tool_call_id":"mcp-call""#));
+}
+
+#[test]
+fn local_execute_delivers_one_completed_remote_mcp_task_to_the_provider() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    let directory = tempdir().expect("directory");
+    let (mcp_origin, mcp) = mcp_task_server();
+    let (provider_origin, provider) = mcp_provider_server();
+    let config = write_mcp_config(
+        directory.path(),
+        &provider_origin,
+        McpFixture::Tasks(&mcp_origin),
+    );
+    let output = command(binary, &config)
+        .current_dir(directory.path())
+        .args([
+            "run",
+            "Call the configured remote echo tool.",
+            "--max-turns",
+            "4",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("local CLI Execute run");
+    let requests = provider.join().expect("MCP provider");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("mcp-finished"));
+    let [initial, follow_up] = requests.as_slice() else {
+        panic!("expected exactly two provider turns");
+    };
+    assert!(initial.contains(r#""name":"mcp_call""#));
+    assert!(!initial.contains(MCP_TASK_RESULT));
+    assert!(!follow_up.contains(MCP_TASK_ID));
+    let (_, body) = follow_up
+        .split_once("\r\n\r\n")
+        .expect("provider HTTP request");
+    let body: Value = serde_json::from_str(body).expect("provider request JSON");
+    let tool_results = body["messages"]
+        .as_array()
+        .expect("provider messages")
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .collect::<Vec<_>>();
+    let [result] = tool_results.as_slice() else {
+        panic!("expected a single terminal tool result");
+    };
+    assert_eq!(result["tool_call_id"], "mcp-call");
+    assert_eq!(
+        result["content"]
+            .as_str()
+            .expect("tool result text")
+            .matches(MCP_TASK_RESULT)
+            .count(),
+        1
+    );
+    let listener = mcp.join().expect("all required MCP requests");
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == ErrorKind::WouldBlock),
+        "the runtime made an extra MCP request"
+    );
 }
 
 #[test]

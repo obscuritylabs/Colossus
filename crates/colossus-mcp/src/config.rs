@@ -121,6 +121,9 @@ pub struct McpServerConfig {
     /// Remote protocol lifecycle; automatic discovery preserves legacy compatibility.
     #[serde(default)]
     pub protocol_version: McpProtocolVersion,
+    /// Enable the modern Tasks extension for allowlisted tools in active local runs.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enable_tasks: bool,
     /// Optional OAuth 2.1 authorization-code flow.
     #[serde(default)]
     pub oauth: Option<McpOAuthConfig>,
@@ -143,6 +146,26 @@ pub struct McpServerConfig {
     /// Runtime-only verified plugin provenance disclosed to policy.
     #[serde(skip)]
     pub provenance: Option<Value>,
+}
+
+impl McpServerConfig {
+    pub(super) fn validate_allowlist(&self, name: &str) -> Result<ToolAllowlist, McpError> {
+        let allowed_tools = ToolAllowlist::from_config(name, &self.allowed_tools)?;
+        if self.enable_tasks
+            && (self.transport != McpTransportKind::StreamableHttp
+                || self.protocol_version != McpProtocolVersion::V2026
+                || self.oauth.is_some()
+                || self.effect_action_prefix.is_some()
+                || self.provenance.is_some()
+                || name.contains('/')
+                || !matches!(&allowed_tools, ToolAllowlist::Explicit(_)))
+        {
+            return Err(McpError::Invalid(format!(
+                "server {name} Tasks requires a top-level pinned 2026 HTTP server with exact tool names and no OAuth"
+            )));
+        }
+        Ok(allowed_tools)
+    }
 }
 
 /// One allowlisted MCP tool template for the research collector.
@@ -347,6 +370,8 @@ impl McpOperation {
 #[serde(deny_unknown_fields)]
 pub(super) struct McpEffectInput {
     pub(super) operation: McpOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) task_step: Option<crate::tasks::TaskStep>,
     pub(super) transport: McpTransportKind,
     pub(super) cwd: Option<PathBuf>,
     pub(super) args: Vec<String>,
@@ -444,6 +469,7 @@ pub(super) struct ConfiguredServer {
     pub(super) credential_headers: BTreeMap<String, McpCredentialHeaderConfig>,
     pub(super) allow_stateless: bool,
     pub(super) protocol_version: McpProtocolVersion,
+    pub(super) enable_tasks: bool,
     pub(super) oauth: Option<McpOAuthConfig>,
     pub(super) allowed_tools: ToolAllowlist,
     pub(super) research_tools: Vec<McpResearchToolConfig>,
@@ -562,7 +588,7 @@ pub fn validate_config(
                 "server {name} allowlist exceeds {MAX_MCP_TOOLS} tools"
             )));
         }
-        let tools = ToolAllowlist::from_config(name, &server.allowed_tools)?;
+        let tools = server.validate_allowlist(name)?;
         if server.research_tools.len() > 64 {
             return Err(McpError::Invalid(format!(
                 "server {name} configures too many research tools"

@@ -36,6 +36,7 @@ fn schema_paths(request: &EffectRequest) -> Vec<String> {
         return Vec::new();
     }
     if (request.action == "mcp.call"
+        || crate::mcp_tasks::is_follow_up(&request.action)
         || (request.action.starts_with("plugin.mcp.") && request.action.ends_with(".call")))
         && request
             .content

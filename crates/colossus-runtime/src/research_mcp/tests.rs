@@ -171,6 +171,7 @@ fn server(allowed: &[&str], projections: Vec<McpResearchToolConfig>) -> McpServe
         credential_headers: BTreeMap::new(),
         allow_stateless: false,
         protocol_version: colossus_contracts::McpProtocolVersion::Auto,
+        enable_tasks: false,
         oauth: None,
         allowed_tools: allowed.iter().map(|name| (*name).into()).collect(),
         research_tools: projections,

@@ -658,6 +658,11 @@ impl EffectGateway {
         )?;
         let (command_context, mut request) =
             match command_approval_context(&request).and_then(|context| {
+                if chunks_already_released && mcp_tasks::is_task_step(&request) {
+                    return Err(GatewayError::Safety(
+                        "MCP Tasks effects require one-shot execution".into(),
+                    ));
+                }
                 self.kernel
                     .prepare(&request)
                     .map(|request| (context, request))
@@ -758,14 +763,45 @@ impl EffectGateway {
             request.approval = Some(proof);
             decision = self.decide(&request).await?;
         }
-        if decision.outcome != DecisionOutcome::Allow {
+        let execution_denial = if decision.outcome != DecisionOutcome::Allow {
+            Some(decision.reason.as_str())
+        } else if mcp_tasks::is_task_step(&request)
+            && !decision.obligations.required_redactions.is_empty()
+        {
+            Some(mcp_tasks::UNSUPPORTED_REDACTIONS)
+        } else {
+            None
+        };
+        if let Some(reason) = execution_denial {
             self.event(
                 &request,
                 "effect.denied.v1",
                 EventClassification::Effect,
-                json!({"decision_id": decision.decision_id, "reason": decision.reason}),
+                json!({"decision_id": decision.decision_id, "reason": reason}),
             )?;
-            return Err(GatewayError::Denied(decision.reason));
+            return Err(GatewayError::Denied(reason.into()));
+        }
+        if let Some(parent) = mcp_tasks::parent_policy_request(&request)? {
+            let parent_decision = self.decide(&parent).await?;
+            let parent_denial = if parent_decision.outcome == DecisionOutcome::Deny {
+                Some("current policy denied the originating MCP call")
+            } else if !mcp_tasks::fits_live_parent_ceiling(
+                &decision.obligations,
+                &parent_decision.obligations,
+            ) {
+                Some("MCP Tasks follow-up exceeds current originating call obligations")
+            } else {
+                None
+            };
+            if let Some(reason) = parent_denial {
+                self.event(
+                    &request,
+                    "effect.denied.v1",
+                    EventClassification::Effect,
+                    json!({"decision_id": parent_decision.decision_id, "reason": reason}),
+                )?;
+                return Err(GatewayError::Denied(reason.into()));
+            }
         }
         let request_hash = sha256_hex(&canonical_bytes(&request)?);
         let permit = self.mint_permit(&request, request_hash, &decision)?;
@@ -904,6 +940,11 @@ impl EffectGateway {
                 "size": result.bytes.len(),
                 "content_base64": BASE64.encode(&result.bytes),
             });
+            if mcp_tasks::is_task_step(&request)
+                && let Some(step) = request.content.get("task_step")
+            {
+                post_request.content["task_step"] = step.clone();
+            }
             let post_request = self.kernel.prepare(&post_request)?;
             self.event(
                 &post_request,
@@ -911,22 +952,31 @@ impl EffectGateway {
                 EventClassification::Effect,
                 disclosure_summary(&post_request).await?,
             )?;
-            let post_decision = self.decide(&post_request).await?;
-            if post_decision.outcome != DecisionOutcome::Allow {
+            let mut post_decision = self.decide(&post_request).await?;
+            let mut denial =
+                mcp_tasks::release_denial_reason(&post_request, &post_decision, result.bytes.len());
+            if denial.is_none()
+                && let Some(parent) = mcp_tasks::parent_policy_request(&post_request)?
+            {
+                // A follow-up must also respect the originating call's output policy.
+                post_decision = self.decide(&parent).await?;
+                denial =
+                    mcp_tasks::release_denial_reason(&parent, &post_decision, result.bytes.len());
+            }
+            if let Some(reason) = denial {
                 self.event(
                     &post_request,
                     "effect.release_denied.v1",
                     EventClassification::Effect,
                     json!({
                         "decision_id": post_decision.decision_id,
-                        "reason": post_decision.reason,
+                        "reason": reason,
                         "content_hash": sha256_hex(&result.bytes),
                         "size": result.bytes.len(),
                     }),
                 )?;
                 return Err(GatewayError::Denied(format!(
-                    "post-effect release denied: {}",
-                    post_decision.reason
+                    "post-effect release denied: {reason}"
                 )));
             }
         }
