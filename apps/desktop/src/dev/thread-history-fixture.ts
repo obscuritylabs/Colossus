@@ -68,5 +68,13 @@ export async function readThreadHistoryFixture(
     },
   );
   const next = offset + runs.length;
-  return { runs, nextPageToken: next < total ? `history:${next}` : "" };
+  return {
+    runs,
+    nextPageToken:
+      query.get("historyRepeatAt") === String(offset)
+        ? cursor
+        : next < total
+          ? `history:${next}`
+          : "",
+  };
 }

@@ -1788,7 +1788,7 @@ export default function App() {
         historyPager.current.fail(historyRequest);
         markConnectionFailure(failure, route);
         setListError(failure.message);
-        setHistoryNeedsRefresh(!failure.retryable);
+        setHistoryNeedsRefresh(historyRequest.replace || !failure.retryable);
         return false;
       } finally {
         if (

@@ -1,5 +1,82 @@
 import { expect, test } from "@playwright/test";
 
+test("a failed initial history read can be retried from the sidebar", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/?fixture=thread-history&historyCount=3&historyFailAt=0");
+  const sidebar = page.locator(".work-sidebar");
+  await expect(sidebar.getByRole("alert")).toContainText(
+    "temporarily unavailable",
+  );
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-history-requests",
+    "1",
+  );
+  await sidebar
+    .getByRole("button", { name: /^(Retry|Refresh threads)$/ })
+    .focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    sidebar.getByRole("button", { name: /^History thread 00001 Execute/ }),
+  ).toBeVisible();
+  await expect(sidebar.getByRole("alert")).toHaveCount(0);
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-history-cursor-log",
+    JSON.stringify(["", ""]),
+  );
+  await sidebar.screenshot({
+    path: "output/playwright/history-initial-retry.png",
+  });
+});
+
+test("retrying a failed replacement refresh replaces the previous history", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/?fixture=thread-history&historyCount=6&historyRepeatAt=3");
+  const sidebar = page.locator(".work-sidebar");
+  await expect(sidebar.getByRole("status")).toContainText(
+    "History returned a repeated page",
+  );
+  await page.evaluate(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("historyCount", "3");
+    url.searchParams.set("historyFailAt", "0");
+    window.history.replaceState(null, "", url);
+  });
+  await sidebar.getByRole("button", { name: "Refresh threads" }).click();
+  await expect(sidebar.getByRole("alert")).toContainText(
+    "temporarily unavailable",
+  );
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-history-requests",
+    "3",
+  );
+  await sidebar
+    .getByRole("button", { name: /^(Retry|Refresh threads)$/ })
+    .focus();
+  await page.keyboard.press("Enter");
+  await expect(sidebar.getByRole("alert")).toHaveCount(0);
+  await expect(
+    sidebar.getByRole("button", { name: /^History thread 00001 Execute/ }),
+  ).toBeVisible();
+  await expect(
+    sidebar.getByRole("button", { name: /^History thread 00004 Execute/ }),
+  ).toHaveCount(0);
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-history-cursor-log",
+    JSON.stringify(["", "history:3", "", ""]),
+  );
+  await expect(page.locator("html")).toHaveAttribute(
+    "data-history-maximum-in-flight",
+    "1",
+  );
+  await sidebar.screenshot({
+    path: "output/playwright/history-refresh-retry.png",
+  });
+});
+
 test("visible history fills incrementally, pauses for collapse/search and retries the exact page", async ({
   page,
 }) => {
