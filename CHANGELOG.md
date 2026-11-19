@@ -76,6 +76,7 @@ migration from the remaining chrono dependency paths.
 - **desktop:** load older threads while scrolling ([5b8aa0b](https://github.com/obscuritylabs/Colossus/commit/5b8aa0b8cb5dea0d6a6ce28a8064b27853e2c8a6))
 - **desktop:** keep history replacement retries recoverable ([0c9285c](https://github.com/obscuritylabs/Colossus/commit/0c9285c4a2100e2b60ec3b42cf5963065274af28))
 - **worktrees:** release catalog lock with its mutation lease ([d287470](https://github.com/obscuritylabs/Colossus/commit/d2874701ce18f1d3670437f1a510d6a7ec19ea14))
+- **desktop:** contain conversation pane controls ([d3ecf09](https://github.com/obscuritylabs/Colossus/commit/d3ecf0959c82294952d3b51ff622abe652fa6576))
 
 #### Security
 
@@ -90,6 +91,7 @@ migration from the remaining chrono dependency paths.
 - **release:** include history retry recovery in v0.12.1 ([a0ec433](https://github.com/obscuritylabs/Colossus/commit/a0ec43392e2b37a0c901d2b14f58d722cc9b623c))
 - **release:** record validator setup correction ([ba7205c](https://github.com/obscuritylabs/Colossus/commit/ba7205c763cc9247a6e3693d563598ee953824ea))
 - **release:** include worktree lease recovery fix ([65ca965](https://github.com/obscuritylabs/Colossus/commit/65ca965b7430a6271d643864c6f2a9c54a2d450e))
+- **release:** record cold CLI build deadline ([c140ff1](https://github.com/obscuritylabs/Colossus/commit/c140ff12efb37a33f05045ea10e36e096b9bdd9b))
 
 #### Maintenance
 
@@ -99,7 +101,7 @@ migration from the remaining chrono dependency paths.
 - **release:** provision Python contract prerequisites ([7de1926](https://github.com/obscuritylabs/Colossus/commit/7de19262750d6282f4ac804f6202d5f9f4879810))
 - **release:** allow cold CLI builds ninety minutes ([238aea0](https://github.com/obscuritylabs/Colossus/commit/238aea0e4c0a98c12edb580455f24f6d4a943f98))
 
-**Source:** [238aea0](https://github.com/obscuritylabs/Colossus/commit/238aea0e4c0a98c12edb580455f24f6d4a943f98)
+**Source:** [d3ecf09](https://github.com/obscuritylabs/Colossus/commit/d3ecf0959c82294952d3b51ff622abe652fa6576)
 
 **Full changelog:** [v0.12.0...v0.12.1](https://github.com/obscuritylabs/Colossus/compare/v0.12.0...v0.12.1)
 
