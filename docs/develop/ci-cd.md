@@ -294,6 +294,13 @@ acceptance, optimized compilation and packaging. Cold macOS jobs have exceeded
 60 minutes, so manual validation and tag builds use the same bounded budget with
 caches optional. The deadline bounds job wall time; billed runner usage is separate.
 
+Signed Windows Desktop releases, including signed Developer Previews, allow 150
+minutes for cold native builds, signing, NSIS packaging and installed smoke. A cold
+run spent 86 minutes building unsigned inputs and reached the former 100-minute
+limit during NSIS bundling. Every signature, inventory, installation, launch and
+uninstall check remains required; caches stay optional. The separate unsigned
+Windows Desktop validation job retains 100 minutes.
+
 Stable releases additionally generate/test/package TypeScript, Python and Go SDKs,
 bind candidate metadata and checksums to the source commit, and require signed Windows
 x64 Desktop and x64/ARM64 CLI archives. SDK compatibility uses the latest reachable
