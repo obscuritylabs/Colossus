@@ -75,16 +75,21 @@ migration from the remaining chrono dependency paths.
 
 - **desktop:** load older threads while scrolling ([5b8aa0b](https://github.com/obscuritylabs/Colossus/commit/5b8aa0b8cb5dea0d6a6ce28a8064b27853e2c8a6))
 
+#### Security
+
+- **deps:** enforce approved temporary chrono support-risk policy ([1c69e41](https://github.com/obscuritylabs/Colossus/commit/1c69e4127d9c538876856210fb545732b4f1bb17))
+
 #### Documentation
 
 - **mcp:** explain how to check server health ([06da53b](https://github.com/obscuritylabs/Colossus/commit/06da53b990e66740ecebc6c20612b946eb8b403b))
+- **release:** record v0.12.1 changelog ([281b67d](https://github.com/obscuritylabs/Colossus/commit/281b67d7b4c68cf1949e44da60f451bce26913db))
 
 #### Maintenance
 
 - **ubuntu:** validate Ubuntu 26.04 on x64 and arm64 ([1195294](https://github.com/obscuritylabs/Colossus/commit/1195294aeffbb269de44134195c91b7c13e86718))
 - **release:** prepare v0.12.1 with signed browser builds ([eaec0c9](https://github.com/obscuritylabs/Colossus/commit/eaec0c9100397cd6f0ad06536a0529be4a99063c))
 
-**Source:** [eaec0c9](https://github.com/obscuritylabs/Colossus/commit/eaec0c9100397cd6f0ad06536a0529be4a99063c)
+**Source:** [1c69e41](https://github.com/obscuritylabs/Colossus/commit/1c69e4127d9c538876856210fb545732b4f1bb17)
 
 **Full changelog:** [v0.12.0...v0.12.1](https://github.com/obscuritylabs/Colossus/compare/v0.12.0...v0.12.1)
 
