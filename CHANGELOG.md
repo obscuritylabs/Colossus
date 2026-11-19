@@ -75,6 +75,7 @@ migration from the remaining chrono dependency paths.
 
 - **desktop:** load older threads while scrolling ([5b8aa0b](https://github.com/obscuritylabs/Colossus/commit/5b8aa0b8cb5dea0d6a6ce28a8064b27853e2c8a6))
 - **desktop:** keep history replacement retries recoverable ([0c9285c](https://github.com/obscuritylabs/Colossus/commit/0c9285c4a2100e2b60ec3b42cf5963065274af28))
+- **worktrees:** release catalog lock with its mutation lease ([d287470](https://github.com/obscuritylabs/Colossus/commit/d2874701ce18f1d3670437f1a510d6a7ec19ea14))
 
 #### Security
 
@@ -87,6 +88,7 @@ migration from the remaining chrono dependency paths.
 - **release:** refresh v0.12.1 history after dependency policy ([b6226fc](https://github.com/obscuritylabs/Colossus/commit/b6226fc9ec70623553864cd393c3c34efe6398d0))
 - **release:** refresh history after sidecar fixture validation ([b2a20fa](https://github.com/obscuritylabs/Colossus/commit/b2a20fa3d961b8cb1768c315fae345a6d160de09))
 - **release:** include history retry recovery in v0.12.1 ([a0ec433](https://github.com/obscuritylabs/Colossus/commit/a0ec43392e2b37a0c901d2b14f58d722cc9b623c))
+- **release:** record validator setup correction ([ba7205c](https://github.com/obscuritylabs/Colossus/commit/ba7205c763cc9247a6e3693d563598ee953824ea))
 
 #### Maintenance
 
@@ -95,7 +97,7 @@ migration from the remaining chrono dependency paths.
 - **sidecar:** use canonical executable in inspection fixtures ([5390e9b](https://github.com/obscuritylabs/Colossus/commit/5390e9bef7629509b84a35548d664af172bc4f62))
 - **release:** provision Python contract prerequisites ([7de1926](https://github.com/obscuritylabs/Colossus/commit/7de19262750d6282f4ac804f6202d5f9f4879810))
 
-**Source:** [7de1926](https://github.com/obscuritylabs/Colossus/commit/7de19262750d6282f4ac804f6202d5f9f4879810)
+**Source:** [d287470](https://github.com/obscuritylabs/Colossus/commit/d2874701ce18f1d3670437f1a510d6a7ec19ea14)
 
 **Full changelog:** [v0.12.0...v0.12.1](https://github.com/obscuritylabs/Colossus/compare/v0.12.0...v0.12.1)
 
