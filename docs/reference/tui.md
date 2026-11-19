@@ -80,12 +80,20 @@ selects a browser row for preview; Enter opens it. Compact terminals show the li
 | `Home` / `End` | Select the first or last session. |
 | `PageUp` / `PageDown` | Scroll the selected session's preview. |
 | `Enter` | Open the highlighted unarchived session. |
+| `p` | Pin an inactive session from Open or unpin the highlighted pinned session. Available in the full-screen TUI. |
 | `n` | Start a new session. |
 | `r` | Refresh the saved-session catalogue. |
 | `s` | Stop the highlighted running or waiting session; other sessions continue. |
 | `a` | Archive an idle session with no unsent draft or queued turns. |
 | `u` | Restore the highlighted session from Archived to History. |
 | `Esc` / `F2` | Return to the conversation. While editing a search, Esc first leaves search editing. |
+
+The pinned transcript follows recent output in the sidebar at widths of 100
+columns or more when there is enough vertical space. It occupies the usual right
+sidebar while visible. PageUp, PageDown, and End
+still control the active transcript. The pane disappears in compact layouts and
+returns when there is room. Open the pinned session to read older output or act
+on a decision.
 
 Working and decision indicators describe sessions retained by this terminal.
 Saved sessions that are not open here show **ready**; this is not a live status

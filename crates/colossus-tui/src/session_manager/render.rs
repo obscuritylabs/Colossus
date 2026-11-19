@@ -41,6 +41,7 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut TuiState, area: Rect) {
         ("[n] New", WorkspaceAction::New),
         ("[r] Refresh", WorkspaceAction::Browse),
     ];
+    actions.extend(state.workspace_manager.companion_action());
     if let Some(entry) = selected {
         if matches!(
             entry.status,
@@ -185,9 +186,14 @@ fn draw_list(
         frame.render_widget(Block::default().style(style), hit);
         let cells = columns(hit);
         let title = format!(
-            "{}{} {}",
+            "{}{} {}{}",
             if selected { "› " } else { "  " },
             entry.status.display().0,
+            if manager.companion_id.as_ref() == Some(&entry.summary.id) {
+                "Pinned · "
+            } else {
+                ""
+            },
             session_browser_title(&entry.summary)
         );
         frame.render_widget(

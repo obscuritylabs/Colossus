@@ -16,12 +16,15 @@ use std::{
     net::{TcpListener, TcpStream},
     path::Path,
     process::{Child, Command, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
 use terminal_support::Terminal;
 
 const PROVIDER_WAIT: Duration = Duration::from_secs(30);
+const BETA_OLDER_OUTPUT: &str = "BETA_HISTORY_00";
+const BETA_LATEST_OUTPUT: &str = "BETA_HISTORY_59";
 
 struct Worker(Child);
 
@@ -113,10 +116,11 @@ fn start_stream(stream: &mut TcpStream, start: &str, end: &str) -> String {
     final_part
 }
 
-fn overlapping_provider() -> (String, thread::JoinHandle<[Value; 2]>) {
+fn overlapping_provider() -> (String, mpsc::Sender<()>, thread::JoinHandle<[Value; 3]>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
+    let (continue_alpha, pin_ready) = mpsc::channel();
     let task = thread::spawn(move || {
         let (mut alpha, alpha_request) = accept_request(&listener);
         assert!(
@@ -124,19 +128,42 @@ fn overlapping_provider() -> (String, thread::JoinHandle<[Value; 2]>) {
                 .to_string()
                 .contains("ALPHA_REQUEST")
         );
-        let alpha_final = start_stream(&mut alpha, "ALPHA_RUNNING\n", "ALPHA_FINAL_OUTPUT");
-        // Alpha's HTTP response remains incomplete until Beta reaches the
-        // provider. A globally serialized host cannot pass this barrier.
+        let alpha_initial = event("ALPHA_RUNNING\n", false);
+        let alpha_increment = event("ALPHA_PINNED_DELTA\n", false);
+        let alpha_final = format!("{}data: [DONE]\n\n", event("ALPHA_FINAL_OUTPUT", true));
+        write!(
+            alpha,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{alpha_initial}",
+            alpha_initial.len() + alpha_increment.len() + alpha_final.len()
+        )
+        .unwrap();
+        alpha.flush().unwrap();
+
+        // Populate the active session with enough released output to scroll.
+        // Alpha's response stays incomplete, so the host must run Beta concurrently.
+        let (mut history, history_request) = accept_request(&listener);
+        let history_context = history_request["messages"].to_string();
+        assert!(history_context.contains("BETA_HISTORY_REQUEST"));
+        assert!(!history_context.contains("ALPHA_REQUEST"));
+        let history_text = (0..60)
+            .map(|index| format!("BETA_HISTORY_{index:02}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let history_final = start_stream(&mut history, "", &history_text);
+        history.write_all(history_final.as_bytes()).unwrap();
+        drop(history);
+
+        pin_ready
+            .recv_timeout(PROVIDER_WAIT)
+            .expect("Alpha pinned before its next delta");
+        alpha.write_all(alpha_increment.as_bytes()).unwrap();
+        alpha.flush().unwrap();
         let (mut beta, beta_request) = accept_request(&listener);
+        let beta_context = beta_request["messages"].to_string();
+        assert!(beta_context.contains("BETA_REQUEST"));
+        assert!(beta_context.contains(BETA_LATEST_OUTPUT));
         assert!(
-            beta_request["messages"]
-                .to_string()
-                .contains("BETA_REQUEST")
-        );
-        assert!(
-            !beta_request["messages"]
-                .to_string()
-                .contains("ALPHA_REQUEST"),
+            !beta_context.contains("ALPHA_REQUEST"),
             "independent sessions must not share canonical conversation context"
         );
         let beta_final = start_stream(&mut beta, "BETA_RUNNING\n", "BETA_FINAL_OUTPUT");
@@ -144,9 +171,9 @@ fn overlapping_provider() -> (String, thread::JoinHandle<[Value; 2]>) {
         alpha.flush().unwrap();
         beta.write_all(beta_final.as_bytes()).unwrap();
         beta.flush().unwrap();
-        [alpha_request, beta_request]
+        [alpha_request, history_request, beta_request]
     });
-    (origin, task)
+    (origin, continue_alpha, task)
 }
 
 fn submit(terminal: &Terminal, prompt: &str) {
@@ -162,6 +189,14 @@ fn center(terminal: &Terminal) {
         b"\x1bOQ"
     });
     terminal.wait("Sessions ·");
+}
+
+fn companion_contains(rows: &[String], text: &str) -> bool {
+    rows.iter().any(|row| {
+        row.rsplit('│')
+            .nth(1)
+            .is_some_and(|cell| cell.contains(text))
+    })
 }
 
 #[test]
@@ -184,7 +219,7 @@ fn exercise(worker_host: bool) {
         "colossus-concurrency-test"
     });
     fs::copy(env!("CARGO_BIN_EXE_colossus"), &binary).unwrap();
-    let (origin, requests) = overlapping_provider();
+    let (origin, continue_alpha, requests) = overlapping_provider();
     let mut config = RuntimeConfig::offline_template(workspace.join("state.redb"));
     config.workflows.repository = workspace.join("workflows");
     config.workflows.user = workspace.join("workflows");
@@ -265,17 +300,81 @@ fn exercise(worker_host: bool) {
     terminal.wait_for_composer("new session composer", |draft| {
         draft.contains("Implement {feature}")
     });
-    submit(&terminal, "BETA_REQUEST");
-    let beta = terminal.wait("BETA_FINAL_OUTPUT");
+    submit(&terminal, "BETA_HISTORY_REQUEST");
+    terminal.wait_until("Beta's live transcript tail", |screen| {
+        screen.contains(BETA_LATEST_OUTPUT) && !screen.contains(BETA_OLDER_OUTPUT)
+    });
+    terminal.send(&b"\x1b[5~".repeat(6));
+    terminal.wait_until("older Beta transcript after PageUp", |screen| {
+        screen.contains(BETA_OLDER_OUTPUT) && !screen.contains(BETA_LATEST_OUTPUT)
+    });
+    center(&terminal);
+    terminal.send(b"\x1b[H");
+    terminal.wait("[p] Pin");
+    terminal.send(b"p");
+    terminal.wait_until_visual_rows("Alpha's read-only working transcript", |screen, rows| {
+        screen.contains("Pinned · Read-only")
+            && companion_contains(rows, "Status: working")
+            && companion_contains(rows, "ALPHA_RUNNING")
+            && screen.contains(BETA_OLDER_OUTPUT)
+            && !screen.contains(BETA_LATEST_OUTPUT)
+    });
+    terminal.send(b"\x1b[200~BETA_REQUEST\x1b[201~");
+    terminal.wait_for_composer("Beta draft while Alpha is pinned", |draft| {
+        draft == "BETA_REQUEST"
+    });
+    terminal.resize(40, 80);
+    terminal.wait_until("compact conversation without pinned pane", |screen| {
+        screen.contains("BETA_REQUEST") && !screen.contains("Pinned · Read-only")
+    });
+    terminal.resize(40, 140);
+    terminal.wait("Pinned · Read-only");
+    terminal.wait_for_composer("Beta draft after resizing", |draft| draft == "BETA_REQUEST");
+    continue_alpha.send(()).unwrap();
+    terminal.wait_until_visual_rows(
+        "pinned delta while reading older Beta output",
+        |screen, rows| {
+            companion_contains(rows, "ALPHA_PINNED_DELTA")
+                && screen.contains(BETA_OLDER_OUTPUT)
+                && !screen.contains(BETA_LATEST_OUTPUT)
+        },
+    );
+    terminal.send(b"\x1b[F");
+    terminal.wait_until("End restores the active live transcript", |screen| {
+        screen.contains(BETA_LATEST_OUTPUT)
+            && !screen.contains(BETA_OLDER_OUTPUT)
+            && screen.contains("Pinned · Read-only")
+    });
+    terminal.send(b"\r");
+    terminal.wait_until_visual_rows("Beta response and Alpha completion", |screen, rows| {
+        screen.contains("BETA_FINAL_OUTPUT")
+            && companion_contains(rows, "ALPHA_FINAL_OUTPUT")
+            && companion_contains(rows, "Status: done")
+            && !companion_contains(rows, "BETA_FINAL_OUTPUT")
+    });
+    center(&terminal);
+    terminal.send(b"\x1b[H");
+    terminal.wait("[p] Unpin");
+    terminal.send(b"p");
+    terminal.wait_for_composer("Beta composer after keyboard unpin", str::is_empty);
+    let beta = terminal.wait_until("Beta transcript after keyboard unpin", |screen| {
+        screen.contains("BETA_FINAL_OUTPUT")
+            && !screen.contains("Sessions ·")
+            && !screen.contains("Pinned · Read-only")
+    });
     assert!(
         !beta.contains("ALPHA_FINAL_OUTPUT"),
         "Alpha streamed into Beta: {beta}"
     );
     center(&terminal);
     terminal.send(b"\x1b[H\r");
-    let alpha = terminal.wait("ALPHA_FINAL_OUTPUT");
     terminal.wait_for_composer("retained Alpha draft", |draft| {
         draft == "ALPHA_UNSENT_DRAFT"
+    });
+    let alpha = terminal.wait_until("Alpha transcript after selecting it", |screen| {
+        screen.contains("ALPHA_FINAL_OUTPUT")
+            && screen.contains("ALPHA_UNSENT_DRAFT")
+            && !screen.contains("Sessions ·")
     });
     assert!(
         !alpha.contains("BETA_FINAL_OUTPUT"),
@@ -283,8 +382,10 @@ fn exercise(worker_host: bool) {
     );
     center(&terminal);
     terminal.send(b"\x1b[F\r");
-    terminal.wait("BETA_FINAL_OUTPUT");
     terminal.wait_for_composer("independent empty Beta draft", str::is_empty);
+    terminal.wait_until("Beta transcript after selecting it", |screen| {
+        screen.contains("BETA_FINAL_OUTPUT") && !screen.contains("Sessions ·")
+    });
     let requests = requests.join().expect("overlapping local provider");
     assert!(
         requests
@@ -292,7 +393,7 @@ fn exercise(worker_host: bool) {
             .all(|request| request["tools"].as_array().is_none_or(Vec::is_empty))
     );
     println!(
-        "{} TUI: two overlapping real provider requests, independent contexts, routed output and retained drafts",
+        "{} TUI: overlapping provider requests, routed pinned updates, compact fallback, retained drafts and transcript scrolling",
         if worker_host {
             "authenticated worker"
         } else {

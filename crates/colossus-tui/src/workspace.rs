@@ -4,6 +4,7 @@
 //! behind InteractiveHost; this coordinator retains editing and rendering state.
 
 use super::*;
+use crate::companion::CompanionView;
 use crate::workspace_view::{WorkspaceAction, WorkspaceSessionRow, WorkspaceSessionStatus};
 use std::ops::{Deref, DerefMut};
 mod manager;
@@ -57,6 +58,8 @@ pub(super) struct Workspace {
     channels: BTreeMap<String, SessionChannel>,
     order: Vec<String>,
     unread: BTreeMap<String, usize>,
+    screen_mode: ScreenMode,
+    companion_id: Option<String>,
     catalog: Vec<SessionSummary>,
     archived_catalog: Vec<SessionSummary>,
     events: mpsc::Sender<WorkspaceEvent>,
@@ -90,7 +93,10 @@ impl DerefMut for Workspace {
 }
 
 impl Workspace {
-    pub(super) fn new(mut active: TuiState) -> (Self, mpsc::Receiver<WorkspaceEvent>) {
+    pub(super) fn new(
+        screen_mode: ScreenMode,
+        mut active: TuiState,
+    ) -> (Self, mpsc::Receiver<WorkspaceEvent>) {
         active
             .next_prompt
             .resume_model(active.preferences.next_prompt_mode);
@@ -105,6 +111,8 @@ impl Workspace {
             channels: BTreeMap::new(),
             order: vec![id.clone()],
             unread: BTreeMap::new(),
+            screen_mode,
+            companion_id: None,
             catalog: Vec::new(),
             archived_catalog: Vec::new(),
             events,
@@ -126,6 +134,31 @@ impl Workspace {
         workspace.add_channel(id);
         workspace.sync_rows();
         (workspace, receiver)
+    }
+
+    pub(super) fn draw_parts(&mut self) -> (&mut TuiState, Option<CompanionView<'_>>) {
+        let companion = self.companion_id.as_ref().and_then(|id| {
+            let state = self.background.get(id)?;
+            // Copy only the bounded row metadata so rendering can also borrow
+            // the active state mutably.
+            let row = self
+                .active
+                .workspace_sessions
+                .iter()
+                .find(|row| &row.id == id)?
+                .clone();
+            Some(CompanionView { state, row })
+        });
+        (&mut self.active, companion)
+    }
+
+    fn can_pin(&self, id: &str) -> bool {
+        self.screen_mode == ScreenMode::Alternate
+            && self
+                .background
+                .get(id)
+                .is_some_and(|state| !state.workspace_archiving)
+            && !self.archived_catalog.iter().any(|entry| entry.id == id)
     }
 
     fn add_channel(&mut self, id: String) {
@@ -317,6 +350,13 @@ impl Workspace {
                     Ok(mut sessions) => {
                         sessions.truncate(MAX_CATALOG_SESSIONS);
                         if archived {
+                            if self
+                                .companion_id
+                                .as_ref()
+                                .is_some_and(|id| sessions.iter().any(|entry| &entry.id == id))
+                            {
+                                self.companion_id = None;
+                            }
                             self.archived_catalog = sessions;
                         } else {
                             self.catalog = sessions;
@@ -456,6 +496,15 @@ impl Workspace {
             }
             WorkspaceAction::Tab(tab) => self.open_manager(tab),
             WorkspaceAction::Select(id) => self.active.workspace_manager.select(Some(id)),
+            WorkspaceAction::ToggleCompanion(id) => {
+                if self.companion_id.as_ref() == Some(&id) {
+                    self.companion_id = None;
+                    self.active.workspace_center = false;
+                } else if self.can_pin(&id) {
+                    self.companion_id = Some(id);
+                    self.active.workspace_center = false;
+                }
+            }
             WorkspaceAction::Archive(id, archived) => self.archive_session(id, archived, host),
             WorkspaceAction::CloseCenter => self.active.workspace_center = false,
             WorkspaceAction::Stop(id) => {
@@ -530,6 +579,13 @@ impl Workspace {
     }
 
     pub(super) fn sync_rows(&mut self) {
+        if self
+            .companion_id
+            .as_ref()
+            .is_some_and(|id| !self.background.contains_key(id))
+        {
+            self.companion_id = None;
+        }
         let ids = self.order.clone();
         let rows = ids
             .into_iter()

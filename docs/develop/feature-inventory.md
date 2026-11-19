@@ -81,6 +81,7 @@ Their pending native checks remain separate from implementation and historical t
 | Human conversation export | Supported: optional `conversations.transcript.v1` read-only paging through an authorized source run; broader `SessionService` remains unhosted | Supported: `sessions export`, `/session export` and `/export` in embedded and worker hosts | Implemented: native Save and bounded Copy with progress/cancellation; installed native Save/clipboard acceptance pending | Missing: no human export command | Implemented: full Hosted/Fleet export with bounded download/Copy and authorized live source; loaded-history actions remain the offline excerpt fallback |
 | Standalone Goal creation | Supported; bounded iterations and caller tool ceiling | Supported; CLI and full-screen TUI `/goal` creation/completion acceptance in embedded and worker hosts | Supported; composer and native request validation evidence | Missing; composer exposes Plan, Execute, and Research | Supported on connected runtimes; capability and budget-bound composer |
 | Always On check-ins in an owned local conversation | Standing-chat controls use authenticated local worker IPC. Desktop wake runs use the existing owned run API. | CLI enrollment, status, pause, and manual wake. TUI opens the same session using its ordinary session selector. | Managed Local conversation enrollment and wake controls. Workspace worker must be running. | No Always On control. | No Always On control. |
+| Read-only live tail of an open background conversation | Existing transcript and ordered run-feed contracts supply released messages and status. Pinning is local presentation state. | Full-screen TUI supports one same-workspace, same-runtime companion. Intentional difference for one-shot CLI and inline TUI: both keep a single transcript and use ordinary inspection or terminal scrollback. | Partial: live Asides support separate follow-up conversations. Pinning a peer conversation is missing. | Missing: the extension follows the selected conversation. | Partial: Side Chat shows a related conversation alongside its parent. Pinning an arbitrary open peer is missing. |
 | Anthropic tool replay recovery | Ordinary Execute can continue a verified oversized replay using saved tool evidence. The keyless missing-checkpoint path also remains available. | Existing CLI resume and TUI continuation use the same runtime recovery. | Managed Local inherits protected replay overflow recovery. | Existing Execute conversations inherit the runtime behavior. | Connected runtimes inherit the ordinary Execute recovery. |
 | Revision-bound Plan workflow | Supported; source-run-bound Draft continuation | Supported; revision-bound refinement, approval, and execution | Supported; exact-revision Plan continuation | Partial; canonical Plan inspection exists, continuation controls missing | Supported; source-run and revision-bound continuation |
 | Human managed-shell discovery, read, and Stop | Supported; scoped process-session requests | Unverified; dedicated human controls not evidenced by agent-tool tests | Supported; active-shell inspection and Stop | Missing; process-supervision controls unimplemented | Unverified; Fleet human terminals are a distinct workflow |
@@ -131,6 +132,15 @@ Evidence and owned follow-ups:
   `desktop_owner` and the public API owner retain the follow-up for deep persisted
   search and archived results without a reusable discovery receipt; released
   history can remain read-only when bounded ownership checks are inconclusive.
+- **Pinned TUI transcript:** [Sessions](../use/sessions.md#follow-another-open-session)
+  and [TUI keys](../reference/tui.md#workspace-sessions) document F2 and the compact
+  fallback. `crates/colossus-tui/src/workspace/tests/companion_tests.rs` covers
+  viewport and draft preservation, a waiting decision, archival, and late
+  events. `crates/colossus-cli/tests/concurrent_sessions_tui.rs` exercises the
+  rendered workflow with the embedded runtime and an authenticated worker.
+  `desktop_owner` and `vscode_owner` own assessing equivalent peer-conversation
+  controls using the existing feed. `maintenance_coordinator` owns evaluating
+  that workflow for Web Chat.
 - **Always On:** Runtime tests cover stable wake identity, schedule advancement,
   owner checks, and pause. The CLI worker smoke covers manual wake and continuation
   in one session. `desktop_owner` owns packaged Desktop acceptance. `cli_owner`

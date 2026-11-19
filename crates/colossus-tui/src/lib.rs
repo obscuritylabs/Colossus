@@ -98,6 +98,7 @@ mod app;
 pub use app::{sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt};
 mod branding;
 mod browser;
+mod companion;
 mod completion;
 mod composer;
 mod contract;

@@ -291,10 +291,28 @@ fn concurrent_sessions_preserve_drafts_and_isolate_approvals_and_stop() {
     center_key(&mut writer);
     wait_for_screen(&output, 30, 120, "Sessions · 2 open");
     write_input(&mut writer, b"\x1b[H\r");
-    wait_for_screen(&output, 30, 120, "alpha unsent");
-    wait_for_screen(&output, 30, 120, "Both session futures overlap");
-    let alpha = screen_contents(&output, 30, 120);
+    let alpha = wait_for_workspace_frame(&output, "Alpha active after switching", |screen| {
+        screen.contains("alpha unsent")
+            && screen.contains("Both session futures overlap")
+            && !screen.contains("Sessions · 2 open")
+    });
     assert!(!alpha.contains("Only Beta may receive"), "{alpha}");
+    center_key(&mut writer);
+    wait_for_screen(&output, 30, 120, "Sessions · 2 open");
+    write_input(&mut writer, b"\x1b[F");
+    wait_for_screen(&output, 30, 120, "[p] Pin");
+    write_input(&mut writer, b"p");
+    let pinned = wait_for_workspace_frame(&output, "Alpha composer beside pinned Beta", |screen| {
+        screen.contains("alpha unsent")
+            && screen.contains("Pinned · Read-only")
+            && screen.contains("Status: decision")
+            && !screen.contains("Sessions · 2 open")
+    });
+    assert!(!pinned.contains("Only Beta may receive"), "{pinned}");
+    write_input(&mut writer, b"a");
+    wait_for_workspace_frame(&output, "Alpha edit with Beta still waiting", |screen| {
+        screen.contains("alpha unsenta") && screen.contains("Status: decision")
+    });
 
     // Stop only the selected Alpha run without editing either session's draft
     // or resolving the inactive Beta approval.
@@ -302,7 +320,16 @@ fn concurrent_sessions_preserve_drafts_and_isolate_approvals_and_stop() {
     wait_for_screen(&output, 30, 120, "Sessions · 2 open");
     write_input(&mut writer, b"s");
     write_input(&mut writer, b"\x1b[F\r");
-    wait_for_screen(&output, 30, 120, "Beta approval origin");
+    let beta = wait_for_workspace_frame(
+        &output,
+        "Beta approval controls after switching",
+        |screen| {
+            screen.contains("Beta approval origin")
+                && screen.contains("Enter confirm")
+                && !screen.contains("Sessions · 2 open")
+        },
+    );
+    assert!(!beta.contains("Pinned · Read-only"), "{beta}");
     write_input(&mut writer, b"a\r");
     wait_for_screen(
         &output,
@@ -314,17 +341,41 @@ fn concurrent_sessions_preserve_drafts_and_isolate_approvals_and_stop() {
     center_key(&mut writer);
     wait_for_screen(&output, 30, 120, "Sessions · 2 open");
     write_input(&mut writer, b"\x1b[H\r");
-    wait_for_screen(&output, 30, 120, "Alpha cancellation observed");
-    wait_for_screen(&output, 30, 120, "alpha unsent");
+    let alpha =
+        wait_for_workspace_frame(&output, "Alpha cancellation and retained draft", |screen| {
+            screen.contains("Alpha cancellation observed")
+                && screen.contains("alpha unsenta")
+                && !screen.contains("Sessions · 2 open")
+        });
     assert!(
-        !screen_contents(&output, 30, 120).contains("Beta approval accepted"),
-        "Beta output crossed into Alpha's transcript"
+        !alpha.contains("Beta approval accepted"),
+        "Beta output crossed into Alpha's transcript: {alpha}"
     );
     write_input(&mut writer, &[3, 3]);
     assert!(child.wait().expect("workspace fixture exit").success());
     drop(writer);
     drop(pair.master);
     reader_thread.join().expect("reader thread");
+}
+
+/// ConPTY can deliver the heading, transcript, and composer in separate reads.
+fn wait_for_workspace_frame(
+    output: &Arc<Mutex<Vec<u8>>>,
+    description: &str,
+    ready: impl Fn(&str) -> bool,
+) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let screen = screen_contents(output, 30, 120);
+        if ready(&screen) {
+            return screen;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "screen never showed {description}:\n{screen}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn write_input(writer: &mut dyn std::io::Write, bytes: &[u8]) {
