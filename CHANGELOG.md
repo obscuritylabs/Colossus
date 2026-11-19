@@ -89,6 +89,7 @@ migration from the remaining chrono dependency paths.
 - **release:** refresh history after sidecar fixture validation ([b2a20fa](https://github.com/obscuritylabs/Colossus/commit/b2a20fa3d961b8cb1768c315fae345a6d160de09))
 - **release:** include history retry recovery in v0.12.1 ([a0ec433](https://github.com/obscuritylabs/Colossus/commit/a0ec43392e2b37a0c901d2b14f58d722cc9b623c))
 - **release:** record validator setup correction ([ba7205c](https://github.com/obscuritylabs/Colossus/commit/ba7205c763cc9247a6e3693d563598ee953824ea))
+- **release:** include worktree lease recovery fix ([65ca965](https://github.com/obscuritylabs/Colossus/commit/65ca965b7430a6271d643864c6f2a9c54a2d450e))
 
 #### Maintenance
 
@@ -96,8 +97,9 @@ migration from the remaining chrono dependency paths.
 - **release:** prepare v0.12.1 with signed browser builds ([eaec0c9](https://github.com/obscuritylabs/Colossus/commit/eaec0c9100397cd6f0ad06536a0529be4a99063c))
 - **sidecar:** use canonical executable in inspection fixtures ([5390e9b](https://github.com/obscuritylabs/Colossus/commit/5390e9bef7629509b84a35548d664af172bc4f62))
 - **release:** provision Python contract prerequisites ([7de1926](https://github.com/obscuritylabs/Colossus/commit/7de19262750d6282f4ac804f6202d5f9f4879810))
+- **release:** allow cold CLI builds ninety minutes ([238aea0](https://github.com/obscuritylabs/Colossus/commit/238aea0e4c0a98c12edb580455f24f6d4a943f98))
 
-**Source:** [d287470](https://github.com/obscuritylabs/Colossus/commit/d2874701ce18f1d3670437f1a510d6a7ec19ea14)
+**Source:** [238aea0](https://github.com/obscuritylabs/Colossus/commit/238aea0e4c0a98c12edb580455f24f6d4a943f98)
 
 **Full changelog:** [v0.12.0...v0.12.1](https://github.com/obscuritylabs/Colossus/compare/v0.12.0...v0.12.1)
 
