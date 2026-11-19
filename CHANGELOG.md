@@ -86,14 +86,16 @@ migration from the remaining chrono dependency paths.
 - **release:** record v0.12.1 changelog ([281b67d](https://github.com/obscuritylabs/Colossus/commit/281b67d7b4c68cf1949e44da60f451bce26913db))
 - **release:** refresh v0.12.1 history after dependency policy ([b6226fc](https://github.com/obscuritylabs/Colossus/commit/b6226fc9ec70623553864cd393c3c34efe6398d0))
 - **release:** refresh history after sidecar fixture validation ([b2a20fa](https://github.com/obscuritylabs/Colossus/commit/b2a20fa3d961b8cb1768c315fae345a6d160de09))
+- **release:** include history retry recovery in v0.12.1 ([a0ec433](https://github.com/obscuritylabs/Colossus/commit/a0ec43392e2b37a0c901d2b14f58d722cc9b623c))
 
 #### Maintenance
 
 - **ubuntu:** validate Ubuntu 26.04 on x64 and arm64 ([1195294](https://github.com/obscuritylabs/Colossus/commit/1195294aeffbb269de44134195c91b7c13e86718))
 - **release:** prepare v0.12.1 with signed browser builds ([eaec0c9](https://github.com/obscuritylabs/Colossus/commit/eaec0c9100397cd6f0ad06536a0529be4a99063c))
 - **sidecar:** use canonical executable in inspection fixtures ([5390e9b](https://github.com/obscuritylabs/Colossus/commit/5390e9bef7629509b84a35548d664af172bc4f62))
+- **release:** provision Python contract prerequisites ([7de1926](https://github.com/obscuritylabs/Colossus/commit/7de19262750d6282f4ac804f6202d5f9f4879810))
 
-**Source:** [0c9285c](https://github.com/obscuritylabs/Colossus/commit/0c9285c4a2100e2b60ec3b42cf5963065274af28)
+**Source:** [7de1926](https://github.com/obscuritylabs/Colossus/commit/7de19262750d6282f4ac804f6202d5f9f4879810)
 
 **Full changelog:** [v0.12.0...v0.12.1](https://github.com/obscuritylabs/Colossus/compare/v0.12.0...v0.12.1)
 
