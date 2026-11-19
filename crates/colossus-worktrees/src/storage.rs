@@ -37,6 +37,12 @@ pub(crate) struct Storage {
 pub(crate) struct MutationLease {
     _file: ConfinedFile,
 }
+impl Drop for MutationLease {
+    fn drop(&mut self) {
+        // Release even if a transient fork inherited the same open-file description.
+        let _ = FileExt::unlock(self._file.file());
+    }
+}
 impl Storage {
     pub fn open(path: &Path, create: bool) -> Result<Self> {
         if !path.is_absolute() {
@@ -105,9 +111,12 @@ impl Storage {
                 "Another managed worktree operation is still running.",
             ));
         }
-        file.revalidate(&self.root)
+        let lease = MutationLease { _file: file };
+        lease
+            ._file
+            .revalidate(&self.root)
             .map_err(|_| WorktreeError::ownership())?;
-        Ok(MutationLease { _file: file })
+        Ok(lease)
     }
     pub fn lock_existing(&self) -> Result<MutationLease> {
         let file = self
@@ -294,4 +303,33 @@ fn write(mut file: &fs::File, catalog: &Catalog) -> Result<()> {
     file.write_all(&bytes).map_err(|_| WorktreeError::io())?;
     file.write_all(b"\n").map_err(|_| WorktreeError::io())?;
     file.sync_all().map_err(|_| WorktreeError::io())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mutation_lease_releases_lock_with_a_surviving_duplicate() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("managed");
+        let storage = Storage::open(&root, true).unwrap();
+        let competing = Storage::open(&root, false).unwrap();
+        let lease = storage.lock().unwrap();
+        // A fork-inherited descriptor shares this same native lock description.
+        let duplicate = lease._file.file().try_clone().unwrap();
+        assert_eq!(
+            competing.lock().err().unwrap().code,
+            WorktreeErrorCode::Busy
+        );
+
+        drop(lease);
+        let next_lease = competing.lock_existing().unwrap();
+        assert_eq!(storage.lock().err().unwrap().code, WorktreeErrorCode::Busy);
+        drop(duplicate);
+        assert_eq!(storage.lock().err().unwrap().code, WorktreeErrorCode::Busy);
+
+        drop(next_lease);
+        let _lease = storage.lock().unwrap();
+    }
 }
