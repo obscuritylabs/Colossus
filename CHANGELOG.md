@@ -8,6 +8,8 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-19
+
 ### Highlights
 
 - Export a fixed snapshot of a saved conversation as Markdown, plain text or JSON
@@ -47,6 +49,35 @@ include breaking changes while the public API is still settling.
   production browser acceptance.
 - SDK candidate archives use version 0.12.1, but this release disables SDK
   registry publication. It does not publish npm/PyPI packages or a Go module tag.
+
+<!-- colossus:release-notes base=v0.12.0 -->
+
+### Merged changes
+
+#### Added
+
+- **tui:** pin a second live conversation ([4d07415](https://github.com/obscuritylabs/Colossus/commit/4d074157f3389baee54edc8d978f0e2fec23fdba))
+- **mcp:** follow remote tasks in local Execute runs ([0bf1e8f](https://github.com/obscuritylabs/Colossus/commit/0bf1e8fa6e041988c808736338e1f3a7c9977bce))
+- export saved conversations across clients ([26b211a](https://github.com/obscuritylabs/Colossus/commit/26b211a9d8460405fad644720d6ad4a5d399dc59))
+
+#### Fixed
+
+- **desktop:** load older threads while scrolling ([5b8aa0b](https://github.com/obscuritylabs/Colossus/commit/5b8aa0b8cb5dea0d6a6ce28a8064b27853e2c8a6))
+
+#### Documentation
+
+- **mcp:** explain how to check server health ([06da53b](https://github.com/obscuritylabs/Colossus/commit/06da53b990e66740ecebc6c20612b946eb8b403b))
+
+#### Maintenance
+
+- **ubuntu:** validate Ubuntu 26.04 on x64 and arm64 ([1195294](https://github.com/obscuritylabs/Colossus/commit/1195294aeffbb269de44134195c91b7c13e86718))
+- **release:** prepare v0.12.1 with signed browser builds ([eaec0c9](https://github.com/obscuritylabs/Colossus/commit/eaec0c9100397cd6f0ad06536a0529be4a99063c))
+
+**Source:** [eaec0c9](https://github.com/obscuritylabs/Colossus/commit/eaec0c9100397cd6f0ad06536a0529be4a99063c)
+
+**Full changelog:** [v0.12.0...v0.12.1](https://github.com/obscuritylabs/Colossus/compare/v0.12.0...v0.12.1)
+
+<!-- /colossus:release-notes -->
 
 ## [0.12.0] - 2026-11-16
 
