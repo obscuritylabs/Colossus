@@ -50,6 +50,17 @@ include breaking changes while the public API is still settling.
 - SDK candidate archives use version 0.12.1, but this release disables SDK
   registry publication. It does not publish npm/PyPI packages or a Go module tag.
 
+### Dependency support risk
+
+`chrono 0.4.45` remains unmaintained
+([RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html)).
+An explicitly approved temporary exception accepts this support risk only within
+the unchanged reviewed advisory, dependency and application-source scope. It
+expires at `2026-12-19T00:00:00Z`, without automatic renewal; changes to those
+bindings fail closed pending review. This exception does not fix chrono. Other
+dependency checks and blocking findings remain enforced. `dependency_owner` owns
+migration from the remaining chrono dependency paths.
+
 <!-- colossus:release-notes base=v0.12.0 -->
 
 ### Merged changes

@@ -59,6 +59,8 @@ esac
 legacy_python_sources=$(git ls-files -- '*.py' ':(exclude)sdk/python/**' \
     ':(exclude)deploy/documentation/build-config.py' \
     ':(exclude)scripts/ci/normalize_python_sdist.py' \
+    ':(exclude)scripts/ci/dependency-policy.py' \
+    ':(exclude)scripts/ci/test-dependency-policy.py' \
     ':(exclude)native/browser/scripts/component.py' \
     ':(exclude)native/browser/scripts/test_component.py' \
     ':(exclude)native/browser/scripts/run_probe.py' \
@@ -137,12 +139,9 @@ run cargo test --locked --workspace
 run cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets
 
 run cargo deny --locked check -A license-not-encountered licenses sources bans
-run cargo deny --locked check -D warnings advisories
-# OpenID Connect verifies public signatures only; no RSA private-key operations.
-# Its legacy EC arithmetic also handles public verification only; secret signing
-# uses p256 0.14 / crypto-bigint 0.7.10. Keep these exact OIDC exceptions aligned
-# with deny.toml and ADR 0006, including the legacy arithmetic wrapper bans.
-run cargo audit -D warnings --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0387 --file Cargo.lock
+# Preserve this verifier's root-only advisory scope and existing RSA public-key
+# verification exception through the same reviewed, expiring dependency policy.
+run "${PYTHON:-python3}" -B scripts/ci/dependency-policy.py --root-only
 
 run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -A license-not-encountered licenses sources bans
 run cargo deny --manifest-path fuzz/Cargo.toml --config deny.toml --locked check -D warnings -A advisory-not-detected advisories

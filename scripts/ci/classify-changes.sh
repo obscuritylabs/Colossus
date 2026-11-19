@@ -24,6 +24,10 @@ for changed_path in "$@"; do
     esac
 
     case "$changed_path" in
+        ci/dependency-policy/* | scripts/ci/dependency-policy.py | scripts/ci/test-dependency-policy.py)
+            dependency_required=true
+            rust_required=true
+            ;;
         Cargo.toml | Cargo.lock | */Cargo.toml | */Cargo.lock | deny.toml | rust-toolchain | rust-toolchain.toml)
             dependency_required=true
             rust_required=true

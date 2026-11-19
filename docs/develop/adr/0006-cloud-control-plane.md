@@ -149,6 +149,12 @@ that use and remove it when the dependency no longer contains the affected versi
 Adding a private-key operation through this dependency requires revisiting this
 decision and exception.
 
+The Cloud authentication clock and expiry path still depends on chrono. Its
+unmaintained advisory has an explicitly approved temporary
+[support-risk exception](../ci-cd.md#dependency-policy), with exact scope and hard
+expiry in the linked policy record. This does not change authentication/session
+contracts or establish a chrono fix.
+
 OpenID Connect 4.1.0 adopts P-256/P-384 0.14 and removes the legacy `crypto-bigint`
 0.5.5 verification stack affected by
 [RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387.html).

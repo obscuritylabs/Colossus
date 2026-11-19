@@ -1,0 +1,1598 @@
+{
+  "schema": 1,
+  "approval": {
+    "reference": "call_7b8046c722cc4a63ac3c1dd3b7bf8f3b",
+    "decision": "Approve 30-day scoped exception",
+    "expires_utc": "2026-12-19T00:00:00Z"
+  },
+  "rationale": "Chrono is reached by Cloud authentication UTC/expiry handling and by supported OAuth2, OpenID Connect, MCP and Desktop serde_with parents. No useful compatible bump removes all activated parent paths. The user explicitly accepts only temporary maintenance/support risk for chrono 0.4.45 while a supported migration is scoped. This is not an exploit-unreachability claim, a chrono fix or evidence of no other vulnerabilities.",
+  "package": {
+    "name": "chrono",
+    "version": "0.4.45",
+    "source": "registry+https://github.com/rust-lang/crates.io-index"
+  },
+  "package_checksum": "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327",
+  "advisory_sha256": "18424c6a155f754151a55ce9fb73376bf66f3709d81750d921f5293da91ccc59",
+  "finding_sha256": "c9db0efdf883e899c4a02194c2903f8da0a60518ea77d63451dde11e200c0847",
+  "reviewed_finding": {
+    "advisory": {
+      "id": "RUSTSEC-2026-0543",
+      "package": "chrono",
+      "title": "chrono is unmaintained",
+      "description": "The chrono crate is unmaintained; all versions are affected.\n\nRecommended alternatives:\n\n- [jiff](https://crates.io/crates/jiff)\n- [time](https://crates.io/crates/time)",
+      "date": "2026-09-14",
+      "aliases": [],
+      "related": [],
+      "collection": "crates",
+      "categories": [],
+      "keywords": [],
+      "cvss": null,
+      "informational": "unmaintained",
+      "references": [],
+      "source": null,
+      "url": "https://github.com/chronotope/chrono/issues/1768",
+      "withdrawn": null,
+      "license": "CC0-1.0",
+      "expect-deleted": false
+    },
+    "affected": null,
+    "versions": {
+      "patched": [],
+      "unaffected": []
+    }
+  },
+  "deny_config_sha256": "d349fd0fd03d431a74ea0d890a8b872824a68d52c2363c039e2ea12b05887baf",
+  "reviewed_at_utc": "2026-11-19",
+  "reviewed_source": "281b67d7b4c68cf1949e44da60f451bce26913db",
+  "advisory_database": {
+    "advisory-count": 1533,
+    "last-commit": "472a4c9a785030434f15d7da84964d60fbe789ab",
+    "last-updated": "2026-11-18T10:14:42+01:00"
+  },
+  "upstream_sources": [
+    "https://rustsec.org/advisories/RUSTSEC-2026-0543.html",
+    "https://github.com/chronotope/chrono/issues/1768"
+  ],
+  "removal": {
+    "follow_up": "chrono-unmaintained-parent-graph-migration",
+    "owner": "dependency_owner",
+    "scope_owners": [
+      "cloud_auth_owner",
+      "mcp_owner",
+      "desktop_owner"
+    ],
+    "scope_due_utc": "2026-11-26T00:00:00Z",
+    "implementation_review_owner": "maintenance_coordinator",
+    "implementation_review_due_utc": "2026-12-12T00:00:00Z",
+    "remove_or_block_before_utc": "2026-12-19T00:00:00Z",
+    "reevaluate_on_new_security_information": true,
+    "automatic_renewal": false
+  },
+  "scanner_semantics": "Keep root cargo-deny advisories -D warnings and root cargo-audit -D warnings with the existing exact RSA RUSTSEC-2023-0071 ignore unchanged. Desktop audit retains its existing non-D-warnings informational/yanked treatment. All raw diagnostics remain visible and preserved; no other advisory receives an exception. Other independent Rust graph gates remain unchanged.",
+  "scope_contract": "Exact all-features Cargo metadata reverse closure including local repository-relative manifests, registry versions/sources, activated features and every normal/build/dev/target edge. Any changed/new parent or use requires review. Absolute checkout paths are not policy inputs.",
+  "graphs": {
+    "root": {
+      "nodes": [
+        {
+          "package": "agent-client-protocol-schema@1.9.1|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "default",
+            "schemars",
+            "tracing"
+          ]
+        },
+        {
+          "package": "agent-client-protocol@2.2.0|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "default"
+          ]
+        },
+        {
+          "package": "chrono@0.4.45|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "alloc",
+            "clock",
+            "default",
+            "iana-time-zone",
+            "js-sys",
+            "now",
+            "oldtime",
+            "serde",
+            "std",
+            "wasm-bindgen",
+            "wasmbind",
+            "winapi",
+            "windows-link"
+          ]
+        },
+        {
+          "package": "colossus-a2a-server@0.12.1|workspace:crates/colossus-a2a-server/Cargo.toml",
+          "features": []
+        },
+        {
+          "package": "colossus-api-runtime@0.12.1|workspace:crates/colossus-api-runtime/Cargo.toml",
+          "features": []
+        },
+        {
+          "package": "colossus-app-host@0.12.1|workspace:crates/colossus-app-host/Cargo.toml",
+          "features": []
+        },
+        {
+          "package": "colossus-audit@0.12.1|workspace:crates/colossus-audit/Cargo.toml",
+          "features": []
+        },
+        {
+          "package": "colossus-cli@0.12.1|workspace:crates/colossus-cli/Cargo.toml",
+          "features": [
+            "dictation"
+          ]
+        },
+        {
+          "package": "colossus-cloud-chat@0.12.1|workspace:crates/colossus-cloud-chat/Cargo.toml",
+          "features": []
+        },
+        {
+          "package": "colossus-cloud-executor@0.12.1|workspace:crates/colossus-cloud-executor/Cargo.toml",
+          "features": []
+        },
+        {
+          "package": "colossus-cloud-postgres@0.12.1|workspace:crates/colossus-cloud-postgres/Cargo.toml",
+          "features": []
+        },
+        {
+          "package": "colossus-cloud-protocol@0.12.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "features": []
+        },
+        {
+          "package": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "features": []
+        },
+        {
+          "package": "colossus-cloud@0.12.1|workspace:crates/colossus-cloud/Cargo.toml",
+          "features": []
+        },
+        {
+          "package": "colossus-connector@0.12.1|workspace:crates/colossus-connector/Cargo.toml",
+          "features": []
+        },
+        {
+          "package": "colossus-mcp@0.12.1|workspace:crates/colossus-mcp/Cargo.toml",
+          "features": [
+            "live-splunk"
+          ]
+        },
+        {
+          "package": "colossus-runtime@0.12.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "features": [
+            "macos-browser-host-acceptance",
+            "windows-browser-development",
+            "windows-browser-functional-preview"
+          ]
+        },
+        {
+          "package": "colossus-sandbox@0.12.1|workspace:crates/colossus-sandbox/Cargo.toml",
+          "features": [
+            "macos-browser-tls-development",
+            "windows-browser-functional-preview"
+          ]
+        },
+        {
+          "package": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "features": [
+            "daemon",
+            "default",
+            "embedded",
+            "keyring",
+            "serialization",
+            "sidecar"
+          ]
+        },
+        {
+          "package": "colossus-sidecar@0.12.1|workspace:crates/colossus-sidecar/Cargo.toml",
+          "features": [
+            "macos-browser-host-acceptance",
+            "windows-browser-development",
+            "windows-browser-functional-preview"
+          ]
+        },
+        {
+          "package": "colossus-worker@0.12.1|workspace:crates/colossus-worker/Cargo.toml",
+          "features": []
+        },
+        {
+          "package": "oauth2@5.0.0|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "reqwest",
+            "rustls-tls"
+          ]
+        },
+        {
+          "package": "openidconnect@4.1.0|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "reqwest",
+            "rustls-tls"
+          ]
+        },
+        {
+          "package": "rmcp@3.9.0|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "__reqwest",
+            "auth",
+            "base64",
+            "client",
+            "client-side-sse",
+            "transport-streamable-http-client",
+            "transport-worker"
+          ]
+        },
+        {
+          "package": "serde_with@3.22.0|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "alloc",
+            "default",
+            "json",
+            "macros",
+            "schemars_1",
+            "std"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "parent": "agent-client-protocol@2.2.0|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "agent-client-protocol-schema@1.9.1|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "agent_client_protocol_schema",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cli@0.12.1|workspace:crates/colossus-cli/Cargo.toml",
+          "dependency": "agent-client-protocol@2.2.0|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "agent_client_protocol",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "rmcp@3.9.0|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "chrono@0.4.45|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "chrono",
+          "kinds": [
+            {
+              "kind": null,
+              "target": "cfg(all(target_family = \"wasm\", target_os = \"unknown\"))"
+            },
+            {
+              "kind": null,
+              "target": "cfg(not(all(target_family = \"wasm\", target_os = \"unknown\")))"
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "chrono@0.4.45|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "chrono",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "oauth2@5.0.0|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "chrono@0.4.45|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "chrono",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "openidconnect@4.1.0|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "chrono@0.4.45|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "chrono",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "serde_with@3.22.0|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "chrono@0.4.45|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "chrono_0_4",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-api-runtime@0.12.1|workspace:crates/colossus-api-runtime/Cargo.toml",
+          "name": "colossus_api_runtime",
+          "kinds": [
+            {
+              "kind": "dev",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "dependency": "colossus-api-runtime@0.12.1|workspace:crates/colossus-api-runtime/Cargo.toml",
+          "name": "colossus_api_runtime",
+          "kinds": [
+            {
+              "kind": "dev",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-chat@0.12.1|workspace:crates/colossus-cloud-chat/Cargo.toml",
+          "dependency": "colossus-api-runtime@0.12.1|workspace:crates/colossus-api-runtime/Cargo.toml",
+          "name": "colossus_api_runtime",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-worker@0.12.1|workspace:crates/colossus-worker/Cargo.toml",
+          "dependency": "colossus-api-runtime@0.12.1|workspace:crates/colossus-api-runtime/Cargo.toml",
+          "name": "colossus_api_runtime",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-runtime@0.12.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "dependency": "colossus-audit@0.12.1|workspace:crates/colossus-audit/Cargo.toml",
+          "name": "colossus_audit",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-cloud-chat@0.12.1|workspace:crates/colossus-cloud-chat/Cargo.toml",
+          "name": "colossus_cloud_chat",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-cloud-executor@0.12.1|workspace:crates/colossus-cloud-executor/Cargo.toml",
+          "name": "colossus_cloud_executor",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-connector@0.12.1|workspace:crates/colossus-connector/Cargo.toml",
+          "dependency": "colossus-cloud-executor@0.12.1|workspace:crates/colossus-cloud-executor/Cargo.toml",
+          "name": "colossus_cloud_executor",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-cloud-postgres@0.12.1|workspace:crates/colossus-cloud-postgres/Cargo.toml",
+          "name": "colossus_cloud_postgres",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-postgres@0.12.1|workspace:crates/colossus-cloud-postgres/Cargo.toml",
+          "dependency": "colossus-cloud-protocol@0.12.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "name": "colossus_cloud_protocol",
+          "kinds": [
+            {
+              "kind": "dev",
+              "target": null
+            },
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-executor@0.12.1|workspace:crates/colossus-cloud-executor/Cargo.toml",
+          "dependency": "colossus-cloud-protocol@0.12.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "name": "colossus_cloud_protocol",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-cloud-protocol@0.12.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "name": "colossus_cloud_protocol",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud@0.12.1|workspace:crates/colossus-cloud/Cargo.toml",
+          "dependency": "colossus-cloud-protocol@0.12.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "name": "colossus_cloud_protocol",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-connector@0.12.1|workspace:crates/colossus-connector/Cargo.toml",
+          "dependency": "colossus-cloud-protocol@0.12.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "name": "colossus_cloud_protocol",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-postgres@0.12.1|workspace:crates/colossus-cloud-postgres/Cargo.toml",
+          "dependency": "colossus-cloud@0.12.1|workspace:crates/colossus-cloud/Cargo.toml",
+          "name": "colossus_cloud",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-cloud@0.12.1|workspace:crates/colossus-cloud/Cargo.toml",
+          "name": "colossus_cloud",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-connector@0.12.1|workspace:crates/colossus-connector/Cargo.toml",
+          "name": "colossus_connector",
+          "kinds": [
+            {
+              "kind": "dev",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cli@0.12.1|workspace:crates/colossus-cli/Cargo.toml",
+          "dependency": "colossus-connector@0.12.1|workspace:crates/colossus-connector/Cargo.toml",
+          "name": "colossus_connector",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-mcp@0.12.1|workspace:crates/colossus-mcp/Cargo.toml",
+          "name": "colossus_mcp",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-runtime@0.12.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "dependency": "colossus-mcp@0.12.1|workspace:crates/colossus-mcp/Cargo.toml",
+          "name": "colossus_mcp",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-sidecar@0.12.1|workspace:crates/colossus-sidecar/Cargo.toml",
+          "dependency": "colossus-mcp@0.12.1|workspace:crates/colossus-mcp/Cargo.toml",
+          "name": "colossus_mcp",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "dependency": "colossus-runtime@0.12.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "name": "colossus_runtime",
+          "kinds": [
+            {
+              "kind": "dev",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-api-runtime@0.12.1|workspace:crates/colossus-api-runtime/Cargo.toml",
+          "dependency": "colossus-runtime@0.12.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "name": "colossus_runtime",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cli@0.12.1|workspace:crates/colossus-cli/Cargo.toml",
+          "dependency": "colossus-runtime@0.12.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "name": "colossus_runtime",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-chat@0.12.1|workspace:crates/colossus-cloud-chat/Cargo.toml",
+          "dependency": "colossus-runtime@0.12.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "name": "colossus_runtime",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-runtime@0.12.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "name": "colossus_runtime",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-sidecar@0.12.1|workspace:crates/colossus-sidecar/Cargo.toml",
+          "dependency": "colossus-runtime@0.12.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "name": "colossus_runtime",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-worker@0.12.1|workspace:crates/colossus-worker/Cargo.toml",
+          "dependency": "colossus-runtime@0.12.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "name": "colossus_runtime",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-audit@0.12.1|workspace:crates/colossus-audit/Cargo.toml",
+          "dependency": "colossus-sandbox@0.12.1|workspace:crates/colossus-sandbox/Cargo.toml",
+          "name": "colossus_sandbox",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cli@0.12.1|workspace:crates/colossus-cli/Cargo.toml",
+          "dependency": "colossus-sandbox@0.12.1|workspace:crates/colossus-sandbox/Cargo.toml",
+          "name": "colossus_sandbox",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-mcp@0.12.1|workspace:crates/colossus-mcp/Cargo.toml",
+          "dependency": "colossus-sandbox@0.12.1|workspace:crates/colossus-sandbox/Cargo.toml",
+          "name": "colossus_sandbox",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-runtime@0.12.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "dependency": "colossus-sandbox@0.12.1|workspace:crates/colossus-sandbox/Cargo.toml",
+          "name": "colossus_sandbox",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-sidecar@0.12.1|workspace:crates/colossus-sidecar/Cargo.toml",
+          "dependency": "colossus-sandbox@0.12.1|workspace:crates/colossus-sandbox/Cargo.toml",
+          "name": "colossus_sandbox",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "name": "colossus_sdk",
+          "kinds": [
+            {
+              "kind": "dev",
+              "target": null
+            },
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-postgres@0.12.1|workspace:crates/colossus-cloud-postgres/Cargo.toml",
+          "dependency": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "name": "colossus_sdk",
+          "kinds": [
+            {
+              "kind": "dev",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-sidecar@0.12.1|workspace:crates/colossus-sidecar/Cargo.toml",
+          "dependency": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "name": "colossus_sdk",
+          "kinds": [
+            {
+              "kind": "dev",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-a2a-server@0.12.1|workspace:crates/colossus-a2a-server/Cargo.toml",
+          "dependency": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "name": "colossus_sdk",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-app-host@0.12.1|workspace:crates/colossus-app-host/Cargo.toml",
+          "dependency": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "name": "colossus_sdk",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cli@0.12.1|workspace:crates/colossus-cli/Cargo.toml",
+          "dependency": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "name": "colossus_sdk",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-chat@0.12.1|workspace:crates/colossus-cloud-chat/Cargo.toml",
+          "dependency": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "name": "colossus_sdk",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-executor@0.12.1|workspace:crates/colossus-cloud-executor/Cargo.toml",
+          "dependency": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "name": "colossus_sdk",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-protocol@0.12.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "dependency": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "name": "colossus_sdk",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud@0.12.1|workspace:crates/colossus-cloud/Cargo.toml",
+          "dependency": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "name": "colossus_sdk",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-connector@0.12.1|workspace:crates/colossus-connector/Cargo.toml",
+          "dependency": "colossus-sdk@0.12.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "name": "colossus_sdk",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cli@0.12.1|workspace:crates/colossus-cli/Cargo.toml",
+          "dependency": "colossus-worker@0.12.1|workspace:crates/colossus-worker/Cargo.toml",
+          "name": "colossus_worker",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-sidecar@0.12.1|workspace:crates/colossus-sidecar/Cargo.toml",
+          "dependency": "colossus-worker@0.12.1|workspace:crates/colossus-worker/Cargo.toml",
+          "name": "colossus_worker",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "openidconnect@4.1.0|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "oauth2@5.0.0|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "oauth2",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "rmcp@3.9.0|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "oauth2@5.0.0|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "oauth2",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-cloud-server@0.12.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "openidconnect@4.1.0|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "openidconnect",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-mcp@0.12.1|workspace:crates/colossus-mcp/Cargo.toml",
+          "dependency": "rmcp@3.9.0|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "rmcp",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-sandbox@0.12.1|workspace:crates/colossus-sandbox/Cargo.toml",
+          "dependency": "rmcp@3.9.0|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "rmcp",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "agent-client-protocol-schema@1.9.1|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "serde_with@3.22.0|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "serde_with",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "openidconnect@4.1.0|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "serde_with@3.22.0|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "serde_with",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        }
+      ]
+    },
+    "desktop": {
+      "nodes": [
+        {
+          "package": "chrono@0.4.45|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "alloc",
+            "clock",
+            "iana-time-zone",
+            "now",
+            "serde",
+            "std",
+            "winapi",
+            "windows-link"
+          ]
+        },
+        {
+          "package": "colossus-desktop@0.1.0|workspace:apps/desktop/src-tauri/Cargo.toml",
+          "features": [
+            "approval-test-bridge",
+            "browser-preview",
+            "browser-test-bridge",
+            "client-identity-test-bridge",
+            "default",
+            "dictation",
+            "dictation-metal",
+            "dictation-preview",
+            "embedded-chromium-preview",
+            "macos-contained-browser-diagnostic",
+            "plugin-test-bridge",
+            "windows-browser-development",
+            "windows-browser-functional-preview"
+          ]
+        },
+        {
+          "package": "colossus-native-browser@0.1.0|workspace:apps/desktop/native-browser/Cargo.toml",
+          "features": [
+            "cef-preview",
+            "native-test-driver",
+            "windows-browser-functional-preview"
+          ]
+        },
+        {
+          "package": "colossus-native-credential-ui@0.1.0|workspace:apps/desktop/native-credential-ui/Cargo.toml",
+          "features": [
+            "native-test-driver"
+          ]
+        },
+        {
+          "package": "serde_with@3.21.0|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "alloc",
+            "default",
+            "macros",
+            "std"
+          ]
+        },
+        {
+          "package": "tauri-build@2.7.3|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "config-json",
+            "default"
+          ]
+        },
+        {
+          "package": "tauri-codegen@2.7.3|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "brotli",
+            "compression"
+          ]
+        },
+        {
+          "package": "tauri-macros@2.7.3|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "compression",
+            "custom-protocol"
+          ]
+        },
+        {
+          "package": "tauri-plugin-dialog@2.7.2|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "default",
+            "gtk3"
+          ]
+        },
+        {
+          "package": "tauri-plugin-fs@2.5.1|registry+https://github.com/rust-lang/crates.io-index",
+          "features": []
+        },
+        {
+          "package": "tauri-plugin-global-shortcut@2.4.1|registry+https://github.com/rust-lang/crates.io-index",
+          "features": []
+        },
+        {
+          "package": "tauri-plugin-updater@2.9.0|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "rustls-tls"
+          ]
+        },
+        {
+          "package": "tauri-plugin@2.7.2|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "build"
+          ]
+        },
+        {
+          "package": "tauri-runtime-wry@2.12.2|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "common-controls-v6",
+            "dbus",
+            "unstable",
+            "x11"
+          ]
+        },
+        {
+          "package": "tauri-runtime@2.12.2|registry+https://github.com/rust-lang/crates.io-index",
+          "features": []
+        },
+        {
+          "package": "tauri-utils@2.10.2|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "brotli",
+            "build-2",
+            "cargo_metadata",
+            "compression",
+            "html-manipulation-2",
+            "proc-macro2",
+            "quote",
+            "resources",
+            "schema",
+            "schemars",
+            "swift-rs",
+            "walkdir"
+          ]
+        },
+        {
+          "package": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "features": [
+            "common-controls-v6",
+            "compression",
+            "custom-protocol",
+            "dbus",
+            "default",
+            "dynamic-acl",
+            "image",
+            "image-png",
+            "tauri-runtime-wry",
+            "tray-icon",
+            "unstable",
+            "webkit2gtk",
+            "webview2-com",
+            "wry",
+            "x11"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "parent": "serde_with@3.21.0|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "chrono@0.4.45|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "chrono_0_4",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-desktop@0.1.0|workspace:apps/desktop/src-tauri/Cargo.toml",
+          "dependency": "colossus-native-browser@0.1.0|workspace:apps/desktop/native-browser/Cargo.toml",
+          "name": "colossus_native_browser",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-desktop@0.1.0|workspace:apps/desktop/src-tauri/Cargo.toml",
+          "dependency": "colossus-native-credential-ui@0.1.0|workspace:apps/desktop/native-credential-ui/Cargo.toml",
+          "name": "colossus_native_credential_ui",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-utils@2.10.2|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "serde_with@3.21.0|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "serde_with",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-desktop@0.1.0|workspace:apps/desktop/src-tauri/Cargo.toml",
+          "dependency": "tauri-build@2.7.3|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_build",
+          "kinds": [
+            {
+              "kind": "build",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-build@2.7.3|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_build",
+          "kinds": [
+            {
+              "kind": "build",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-macros@2.7.3|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-codegen@2.7.3|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_codegen",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-macros@2.7.3|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_macros",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-desktop@0.1.0|workspace:apps/desktop/src-tauri/Cargo.toml",
+          "dependency": "tauri-plugin-dialog@2.7.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_plugin_dialog",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-plugin-dialog@2.7.2|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-plugin-fs@2.5.1|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_plugin_fs",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-desktop@0.1.0|workspace:apps/desktop/src-tauri/Cargo.toml",
+          "dependency": "tauri-plugin-global-shortcut@2.4.1|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_plugin_global_shortcut",
+          "kinds": [
+            {
+              "kind": null,
+              "target": "cfg(windows)"
+            }
+          ]
+        },
+        {
+          "parent": "colossus-desktop@0.1.0|workspace:apps/desktop/src-tauri/Cargo.toml",
+          "dependency": "tauri-plugin-updater@2.9.0|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_plugin_updater",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-plugin-dialog@2.7.2|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-plugin@2.7.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_plugin",
+          "kinds": [
+            {
+              "kind": "build",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-plugin-fs@2.5.1|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-plugin@2.7.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_plugin",
+          "kinds": [
+            {
+              "kind": "build",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-plugin-global-shortcut@2.4.1|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-plugin@2.7.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_plugin",
+          "kinds": [
+            {
+              "kind": "build",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-plugin-updater@2.9.0|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-plugin@2.7.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_plugin",
+          "kinds": [
+            {
+              "kind": "build",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-runtime-wry@2.12.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_runtime_wry",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-runtime-wry@2.12.2|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-runtime@2.12.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_runtime",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-runtime@2.12.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_runtime",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-utils@2.10.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_utils",
+          "kinds": [
+            {
+              "kind": "build",
+              "target": null
+            },
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-plugin-fs@2.5.1|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-utils@2.10.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_utils",
+          "kinds": [
+            {
+              "kind": "build",
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-build@2.7.3|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-utils@2.10.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_utils",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-codegen@2.7.3|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-utils@2.10.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_utils",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-macros@2.7.3|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-utils@2.10.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_utils",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-plugin@2.7.2|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-utils@2.10.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_utils",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-runtime-wry@2.12.2|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-utils@2.10.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_utils",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-runtime@2.12.2|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri-utils@2.10.2|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri_utils",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-desktop@0.1.0|workspace:apps/desktop/src-tauri/Cargo.toml",
+          "dependency": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri",
+          "kinds": [
+            {
+              "kind": null,
+              "target": "cfg(any(target_os = \"macos\", windows))"
+            },
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-plugin-dialog@2.7.2|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri",
+          "kinds": [
+            {
+              "kind": null,
+              "target": "cfg(target_os = \"ios\")"
+            },
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-native-browser@0.1.0|workspace:apps/desktop/native-browser/Cargo.toml",
+          "dependency": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "colossus-native-credential-ui@0.1.0|workspace:apps/desktop/native-credential-ui/Cargo.toml",
+          "dependency": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-plugin-fs@2.5.1|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-plugin-global-shortcut@2.4.1|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        },
+        {
+          "parent": "tauri-plugin-updater@2.9.0|registry+https://github.com/rust-lang/crates.io-index",
+          "dependency": "tauri@2.12.4|registry+https://github.com/rust-lang/crates.io-index",
+          "name": "tauri",
+          "kinds": [
+            {
+              "kind": null,
+              "target": null
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "application_uses": {
+    "root": {
+      "files": {
+        "crates/colossus-cloud-server/examples/import_chat_codex.rs": "3faa0e2b514ee8d984558d084a9d43bf00ef7bb64923131807f5ae26fb685ba1",
+        "crates/colossus-cloud-server/examples/init_chat.rs": "8d9f9156a168cd07ee6be7a024adc9b3cbb75fae77e057338ddc254715d23a98",
+        "crates/colossus-cloud-server/examples/init_local.rs": "d0a9c5f4ba61f402888d943d873db6febf954a07d4c052817dec52d5fef1f2da",
+        "crates/colossus-cloud-server/examples/init_runtime.rs": "0ca2324c4b5bb22c4b7220c37e312463ed0d514a673d9286e55b012a304e4e44",
+        "crates/colossus-cloud-server/src/admin.rs": "a201facd47bb67aa9e77528d04c0b77bc465c6393b5cc469ed13bdb84b2c23d8",
+        "crates/colossus-cloud-server/src/admin/user_inventory.rs": "b5ff7524b24f1d95860881f459997a33c13cea8d3a2903d2ce676453fc67c31d",
+        "crates/colossus-cloud-server/src/anchor_authority.rs": "1fae056d503add31e4e193c222fb549c91cb41ec40038290970336bb8bd58f36",
+        "crates/colossus-cloud-server/src/anchor_authority/custody.rs": "32934cd971f3a590d1bfff922ab0996267fa9db1efb715f52c42c03c38d5e738",
+        "crates/colossus-cloud-server/src/anchor_authority/records.rs": "97ebd514e6603a675a077fa12e7faa495e5813bf553329c4bd57fd6111b6535c",
+        "crates/colossus-cloud-server/src/anchor_authority/tests.rs": "589aee6fa5e5abcd3dacbced7d0da5b22437c3c0390f44cdca0ee2a26ff8637a",
+        "crates/colossus-cloud-server/src/announcements.rs": "2f8691e8538fecdfd196c5463d3de2a843e2a2bbdb426e49cb388b34c2ca92d1",
+        "crates/colossus-cloud-server/src/auth.rs": "c39fd029dfd50acc00f2f518f0c8da0149be463f6e834e12c64c7bca68fc882e",
+        "crates/colossus-cloud-server/src/auth/accounts.rs": "525816342e0acb33bf3a6d7e59b51739a8df84376ed09ec770dfa4daf272bb11",
+        "crates/colossus-cloud-server/src/auth/bootstrap.rs": "0ebc2d704f9becbe5a8a315fe79ce053798bf149c23ddc6bf4dd9a5d5b764f64",
+        "crates/colossus-cloud-server/src/auth/local.rs": "f91b9225d06453556787650ce2a15fe75ebfea5e4704bc5720197bfffd1bed22",
+        "crates/colossus-cloud-server/src/auth/tests.rs": "44546f053d82e637a0f6b6d177b00dfb8dfd924ddf3e94e84ef2ade8878b289a",
+        "crates/colossus-cloud-server/src/auth/tests/local.rs": "aa3818d84a74506252aa0bdc8634ee776684afc9ac20cb8fa0d4b3ded3b69949",
+        "crates/colossus-cloud-server/src/auth/tests/markers.rs": "7d8d025686d2159609145ab4cc54da1a851ea4c16e06041b11db922af68c5311",
+        "crates/colossus-cloud-server/src/auth/tests/transport.rs": "e25e0f6d8b2472e8a4a8fe84cf5894ea3c5b624de690bd28cd0ede40bf86143c",
+        "crates/colossus-cloud-server/src/auth/tests/transport/admin_users.rs": "8dbe82e8ee08ef09f3257f0933d4630e2b20b7230434a03cbe4256b87598905d",
+        "crates/colossus-cloud-server/src/auth/tests/transport/announcements.rs": "d12238c542426341d493026815d4ae65d68cbfc1306efb50b972a59ab86f16ec",
+        "crates/colossus-cloud-server/src/auth/tests/transport/global_lifecycle.rs": "81008fd70cb56806156622a7c7fcf284d8bf5765c4a6909ae6a7a87cebf383c3",
+        "crates/colossus-cloud-server/src/auth/tests/transport/global_lifecycle/dormant.rs": "d3e69dc81cd67bb0c5823fa3559b7d682cee20e3edeedd841fecd6364353105a",
+        "crates/colossus-cloud-server/src/auth/tests/transport/hosted.rs": "b05793c20ed6326cf49db2104e73246a3623f16bd013e7de20119ead9b81aa86",
+        "crates/colossus-cloud-server/src/auth/tests/transport/hosted/catalog.rs": "2110cdc9a1a106a497cc3d3d3543d368fdae3b15f540f2d5d03748ce278051ea",
+        "crates/colossus-cloud-server/src/auth/tests/transport/hosted/credential_store.rs": "7c8a12b674a65771be6f42c00f2b85ce9ab663fe6a12634e62610595fc1edde0",
+        "crates/colossus-cloud-server/src/auth/tests/transport/hosted/shared.rs": "6c352e806049f98a6228658dc5e359f4271b355cbefc82b12dc5df488da3de20",
+        "crates/colossus-cloud-server/src/auth/tests/transport/hosted/view.rs": "c10bcef8b8795139f67eded2811260bc4d81bc416e3b366264144b56568c5eb8",
+        "crates/colossus-cloud-server/src/auth/tests/transport/isolated.rs": "de2fca21cb8f277b9e2c7c79cf6fcb72e07b59cff4edf8f5977e64886f82e8c2",
+        "crates/colossus-cloud-server/src/auth/tests/transport/managed.rs": "0d8100caf1fc164693dc87b687e8a7c008ae4060d971a93be4dab984304611da",
+        "crates/colossus-cloud-server/src/auth/tests/transport/native.rs": "e9964d9aed4b93a58d84bcce562e731b942dfaa6c4059fcef1ae885294cab9c1",
+        "crates/colossus-cloud-server/src/auth/tests/transport/resources.rs": "adf5dc373746336b1a0c197c2404e3f0cd176a88e54de4a83bcbc27428d01717",
+        "crates/colossus-cloud-server/src/auth/tests/transport/retained.rs": "fca04befdb4b594ca2300479f9789716df62f2be9ba236f1515a4e4228ae36b1",
+        "crates/colossus-cloud-server/src/auth/tests/transport/settings_matrix.rs": "4ad389f27bb74ae73980c638b5598ba8c0f5c00b58034149b153b553e9a2c412",
+        "crates/colossus-cloud-server/src/auth/tests/transport/settings_matrix/effects.rs": "8dc1a8fd4715f86b41f0294e55bcc6186b08d2e5bb84968a3a18995faf27c98f",
+        "crates/colossus-cloud-server/src/auth/tests/transport/settings_matrix/fixture.rs": "4fa0ce8fd4fd98f8f3ce1b66eadfd2bc67249cda85cd16b3b712fcf15be6c58a",
+        "crates/colossus-cloud-server/src/auth/tests/transport/settings_matrix/lifecycles.rs": "ec2219d41af69b53a7281170238a559f64812a9815b34b6f27d724473ab08dd3",
+        "crates/colossus-cloud-server/src/auth/tests/transport/settings_matrix/mutations.rs": "d79dd2fb709903386c7813e2c09893129c0596a1ac4ae1404f192ff809bb6e44",
+        "crates/colossus-cloud-server/src/auth/tests/transport/settings_matrix/project_authorization.rs": "3e3afeb2480ce68a802f5217f21866398fc334cedad05df55f0f25ece8abf4c0",
+        "crates/colossus-cloud-server/src/auth/tests/transport/settings_matrix/project_metadata.rs": "5b1ef86c37084ac8f8bcb8cccbf959162a4c2b7d145bfe6e7075fd77b3d2bdca",
+        "crates/colossus-cloud-server/src/auth/tests/transport/settings_matrix/services.rs": "f0aa06325606f6df1d15b26b6432def2958874a4f572e8ab2ae1114aeffe7bab",
+        "crates/colossus-cloud-server/src/auth/tests/transport/settings_matrix/variables.rs": "19726b7cb453db78a9eaf18d2e40f93f17338a9bad8ec7f6cac2d81b649ca0de",
+        "crates/colossus-cloud-server/src/auth/tests/transport/telemetry.rs": "96307e07cd409ae708e50c37803377a74942f1121c7ab878c82bfc7025ca19cd",
+        "crates/colossus-cloud-server/src/auth/tests/transport/terminal.rs": "9fa51df90c706bc6966d1fc490bcc8205bd14cc5dd7c040db77ac81fd8e37830",
+        "crates/colossus-cloud-server/src/auth/tests/transport/terminal/display.rs": "92955e79570f0a7d10e2c6b02727e5b1214315626dfcffb39c615c2629d520bb",
+        "crates/colossus-cloud-server/src/auth/tests/transport/terminal/public.rs": "8f1eabb1a33abfa6cc8f2e5520c45a6864d8c689a5e197e4ec9a89ea6214e516",
+        "crates/colossus-cloud-server/src/auth/tests/transport/thread_metadata.rs": "2e3584351183ad5adf9ee13b9c3123f12ec8ba198dd44bf8b81ec68db9f64327",
+        "crates/colossus-cloud-server/src/auth/tests/transport/transcript_export.rs": "bd9fbeffff6d5c05cbb5d3a754941f43a8b00ec67b956a992c3afb57442aa982",
+        "crates/colossus-cloud-server/src/auth/tests/transport/user_inventory.rs": "e818c172b31a76338ece2d1617c684c4863dc347ca8c32059ebdde5bdb7a7432",
+        "crates/colossus-cloud-server/src/bin/colossus-chat-anchor.rs": "3ad0e8ef443475b52f6b4937943dd017b75b4a7d0feef6a9098cdf21dc3252b2",
+        "crates/colossus-cloud-server/src/bin/colossus-control-plane.rs": "d3bd1e32f4f786bee0ddb2b247d29a66cbf7f70459b1e070c87e066653742a9d",
+        "crates/colossus-cloud-server/src/certificates.rs": "ee6577d91d1749532e9403bd3f6e2fb0237f13f71650bc0d96e3f58d8ebe5a4e",
+        "crates/colossus-cloud-server/src/chat.rs": "63df98ca6dc4bc8a9850aa040edf53a87e6b03ed50192f53cf93192429bec2a3",
+        "crates/colossus-cloud-server/src/chat_credentials.rs": "7b0920ca83f66ed037ea52d0a83611671f525cc12a779a7c11fb578ebf20e205",
+        "crates/colossus-cloud-server/src/chat_credentials/inventory.rs": "ec7741f6dc92af3a27814768494c01eabadaf9fffad149ce3e2d3a8ab07b1e24",
+        "crates/colossus-cloud-server/src/chat_settings.rs": "af26b918d3f6261df61484eb625e79d9d316aff6148913a7c47c4f380cbb9552",
+        "crates/colossus-cloud-server/src/chat_settings/availability.rs": "194c341247572cf8215ff0e7b47f29026de7859aeefaa0e8245c46a45d9aa354",
+        "crates/colossus-cloud-server/src/chat_settings/credentials.rs": "e2ec3c25a4cb239c7bd65b0f67bc0d388fe57663538ced61da95c420ea21a776",
+        "crates/colossus-cloud-server/src/chat_settings/tests.rs": "458ac7ac01672dc33388e1673edd38f3f8d78f9aeb4ab23efa70c7809ddbc060",
+        "crates/colossus-cloud-server/src/cli.rs": "6681fefaee0bac31f995def8eec27a427af1d70bda7466160743da0a81b6f27d",
+        "crates/colossus-cloud-server/src/config.rs": "5da514b9bafb2c68c2cd94f061b8ec105cceebe78467381fea6ee83758928208",
+        "crates/colossus-cloud-server/src/connection.rs": "2ea763508911a2cfd0cec82e17424f00d5430cc44aaee195a5e8d1652c2f3902",
+        "crates/colossus-cloud-server/src/connection/outbound.rs": "b71d189b27099f36e74c63997a218fb948249193f1b4fe3051b50ad221ff7a62",
+        "crates/colossus-cloud-server/src/connection/resources.rs": "54d711f7ad3b245edd91a76ae56353662c81ec0d99943b8cd6da464ff7c0abd2",
+        "crates/colossus-cloud-server/src/connection/resources/tests.rs": "24909c80d1dcc173bcff4ada502b82a934d851200a27cad24404022b3083d9ea",
+        "crates/colossus-cloud-server/src/global_settings.rs": "8a2f80918f298cdccc4ba2bbc483da75540546fc3a7d6f698af0ea495270f81b",
+        "crates/colossus-cloud-server/src/global_settings/credentials.rs": "4b82441494cb115e09b021a085568a3b55a48517980059b80b3f9dc82559636e",
+        "crates/colossus-cloud-server/src/global_settings/inheritance.rs": "7a2552ec98231ecb6084dfe398f26b4d0e4601b020b9b16c66d9085169909d9a",
+        "crates/colossus-cloud-server/src/global_settings/intrinsic.rs": "3d20cab33bbb04152f82ae252e2ae3b4e47f8e31a0bf65169ba757058f16fadc",
+        "crates/colossus-cloud-server/src/global_settings/network.rs": "901a9839a949604e5eaffb06befe3b71d6a5fd168b003816883c6f03e15ac7ad",
+        "crates/colossus-cloud-server/src/global_settings/network/oauth_tests.rs": "82e8ae3956336fca0482fb41ff5c94ed1747706641ea769dd13673df56a8d1b6",
+        "crates/colossus-cloud-server/src/global_settings/network/tests.rs": "f7d9837ad05943aa8ca89f2caee9abf795e70c4c0f368717fe240be0365529c7",
+        "crates/colossus-cloud-server/src/global_settings/search.rs": "d517b03524d64f712ec4816b2937fcf015875de028c474934604289090989714",
+        "crates/colossus-cloud-server/src/global_settings/storage.rs": "c6b8653acdc303dbb99ad52ced5c61ec0e330f157c14c2d8973fee31366dec42",
+        "crates/colossus-cloud-server/src/global_settings/telemetry.rs": "cf098b02fb68179fb5393edc6b6c93f00d845f428081a0c158efcd29b8e0b75f",
+        "crates/colossus-cloud-server/src/global_settings/tests.rs": "342bd2f3b184cfe92364c8edae67ec8ca1bc63085f59b9011be15a8ae8ee2edc",
+        "crates/colossus-cloud-server/src/global_settings/types.rs": "63cb8c6d4eb6befa9227e8108dd9ca99d6ed7471c79748e9c7d0c6a84723d82e",
+        "crates/colossus-cloud-server/src/global_settings/variables.rs": "20b1ee453ffd49b1d9690598b04b837a09be48f460ce8774f289857ea335332f",
+        "crates/colossus-cloud-server/src/hosted.rs": "cac14cbe1d897ba0cbc4fc2142af5e9f45b23116444c33af2d95026b0d06347a",
+        "crates/colossus-cloud-server/src/hosted/admission.rs": "0e5b635784830320d5961de071639e3adad000a78037c915ed71a7e70885e64d",
+        "crates/colossus-cloud-server/src/hosted/catalog.rs": "d1493659384a9de9f5c95f5aa52ba89f0c3503b85231862a00e4604172d20ed0",
+        "crates/colossus-cloud-server/src/hosted/catalog/tests.rs": "a8d5d5a373019729018b8e45a7bbe8a73b5c7cfc2cb02f7f1801d2a0616b50b1",
+        "crates/colossus-cloud-server/src/hosted/context.rs": "593b6ed1acc57958d610bab5c2be65469212756500f489ca1f7a752b1e6b8005",
+        "crates/colossus-cloud-server/src/hosted/credentials.rs": "5f5d04e7508d5c31acc6bdc7fbc5f67355ca119281971d32489eed6b63002f51",
+        "crates/colossus-cloud-server/src/hosted/files.rs": "a81741b6aea7907ea04d5a33c4e01b739d63a4483efc828a0506c769cd8ad4ff",
+        "crates/colossus-cloud-server/src/hosted/host.rs": "91c9b9ab148bce6d27fd6d7f5ebb16d4375feb4a85906916374ab2593360c126",
+        "crates/colossus-cloud-server/src/hosted/inventory.rs": "67595c923830fc1a6b260f671b4fdde030d75349837cd6cf458cdded15f88816",
+        "crates/colossus-cloud-server/src/hosted/management.rs": "ef409929c4a834f2b8086b4d93bbf559c01f6ac193e325596b190a477c343a38",
+        "crates/colossus-cloud-server/src/hosted/oauth.rs": "4de2aa7cc8d3e9cfc220fafe5a4a06f0ce1ab5739515c68269a5cba9f0ff3a04",
+        "crates/colossus-cloud-server/src/hosted/oauth_shared.rs": "e75bcc97b4cd7a93f316d6d50e603a60339ee175d2b54dc6daae1fc8647e0057",
+        "crates/colossus-cloud-server/src/hosted/pool.rs": "e734a0c5d068e5b198008e95fac6ed4ee01687176cae84b6921e1788df19f1ac",
+        "crates/colossus-cloud-server/src/hosted/shared.rs": "336eb2bef2e7138d4122ba8d7a4258daaf8b31372043d58a0f0ed1deb14a03cb",
+        "crates/colossus-cloud-server/src/hosted/title_recovery.rs": "a796331a203b2443dd2132d3340c5d0d3a3eb0fd6bd9bf449db8b44b1b4566c4",
+        "crates/colossus-cloud-server/src/hosted/title_recovery/tests.rs": "639f5b774bf2c20d29f55b34e92539c85b06e57ea3248da9665722fc271f8a58",
+        "crates/colossus-cloud-server/src/hosted/transcript.rs": "aa482090b0dbd446dc9368574170c81e42b75b4ccc2dd0101b5a2b43a6276ea0",
+        "crates/colossus-cloud-server/src/hosted/worker.rs": "cff7ea1fa5fba29b0b7eccef0ac6d289cca2cdb0558e1a7fe97a79e5f184fab3",
+        "crates/colossus-cloud-server/src/hosted/worker/tests.rs": "c6d8e47db0d0696df31c1c3bb2f6917840a634a1a0d02fa4a6dc5394dda2b70f",
+        "crates/colossus-cloud-server/src/http.rs": "b9adb346437e2fef38963eb3b08092cb523af479d0b5af9105105dc60157aada",
+        "crates/colossus-cloud-server/src/http/branches.rs": "e85ae0f55001fc8c684eb9b63c4c79d94e884ba6675451c69d1ba68cd22a818e",
+        "crates/colossus-cloud-server/src/http/diagnostics.rs": "9904dc6d778114613ffc128730bf7b7a64f8db4c33f06de3b0cff5b683990251",
+        "crates/colossus-cloud-server/src/http/diagnostics/tests.rs": "4f8fa019f6a2f58e918d6f0fc673bceeadb11ce8e7950f9078519d041d342e21",
+        "crates/colossus-cloud-server/src/http/spa.rs": "9da3f2b639fe47b4903c6d06b33a5019a9a21f69462e000a5cc890fca42fe1b6",
+        "crates/colossus-cloud-server/src/http/spa/tests.rs": "5dc480de979a9292e683a236d97b940d2bab1574243bebdc183f88a3908bc661",
+        "crates/colossus-cloud-server/src/http/thread_metadata.rs": "fd8c8e9a6d7f46e8e102568ddae5d51a32d80085ae0ce79914a9525d9879a16b",
+        "crates/colossus-cloud-server/src/lib.rs": "dc7a0899fbb3baff26c29522f39335e7082adc4da5509799f5bc81be7fb64fce",
+        "crates/colossus-cloud-server/src/main.rs": "d2ea66664bfd2c90bbf92d53ed863510b498027a8fabb6f43212340ff922556d",
+        "crates/colossus-cloud-server/src/observability.rs": "fb7722171c9d35ffd330ffe59a544ae88fd34273a38162b66df7690888360866",
+        "crates/colossus-cloud-server/src/resources.rs": "780c78f1cf02feddab52dd9b1fa47b86f5aeb7b8ee392d7bf76e7b42d605b32f",
+        "crates/colossus-cloud-server/src/runtime_connection_limit.rs": "844d2e42abb2c7802b8de5b4418bdab5cb433c728cf8b57ad79c30459762f4a6",
+        "crates/colossus-cloud-server/src/runtime_connection_limit/tests.rs": "75b4a3cead7c71b82f36cc6c8e33a6d35040dc8ded9b81c75ee15e26c0b481c6",
+        "crates/colossus-cloud-server/src/server.rs": "11405f32676f90babe6fcbd837bb458f383846c6fcab757e4282a98838596a63",
+        "crates/colossus-cloud-server/src/settings.rs": "aaefb0e22e99bd8f4298267e9b67e8a25a6f88806e0c5912ff69dfe730d32cfc",
+        "crates/colossus-cloud-server/src/telemetry_host.rs": "0d876204d2262b21f6ce3e027cd808ffa6d4c8356e35e65d04cd6a32a729f37b",
+        "crates/colossus-cloud-server/src/terminal.rs": "b1318ca2d1253bda443be72fc619731f524f1076c77575877cf32f8f723df189",
+        "crates/colossus-cloud-server/src/terminal/browser.rs": "2987f188583480a8a0cd7ce8e8d2ee4f6fe3dac639df14716bedcfa2eaee3a5c",
+        "crates/colossus-cloud-server/src/terminal/hub.rs": "71bc969a2e112838c0d489fb9e384aaaee63c62fd7703ed94ca101fd6b501c1d",
+        "crates/colossus-cloud-server/src/terminal/hub/tests.rs": "e9a8d4ffd90722c911c66d96cbfd47d89ec28d7eba9deaf4094efb81c67091ef",
+        "crates/colossus-cloud-server/src/terminal_relay.rs": "f8038fe54971862842d3ad17adaec1629e5a2d8c0fc2bd00196562e979687ba3",
+        "crates/colossus-cloud-server/src/terminal_relay/identity.rs": "4e54cf421585fa51902495f53e7faf45e9c789232db1a8289b85b013b58b2fb4",
+        "crates/colossus-cloud-server/src/terminal_relay/tests.rs": "e9f672e3954d6a1def1c6cdced41c318e4a669041fd00edf232f78a498f6a457",
+        "crates/colossus-cloud-server/src/tls.rs": "59f203018001a74176e2c9e139541a252c82ccc6cacfa0783920529abb5a8767",
+        "crates/colossus-cloud-server/src/transcript_export.rs": "c68dd87728dd05c98f8089448e4376f69213e7440fd5e3d15a95d0fbc41d63a5",
+        "crates/colossus-cloud-server/src/transcript_export/tests.rs": "dd5db8c57a8b1219efd03729bac102bce15fa07137f4d0cafed1ed96b3091378",
+        "crates/colossus-cloud-server/tests/helm_chart.rs": "f9f6e7f2eded274fdbb124ec30d540f565e679dc242663442d873a414d0e7a71"
+      },
+      "references": [
+        "crates/colossus-cloud-server/src/auth.rs"
+      ]
+    },
+    "desktop": {
+      "files": {},
+      "references": []
+    }
+  },
+  "application_use_contract": "Conservative normalized SHA256 file-set binding covers all Rust files only in the direct local chrono consumer colossus-cloud-server, including new/untracked and removed files. This catches new alias/re-export uses with unchanged dependency metadata and requires independent security/architecture review and revalidated scope for any Rust edit in that direct application crate before updating this record. Such unchanged-risk review never extends expiry, package/version/advisory or parent scope. The supplementary lexical chrono token inventory has conservative false positives and is not whole-program information-flow proof; unrelated crates are not frozen and external parents remain bound by exact registry versions/source/graph."
+}

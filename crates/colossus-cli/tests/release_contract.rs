@@ -719,64 +719,106 @@ fn retired_lru_advisory_exception_is_absent_and_dependency_is_patched() {
 
 #[test]
 fn oidc_public_verification_exception_is_exact_and_scoped() {
-    const ADVISORIES: [&str; 2] = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0387"];
+    const RSA: &str = "RUSTSEC-2023-0071";
+    const RETIRED_EC: &str = "RUSTSEC-2026-0387";
+    const CHRONO: &str = "RUSTSEC-2026-0543";
     let root = repository_root();
     let deny = fs::read_to_string(root.join("deny.toml")).unwrap();
     assert_eq!(
         deny.matches("RUSTSEC-").count(),
-        ADVISORIES.len(),
-        "the policy permits only the reviewed RSA and EC verification exceptions"
+        1,
+        "cargo-deny permits only the reviewed RSA public-verification ignore"
     );
-    for advisory in ADVISORIES {
-        assert!(deny.contains(&format!("id = \"{advisory}\"")));
-    }
-    assert!(deny.contains("no application RSA private-key operations"));
-    assert!(deny.contains("application secret signing uses patched crypto-bigint"));
+    assert!(deny.contains(&format!("id = \"{RSA}\"")));
+    assert!(deny.contains("no private-key operation through this rsa dependency"));
     for path in [
+        "deny.toml",
         "xtask/src/checks/surfaces.rs",
         "release/verify-release-readiness.sh",
-        "docs/develop/adr/0006-cloud-control-plane.md",
+        "scripts/ci/dependency-policy.py",
     ] {
         let source = fs::read_to_string(root.join(path)).unwrap();
-        for advisory in ADVISORIES {
-            assert!(
-                source.contains(advisory),
-                "{path} must document the exact exception {advisory}"
-            );
-        }
-    }
-
-    let verifier = fs::read_to_string(root.join("release/verify-release-readiness.sh")).unwrap();
-    let audit = verifier
-        .lines()
-        .find(|line| line.starts_with("run cargo audit ") && line.ends_with("--file Cargo.lock"))
-        .expect("root release audit command");
-    let arguments = audit.split_whitespace().collect::<Vec<_>>();
-    let mut ignored = arguments
-        .windows(2)
-        .filter_map(|pair| (pair[0] == "--ignore").then_some(pair[1]))
-        .collect::<Vec<_>>();
-    ignored.sort_unstable();
-    assert_eq!(
-        ignored,
-        ["RUSTSEC-2023-0071", "RUSTSEC-2026-0387"],
-        "the release audit must carry only the reviewed OIDC exceptions"
-    );
-    let xtask = fs::read_to_string(root.join("xtask/src/checks/surfaces.rs")).unwrap();
-    for name in [
-        "OIDC_RSA_PRIVATE_KEY_ADVISORY",
-        "OIDC_EC_PRIVATE_KEY_ADVISORY",
-    ] {
-        assert_eq!(
-            xtask.matches(name).count(),
-            2,
-            "{name} belongs only in its declaration and root audit command"
+        assert!(
+            !source.contains(RETIRED_EC),
+            "{path} must not retain the retired EC advisory exception"
         );
     }
+
+    let adr = fs::read_to_string(root.join("docs/develop/adr/0006-cloud-control-plane.md"))
+        .unwrap()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for required in [
+        RSA,
+        "only to verify provider signatures with public keys",
+        "no application path signs or decrypts with private keys through this `rsa` dependency",
+        "remove it when the dependency no longer contains the affected version",
+    ] {
+        assert!(
+            adr.contains(required),
+            "ADR 0006 must retain the RSA scope: {required}"
+        );
+    }
+    let xtask = fs::read_to_string(root.join("xtask/src/checks/surfaces.rs")).unwrap();
+    assert!(xtask.contains(".args([\"-B\", \"scripts/ci/dependency-policy.py\"])"));
+    let verifier = fs::read_to_string(root.join("release/verify-release-readiness.sh")).unwrap();
+    assert!(
+        verifier
+            .contains("run \"${PYTHON:-python3}\" -B scripts/ci/dependency-policy.py --root-only")
+    );
+    let helper = fs::read_to_string(root.join("scripts/ci/dependency-policy.py")).unwrap();
+    assert!(helper.contains(&format!("RSA = \"{RSA}\"")));
+    let audit_command = helper
+        .split_once("def audit_command(cargo, database, graph):")
+        .expect("canonical graph audit command")
+        .1
+        .split("\ndef ")
+        .next()
+        .unwrap();
+    assert!(audit_command.contains(
+        "if graph == \"root\":\n        args.extend([\"-D\", \"warnings\", \"--ignore\", RSA])"
+    ));
+    assert_eq!(
+        audit_command.matches("\"--ignore\"").count(),
+        1,
+        "only the root RSA ignore belongs in the shared audit command"
+    );
+    assert!(helper.contains("settings.get(\"ignore\") == ([RSA] if graph == \"root\" else [])"));
+    assert!(
+        !deny.contains(CHRONO),
+        "chrono must not become a static ignore"
+    );
+    let policy: Value = serde_json::from_str(
+        &fs::read_to_string(root.join("ci/dependency-policy/chrono-2026-0543.json")).unwrap(),
+    )
+    .expect("separate approved chrono policy");
+    assert_eq!(policy["reviewed_finding"]["advisory"]["id"], CHRONO);
+    assert_eq!(
+        policy["reviewed_finding"]["advisory"]["informational"],
+        "unmaintained"
+    );
+    assert_eq!(
+        policy["approval"]["decision"],
+        "Approve 30-day scoped exception"
+    );
+    assert_eq!(policy["approval"]["expires_utc"], "2026-12-19T00:00:00Z");
+    assert_eq!(
+        policy["package"],
+        serde_json::json!({
+            "name": "chrono",
+            "version": "0.4.45",
+            "source": "registry+https://github.com/rust-lang/crates.io-index",
+        })
+    );
+    assert_eq!(
+        policy["removal"]["automatic_renewal"].as_bool(),
+        Some(false)
+    );
 }
 
 #[test]
-fn oidc_legacy_ec_exception_keeps_its_wrappers_and_removal_condition() {
+fn oidc_legacy_ec_exception_is_retired_and_wrapper_bans_remain() {
     let root = repository_root();
     let deny = fs::read_to_string(root.join("deny.toml")).unwrap();
     let wrappers = [
@@ -794,17 +836,52 @@ fn oidc_legacy_ec_exception_keeps_its_wrappers_and_removal_condition() {
         let rule = format!("{{ crate = \"{crate_spec}\", wrappers = [{parents}],");
         assert!(deny.contains(&rule), "missing scoped legacy ban {rule}");
     }
+    for path in ["Cargo.lock", "apps/desktop/src-tauri/Cargo.lock"] {
+        let lock = fs::read_to_string(root.join(path)).unwrap();
+        let versions = lock
+            .split("[[package]]")
+            .filter(|package| {
+                package
+                    .lines()
+                    .any(|line| line == "name = \"crypto-bigint\"")
+            })
+            .map(|package| {
+                package
+                    .lines()
+                    .find_map(|line| line.strip_prefix("version = \"")?.strip_suffix('"'))
+                    .expect("crypto-bigint version")
+                    .split('.')
+                    .map(|component| {
+                        component
+                            .parse::<u64>()
+                            .expect("numeric crypto-bigint version")
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !versions.is_empty(),
+            "{path} must retain the patched arithmetic"
+        );
+        assert!(
+            versions
+                .iter()
+                .all(|version| version.as_slice() >= [0, 7, 6].as_slice()),
+            "{path} must not restore the retired EC arithmetic"
+        );
+    }
     let adr = fs::read_to_string(root.join("docs/develop/adr/0006-cloud-control-plane.md"))
         .unwrap()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
     for required in [
+        "OpenID Connect 4.1.0 adopts P-256/P-384 0.14",
+        "neither dependency scanner retains the EC advisory exception",
         "client-secret checks use HMAC and access-token hashes use SHA",
-        "No application path supplies EC private scalars or signing nonces to it",
-        "The Desktop dependency graph contains no affected arithmetic",
-        "wrapper rules do not pin parent versions",
-        "Remove the exception and wrapper rules when OpenID Connect adopts patched arithmetic",
+        "Application code does not supply EC private scalars or signing nonces",
+        "wrapper rules do not pin parent versions or exempt advisories",
+        "Any future exception or legacy EC secret operation requires a new review",
     ] {
         assert!(adr.contains(required), "ADR 0006 must retain {required}");
     }
