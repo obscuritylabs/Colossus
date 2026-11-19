@@ -3,6 +3,8 @@ use std::{env, error::Error, fs, io::Read as _, path::Path};
 
 #[path = "../../colossus-runtime/src/browser_package/windows_preview_manifest.rs"]
 mod descriptor;
+#[path = "windows_browser_release_policy.rs"]
+mod release_policy;
 
 pub(super) fn embed() -> Result<(), Box<dyn Error>> {
     const NAME: &str = "COLOSSUS_SIDECAR_WINDOWS_BROWSER_FUNCTIONAL_PREVIEW";
@@ -13,17 +15,16 @@ pub(super) fn embed() -> Result<(), Box<dyn Error>> {
         fs::write(output, [])?;
         return Ok(());
     }
+    let release_channel = env::var("COLOSSUS_DESKTOP_RELEASE_CHANNEL");
     if env::var("TARGET")? != descriptor::TARGET
-        || env::var("PROFILE")? != "release"
-        || !matches!(
-            env::var("COLOSSUS_DESKTOP_RELEASE_CHANNEL").as_deref(),
-            Ok("developer_preview" | "validation_only")
+        || !release_policy::admitted(
+            &env::var("PROFILE")?,
+            release_channel.as_deref().ok(),
+            env::var_os("CARGO_FEATURE_WINDOWS_BROWSER_DEVELOPMENT").is_some(),
         )
-        || env::var_os("CARGO_FEATURE_WINDOWS_BROWSER_DEVELOPMENT").is_some()
     {
         return Err(
-            "functional-preview browser requires its explicit Windows x64 Release preview edition"
-                .into(),
+            "functional-preview browser requires its explicit Windows x64 Release edition".into(),
         );
     }
     let selected = env::var_os(NAME).ok_or("compiler-selected preview seal required")?;

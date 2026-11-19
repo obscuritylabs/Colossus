@@ -131,10 +131,11 @@ root sidecar and independent Desktop, browser and native-computer graphs. Tantiv
 Ratatui use patched `lru` 0.18.2 without an advisory exception. Any new exception must
 name the exact advisory in every reporting scanner, explain unreachability and define removal.
 
-The exact `RUSTSEC-2026-0387` exception covers only OpenID Connect's remaining public
-P-256/P-384 verification stack. Application certificate signing uses patched arithmetic,
-and wrapper bans reject direct use of the legacy APIs. The reachability review and
-removal condition are recorded in [ADR 0006](adr/0006-cloud-control-plane.md#consequences).
+OpenID Connect 4.1.0 removes the legacy P-256/P-384 verification stack, so neither
+scanner retains a `RUSTSEC-2026-0387` exception. Existing wrapper bans still constrain
+legacy API imports; they do not exempt advisories. The remaining RSA public-key
+verification exception and its removal condition are recorded in
+[ADR 0006](adr/0006-cloud-control-plane.md#consequences).
 
 Classification, Conventional Commit title validation and aggregate decisions execute
 contracts from the **PR base revision**, never their proposed replacements. The initial

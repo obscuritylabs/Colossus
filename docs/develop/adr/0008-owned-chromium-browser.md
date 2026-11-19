@@ -182,10 +182,11 @@ signed-package acceptance. Ordinary-user client-key requests use the exact nativ
 handshake approval described below.
 
 The separate `windows-browser-functional-preview` edition packages this same
-ordinary-user boundary for Windows x64 Developer Previews. It is explicitly
-selected at compilation and cannot be enabled in an ordinary stable build or
-by runtime environment variables. The native CEF host is separate from Desktop;
-Desktop links only the Win32 pixel presenter. The installer includes the pinned
+ordinary-user boundary for Windows x64 stable and Developer Preview installers.
+Both release channels explicitly select it at compilation; runtime environment
+variables cannot enable it or select its payload. The edition's functional-preview
+label does not grant production component acceptance. The native CEF host is
+separate from Desktop; Desktop links only the Win32 pixel presenter. The installer includes the pinned
 host, helpers, libraries, resources and notices. All executable/DLL signing
 finishes before a fresh false-mode component inventory is sealed. The subsequently
 signed sidecar embeds that exact inventory digest and a fixed installation-relative
@@ -317,12 +318,13 @@ and custody crash recovery remain unaccepted. Reproduction and evidence scope ar
 | PKI | Native exact-origin reviewed identity selection; Linux owned NSS provisioning and actual Core per-request fixtures. A signed Mac no-CEF fixture passed private Keychain import, server-observed native mTLS, socket drainage and durable exact-generation removal while default/search metadata stayed unchanged | Linux broker custody remains unaccepted. Mac Core enrollment, full-component key isolation and custody crash recovery require acceptance; Windows owned-store and broker acceptance remain incomplete. Existing OS-user stores are not isolated by a temporary browser profile |
 | Persistent profiles | Linux native store, exclusive lease, compatibility/dirty/reset behavior and independent tool filesystem denial; actual five-host cookie restart/reset/temporary-isolation proof | Encryption and disk quota, native management and Desktop controls. Production configuration remains disabled |
 | Multi-origin browsing | Runtime defaults request public HTTPS browsing; the effect gateway narrows this to the permit's network authority. The immutable native enrollment and proxy bind that grant, while private destinations still need exact admission | Native public-page acceptance on each supported platform; interactive expansion of restricted origin lists remains future work |
-| Shipping package | Shared verifier, compiler-bound publisher seal and offline Linux package builder | Independently reviewed signed component/image receipts and accepted distribution. Headless and Embedded modes stay disabled until their own acceptance passes |
+| Shipping package | Shared verifier, compiler-bound publisher seal and offline Linux package builder; Windows x64 stable and preview installers explicitly select the ordinary-user functional edition | Exact signed installed Windows functional acceptance remains required for each release. Independently reviewed component/image receipts and accepted distribution remain necessary for production modes; Headless and Embedded modes stay disabled until their own acceptance passes |
 
 These include implementation work as well as platform tests. Enabling an inventory
 flag, running a preview, or passing a fixture cannot substitute for missing
-capabilities or publisher acceptance. The platform WebView remains the shipping
-human browsing surface, and a later extension adapter remains outside this change.
+capabilities or publisher acceptance. The platform WebView remains the separate
+human sign-in surface. Windows functional installers also include owned Chromium;
+other platforms and a later extension adapter retain their existing availability.
 
 ## Consequences
 
@@ -330,10 +332,11 @@ Core, workflows, CLI, and Desktop can share one tool and ownership contract with
 linking runtime or policy implementation into Desktop. A later MCP facade or browser
 extension can implement the same port without creating another policy path.
 
-The implementation includes shared owned control and an explicit native preview boundary.
-It does not change the shipping platform-WebView default until native platform
-acceptance and the private bridge are complete. Engine replacement, native PKI,
-unattended operation, and shared-page automation each require their own evidence.
+The implementation includes shared owned control and an explicit native functional boundary.
+Windows x64 stable and preview installers select owned Chromium for that functional
+edition. Human WebView2 sign-in profiles retain their separate host and authority.
+Other platforms, native PKI, unattended operation, and shared-page automation each
+require their own evidence.
 Snapshots remain bounded text observations. Screenshots use a closed native capture
 action and authenticated 64 KiB chunks; the complete bounded PNG enters the effect
 gateway before an owner-bound RunOutput artifact and typed model image are published.

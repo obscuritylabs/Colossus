@@ -76,7 +76,7 @@ $StagedRipgrep = Join-Path $Native "binaries/rg-$Target.exe"
 $BrowserPreview = $env:COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW -eq '1'
 $BrowserComponent = $env:COLOSSUS_BROWSER_PREVIEW_COMPONENT
 if ($BrowserPreview) {
-    if ($env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -notin @('developer_preview', 'validation_only') -or
+    if ($env:COLOSSUS_DESKTOP_RELEASE_CHANNEL -notin @('stable', 'developer_preview', 'validation_only') -or
         -not $BrowserComponent -or -not [IO.Path]::IsPathFullyQualified($BrowserComponent) -or
         -not (Test-Path -LiteralPath (Join-Path $BrowserComponent 'browser-component.json') -PathType Leaf) -or
         -not $env:COLOSSUS_SIDECAR_WINDOWS_BROWSER_FUNCTIONAL_PREVIEW -or

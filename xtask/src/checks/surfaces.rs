@@ -3,15 +3,10 @@ use std::{env, ffi::OsString};
 use super::stages::{CompletedStages, Stage};
 use crate::repository::Repository;
 
-// OpenID Connect validates provider signatures with public keys only. No RSA
-// private keys are created or used; cloud certificate issuance is Ed25519.
+// OpenID Connect uses this rsa dependency only for public-key verification.
+// TLS client identities use rustls separately; cloud issuance is Ed25519.
 // Keep this exact exception aligned with deny.toml and ADR 0006.
 const OIDC_RSA_PRIVATE_KEY_ADVISORY: &str = "RUSTSEC-2023-0071";
-
-// OpenID Connect's legacy EC arithmetic only verifies public provider signatures.
-// Application secret signing uses p256 0.14 / crypto-bigint 0.7.10. Keep this exact
-// exception aligned with deny.toml and ADR 0006, including its wrapper bans.
-const OIDC_EC_PRIVATE_KEY_ADVISORY: &str = "RUSTSEC-2026-0387";
 
 pub(super) fn sidecar(repository: &Repository) -> Result<(), String> {
     repository
@@ -365,8 +360,6 @@ pub(super) fn dependencies(repository: &Repository) -> Result<(), String> {
             "warnings",
             "--ignore",
             OIDC_RSA_PRIVATE_KEY_ADVISORY,
-            "--ignore",
-            OIDC_EC_PRIVATE_KEY_ADVISORY,
             "--file",
             "Cargo.lock",
         ],

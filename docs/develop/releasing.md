@@ -318,8 +318,10 @@ omit the four bootstrap installer assets because bootstrap installation requires
 tag and binary versions to match. Stable tags and already-versioned preview sources
 still require an exact version match.
 
-Windows Developer Previews select the explicit `windows-browser-functional-preview`
-edition. The release job builds the pinned separate CEF host, signs its executable
+Windows x64 stable and Developer Preview installers select the explicit
+`windows-browser-functional-preview` edition. The edition's functional-preview
+label describes its browser boundary independently of the application release
+channel. The release job builds the pinned separate CEF host, signs its executable
 and DLL payload, then creates a fresh inventory. Only afterward does it compile
 the inventory digest and fixed `browser/component` resource location into the
 sidecar, sign that sidecar and bind the normal Desktop bundle manifest. The
@@ -329,10 +331,12 @@ Windows Desktop is distributed through that per-user NSIS installer, not a porta
 ZIP. Extracting installer contents or copying an app directory does not establish
 the component access rules. Windows CLI ZIPs do not contain this browser edition.
 
-This is an ordinary-user functional preview: Chromium's sandbox and supervised
-cleanup remain enabled, while whole-host restrictive egress and private certificate
-custody remain unavailable. Stable packaging does not select this edition. Manual
-validation dispatches build its unsigned bytes without publisher authority.
+This is an ordinary-user functional edition: Chromium's sandbox and supervised
+cleanup remain enabled, while whole-host restrictive egress, private certificate
+custody and production component acceptance remain unavailable. Both published
+channels require signature verification before inventory sealing. Manual preview
+validation dispatches build its unsigned bytes without publisher authority; manual
+stable validation retains its existing omission of Windows Desktop packaging.
 Before publishing the signed draft, verify its installed inventory and signatures
 and retain ordinary-user native browser acceptance from those exact installed
 bytes, including input, screenshots, background/restore, completion and cleanup.

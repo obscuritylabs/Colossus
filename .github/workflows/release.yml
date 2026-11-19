@@ -1081,7 +1081,9 @@ jobs:
       COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC
       COLOSSUS_DESKTOP_UPDATE_ENDPOINT: ""
       COLOSSUS_DESKTOP_UPDATE_PUBLIC_KEY: ""
-      COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW: ${{ needs.validate.outputs.release_channel == 'developer_preview' && '1' || '0' }}
+      # Stable and preview Windows installers carry the explicit functional
+      # edition; its containment and certificate-custody claims remain false.
+      COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW: "1"
       SCCACHE_GHA_ENABLED: "true"
     steps:
       - name: Check out repository

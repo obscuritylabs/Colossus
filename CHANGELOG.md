@@ -8,6 +8,46 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Highlights
+
+- Export a fixed snapshot of a saved conversation as Markdown, plain text or JSON
+  from the CLI, TUI, Desktop and connected Hosted/Fleet Web Chat. Export reads
+  retained history across runs, including messages from before context compaction,
+  and reports failures instead of a successful shortened transcript.
+- Follow one other open conversation in the full-screen TUI. Pin its read-only
+  live transcript from the Sessions browser while keeping the active draft and
+  reading position. Embedded and worker-backed terminals support this workflow.
+- Opt in to remote MCP Tasks during ordinary local CLI/TUI Execute runs with a
+  file-backed redb store. Explicitly selected tools on pinned 2026 Streamable HTTP
+  servers can remain pending until their result is released; observations and
+  cancellation requests remain subject to the originating run's policy.
+- Browse older Desktop conversations as you scroll beyond the former 200-entry
+  cutoff. Progressive paging retains lightweight history summaries while a
+  virtual list bounds the rendered rows.
+- Windows x64 stable Desktop packaging now selects the owned Chromium functional
+  edition previously selected for previews. Chromium's sandbox and supervised
+  cleanup remain enabled. Whole-host restrictive egress and private certificate
+  custody remain unavailable.
+
+### Scope and limitations
+
+- Conversation export includes saved human/application input and released visible
+  assistant text. It excludes hidden reasoning, system instructions, peer-agent
+  messages, and tool calls/results. Images and opaque attachment references use
+  metadata placeholders; text already saved in messages remains included. Export
+  requires a supporting source runtime and current read access; the VS Code
+  extension has no human export command.
+- Remote Tasks remain unavailable in standalone `mcp call`, OAuth-based servers,
+  Agent Plugins, stdio, legacy protocols and hosted/Fleet runs. Stop requests
+  remote cancellation when policy and time allow; only an observed terminal state
+  confirms it. Interrupted or unconfirmed work can remain unknown.
+- The browser packaging change applies to the Windows x64 Desktop installer.
+  Standalone CLI/TUI archives gain no browser payload, and macOS/Linux browser
+  boundaries are unchanged. This functional edition does not establish
+  production browser acceptance.
+- SDK candidate archives use version 0.12.1, but this release disables SDK
+  registry publication. It does not publish npm/PyPI packages or a Go module tag.
+
 ## [0.12.0] - 2026-11-16
 
 ### Highlights

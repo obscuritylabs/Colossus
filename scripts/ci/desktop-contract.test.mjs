@@ -137,6 +137,20 @@ test(
   },
 );
 
+test(
+  "Windows stable and preview browser publication preserve signed admission",
+  { skip: process.platform !== "win32" },
+  () => {
+    const result = spawnSync(
+      "pwsh",
+      ["-NoProfile", "-NonInteractive", "-File", join(repository, "scripts/ci/browser-release-policy.test.ps1")],
+      { encoding: "utf8", timeout: 15000, maxBuffer: 32768, windowsHide: true },
+    );
+    assert.equal(result.status, 0, result.stderr || result.error?.message);
+    assert.match(result.stdout, /PASS stable and preview browser admission preserves signing and sealed inputs/u);
+  },
+);
+
 function filesUnder(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
@@ -1558,6 +1572,8 @@ test("Developer Preview compilation and ad-hoc signing use separate runners", ()
   assert.match(signedWindowsJob, /environment: release-signing/u);
   assert.match(signedWindowsJob, /id-token: write/u);
   assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_TEAM_ID: OBSCURITY_LABS_LLC/u);
+  assert.match(signedWindowsJob, /COLOSSUS_DESKTOP_BROWSER_FUNCTIONAL_PREVIEW: "1"/u);
+  assert.doesNotMatch(signedWindowsJob, /release_channel == 'developer_preview' && '1' \|\| '0'/u);
   const signedSteps = signedWindowsJob
     .replaceAll("\r\n", "\n")
     .split(/^      - /mu)

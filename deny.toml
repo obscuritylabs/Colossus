@@ -12,14 +12,10 @@ all-features = true
 [advisories]
 ignore = [
     # OIDC verifies signatures with public keys only; certificate issuance is
-    # Ed25519. No application path performs RSA private-key operations.
+    # Ed25519. No application path performs private-key operations through this
+    # rsa dependency; TLS client identities use a separate rustls implementation.
     # See ADR 0006. Remove when OpenID Connect drops the affected dependency.
-    { id = "RUSTSEC-2023-0071", reason = "OIDC public-key verification is outside the private-key timing attack; no application RSA private-key operations" },
-    # Only OpenID Connect retains crypto-bigint 0.5.5, for public P-256/P-384
-    # signature verification. Secret signing uses p256 0.14 / crypto-bigint 0.7.10.
-    # The wrapper bans below reject direct imports of the legacy arithmetic.
-    # See ADR 0006; remove when OpenID Connect adopts patched arithmetic.
-    { id = "RUSTSEC-2026-0387", reason = "Legacy EC arithmetic is confined to OIDC public-key verification; application secret signing uses patched crypto-bigint" },
+    { id = "RUSTSEC-2023-0071", reason = "OIDC public-key verification is outside this dependency's private-key timing attack; no private-key operation through this rsa dependency" },
 ]
 
 [licenses]
