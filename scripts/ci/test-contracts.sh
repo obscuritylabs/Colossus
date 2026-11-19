@@ -320,17 +320,17 @@ if $script_dir/require-success.sh eligibility=skipped >/dev/null 2>&1; then
     exit 1
 fi
 
-# The policy helper is Python 3.10 stdlib, and that exact existing tool pin must
-# be provisioned in each consuming job before policy execution. Ubuntu 26.04
-# has no setup-python 3.10.18 build; actual 26.04 platform acceptance is separate.
+# Policy-only jobs keep Python 3.10.18; release readiness also runs portable
+# contracts requiring Python 3.11+ and cryptography. Each consumer provisions
+# its own runtime on Ubuntu 24.04; actual 26.04 platform acceptance is separate.
 "${NODE:-node}" --input-type=module - "$script_dir/../../.github/workflows/pr.yml" "$script_dir/../../.github/workflows/premerge.yml" "$script_dir/../../.github/workflows/release.yml" <<'NODE'
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-for (const [path, name, command] of [
-  [process.argv[2], 'dependency-policy', 'run: cargo xtask check dependencies'],
-  [process.argv[3], 'supply-chain', 'run: cargo xtask check dependencies'],
-  [process.argv[4], 'validate', 'run: ./release/verify-release-readiness.sh'],
+for (const [path, name, command, version] of [
+  [process.argv[2], 'dependency-policy', 'run: cargo xtask check dependencies', '3.10.18'],
+  [process.argv[3], 'supply-chain', 'run: cargo xtask check dependencies', '3.10.18'],
+  [process.argv[4], 'validate', 'run: ./release/verify-release-readiness.sh', '3.12.16'],
 ]) {
   const source = readFileSync(path, 'utf8').replaceAll('\r\n', '\n');
   const start = source.indexOf('\n  ' + name + ':\n');
@@ -339,17 +339,34 @@ for (const [path, name, command] of [
   const end = rest.slice(1).search(/^  [\w-]+:$/mu);
   const job = end < 0 ? rest : rest.slice(0, end + 1);
   assert.match(job, /^    runs-on: ubuntu-24\.04$/mu,
-    name + ' requires a host with the unchanged Python 3.10.18 build');
+    name + ' requires the reviewed Python host');
   const steps = job.split(/(?=^      - )/mu);
   const python = steps.filter(step => step.includes('uses: actions/setup-python@'));
   assert.equal(python.length, 1, name + ' must provision its own Python, independent of SDK jobs');
   assert.match(python[0], /uses: actions\/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5\.6\.0/u);
-  assert.match(python[0], /^          python-version: 3\.10\.18$/mu);
+  assert.match(python[0], new RegExp('^          python-version: ' + version.replaceAll('.', '\\.') + '$', 'mu'));
   assert.doesNotMatch(python[0], /continue-on-error:|^        if:/mu);
   const setup = job.indexOf(python[0]);
   const use = job.indexOf(command);
   assert.ok(setup >= 0 && use > setup + python[0].length,
     name + ' must finish mandatory Python provisioning before the policy consumer');
+  if (name === 'validate') {
+    assert.match(python[0], /^        id: contract_python$/mu);
+    const prerequisites = steps.filter(step => step.startsWith('      - name: Provision release-contract Python prerequisites\n'));
+    assert.equal(prerequisites.length, 1, 'release validation must provision portable-contract prerequisites');
+    const provision = prerequisites[0];
+    assert.match(provision, /^          PYTHON: \$\{\{ steps\.contract_python\.outputs\.python-path \}\}$/mu);
+    assert.match(provision, /"\$PYTHON" -m pip install --disable-pip-version-check --only-binary=:all: "cryptography==50\.0\.2"/u);
+    for (const required of ['set -euo pipefail', 'import cryptography', 'from cryptography import x509', 'sys.version_info < (3, 11)', 'getattr(hashlib, "file_digest", None)', 'cryptography.__version__ != "50.0.2"', 'raise SystemExit(', 'printf \'PYTHON=%s\\n\' "$PYTHON" >> "$GITHUB_ENV"']) {
+      assert.ok(provision.includes(required), 'missing fail-fast release Python prerequisite: ' + required);
+    }
+    assert.doesNotMatch(provision, /continue-on-error:|^        if:/mu);
+    assert.ok(job.indexOf(provision) > setup && job.indexOf(provision) + provision.length < use,
+      'runtime install/import checks and PYTHON export must finish before expensive readiness Cargo checks');
+    const firstCargo = job.search(/\bcargo (?:metadata|build|test|run|clippy|fmt|xtask)\b/u);
+    assert.ok(firstCargo >= 0 && job.indexOf(provision) + provision.length < firstCargo,
+      'release Python preflight must finish before even the first inline Cargo invocation');
+  }
   const retained = steps.filter(step => step.startsWith('      - name: Retain raw dependency policy evidence\n'));
   assert.equal(retained.length, 1, name + ' must retain its own raw policy diagnostics');
   const evidence = retained[0];

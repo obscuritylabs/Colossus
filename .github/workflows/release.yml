@@ -48,10 +48,29 @@ jobs:
           toolchain: 1.96.0
           components: clippy,rustfmt
 
-      - name: Install Python 3.10 for dependency policy
+      - name: Install Python 3.12 for release contracts
+        id: contract_python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: 3.10.18
+          python-version: 3.12.16
+
+      - name: Provision release-contract Python prerequisites
+        env:
+          PYTHON: ${{ steps.contract_python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          "$PYTHON" -m pip install --disable-pip-version-check --only-binary=:all: "cryptography==50.0.2"
+          "$PYTHON" - <<'PY'
+          import hashlib
+          import sys
+          import cryptography
+          from cryptography import x509
+          if (sys.version_info < (3, 11)
+              or not callable(getattr(hashlib, "file_digest", None))
+              or cryptography.__version__ != "50.0.2"):
+              raise SystemExit("release contracts require Python 3.11+ and cryptography 50.0.2")
+          PY
+          printf 'PYTHON=%s\n' "$PYTHON" >> "$GITHUB_ENV"
 
       - name: Enable shared compiler cache
         id: sccache
