@@ -2093,6 +2093,86 @@ fn public_network_wildcard_excludes_non_public_and_metadata_origins() {
 }
 
 #[test]
+fn public_network_wildcard_rejects_reserved_ipv4_origins() {
+    let wildcard = vec!["*".into()];
+    for public in [
+        "https://example.com/path",
+        "https://223.255.255.254/path",
+        "https://192.0.0.9/path",
+        "https://192.0.0.10/path",
+    ] {
+        assert_eq!(
+            network_destination_match(&wildcard, public).expect("public URL"),
+            Some(NetworkDestinationMatch::PublicWildcard),
+            "{public}"
+        );
+    }
+    for reserved in [
+        "https://240.0.0.0/path",
+        "https://240.0.0.1/path",
+        "https://248.1.2.3/path",
+        "https://255.255.255.254/path",
+    ] {
+        assert_eq!(
+            network_destination_match(&wildcard, reserved).expect("reserved IPv4 URL"),
+            None,
+            "{reserved}"
+        );
+    }
+}
+
+#[test]
+fn public_network_wildcard_rejects_reserved_ipv4_mapped_origins() {
+    let wildcard = vec!["*".into()];
+    for reserved in [
+        "https://[::ffff:240.0.0.0]/path",
+        "https://[::ffff:240.0.0.1]/path",
+        "https://[::ffff:248.1.2.3]/path",
+        "https://[::ffff:255.255.255.254]/path",
+    ] {
+        assert_eq!(
+            network_destination_match(&wildcard, reserved).expect("mapped reserved IPv4 URL"),
+            None,
+            "{reserved}"
+        );
+    }
+}
+
+#[test]
+fn reserved_ipv4_origins_preserve_exact_and_ambient_authority() {
+    for resource in [
+        "https://240.0.0.1/path",
+        "https://255.255.255.254/path",
+        "https://[::ffff:240.0.0.1]/path",
+        "https://[::ffff:255.255.255.254]/path",
+    ] {
+        let mut obligations = super::default_obligations();
+        obligations.network_destinations = vec![
+            "*".into(),
+            super::canonical_network_origin(resource).expect("canonical reserved origin"),
+        ];
+        assert_eq!(
+            http_transport_authority_match(&obligations, resource).expect("exact reserved HTTPS"),
+            Some(NetworkDestinationMatch::Exact),
+            "{resource}"
+        );
+        obligations.resource_authority = ResourceAuthority::Ambient;
+        assert_eq!(
+            http_transport_authority_match(&obligations, resource).expect("ambient reserved HTTPS"),
+            Some(NetworkDestinationMatch::Ambient),
+            "{resource}"
+        );
+        obligations.network_destinations.clear();
+        assert_eq!(
+            http_transport_authority_match(&obligations, resource)
+                .expect("ambient reserved HTTPS without a grant"),
+            Some(NetworkDestinationMatch::Ambient),
+            "{resource}"
+        );
+    }
+}
+
+#[test]
 fn ambient_network_authority_accepts_any_canonical_http_origin_only() {
     let mut obligations = super::default_obligations();
     obligations.resource_authority = ResourceAuthority::Ambient;
