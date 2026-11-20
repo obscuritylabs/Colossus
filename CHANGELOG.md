@@ -8,6 +8,8 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-20
+
 ### Highlights
 
 - Open **Always On Agents** from the Desktop rail to see enrolled agents across
@@ -17,6 +19,24 @@ include breaking changes while the public API is still settling.
 - The local Windows TUI confirms clipboard writes for selected text. For
   terminal-managed copying, the TUI reports a copy request and offers the native
   terminal selection shortcut when confirmation is unavailable.
+
+<!-- colossus:release-notes base=v0.12.1 -->
+
+### Merged changes
+
+#### Added
+
+- add Desktop Always On Agents and repair TUI clipboard ([889c952](https://github.com/obscuritylabs/Colossus/commit/889c9521ec2668e07a402a6d84a01d884a3e8337))
+
+#### Fixed
+
+- **ci:** allow signed Windows packaging to finish cold builds ([b7c303c](https://github.com/obscuritylabs/Colossus/commit/b7c303c10ab761a68e6b889fd245ae748db350b6))
+
+**Source:** [889c952](https://github.com/obscuritylabs/Colossus/commit/889c9521ec2668e07a402a6d84a01d884a3e8337)
+
+**Full changelog:** [v0.12.1...v0.12.2](https://github.com/obscuritylabs/Colossus/compare/v0.12.1...v0.12.2)
+
+<!-- /colossus:release-notes -->
 
 ## [0.12.1] - 2026-11-19
 
