@@ -29,8 +29,10 @@ portable-pty.workspace = true
 serde_json.workspace = true
 vt100.workspace = true
 
-[target.'cfg(windows)'.dev-dependencies]
+[target.'cfg(windows)'.dependencies]
 colossus-windows-native.workspace = true
+
+[target.'cfg(windows)'.dev-dependencies]
 tempfile.workspace = true
 
 [lints]

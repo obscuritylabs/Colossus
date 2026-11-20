@@ -3,7 +3,7 @@ use crate::{
     commands::{target, unary_slot},
     desktop_settings::SettingsStore,
     dto::CommandErrorDto,
-    state::{AppState, SelectedTargetLease, TargetConsentContext},
+    state::{AppState, MAX_LIVE_MANAGED_SPACES, SelectedTargetLease, TargetConsentContext},
 };
 use colossus_contracts::always_on::AlwaysOnProfile;
 use colossus_sdk::{
@@ -12,6 +12,7 @@ use colossus_sdk::{
     WorkflowPage, WorkflowRunSnapshot, WorkflowScheduleSnapshot,
 };
 use colossus_worker_protocol::AlwaysOnCommand;
+use futures_util::{StreamExt as _, stream};
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::State;
@@ -120,6 +121,87 @@ fn bounded_yaml(yaml: &str) -> Result<(), CommandErrorDto> {
 pub(crate) struct DesktopAlwaysOnStatus {
     selection_epoch: u64,
     profile: Option<AlwaysOnProfile>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+enum AlwaysOnWorkspaceStatus {
+    Enrolled { profile: AlwaysOnProfile },
+    Unenrolled,
+    Unavailable,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopAlwaysOnWorkspace {
+    space_id: String,
+    display_name: String,
+    #[serde(flatten)]
+    status: AlwaysOnWorkspaceStatus,
+}
+
+/// Read existing owner-scoped profiles without changing selection or starting workers.
+#[tauri::command]
+pub(crate) async fn list_desktop_always_on(
+    state: State<'_, AppState>,
+) -> Result<Vec<DesktopAlwaysOnWorkspace>, CommandErrorDto> {
+    let settings = SettingsStore::open_application()?.load()?;
+    let live_targets = state.live_managed_target_ids().await;
+    let state = state.inner();
+    let rows = stream::iter(settings.spaces.into_iter().filter(|space| !space.archived))
+        .map(|space| {
+            let live = live_targets.contains(&space.id);
+            async move {
+                let status = if live {
+                    read_always_on_workspace(state, &space.id).await
+                } else {
+                    AlwaysOnWorkspaceStatus::Unavailable
+                };
+                DesktopAlwaysOnWorkspace {
+                    space_id: space.id,
+                    display_name: space.display_name,
+                    status,
+                }
+            }
+        })
+        .buffered(MAX_LIVE_MANAGED_SPACES)
+        .collect()
+        .await;
+    Ok(rows)
+}
+
+async fn read_always_on_workspace(state: &AppState, space_id: &str) -> AlwaysOnWorkspaceStatus {
+    let Some(target) = state
+        .target(space_id)
+        .await
+        .filter(|target| matches!(target.consent, TargetConsentContext::ManagedLocal))
+    else {
+        return AlwaysOnWorkspaceStatus::Unavailable;
+    };
+    let Ok(_slot) = unary_slot(&target) else {
+        return AlwaysOnWorkspaceStatus::Unavailable;
+    };
+    let Ok(worker) = crate::managed_diagnostics::worker_for(state, space_id).await else {
+        return AlwaysOnWorkspaceStatus::Unavailable;
+    };
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        worker.always_on(AlwaysOnCommand::Status),
+    )
+    .await;
+    if !state.managed_lifecycle_ready_for(space_id).await
+        || !state
+            .target(space_id)
+            .await
+            .is_some_and(|current| current.same_registration(&target))
+    {
+        return AlwaysOnWorkspaceStatus::Unavailable;
+    }
+    match result {
+        Ok(Ok(Some(profile))) => AlwaysOnWorkspaceStatus::Enrolled { profile },
+        Ok(Ok(None)) => AlwaysOnWorkspaceStatus::Unenrolled,
+        Ok(Err(_)) | Err(_) => AlwaysOnWorkspaceStatus::Unavailable,
+    }
 }
 
 async fn always_on_command(

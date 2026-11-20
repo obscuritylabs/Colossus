@@ -104,6 +104,10 @@ impl TargetHandle {
         self.limits.try_unary_slot()
     }
 
+    pub(crate) fn same_registration(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.limits.unary_slots, &other.limits.unary_slots)
+    }
+
     pub(crate) async fn list_runs(
         &self,
         request: ListRunsRequest,

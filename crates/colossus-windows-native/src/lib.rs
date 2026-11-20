@@ -10,6 +10,11 @@
 mod error;
 mod path;
 
+#[cfg(windows)]
+mod clipboard;
+#[cfg(windows)]
+pub use clipboard::try_copy_local_text;
+
 pub use error::WindowsNativeError;
 pub use path::{
     BoundPath, FileIdentity, create_private_directory, create_private_file, replace_private_file,

@@ -64,7 +64,7 @@ use workflow_commands::{
     create_workflow_schedule, delete_workflow_schedule, desktop_always_on_enable,
     desktop_always_on_pause, desktop_always_on_status, desktop_always_on_wake,
     get_registered_workflow, get_scheduled_workflow_run, get_workflow_schedule,
-    list_registered_workflows, list_workflow_runs, list_workflow_schedules,
+    list_desktop_always_on, list_registered_workflows, list_workflow_runs, list_workflow_schedules,
     register_workflow_definition, set_workflow_schedule_enabled, start_workflow_run,
     validate_workflow_definition, workflow_context,
 };
@@ -468,6 +468,7 @@ pub fn run() {
             list_runs,
             list_shell_sessions,
             workflow_context,
+            list_desktop_always_on,
             desktop_always_on_status,
             desktop_always_on_enable,
             desktop_always_on_pause,

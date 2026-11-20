@@ -1,5 +1,6 @@
 use super::*;
 use crate::companion::CompanionView;
+use crate::selection::CopyFeedback;
 
 const OBSCURITY_LABS_RED: Color = Color::Rgb(213, 16, 48);
 const OBSCURITY_LABS_SEGMENT: &str = "OL //  ";
@@ -44,9 +45,14 @@ pub(super) fn render_with_companion(
         let area = frame.area();
         if area.height > 0 {
             let palette = TerminalPalette::for_preferences(&state.preferences);
+            let hint = match state.text_selection.copy_feedback {
+                CopyFeedback::Ready => " Selection · Ctrl+C copy · Esc clear ",
+                CopyFeedback::Copied => " Selection copied · Esc clear ",
+                CopyFeedback::Requested => " Copy requested · F6 terminal selection ",
+                CopyFeedback::Failed => " Copy failed · F6 terminal selection ",
+            };
             frame.render_widget(
-                Paragraph::new(" Selection · Ctrl+C copy · Esc clear ")
-                    .style(ratatui_style(palette.meta_style())),
+                Paragraph::new(hint).style(ratatui_style(palette.meta_style())),
                 Rect::new(area.x, area.bottom() - 1, area.width, 1),
             );
         }

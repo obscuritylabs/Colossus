@@ -4,6 +4,7 @@ import {
   IconArchive,
   IconCheck,
   IconChevronDown,
+  IconClock,
   IconFolder,
   IconGitFork,
   IconLoader2,
@@ -33,6 +34,7 @@ import {
   runModeLabel,
   selectRecentWork,
   shortDateLabel,
+  type RecentWorkItem,
 } from "../presenters";
 import {
   MAX_WORK_SIDEBAR_WIDTH,
@@ -45,6 +47,7 @@ import {
   normalizeThreadName,
 } from "../thread-names";
 import type {
+  AlwaysOnProfile,
   ConnectionState,
   DesktopCapabilities,
   Run,
@@ -84,6 +87,7 @@ interface WorkSidebarProps {
   terminalConsentPending?: boolean;
   terminalAvailable: boolean;
   activeSessionId: string | null;
+  alwaysOnProfile?: AlwaysOnProfile | undefined;
   pinnedSessionIds: ReadonlySet<string>;
   resolveThreadTitle: (
     spaceId: string | null,
@@ -114,6 +118,7 @@ interface WorkSidebarProps {
   onIncludeArchivedChange: (include: boolean) => void;
   onNewWork: () => void;
   onSelect: (run: Run) => void;
+  onOpenAlwaysOnConversation?: ((sessionId: string) => void) | undefined;
   onSelectSearchResult: (result: SpaceSearchResult) => void;
   onLoadMore: () => void;
   onAutoLoadMore?: () => void;
@@ -189,6 +194,7 @@ export function WorkSidebar({
   terminalConsentPending = false,
   terminalAvailable,
   activeSessionId,
+  alwaysOnProfile,
   pinnedSessionIds,
   resolveThreadTitle,
   query,
@@ -215,6 +221,7 @@ export function WorkSidebar({
   onIncludeArchivedChange,
   onNewWork,
   onSelect,
+  onOpenAlwaysOnConversation,
   onSelectSearchResult,
   onLoadMore,
   onAutoLoadMore,
@@ -307,15 +314,36 @@ export function WorkSidebar({
       }),
     [resolveThreadTitle, runs, selectedSpaceId],
   );
-  const groups = useMemo(
-    () =>
-      selectRecentWork(displayRuns, {
-        query: "",
-        pinnedSessionIds,
-        virtualized: true,
-      }),
-    [displayRuns, pinnedSessionIds],
+  const runsById = useMemo(
+    () => new Map(runs.map((run) => [run.runId, run])),
+    [runs],
   );
+  const groups = useMemo(() => {
+    const recent = selectRecentWork(displayRuns, {
+      query: "",
+      pinnedSessionIds,
+      virtualized: true,
+    });
+    if (alwaysOnProfile === undefined) return recent;
+    const enrolledItem = (item: RecentWorkItem) =>
+      runsById.get(item.runId)?.sessionId === alwaysOnProfile.session_id;
+    const enrolled = recent.flatMap((group) => group.items).find(enrolledItem);
+    const otherGroups = recent
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => !enrolledItem(item)),
+      }))
+      .filter((group) => group.items.length > 0);
+    return [
+      {
+        key: "always-on",
+        label: "Always On Agents",
+        items: enrolled === undefined ? [] : [enrolled],
+      } as const,
+      ...otherGroups,
+    ];
+  }, [alwaysOnProfile, displayRuns, pinnedSessionIds, runsById]);
+  const alwaysOnStatusLabel = alwaysOnProfile?.enabled ? "Enabled" : "Paused";
   const hasRecentGroup = groups.some((group) => group.key === "recent");
   useEffect(() => {
     const boundary = historyBoundary.current;
@@ -388,10 +416,6 @@ export function WorkSidebar({
     drawerOpen,
     onAutoLoadMore,
   ]);
-  const runsById = useMemo(
-    () => new Map(runs.map((run) => [run.runId, run])),
-    [runs],
-  );
   const activeSpaces = spaces.filter((space) => !space.archived);
   const archivedSpaces = spaces.filter((space) => space.archived);
   const selectedSpace = spaces.find(
@@ -1083,9 +1107,15 @@ export function WorkSidebar({
                       className="work-group-heading"
                       headingLevel={2}
                       label={group.label}
-                      count={group.items.length}
+                      count={group.key === "always-on" ? 1 : group.items.length}
                       icon={
-                        group.key === "pinned" ? (
+                        group.key === "always-on" ? (
+                          <IconClock
+                            size={12}
+                            stroke={1.8}
+                            aria-hidden="true"
+                          />
+                        ) : group.key === "pinned" ? (
                           <IconPin size={12} stroke={1.8} aria-hidden="true" />
                         ) : group.key === "attention" ? (
                           <IconAlertCircle
@@ -1109,6 +1139,30 @@ export function WorkSidebar({
                       }
                     />
                     <div className="work-group-items">
+                      {group.key === "always-on" &&
+                      group.items.length === 0 &&
+                      alwaysOnProfile !== undefined ? (
+                        <button
+                          className="work-item shared-workspace-thread-link is-compact"
+                          type="button"
+                          disabled={actionsDisabled}
+                          onClick={() =>
+                            onOpenAlwaysOnConversation?.(
+                              alwaysOnProfile.session_id,
+                            )
+                          }
+                        >
+                          <WorkspaceSidebarThreadContent
+                            compact
+                            title={resolveThreadTitle(
+                              selectedSpaceId,
+                              alwaysOnProfile.session_id,
+                              "Enrolled conversation",
+                            )}
+                            metadata={alwaysOnStatusLabel}
+                          />
+                        </button>
+                      ) : null}
                       <VirtualThreadList
                         scrollRef={historyScroll}
                         items={
@@ -1212,10 +1266,9 @@ export function WorkSidebar({
                                       compact
                                       title={item.title}
                                       metadata={
-                                        <>
-                                          {forkDraft ? "Draft" : item.modeLabel}{" "}
-                                          · {item.updatedLabel}
-                                        </>
+                                        group.key === "always-on"
+                                          ? alwaysOnStatusLabel
+                                          : `${forkDraft ? "Draft" : item.modeLabel} · ${item.updatedLabel}`
                                       }
                                       status={
                                         <span
@@ -1523,10 +1576,33 @@ export function WorkSidebar({
       </div>
 
       <WorkspaceNavigation
-        active={surface}
+        active={surface === "always-on" ? "work" : surface}
         hiddenDestinations={["library"]}
-        onSelect={onSelectSurface}
         workAttention={selectedSpace?.attentionCount ?? 0}
+        renderItem={({ id, label }, children) => (
+          <>
+            <button
+              type="button"
+              className="sidebar-nav-item"
+              aria-label={label}
+              aria-current={surface === id ? "page" : undefined}
+              onClick={() => onSelectSurface(id)}
+            >
+              {children}
+            </button>
+            {id === "work" ? (
+              <button
+                type="button"
+                className="sidebar-nav-item"
+                aria-current={surface === "always-on" ? "page" : undefined}
+                onClick={() => onSelectSurface("always-on")}
+              >
+                <IconClock size={17} stroke={1.7} aria-hidden="true" />
+                <span>Always On Agents</span>
+              </button>
+            ) : null}
+          </>
+        )}
       />
 
       <footer className="space-sidebar-footer">

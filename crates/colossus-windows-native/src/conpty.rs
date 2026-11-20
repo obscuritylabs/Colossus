@@ -5,6 +5,7 @@
 //! it is assigned to a kill-on-close Job Object, and only then is its first thread
 //! resumed. The renderer never receives a process handle, pipe handle, or path.
 
+use crate::clipboard::TERMINAL_MANAGED_CLIPBOARD;
 use crate::{FileIdentity, WindowsNativeError};
 use std::{
     ffi::{OsStr, OsString},
@@ -414,9 +415,12 @@ fn spawn_conpty(
     if environment.iter().any(|(name, _)| {
         name.eq_ignore_ascii_case(OsStr::new(AUTH_INPUT_ENVIRONMENT))
             || name.eq_ignore_ascii_case(OsStr::new(AUTH_OUTPUT_ENVIRONMENT))
+            || name.eq_ignore_ascii_case(OsStr::new(TERMINAL_MANAGED_CLIPBOARD))
     }) {
         return Err(WindowsNativeError::InvalidInput);
     }
+    // A nested TUI also uses its terminal host's clipboard path.
+    environment.push((TERMINAL_MANAGED_CLIPBOARD.into(), "1".into()));
     let authentication = if authenticate {
         let (child_input, parent_input) = anonymous_pipe(true)?;
         clear_inherit(&parent_input)?;
@@ -846,7 +850,7 @@ fn quote_argument(argument: &OsStr) -> Result<Vec<u16>, WindowsNativeError> {
 }
 
 fn environment_block(entries: &[(OsString, OsString)]) -> Result<Vec<u16>, WindowsNativeError> {
-    if entries.len() > MAX_ENVIRONMENT_ENTRIES + 2 {
+    if entries.len() > MAX_ENVIRONMENT_ENTRIES + 3 {
         return Err(WindowsNativeError::InvalidInput);
     }
     let mut encoded = Vec::with_capacity(entries.len());

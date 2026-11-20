@@ -153,6 +153,7 @@ fn exercise_mouse_selection(monochrome: bool, inline: bool) {
         base64::engine::general_purpose::STANDARD.encode(copied)
     );
     wait_for_raw(&output, clipboard.as_bytes());
+    wait_for_screen(&output, 24, 80, "Copy requested");
     writer.write_all(b"\x1b").expect("clear selection");
     writer.flush().expect("flush clear");
     wait_for_screen(&output, 24, 80, "stream-final-row-30");

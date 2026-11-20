@@ -1,5 +1,6 @@
 use super::*;
 use crate::app::handle_text_selection_key;
+use crate::terminal::copy_selected_text;
 
 fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
     MouseEvent {
@@ -73,6 +74,57 @@ fn selection_preserves_unicode_graphemes_and_stays_inside_its_pane() {
     select(&mut selection, (1, 0), (15, 1));
     assert_eq!(selection.text().as_deref(), Some("界e\u{301} 👩‍💻\nnext"));
     assert!(!selection.text().unwrap().contains("Agent"));
+}
+
+#[test]
+fn rendered_selection_is_delivered_once_and_reports_clipboard_acknowledgement() {
+    let mut state = TuiState::from_snapshot(crate::tests::snapshot());
+    state
+        .text_selection
+        .remember(&Buffer::with_lines(["界e\u{301} 👩‍💻", "second"]));
+    select(&mut state.text_selection, (0, 0), (5, 1));
+    for key in [KeyCode::Char('c'), KeyCode::Insert] {
+        assert!(handle_text_selection_key(
+            &mut state,
+            KeyEvent::new(key, KeyModifiers::CONTROL)
+        ));
+        let selected = state.text_selection.take_copy().expect("copy request");
+        let mut terminal = Vec::new();
+        assert_eq!(
+            copy_selected_text(&mut terminal, &selected, |text| {
+                assert_eq!(text, "界e\u{301} 👩‍💻\nsecond");
+                Ok(true)
+            }),
+            CopyFeedback::Copied
+        );
+        assert!(
+            terminal.is_empty(),
+            "an acknowledged local copy needs no OSC"
+        );
+        assert!(state.text_selection.take_copy().is_none());
+    }
+}
+
+#[test]
+fn clipboard_feedback_distinguishes_native_failure_from_terminal_delivery() {
+    let mut terminal = Vec::new();
+    assert_eq!(
+        copy_selected_text(&mut terminal, "first\nsecond", |_| {
+            Err(io::Error::other("clipboard busy"))
+        }),
+        CopyFeedback::Failed
+    );
+    assert!(terminal.is_empty(), "failed local copy stays local");
+    assert_eq!(
+        copy_selected_text(&mut terminal, "first\nsecond", |_| Ok(false)),
+        CopyFeedback::Requested
+    );
+    assert_eq!(terminal, b"\x1b]52;c;Zmlyc3QKc2Vjb25k\x07");
+    let mut full: &mut [u8] = &mut [];
+    assert_eq!(
+        copy_selected_text(&mut full, "selected", |_| Ok(false)),
+        CopyFeedback::Failed
+    );
 }
 
 #[test]

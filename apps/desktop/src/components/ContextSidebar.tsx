@@ -21,6 +21,11 @@ interface ContextSidebarProps {
 }
 
 const COPY = {
+  "always-on": {
+    kicker: "Workspaces",
+    title: "Always On Agents",
+    description: "Scheduled check-ins in enrolled conversations.",
+  },
   workflows: {
     kicker: "Workspace automation",
     title: "Workflows",

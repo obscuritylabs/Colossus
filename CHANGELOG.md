@@ -8,6 +8,16 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+### Highlights
+
+- Open **Always On Agents** from the Desktop rail to see enrolled agents across
+  connected Managed Local Workspaces. The current Workspace's enrolled conversation
+  appears above Pinned. Workspaces whose worker status is unavailable can be opened
+  explicitly from the page.
+- The local Windows TUI confirms clipboard writes for selected text. For
+  terminal-managed copying, the TUI reports a copy request and offers the native
+  terminal selection shortcut when confirmation is unavailable.
+
 ## [0.12.1] - 2026-11-19
 
 ### Highlights

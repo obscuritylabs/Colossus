@@ -11,6 +11,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     let TuiOptions {
         bootstrap,
         screen_mode,
+        allow_native_clipboard,
         background_notice,
         lifecycle,
         dictation,
@@ -52,7 +53,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     }
     start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
     schedule_visible_previews(&mut state, Arc::clone(&host), event_tx.clone());
-    let mut terminal = OwnedTerminal::new(screen_mode)?;
+    let mut terminal = OwnedTerminal::new(screen_mode, allow_native_clipboard)?;
     let mut agent_refresh = crate::agents::AgentRefresh::default();
     let mut last_terminal_size = crossterm::terminal::size().ok();
 

@@ -80,8 +80,9 @@ Their pending native checks remain separate from implementation and historical t
 | Packaged owned Chromium functional edition | Existing typed browser contracts, caller authority and capability discovery; installed edition determines availability | Standalone archives do not include a browser host; this change adds no separate CLI/TUI browser payload | Windows x64 stable and preview installers select the functional edition with sandbox and compiler-bound signed component; exact signed installed acceptance remains separate. Human WebView2 sign-in stays separate. macOS/Linux retain their existing boundaries. | No browser host or native presenter is shipped | No native browser host is shipped; the user's browser remains separate |
 | Progressive Desktop thread history | Existing authenticated run discovery and bounded pages; full run reads retain their contract | Existing session browsers and history commands retain their workflows | Supported: older pages load while scrolling, thin summaries survive beyond the former 200-entry cutoff, and a virtual list bounds rendered rows; reopening an evicted native binding revalidates its source | Existing extension history workflow; no host change | Existing web history workflow; no host change |
 | Human conversation export | Supported: optional `conversations.transcript.v1` read-only paging through an authorized source run; broader `SessionService` remains unhosted | Supported: `sessions export`, `/session export` and `/export` in embedded and worker hosts | Implemented: native Save and bounded Copy with progress/cancellation; installed native Save/clipboard acceptance pending | Missing: no human export command | Implemented: full Hosted/Fleet export with bounded download/Copy and authorized live source; loaded-history actions remain the offline excerpt fallback |
+| Copy rendered terminal text | Intentional difference: clipboard authority belongs to interactive terminal hosts | Supported: standalone local Windows TUI confirms a native clipboard write. Remote Windows and other platforms request terminal clipboard delivery. Line-mode CLI uses terminal selection. | Intentional difference: F6 enables terminal-native selection followed by the Desktop Copy shortcut | Intentional difference: the extension has its own conversation UI and the editor owns its native selection | Intentional difference: Fleet terminal output carries no clipboard authority |
 | Standalone Goal creation | Supported; bounded iterations and caller tool ceiling | Supported; CLI and full-screen TUI `/goal` creation/completion acceptance in embedded and worker hosts | Supported; composer and native request validation evidence | Missing; composer exposes Plan, Execute, and Research | Supported on connected runtimes; capability and budget-bound composer |
-| Always On check-ins in an owned local conversation | Standing-chat controls use authenticated local worker IPC. Desktop wake runs use the existing owned run API. | CLI enrollment, status, pause, and manual wake. TUI opens the same session using its ordinary session selector. | Managed Local conversation enrollment and wake controls. Workspace worker must be running. | No Always On control. | No Always On control. |
+| Always On check-ins in an owned local conversation | Standing-chat controls use authenticated local worker IPC. Desktop's inventory reads status from owner-scoped running workers. Wake runs use the existing owned run API. | CLI enrollment, status, pause, and manual wake. TUI opens the same session using its ordinary session selector. | Supported for Managed Local: enrollment and wake controls, cross-Workspace inventory with unavailable status, and a single enrolled thread above Pinned. Fleet uses its existing remote runtime workflows. | Missing: no Always On controls. | Missing: no Always On controls. |
 | Read-only live tail of an open background conversation | Existing transcript and ordered run-feed contracts supply released messages and status. Pinning is local presentation state. | Full-screen TUI supports one same-workspace, same-runtime companion. Intentional difference for one-shot CLI and inline TUI: both keep a single transcript and use ordinary inspection or terminal scrollback. | Partial: live Asides support separate follow-up conversations. Pinning a peer conversation is missing. | Missing: the extension follows the selected conversation. | Partial: Side Chat shows a related conversation alongside its parent. Pinning an arbitrary open peer is missing. |
 | Anthropic tool replay recovery | Ordinary Execute can continue a verified oversized replay using saved tool evidence. The keyless missing-checkpoint path also remains available. | Existing CLI resume and TUI continuation use the same runtime recovery. | Managed Local inherits protected replay overflow recovery. | Existing Execute conversations inherit the runtime behavior. | Connected runtimes inherit the ordinary Execute recovery. |
 | Revision-bound Plan workflow | Supported; source-run-bound Draft continuation | Supported; revision-bound refinement, approval, and execution | Supported; exact-revision Plan continuation | Partial; canonical Plan inspection exists, continuation controls missing | Supported; source-run and revision-bound continuation |
@@ -154,11 +155,22 @@ Evidence and owned follow-ups:
   `desktop_owner` and `vscode_owner` own assessing equivalent peer-conversation
   controls using the existing feed. `maintenance_coordinator` owns evaluating
   that workflow for Web Chat.
+- **TUI copy:** Selection tests exercise mouse drag and both copy chords against
+  a stub clipboard. The PTY selection fixture verifies exact OSC 52 delivery and
+  the request status. The Windows native fixture checks Unicode readback and
+  rejection of invalid data using its own window station and clipboard. The
+  Windows Fleet PTY fixture checks that a shell inherits terminal-managed
+  clipboard routing from the ConPTY launcher shared with Desktop.
+  `cli_owner` and `test_owner` own release-binary paste acceptance.
+  [TUI commands and keys](../reference/tui.md#compose-and-navigate)
 - **Always On:** Runtime tests cover stable wake identity, schedule advancement,
   owner checks, and pause. The CLI worker smoke covers manual wake and continuation
-  in one session. `desktop_owner` owns packaged Desktop acceptance. `cli_owner`
-  owns follow-up TUI controls. `maintenance_coordinator` owns any later evaluation
-  of extension or web enrollment and whether it requires a distinct authority.
+  in one session. The Desktop browser fixture exercises inventory navigation and
+  conversation controls through a mocked native transport. `desktop_owner` owns
+  packaged Desktop acceptance. `cli_owner` owns follow-up TUI controls.
+  `maintenance_coordinator` owns any later evaluation of extension or web
+  enrollment and whether it requires a distinct authority.
+  [Desktop workflows and schedules](../desktop/schedules.md#find-enrolled-conversations)
 - **Anthropic replay recovery:** Runtime tests in
   `crates/colossus-runtime/src/anthropic_recovery_tests.rs` cover keyless replay
   recovery, protected restart, an oversized signed replay, and a saved exchange

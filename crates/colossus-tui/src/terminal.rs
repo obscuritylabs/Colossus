@@ -1,5 +1,6 @@
 use super::*;
 use crate::companion::CompanionView;
+use crate::selection::CopyFeedback;
 
 fn render_terminal_frame(
     frame: &mut Frame<'_>,
@@ -33,11 +34,12 @@ pub(super) struct OwnedTerminal {
     finished: bool,
     selection_frame_frozen: bool,
     monochrome: bool,
+    allow_native_clipboard: bool,
     _guard: TerminalGuard,
 }
 
 impl OwnedTerminal {
-    pub(super) fn new(mode: ScreenMode) -> Result<Self, io::Error> {
+    pub(super) fn new(mode: ScreenMode, allow_native_clipboard: bool) -> Result<Self, io::Error> {
         let guard = TerminalGuard::enter(mode)?;
         let mut backend = CrosstermBackend::new(io::stdout());
         let (terminal, inline_area, inline_screen_size) = match mode {
@@ -67,6 +69,7 @@ impl OwnedTerminal {
             finished: false,
             selection_frame_frozen: false,
             monochrome: std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()),
+            allow_native_clipboard,
             _guard: guard,
         })
     }
@@ -77,10 +80,11 @@ impl OwnedTerminal {
         companion: Option<CompanionView<'_>>,
     ) -> Result<(), io::Error> {
         if let Some(text) = state.text_selection.take_copy() {
-            use base64::Engine as _;
-            let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-            write!(self.terminal.backend_mut(), "\x1b]52;c;{encoded}\x07")?;
-            Backend::flush(self.terminal.backend_mut())?;
+            let allow_native = self.allow_native_clipboard;
+            state.text_selection.copy_feedback =
+                copy_selected_text(self.terminal.backend_mut(), &text, |text| {
+                    try_copy_native(allow_native, text)
+                });
         }
         if state.selecting_text && self.selection_frame_frozen {
             return Ok(());
@@ -298,6 +302,46 @@ impl Drop for OwnedTerminal {
     fn drop(&mut self) {
         let _ = self.finish();
     }
+}
+
+pub(super) fn copy_selected_text(
+    terminal: &mut impl io::Write,
+    text: &str,
+    try_native: impl FnOnce(&str) -> io::Result<bool>,
+) -> CopyFeedback {
+    use base64::Engine as _;
+
+    if text.is_empty() {
+        return CopyFeedback::Failed;
+    }
+    match try_native(text) {
+        Ok(true) => CopyFeedback::Copied,
+        Ok(false) => {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+            match write!(terminal, "\x1b]52;c;{encoded}\x07").and_then(|()| terminal.flush()) {
+                Ok(()) => CopyFeedback::Requested,
+                Err(_) => CopyFeedback::Failed,
+            }
+        }
+        Err(_) => CopyFeedback::Failed,
+    }
+}
+
+#[cfg(windows)]
+fn try_copy_native(allowed: bool, text: &str) -> io::Result<bool> {
+    if !allowed
+        || ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
+            .iter()
+            .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+    {
+        return Ok(false);
+    }
+    colossus_windows_native::try_copy_local_text(text).map_err(io::Error::other)
+}
+
+#[cfg(not(windows))]
+fn try_copy_native(_: bool, _: &str) -> io::Result<bool> {
+    Ok(false)
 }
 
 pub(super) fn prepare_inline_startup<B: Backend>(backend: &mut B) -> Result<(), B::Error> {

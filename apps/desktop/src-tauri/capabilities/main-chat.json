@@ -9,6 +9,7 @@
     "allow-report-renderer-failure",
     "allow-sync-client-identity-appearance",
     "allow-workflow-context",
+    "allow-list-desktop-always-on",
     "allow-desktop-always-on-status",
     "allow-desktop-always-on-enable",
     "allow-desktop-always-on-pause",

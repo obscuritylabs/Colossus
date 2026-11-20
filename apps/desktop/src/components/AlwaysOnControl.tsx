@@ -16,9 +16,8 @@ import {
 } from "../api";
 import { shortDateLabel } from "../presenters";
 import type { AlwaysOnProfile, AlwaysOnStatus } from "../types";
+import { ALWAYS_ON_REFRESH_MS } from "../use-always-on-inventory";
 import "./always-on-control.css";
-
-const STATUS_REFRESH_MS = 5_000;
 
 export function AlwaysOnControl({
   targetId,
@@ -26,12 +25,14 @@ export function AlwaysOnControl({
   canEnroll,
   isCurrent,
   onOpenConversation,
+  onProfileChanged,
 }: {
   targetId: string;
   sessionId: string | null;
   canEnroll: boolean;
   isCurrent: () => boolean;
   onOpenConversation: (sessionId: string) => Promise<boolean>;
+  onProfileChanged: () => void;
 }) {
   const headingId = useId();
   const [open, setOpen] = useState(false);
@@ -71,7 +72,10 @@ export function AlwaysOnControl({
   useEffect(() => {
     if (!open) return;
     void refresh();
-    const timer = window.setInterval(() => void refresh(), STATUS_REFRESH_MS);
+    const timer = window.setInterval(
+      () => void refresh(),
+      ALWAYS_ON_REFRESH_MS,
+    );
     return () => {
       window.clearInterval(timer);
       read.current = null;
@@ -132,6 +136,7 @@ export function AlwaysOnControl({
         if (isCurrent()) {
           setBusy(false);
           void refresh();
+          onProfileChanged();
         }
       }
     }

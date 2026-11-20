@@ -1,6 +1,7 @@
 import {
   IconBriefcase2,
   IconCalendarTime,
+  IconClock,
   IconPlugConnected,
   IconSettings,
   IconTerminal2,
@@ -12,6 +13,7 @@ import type { ConnectionState, DesktopCapabilities } from "../types";
 
 export type WorkspaceSurface =
   | "work"
+  | "always-on"
   | "fleet"
   | "library"
   | "connections"
@@ -34,6 +36,7 @@ interface ProductRailProps {
 
 const MAIN_ITEMS = [
   { id: "work", label: "Work", Icon: IconBriefcase2 },
+  { id: "always-on", label: "Always On Agents", Icon: IconClock },
   { id: "fleet", label: "Capabilities", Icon: IconTopologyStar3 },
   { id: "plugins", label: "Plugins", Icon: IconPlugConnected },
   { id: "workflows", label: "Workflows", Icon: IconTopologyStar3 },
