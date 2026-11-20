@@ -1022,7 +1022,16 @@ jobs:
         env:
           COLOSSUS_OPA_BIN: /tmp/opa
           COLOSSUS_OPENSSL_BIN: /usr/bin/openssl
-        run: cargo test --locked -p colossus-policy --test opa_live -- --ignored
+        run: |
+          # These fixtures start OPA on loopback. Preserve other proxy exclusions.
+          loopback=127.0.0.1,localhost,::1
+          upper=${NO_PROXY-${no_proxy-}}
+          lower=${no_proxy:-${NO_PROXY-}}
+          if [ "$lower" != '*' ]; then
+            lower="$loopback${lower:+,$lower}"
+          fi
+          NO_PROXY="$loopback${upper:+,$upper}" no_proxy="$lower" \
+            cargo test --locked -p colossus-policy --test opa_live -- --ignored
 
   vscode-sdk:
     name: Prepare VS Code SDK bindings
