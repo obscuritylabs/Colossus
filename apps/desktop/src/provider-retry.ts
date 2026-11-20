@@ -50,11 +50,15 @@ export function selectedProviderRetryRun(chat: ChatState): Run | null {
   return run;
 }
 
-interface ProviderRetryRequest {
+interface ProviderRetrySelection {
+  readonly modelSelection: Readonly<ComposerModelSelection>;
+  readonly pluginSkillIds: readonly string[];
+}
+
+interface ProviderRetryRequest extends ProviderRetrySelection {
   readonly role: string;
   readonly sessionId: string;
   readonly idempotencyKey: string;
-  readonly modelSelection: Readonly<ComposerModelSelection>;
 }
 
 type RetryAdmission =
@@ -86,9 +90,18 @@ function retryScope(targetId: string, runId: string): string {
   return JSON.stringify([targetId, runId]);
 }
 
-/** Renderer-only records of admitted model choices and unresolved admissions. */
+function freezeSelection(
+  selection: ProviderRetrySelection,
+): ProviderRetrySelection {
+  return Object.freeze({
+    modelSelection: Object.freeze({ ...selection.modelSelection }),
+    pluginSkillIds: Object.freeze([...selection.pluginSkillIds]),
+  });
+}
+
+/** Renderer-only records of admitted selections and unresolved admissions. */
 export class ProviderRetryRequests {
-  private admittedModels = new Map<string, Readonly<ComposerModelSelection>>();
+  private admittedSelections = new Map<string, ProviderRetrySelection>();
   private readonly pending = new Map<
     string,
     { request: ProviderRetryRequest; uncertain: boolean }
@@ -97,31 +110,30 @@ export class ProviderRetryRequests {
   rememberAccepted(
     targetId: string,
     runId: string,
-    selection: ComposerModelSelection,
+    selection: ProviderRetrySelection,
   ): void {
-    this.admittedModels = withBoundedEntry(
-      this.admittedModels,
+    this.admittedSelections = withBoundedEntry(
+      this.admittedSelections,
       retryScope(targetId, runId),
-      Object.freeze({ ...selection }),
+      freezeSelection(selection),
     );
   }
 
   prepare(
     targetId: string,
     source: Run,
-    selectedModel: ComposerModelSelection,
+    selection: ProviderRetrySelection,
   ): ProviderRetryRequest | null {
     const scope = retryScope(targetId, source.runId);
     const pending = this.pending.get(scope);
     if (pending !== undefined) return pending.request;
     if (this.pending.size >= MAX_CACHED_IDEMPOTENCY_ATTEMPTS) return null;
 
-    const model = this.admittedModels.get(scope) ?? selectedModel;
     const request = Object.freeze({
+      ...freezeSelection(this.admittedSelections.get(scope) ?? selection),
       role: source.role,
       sessionId: source.sessionId,
       idempotencyKey: `desktop-provider-retry:${source.runId}`,
-      modelSelection: Object.freeze({ ...model }),
     });
     this.pending.set(scope, { request, uncertain: false });
     return request;
@@ -131,7 +143,7 @@ export class ProviderRetryRequests {
     const scope = retryScope(targetId, runId);
     if (this.pending.has(scope))
       return "Send the same continuation request again";
-    if (this.admittedModels.has(scope))
+    if (this.admittedSelections.has(scope))
       return "Continue from saved history with the failed run’s model selection";
     return "Continue from saved history with the selected conversation model";
   }

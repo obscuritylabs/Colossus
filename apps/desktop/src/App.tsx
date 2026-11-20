@@ -2833,7 +2833,12 @@ export default function App() {
           providerRetryRequests.current.rememberAccepted(
             route.targetId,
             run.runId,
-            submission.modelSelection ?? {},
+            {
+              modelSelection: submission.modelSelection ?? {},
+              // Queue submissions already include resolved mentions. CreateRun
+              // returns no receipt for mentions it resolves inside the command.
+              pluginSkillIds: request.pluginSkillIds ?? [],
+            },
           );
         }
         if (submission.sessionId === undefined) {
@@ -2915,12 +2920,14 @@ export default function App() {
       return;
     }
 
+    const selection = pluginSelectionKey(route.targetId, source.sessionId);
     const request = providerRetryRequests.current.prepare(
       route.targetId,
       source,
-      conversationModels[
-        pluginSelectionKey(route.targetId, source.sessionId)
-      ] ?? {},
+      {
+        modelSelection: conversationModels[selection] ?? {},
+        pluginSkillIds: conversationSkills[selection] ?? [],
+      },
     );
     if (request === null) {
       setActionError({

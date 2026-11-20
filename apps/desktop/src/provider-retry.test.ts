@@ -53,6 +53,13 @@ function selected(run: Run = failedRun) {
   );
 }
 
+function selection(
+  modelSelection: ComposerModelSelection = {},
+  pluginSkillIds: readonly string[] = [],
+) {
+  return { modelSelection, pluginSkillIds };
+}
+
 describe("Desktop provider continuation", () => {
   it.each([500, 502, 503, 504])(
     "accepts a confirmed HTTP %i Execute failure",
@@ -131,49 +138,94 @@ describe("Desktop provider continuation", () => {
     expect(selectedProviderRetryRun({ ...chat, activeRunId: null })).toBeNull();
   });
 
-  it("continues with the known nondefault profile and effort of the admitted run", () => {
+  it("replays the admitted model settings and exact explicit skills", () => {
     const requests = new ProviderRetryRequests();
-    requests.rememberAccepted("target", failedRun.runId, {
-      modelProfile: "continuation-model",
-      reasoningEffort: "high",
-    });
+    const admittedSkills = ["review/inline", "tools/testing"];
+    requests.rememberAccepted(
+      "target",
+      failedRun.runId,
+      selection(
+        { modelProfile: "continuation-model", reasoningEffort: "high" },
+        admittedSkills,
+      ),
+    );
+    admittedSkills.push("tools/added-later");
     expect(requests.description("target", failedRun.runId)).toContain(
       "failed run’s model selection",
     );
-    const request = requests.prepare("target", failedRun, {
-      modelProfile: "different-model",
-      reasoningEffort: "low",
-    })!;
+    const request = requests.prepare(
+      "target",
+      failedRun,
+      selection({ modelProfile: "different-model", reasoningEffort: "low" }, [
+        "tools/current",
+      ]),
+    )!;
     expect(request.modelSelection).toEqual({
       modelProfile: "continuation-model",
       reasoningEffort: "high",
     });
+    expect(request.pluginSkillIds).toEqual(["review/inline", "tools/testing"]);
+    expect(Object.isFrozen(request.pluginSkillIds)).toBe(true);
+
+    requests.settle("target", failedRun.runId, {
+      type: "stale",
+      dispatched: true,
+    });
+    expect(
+      requests.prepare(
+        "target",
+        failedRun,
+        selection({ modelProfile: "third-model" }, ["tools/changed"]),
+      ),
+    ).toBe(request);
 
     requests.settle("target", failedRun.runId, { type: "accepted" });
     const nextRun = { ...failedRun, runId: "accepted-continuation" };
-    requests.rememberAccepted("target", nextRun.runId, request.modelSelection);
-    const nextRequest = requests.prepare("target", nextRun, {})!;
+    requests.rememberAccepted("target", nextRun.runId, request);
+    const nextRequest = requests.prepare("target", nextRun, selection())!;
     expect(nextRequest.modelSelection).toEqual(request.modelSelection);
+    expect(nextRequest.pluginSkillIds).toEqual(request.pluginSkillIds);
     expect(nextRequest.idempotencyKey).not.toBe(request.idempotencyKey);
   });
 
-  it("freezes the selected model and request identity when an admission reply is lost", () => {
+  it("preserves an explicitly empty admitted skill selection", () => {
+    const requests = new ProviderRetryRequests();
+    requests.rememberAccepted("target", failedRun.runId, selection());
+    expect(
+      requests.prepare("target", failedRun, selection({}, ["tools/current"]))
+        ?.pluginSkillIds,
+    ).toEqual([]);
+  });
+
+  it("freezes the historical fallback selection and request identity after a lost reply", () => {
     const requests = new ProviderRetryRequests();
     const selected: ComposerModelSelection = {
       modelProfile: "selected-profile",
       reasoningEffort: "high",
     };
+    const selectedSkills = ["tools/selected"];
     expect(requests.description("target", failedRun.runId)).toContain(
       "selected conversation model",
     );
-    const request = requests.prepare("target", failedRun, selected);
+    const request = requests.prepare(
+      "target",
+      failedRun,
+      selection(selected, selectedSkills),
+    );
     requests.settle("target", failedRun.runId, {
       type: "stale",
       dispatched: true,
     });
     selected.modelProfile = "different-profile";
     selected.reasoningEffort = "low";
-    expect(requests.prepare("target", failedRun, selected)).toBe(request);
+    selectedSkills.push("tools/changed");
+    expect(
+      requests.prepare(
+        "target",
+        failedRun,
+        selection(selected, selectedSkills),
+      ),
+    ).toBe(request);
     expect(requests.description("target", failedRun.runId)).toBe(
       "Send the same continuation request again",
     );
@@ -185,33 +237,42 @@ describe("Desktop provider continuation", () => {
         modelProfile: "selected-profile",
         reasoningEffort: "high",
       },
+      pluginSkillIds: ["tools/selected"],
     });
     expect(
-      requests.prepare("another-target", failedRun, selected)?.modelSelection,
-    ).toEqual(selected);
+      requests.prepare(
+        "another-target",
+        failedRun,
+        selection(selected, selectedSkills),
+      ),
+    ).toMatchObject(selection(selected, selectedSkills));
   });
 
   it("releases a new attempt after rejection or a selection change before dispatch", () => {
     const requests = new ProviderRetryRequests();
-    const first = requests.prepare("target", failedRun, {
-      modelProfile: "old-profile",
-    });
+    const first = requests.prepare(
+      "target",
+      failedRun,
+      selection({ modelProfile: "old-profile" }),
+    );
     requests.settle("target", failedRun.runId, {
       type: "failed",
       error: modelRejected,
     });
-    const second = requests.prepare("target", failedRun, {
-      modelProfile: "new-profile",
-    });
+    const second = requests.prepare(
+      "target",
+      failedRun,
+      selection({ modelProfile: "new-profile" }),
+    );
     expect(second?.modelSelection).toEqual({ modelProfile: "new-profile" });
     expect(second?.idempotencyKey).toBe(first?.idempotencyKey);
     requests.settle("target", failedRun.runId, {
       type: "stale",
       dispatched: false,
     });
-    expect(requests.prepare("target", failedRun, {})?.modelSelection).toEqual(
-      {},
-    );
+    expect(
+      requests.prepare("target", failedRun, selection())?.modelSelection,
+    ).toEqual({});
   });
 
   it.each([
@@ -226,36 +287,40 @@ describe("Desktop provider continuation", () => {
     "retains a possibly admitted request after a later definite rejection",
     (error) => {
       const requests = new ProviderRetryRequests();
-      const first = requests.prepare("target", failedRun, {
-        modelProfile: "first-profile",
-      });
+      const first = requests.prepare(
+        "target",
+        failedRun,
+        selection({ modelProfile: "first-profile" }),
+      );
       requests.settle("target", failedRun.runId, { type: "failed", error });
       requests.settle("target", failedRun.runId, {
         type: "failed",
         error: modelRejected,
       });
-      expect(requests.prepare("target", failedRun, {})).toBe(first);
+      expect(requests.prepare("target", failedRun, selection())).toBe(first);
     },
   );
 
   it("bounds unresolved admissions and allows exact replays at capacity", () => {
     const requests = new ProviderRetryRequests();
-    const first = requests.prepare("target", failedRun, {
-      reasoningEffort: "high",
-    });
+    const first = requests.prepare(
+      "target",
+      failedRun,
+      selection({ reasoningEffort: "high" }),
+    );
     for (let index = 1; index < MAX_CACHED_IDEMPOTENCY_ATTEMPTS; index += 1) {
       const source = { ...failedRun, runId: `unresolved-${index}` };
-      expect(requests.prepare("target", source, {})).not.toBeNull();
+      expect(requests.prepare("target", source, selection())).not.toBeNull();
       requests.settle("target", source.runId, {
         type: "stale",
         dispatched: true,
       });
     }
     const next = { ...failedRun, runId: "next-run" };
-    expect(requests.prepare("target", next, {})).toBeNull();
-    expect(requests.prepare("target", failedRun, {})).toBe(first);
+    expect(requests.prepare("target", next, selection())).toBeNull();
+    expect(requests.prepare("target", failedRun, selection())).toBe(first);
 
     requests.settle("target", failedRun.runId, { type: "accepted" });
-    expect(requests.prepare("target", next, {})).not.toBeNull();
+    expect(requests.prepare("target", next, selection())).not.toBeNull();
   });
 });
