@@ -137,6 +137,39 @@ fn draw(workspace: &mut Workspace) -> String {
 }
 
 #[tokio::test]
+async fn closing_idle_draft_frees_its_slot_without_archiving() {
+    let mut draft = source("draft");
+    draft.session_saved = false;
+    let (mut workspace, mut events) =
+        Workspace::new(ScreenMode::Alternate, TuiState::from_snapshot(draft));
+    open_snapshot(&mut workspace, "saved");
+    // Discovery can independently learn that a draft save reply was lost.
+    workspace
+        .catalog
+        .push(summary("draft", "Discovered session"));
+    workspace.open_manager(SessionTab::Open);
+    workspace.workspace_manager.select(Some("draft".into()));
+    assert!(draw(&mut workspace).contains("Close draft"));
+    workspace.workspace_action = Some(WorkspaceAction::Archive("draft".into(), true));
+    workspace.process_action(host());
+    let result = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("draft close timeout")
+        .expect("draft close result");
+    workspace.receive(result, host());
+    assert_eq!(workspace.session_id, "saved");
+    assert!(!workspace.background.contains_key("draft"));
+    assert!(!workspace.channels.contains_key("draft"));
+    assert!(workspace.archived_catalog.is_empty());
+    assert!(
+        workspace
+            .catalog
+            .iter()
+            .any(|session| session.id == "draft")
+    );
+}
+
+#[tokio::test]
 async fn app_mouse_routing_switches_sessions_and_preserves_inactive_approval_and_draft() {
     let (mut workspace, _) = Workspace::new(
         ScreenMode::Alternate,

@@ -59,6 +59,7 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::RunPlan { .. } => "run_plan",
         WorkerOperation::Echo { .. } => "echo",
         WorkerOperation::SessionCreate { .. } => "session_create",
+        WorkerOperation::TuiSessionMaterialize { .. } => "tui_session_materialize",
         WorkerOperation::SessionGet { .. } => "session_get",
         WorkerOperation::SessionList { .. } => "session_list",
         WorkerOperation::SessionCatalog { .. } => "session_catalog",

@@ -249,6 +249,7 @@ pub(crate) struct WorkerInteractiveHost {
     model_selections: ModelSelections,
     approval_mode: HostApprovalModes,
     operations: HostOperationGate,
+    drafts: SessionDrafts,
     sandbox_boundary_acknowledgements: Mutex<BTreeMap<String, SandboxBoundaryAcknowledgement>>,
 }
 
@@ -264,8 +265,105 @@ impl WorkerInteractiveHost {
             model_selections: ModelSelections::default(),
             approval_mode: HostApprovalModes::new(approval_mode),
             operations: HostOperationGate::default(),
+            drafts: SessionDrafts::default(),
             sandbox_boundary_acknowledgements: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    async fn prepare_draft_for_work(
+        &self,
+        session_id: &str,
+        events: &mpsc::Sender<HostEvent>,
+        control: &RunControl,
+    ) -> Result<(), String> {
+        let saved = self
+            .drafts
+            .materialize(session_id, events, control, async {
+                let session: SessionSummary = serde_json::from_value(
+                    self.value(WorkerOperation::TuiSessionMaterialize {
+                        session_id: session_id.into(),
+                    })
+                    .await?,
+                )
+                .map_err(|error| error.to_string())?;
+                if session.id != session_id {
+                    return Err("The worker returned another session when saving the draft.".into());
+                }
+                Ok(())
+            })
+            .await?;
+        if saved
+            && !control.is_cancelled()
+            && let Some(mode) = self
+                .pending_sandbox_boundary_acknowledgement(session_id)
+                .await?
+        {
+            let acknowledged = self
+                .request_sandbox_acknowledgement(session_id, mode, events.clone(), control)
+                .await?;
+            let _ = events
+                .send(HostEvent::SandboxBoundaryAcknowledgement(Ok(
+                    acknowledged.then_some(mode)
+                )))
+                .await;
+        }
+        if control.is_cancelled() {
+            return Err("Session work was cancelled before it started.".into());
+        }
+        Ok(())
+    }
+
+    async fn request_sandbox_acknowledgement(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+        events: mpsc::Sender<HostEvent>,
+        control: &RunControl,
+    ) -> Result<bool, String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct AcknowledgementResult {
+            acknowledged: bool,
+            #[serde(default)]
+            sandbox_boundary_acknowledgement: Option<SandboxBoundaryAcknowledgement>,
+        }
+
+        let mut observer = WorkerChannelObserver {
+            sender: events.clone(),
+        };
+        let prompts = TuiWorkerPromptHandler { sender: events };
+        let result = self
+            .client
+            .call_interactive::<AcknowledgementResult>(
+                WorkerOperation::RunInteractive {
+                    model_options: None,
+                    request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
+                        session_id: session_id.into(),
+                        mode,
+                    },
+                    approval_mode: self.interactive_approval_mode()?,
+                    sandbox_boundary_acknowledgement: None,
+                },
+                &mut observer,
+                &prompts,
+                control,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        if !result.acknowledged {
+            if result.sandbox_boundary_acknowledgement.is_some() {
+                return Err("worker returned a capability for a rejected acknowledgement".into());
+            }
+            return Ok(false);
+        }
+        let acknowledgement = result
+            .sandbox_boundary_acknowledgement
+            .ok_or_else(|| "worker returned an invalid sandbox boundary capability".to_owned())?;
+        self.sandbox_boundary_acknowledgements
+            .lock()
+            .map_err(|_| "sandbox boundary acknowledgement lock is poisoned".to_owned())?
+            .insert(session_id.into(), acknowledgement);
+        Ok(true)
     }
 
     fn approval_mode(&self) -> Result<Option<ApprovalMode>, String> {
@@ -325,6 +423,19 @@ impl WorkerInteractiveHost {
         )))
     }
 
+    async fn session_work(&self, session_id: &str) -> Result<WorkStateSnapshot, String> {
+        if self.drafts.contains(session_id)? {
+            return Ok(empty_work(session_id));
+        }
+        serde_json::from_value(
+            self.value(WorkerOperation::WorkState {
+                session_id: session_id.into(),
+            })
+            .await?,
+        )
+        .map_err(|error| error.to_string())
+    }
+
     async fn configured_models(&self) -> Result<Vec<ProviderRoute>, String> {
         serde_json::from_value(self.value(WorkerOperation::ModelProfiles).await?)
             .map_err(|error| error.to_string())
@@ -362,33 +473,38 @@ impl WorkerInteractiveHost {
             &self.configured_models().await?,
             &self.model_selections.get(session_id)?,
         )?;
-        let context = serde_json::from_value::<ContextStatus>(
-            self.value(WorkerOperation::ContextStatus {
-                session_id: session_id.into(),
-                role: "primary".into(),
-            })
-            .await?,
-        )
-        .ok();
-        let session: SessionSummary = serde_json::from_value(
-            self.value(WorkerOperation::SessionGet {
-                session_id: session_id.into(),
-            })
-            .await?,
-        )
-        .map_err(|error| error.to_string())?;
-        let usage_run_id = usage_selection.run_id(session.last_run_id.as_deref());
-        let usage = if let Some(run_id) = usage_run_id {
-            self.value(WorkerOperation::RunTokenUsage {
-                session_id: session_id.into(),
-                run_id: run_id.into(),
-            })
-            .await
-            .ok()
-            .and_then(|value| serde_json::from_value::<RunTokenUsage>(value).ok())
-            .filter(|usage| usage.session_id == session_id && usage.run_id == run_id)
+        let (context, usage, message_count) = if self.drafts.contains(session_id)? {
+            (None, None, 0)
         } else {
-            None
+            let context = serde_json::from_value::<ContextStatus>(
+                self.value(WorkerOperation::ContextStatus {
+                    session_id: session_id.into(),
+                    role: "primary".into(),
+                })
+                .await?,
+            )
+            .ok();
+            let session: SessionSummary = serde_json::from_value(
+                self.value(WorkerOperation::SessionGet {
+                    session_id: session_id.into(),
+                })
+                .await?,
+            )
+            .map_err(|error| error.to_string())?;
+            let usage_run_id = usage_selection.run_id(session.last_run_id.as_deref());
+            let usage = if let Some(run_id) = usage_run_id {
+                self.value(WorkerOperation::RunTokenUsage {
+                    session_id: session_id.into(),
+                    run_id: run_id.into(),
+                })
+                .await
+                .ok()
+                .and_then(|value| serde_json::from_value::<RunTokenUsage>(value).ok())
+                .filter(|usage| usage.session_id == session_id && usage.run_id == run_id)
+            } else {
+                None
+            };
+            (context, usage, session.message_count)
         };
         let approval = self.approval_mode.snapshot()?;
         Ok(FooterState {
@@ -397,7 +513,7 @@ impl WorkerInteractiveHost {
             context: context
                 .map(|context| (context.token_estimate, route.limits.input_budget_tokens)),
             usage,
-            message_count: session.message_count,
+            message_count,
             status: status.into(),
             approval_mode: approval
                 .mode
@@ -748,6 +864,9 @@ impl WorkerInteractiveHost {
                     .await
             }
             "session" => match arguments.trim() {
+                "" | "show" if self.drafts.contains(session_id)? => Ok(HostCommandResult::document(
+                    PresentationDocument::from_block(PresentationBlock::Text("This conversation is an unsaved draft.".into())),
+                )),
                 "" | "show" => {
                     self.document(
                         WorkerOperation::SessionGet {
@@ -767,6 +886,9 @@ impl WorkerInteractiveHost {
                 }
                 "resume" => self.resume_session("", session_id, events).await,
                 arguments if arguments == "export" || arguments.starts_with("export ") => {
+                    if self.drafts.contains(session_id)? {
+                        return Err("This draft has no saved transcript to export.".into());
+                    }
                     let (output, format) = crate::transcript_export::interactive_export_arguments(arguments.strip_prefix("export").unwrap_or_default())?;
                     crate::transcript_export::export_transcript_controlled(
                         crate::transcript_export::TranscriptSource::Worker(&self.client),
@@ -781,6 +903,9 @@ impl WorkerInteractiveHost {
                 _ => Err("/session expects show, new, resume [SESSION_ID], or export PATH [--format markdown|text|json]".into()),
             },
             "resume" => self.resume_session(arguments, session_id, events).await,
+            "work" if self.drafts.contains(session_id)? => Ok(HostCommandResult::document(
+                PresentationDocument::from_block(PresentationBlock::Text("No work in this draft.".into())),
+            )),
             "work" => {
                 let state = serde_json::from_value::<WorkStateSnapshot>(
                     self.value(WorkerOperation::WorkState {
@@ -1169,6 +1294,9 @@ impl WorkerInteractiveHost {
                     clear_transcript: false,
                 })
             }
+            "context" if self.drafts.contains(session_id)? => Ok(HostCommandResult::document(
+                PresentationDocument::from_block(PresentationBlock::Text("No saved context in this draft.".into())),
+            )),
             "context" => {
                 if matches!(arguments.trim(), "" | "status") {
                     let status = serde_json::from_value::<ContextStatus>(
@@ -1517,13 +1645,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         &self,
         session_id: &str,
     ) -> Result<Option<colossus_tui::SidebarSnapshot>, String> {
-        let work = serde_json::from_value(
-            self.value(WorkerOperation::WorkState {
-                session_id: session_id.into(),
-            })
-            .await?,
-        )
-        .map_err(|error| error.to_string())?;
+        let work = self.session_work(session_id).await?;
         Ok(Some(super::sidebar::sidebar_snapshot(
             work,
             None,
@@ -1536,13 +1658,11 @@ impl InteractiveHost for WorkerInteractiveHost {
         session_id: &str,
     ) -> Result<Option<colossus_tui::SidebarSnapshot>, String> {
         let (work, memory, servers) = tokio::join!(
-            self.value(WorkerOperation::WorkState {
-                session_id: session_id.into()
-            }),
+            self.session_work(session_id),
             self.value(WorkerOperation::MemoryCount),
             self.value(WorkerOperation::McpServers),
         );
-        let work = serde_json::from_value(work?).map_err(|error| error.to_string())?;
+        let work = work?;
         let servers = super::sidebar::mcp_servers(servers?)?;
         let memory_count = memory.ok().and_then(|value| {
             Some((
@@ -1623,6 +1743,10 @@ impl InteractiveHost for WorkerInteractiveHost {
         Ok(collector.finish())
     }
 
+    fn close_session_draft(&self, session_id: &str) -> Result<(), String> {
+        self.drafts.close(session_id)
+    }
+
     async fn set_session_archived(&self, session_id: &str, archived: bool) -> Result<(), String> {
         let _operation = self.operations.enter(false).await?;
         let value = self
@@ -1641,7 +1765,7 @@ impl InteractiveHost for WorkerInteractiveHost {
 
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
         let fresh_session = request.session_id.is_none() && !request.resume_latest;
-        let session: SessionSummary = if let Some(session_id) = request.session_id {
+        let session_id = if let Some(session_id) = request.session_id {
             let lifecycle: Option<colossus_contracts::SessionLifecycle> = serde_json::from_value(
                 self.value(WorkerOperation::SessionLifecycle {
                     session_id: session_id.clone(),
@@ -1663,26 +1787,35 @@ impl InteractiveHost for WorkerInteractiveHost {
             if value.is_null() {
                 return Err("requested session was not found".into());
             }
-            serde_json::from_value(value).map_err(|error| error.to_string())?
-        } else if request.resume_latest {
-            serde_json::from_value(self.value(WorkerOperation::SessionLatest).await?)
+            serde_json::from_value::<SessionSummary>(value)
                 .map_err(|error| error.to_string())?
-        } else {
-            serde_json::from_value(
-                self.value(WorkerOperation::SessionCreate { title: None })
-                    .await?,
+                .id
+        } else if request.resume_latest {
+            serde_json::from_value::<SessionSummary>(
+                self.value(WorkerOperation::SessionLatest).await?,
             )
             .map_err(|error| error.to_string())?
+            .id
+        } else {
+            self.drafts.allocate()?
         };
-        let transcript = serde_json::from_value::<SessionMessagePage>(
-            self.value(WorkerOperation::SessionMessagesPage {
-                session_id: session.id.clone(),
-                before_sequence: None,
-                limit: 100,
-            })
-            .await?,
-        )
-        .map_err(|error| error.to_string())?;
+        let (transcript, pending_sandbox_boundary_acknowledgement) = if fresh_session {
+            (empty_transcript(), None)
+        } else {
+            (
+                serde_json::from_value(
+                    self.value(WorkerOperation::SessionMessagesPage {
+                        session_id: session_id.clone(),
+                        before_sequence: None,
+                        limit: 100,
+                    })
+                    .await?,
+                )
+                .map_err(|error| error.to_string())?,
+                self.pending_sandbox_boundary_acknowledgement(&session_id)
+                    .await?,
+            )
+        };
         let preferences = serde_json::from_value::<TerminalPreferences>(
             self.value(WorkerOperation::PresentationGet).await?,
         )
@@ -1741,7 +1874,9 @@ impl InteractiveHost for WorkerInteractiveHost {
             .unwrap_or("configured")
             .to_owned();
         Ok(InteractiveSnapshot {
-            session_id: session.id.clone(),
+            footer: self.footer(&session_id, "ready").await?,
+            session_id,
+            session_saved: !fresh_session,
             fresh_session,
             workspace,
             sandbox_profile,
@@ -1749,11 +1884,8 @@ impl InteractiveHost for WorkerInteractiveHost {
             preferences,
             history,
             completions: terminal_completion_values(&skill_names, &self.themes),
-            footer: self.footer(&session.id, "ready").await?,
             security_posture,
-            pending_sandbox_boundary_acknowledgement: self
-                .pending_sandbox_boundary_acknowledgement(&session.id)
-                .await?,
+            pending_sandbox_boundary_acknowledgement,
         })
     }
 
@@ -1764,53 +1896,9 @@ impl InteractiveHost for WorkerInteractiveHost {
         events: mpsc::Sender<HostEvent>,
     ) -> Result<bool, String> {
         let _operation = self.operations.enter(false).await?;
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct AcknowledgementResult {
-            acknowledged: bool,
-            #[serde(default)]
-            sandbox_boundary_acknowledgement: Option<SandboxBoundaryAcknowledgement>,
-        }
-
-        let mut observer = WorkerChannelObserver {
-            sender: events.clone(),
-        };
-        let prompts = TuiWorkerPromptHandler { sender: events };
-        let control = RunControl::default();
-        let result = self
-            .client
-            .call_interactive::<AcknowledgementResult>(
-                WorkerOperation::RunInteractive {
-                    model_options: None,
-                    request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
-                        session_id: session_id.into(),
-                        mode,
-                    },
-                    approval_mode: self.interactive_approval_mode()?,
-                    sandbox_boundary_acknowledgement: None,
-                },
-                &mut observer,
-                &prompts,
-                &control,
-            )
+        self.request_sandbox_acknowledgement(session_id, mode, events, &RunControl::default())
             .await
-            .map_err(|error| error.to_string())?;
-        if !result.acknowledged {
-            if result.sandbox_boundary_acknowledgement.is_some() {
-                return Err("worker returned a capability for a rejected acknowledgement".into());
-            }
-            return Ok(false);
-        }
-        let acknowledgement = result
-            .sandbox_boundary_acknowledgement
-            .ok_or_else(|| "worker returned an invalid sandbox boundary capability".to_owned())?;
-        self.sandbox_boundary_acknowledgements
-            .lock()
-            .map_err(|_| "sandbox boundary acknowledgement lock is poisoned".to_owned())?
-            .insert(session_id.into(), acknowledgement);
-        Ok(true)
     }
-
     async fn attach_image(&self, path: &str) -> Result<ModelImageReference, String> {
         let _operation = self.operations.enter(false).await?;
         self.client
@@ -1867,6 +1955,10 @@ impl InteractiveHost for WorkerInteractiveHost {
             .operations
             .enter(matches!(command, RuntimeCommand::Permissions(Some(_))))
             .await?;
+        if starts_session_work(&command) {
+            self.prepare_draft_for_work(session_id, &events, &control)
+                .await?;
+        }
         match command {
             RuntimeCommand::Shell { command } => {
                 let mut observer = WorkerChannelObserver {
@@ -1952,12 +2044,14 @@ impl InteractiveHost for WorkerInteractiveHost {
             .collect::<Vec<_>>();
         let (prompt, explicit_skills) =
             crate::resolve_skill_mentions(&request.prompt, &skill_names);
-        if prompt.is_empty() {
+        if prompt.trim().is_empty() {
             return Err("add a message after the qualified @PLUGIN/SKILL name".into());
         }
         request.prompt = prompt;
         request.explicit_skills =
             colossus_contracts::merge_plugin_selections(&explicit_skills, &request.explicit_skills);
+        self.prepare_draft_for_work(&request.session_id, &events, &control)
+            .await?;
         let mut observer = WorkerChannelObserver {
             sender: events.clone(),
         };

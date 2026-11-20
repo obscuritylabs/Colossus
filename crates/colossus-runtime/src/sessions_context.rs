@@ -100,15 +100,60 @@ impl Runtime {
     pub fn create_session(&self, title: Option<&str>) -> Result<SessionSummary, RuntimeError> {
         let id = Uuid::now_v7().to_string();
         self.sessions
-            .create_session(
-                &id,
-                title,
-                Actor {
-                    actor_type: ActorType::User,
-                    id: "terminal-user".into(),
-                },
-            )
+            .create_session(&id, title, terminal_actor())
             .map_err(Into::into)
+    }
+
+    /// Save a native terminal draft at its locally allocated UUIDv7.
+    ///
+    /// Repeating this explicit operation after an uncertain reply returns the
+    /// same active terminal-owned session. Native reads and runs cannot create a
+    /// session by presenting an unknown identifier.
+    pub fn materialize_terminal_session(&self, id: &str) -> Result<SessionSummary, RuntimeError> {
+        if id.len() != 36
+            || !Uuid::parse_str(id).is_ok_and(|parsed| {
+                parsed.get_version_num() == 7
+                    && parsed.get_variant() == uuid::Variant::RFC4122
+                    && parsed.to_string() == id
+            })
+        {
+            return Err(StoreError::Adapter(
+                "terminal draft session ID must be a canonical UUIDv7".into(),
+            )
+            .into());
+        }
+
+        let actor = terminal_actor();
+        let stream = format!("session:{id}");
+        let conflict = match self.sessions.create_session(id, None, actor.clone()) {
+            Ok(session) => return Ok(session),
+            Err(error) => error,
+        };
+        if !matches!(
+            &conflict,
+            StoreError::Conflict { stream_id, expected: 0, actual: 1.. }
+                if stream_id == &stream
+        ) {
+            return Err(conflict.into());
+        }
+        let created = self.journal.read_stream_from(&stream, 0, 1)?;
+        if !created.first().is_some_and(|event| {
+            event.context.session_id.as_deref() == Some(id) && event.actor == actor
+        }) {
+            return Err(conflict.into());
+        }
+        let Some(lifecycle) = self.sessions.session_lifecycle(id)? else {
+            return Err(conflict.into());
+        };
+        if lifecycle.archived {
+            return Err(StoreError::Adapter(
+                "session is archived; restore it before starting work".into(),
+            )
+            .into());
+        }
+        self.sessions
+            .get_session(id)?
+            .ok_or_else(|| conflict.into())
     }
 
     /// Materialize one caller-owned session whose identifier was durably allocated by

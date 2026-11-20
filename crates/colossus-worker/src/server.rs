@@ -709,7 +709,7 @@ async fn dispatch_interactive(
                 })
                 .await
                 .map_err(WorkerError::Protocol)?;
-            if answer.as_deref() != Some(acknowledgement_choice) {
+            if control.is_cancelled() || answer.as_deref() != Some(acknowledgement_choice) {
                 return Ok(json!({"acknowledged": false}));
             }
             let mut acknowledgement = [0_u8; 32];

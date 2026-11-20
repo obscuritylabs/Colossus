@@ -449,6 +449,11 @@ pub enum WorkerOperation {
         /// Optional bounded title.
         title: Option<String>,
     },
+    /// Persist a native TUI draft when it first needs a durable session.
+    TuiSessionMaterialize {
+        /// Canonical UUIDv7 allocated by the terminal host.
+        session_id: String,
+    },
     /// Reconstruct one session summary.
     SessionGet {
         /// Exact session identifier.

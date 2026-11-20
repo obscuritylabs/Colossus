@@ -27,14 +27,14 @@ Shift-Tab move between Open, History, and Archived; `/` searches the current lis
 The left pane shows session titles, status, update times, and message counts.
 Highlight a row with Up/Down or a mouse click to preview recent messages and work
 on the right. PageUp/PageDown scrolls the preview. Enter opens the selected
-unarchived conversation. Press `n` to create another session, `r` to refresh, or
+unarchived conversation. Press `n` to open a new draft, `r` to refresh, or
 Esc to return. On compact terminals, the browser keeps the list visible.
 
 On wider terminals, workspace sessions stay pinned at the bottom of the right
 sidebar. In the default full-screen view, click a row once to switch conversations.
 If F6 terminal-native text selection is enabled, press F6 or Esc to return first.
 The sidebar grows from 28 to 36 columns when there is room while preserving at
-least 64 columns for the conversation. Alt-N starts a new session, and
+least 64 columns for the conversation. Alt-N opens a new draft, and
 Alt-Left/Alt-Right switches between sessions without opening the command center.
 
 Sessions can work concurrently. Switching keeps each open session's draft,
@@ -64,10 +64,10 @@ whether they are running in another terminal or Desktop.
 
 ## Archive and restore a conversation
 
-Open Sessions, highlight an idle conversation, and press `a` to archive it. Stop
+Open Sessions, highlight a saved, idle conversation, and press `a` to archive it. Stop
 running or waiting work first, and resolve unsent drafts or queued turns before
 archiving an open session. Archiving the current session switches to another open
-conversation or starts an empty one when needed.
+conversation or opens a new draft when needed. You can also archive old empty entries.
 
 Archived sessions leave Open and History but retain their messages, plans, tasks,
 and other durable work. The archive state survives restarting Colossus. In
@@ -93,9 +93,14 @@ session.
 
 ## Start a clean conversation
 
-Enter `/session new` in the TUI. Starting `colossus tui` without `--resume` or
-`--session` also opens a fresh session. To give an empty session a title before
-starting work, use the CLI:
+Enter `/session new` in the TUI or start `colossus tui` without `--resume` or
+`--session` to open an unsaved draft. Starting a turn, running a shell command,
+or starting a goal or research run saves the session. Browsing sessions, changing
+terminal preferences, and composing without submitting keep the draft out of
+**History**. Use **Close draft** in Command Center to free an open slot, or
+exit the TUI to discard unsaved conversations.
+
+To save and title an empty session before starting work, use the CLI:
 
 ```bash
 colossus sessions new "Release review"
@@ -165,7 +170,7 @@ messages and uncommitted output are excluded. The file reports active work when 
 can be established, or unknown activity when it cannot. A completed export means the
 captured snapshot is complete; it does not mean the conversation's work has finished.
 
-In the TUI, export the current conversation with either command:
+In the TUI, export the current saved conversation with either command:
 
 ```text
 /session export "conversation notes.md"

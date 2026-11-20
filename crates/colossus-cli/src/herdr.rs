@@ -85,7 +85,7 @@ impl ResumeOptions {
     }
 
     fn argv(&self, session_id: &str, approval_mode: Option<&str>) -> Option<Vec<String>> {
-        if !self.resumable {
+        if !self.resumable || session_id.is_empty() {
             return None;
         }
         let mut argv = vec![

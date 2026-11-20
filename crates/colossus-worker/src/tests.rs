@@ -953,6 +953,7 @@ impl WorkerPromptHandler for FailingSocketPromptHandler {
 }
 
 struct HostedWorkerFixture {
+    runtime: Arc<Runtime>,
     _directory: tempfile::TempDir,
     client: WorkerClient,
     control: colossus_worker_protocol::WorkerControlClient,
@@ -1052,6 +1053,7 @@ async fn hosted_worker_fixture_with_home(
         zeroize::Zeroizing::new(*authentication.expose()),
     )
     .expect("native worker control client");
+    let runtime = Arc::clone(&server.runtime);
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let server_task = tokio::spawn(server.serve_until(async move {
         let _ = shutdown_rx.await;
@@ -1061,6 +1063,7 @@ async fn hosted_worker_fixture_with_home(
         .expect("worker fixture readiness timeout")
         .expect("worker fixture readiness");
     HostedWorkerFixture {
+        runtime,
         _directory: directory,
         client,
         control,
@@ -1071,6 +1074,94 @@ async fn hosted_worker_fixture_with_home(
 
 async fn hosted_worker_fixture() -> HostedWorkerFixture {
     hosted_worker_fixture_with_configure(|_| {}).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticated_terminal_draft_materialization_is_exact_and_idempotent() {
+    let fixture = hosted_worker_fixture().await;
+    let id = Uuid::now_v7().to_string();
+    let materialize = |session_id| {
+        fixture
+            .client
+            .call(WorkerOperation::TuiSessionMaterialize { session_id })
+    };
+    let document = json!({"operation": "tui_session_materialize", "session_id": id});
+    let operation: WorkerOperation =
+        serde_json::from_value(document.clone()).expect("terminal draft wire contract");
+    assert_eq!(
+        canonical_authentication_bytes(&operation).expect("typed bytes"),
+        canonical_authentication_bytes(&document).expect("wire bytes"),
+    );
+    assert!(
+        serde_json::from_value::<WorkerOperation>(json!({
+            "operation": "tui_session_materialize",
+            "session_id": id,
+            "owner": "caller-supplied"
+        }))
+        .is_err()
+    );
+
+    assert!(fixture.runtime.list_sessions(100).unwrap().is_empty());
+    for invalid in [
+        "not-a-uuid",
+        "0196f16e-15c7-447d-b224-8a9f5199633b",
+        "0196F16E-15C7-747D-B224-8A9F5199633B",
+    ] {
+        assert!(matches!(
+            materialize(invalid.into()).await,
+            Err(WorkerError::Remote(message)) if message.contains("canonical UUIDv7")
+        ));
+    }
+    assert!(fixture.runtime.list_sessions(100).unwrap().is_empty());
+    let (first, repeated) = tokio::join!(materialize(id.clone()), materialize(id.clone()));
+    let first = first.expect("materialize terminal draft");
+    assert_eq!(first["id"], id);
+    assert_eq!(first, repeated.expect("retry same draft"));
+    let stream_id = format!("session:{id}");
+    let records = fixture.runtime.journal().read_stream(&stream_id).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].actor.id, "terminal-user");
+    assert_eq!(fixture.runtime.list_sessions(100).unwrap().len(), 1);
+
+    let titled = fixture
+        .runtime
+        .create_session(Some("Keep this title"))
+        .unwrap();
+    let restored = materialize(titled.id)
+        .await
+        .expect("existing native summary");
+    assert_eq!(restored["title"], "Keep this title");
+    fixture.runtime.set_session_archived(&id, true).unwrap();
+    assert!(matches!(
+        materialize(id.clone()).await,
+        Err(WorkerError::Remote(message)) if message.contains("session is archived")
+    ));
+    assert!(
+        fixture
+            .runtime
+            .session_lifecycle(&id)
+            .unwrap()
+            .unwrap()
+            .archived
+    );
+
+    let foreign = Uuid::now_v7().to_string();
+    fixture
+        .runtime
+        .create_application_session(
+            &foreign,
+            Some("Application conversation"),
+            colossus_contracts::Actor {
+                actor_type: colossus_contracts::ActorType::User,
+                id: "application-user".into(),
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        materialize(foreign).await,
+        Err(WorkerError::Remote(message)) if message.contains("optimistic concurrency conflict")
+    ));
+    fixture.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1903,7 +1994,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 28);
+    assert_eq!(PROTOCOL_VERSION, 29);
     let key = [13_u8; 32];
     for incompatible_version in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
         let mut frame =

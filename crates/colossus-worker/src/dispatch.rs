@@ -191,6 +191,9 @@ async fn dispatch_general(
         WorkerOperation::SessionCreate { title } => Ok(serde_json::to_value(
             runtime.create_session(title.as_deref())?,
         )?),
+        WorkerOperation::TuiSessionMaterialize { session_id } => Ok(serde_json::to_value(
+            runtime.materialize_terminal_session(&session_id)?,
+        )?),
         WorkerOperation::SessionGet { session_id } => {
             Ok(serde_json::to_value(runtime.get_session(&session_id)?)?)
         }

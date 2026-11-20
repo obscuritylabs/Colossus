@@ -177,7 +177,11 @@ pub(super) fn observe_lifecycle(
 ) {
     if let Some(observer) = observer {
         observer.observe(
-            &state.session_id,
+            if state.session_saved {
+                &state.session_id
+            } else {
+                ""
+            },
             state.is_busy(),
             matches!(
                 state.overlay.as_ref(),
@@ -1764,6 +1768,11 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             }
         }
         HostEvent::Run(envelope) => handle_run_event(state, envelope),
+        HostEvent::SessionSaved { session_id } => {
+            if session_id == state.session_id {
+                state.session_saved = true;
+            }
+        }
         HostEvent::Subagents {
             session_id,
             revision,
@@ -2301,6 +2310,7 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
         });
     }
     if let Some((session_id, page, pending_sandbox_boundary_acknowledgement)) = result.session {
+        state.session_saved = true;
         state.sidebar = crate::sidebar::SidebarState::default();
         state.text_selection.clear();
         state.selecting_text = false;

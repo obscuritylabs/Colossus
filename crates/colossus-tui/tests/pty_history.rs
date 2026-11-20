@@ -186,6 +186,7 @@ impl InteractiveHost for FixtureHost {
         let history_navigation_fixture =
             std::env::var_os("COLOSSUS_TUI_HISTORY_NAVIGATION_FIXTURE").is_some();
         Ok(InteractiveSnapshot {
+            session_saved: true,
             session_id,
             fresh_session: empty,
             workspace: "/workspace/Colossus".into(),

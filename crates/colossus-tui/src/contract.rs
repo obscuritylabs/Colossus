@@ -69,6 +69,8 @@ pub struct SidebarSnapshot {
 pub struct InteractiveSnapshot {
     /// Exact active durable session.
     pub session_id: String,
+    /// Whether this conversation has a canonical session record.
+    pub session_saved: bool,
     /// Whether this process created the session during this bootstrap.
     pub fresh_session: bool,
     /// Canonical workspace selected for this terminal process.
@@ -786,6 +788,11 @@ pub struct InteractivePrompt {
 
 /// Typed background event consumed by the sole terminal owner.
 pub enum HostEvent {
+    /// User activity materialized the exact local conversation.
+    SessionSaved {
+        /// The stable draft identifier now backed by a canonical session.
+        session_id: String,
+    },
     /// Optional auxiliary text, fenced to its completed source generation.
     NextPrompt {
         /// Selected canonical session when generation began.
@@ -866,8 +873,9 @@ pub trait BackgroundNoticeProvider: Send + Sync {
 
 /// Optional observer of the active terminal session's user-facing lifecycle.
 pub trait InteractiveLifecycleObserver: Send + Sync {
-    /// Report the selected durable session and whether the terminal is working or
-    /// waiting for an operator decision. Neither state includes transcript content.
+    /// Report the selected durable session ID (empty for an unsaved draft) and
+    /// whether the terminal is working or waiting for an operator decision.
+    /// Neither state includes transcript content.
     fn observe(&self, session_id: &str, working: bool, blocked: bool, approval_mode: &str);
 }
 
@@ -927,6 +935,11 @@ pub trait InteractiveHost: Send + Sync {
     /// Persist canonical archive/restore state. The host must reject active sessions.
     async fn set_session_archived(&self, _session_id: &str, _archived: bool) -> Result<(), String> {
         Err("Session archival is unavailable in this host.".into())
+    }
+
+    /// Forget local state for an unused draft without modifying saved sessions.
+    fn close_session_draft(&self, _session_id: &str) -> Result<(), String> {
+        Ok(())
     }
 
     /// Read at most 100 durable child jobs for this session, including terminal history.

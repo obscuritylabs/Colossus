@@ -18,11 +18,17 @@ leaving the terminal.
 colossus -w /absolute/path/to/repository
 ```
 
-`colossus tui` opens the same interface. A fresh session shows your workspace,
+`colossus tui` opens the same interface. A fresh conversation shows your workspace,
 model route, approval mode, and readiness state above the composer. Type a task and
 press Enter to start. For example:
 
 > Explain how this repository handles configuration. Show me the relevant files.
+
+A new conversation appears in History once you start work in it. See
+[Start a clean conversation](sessions.md#start-a-clean-conversation) for when
+the TUI saves a draft. If your sandbox configuration requires a session
+acknowledgement, the TUI asks when you first submit work in a new conversation.
+See [Direct-execution acknowledgements](../reference/configuration/sandbox.md#direct-execution-acknowledgements).
 
 A fresh launch opens a centered entry screen: the Obscurity Labs crest spins,
 then settles above the assembling Colossus wordmark. The workspace appears after
@@ -218,8 +224,8 @@ Suggestions leave existing drafts untouched and disappear while another turn run
 ## Leave and come back
 
 Press Ctrl-C while idle, or enter `/exit`, to leave the TUI. During an active run,
-the first Ctrl-C requests cancellation; a second exits. Your session remains
-available. Reopen the latest one with:
+the first Ctrl-C requests cancellation. A second exits. Reopen the latest saved
+session with:
 
 ```bash
 colossus -w /absolute/path/to/repository tui --resume

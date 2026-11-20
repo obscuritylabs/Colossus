@@ -8,6 +8,7 @@ pub(crate) struct EmbeddedInteractiveHost {
     router: Arc<TuiPromptRouter>,
     approvals: Arc<TuiApprovalProvider>,
     operations: HostOperationGate,
+    drafts: SessionDrafts,
 }
 
 impl EmbeddedInteractiveHost {
@@ -24,11 +25,90 @@ impl EmbeddedInteractiveHost {
             router,
             approvals,
             operations: HostOperationGate::default(),
+            drafts: SessionDrafts::default(),
         }
+    }
+
+    async fn prepare_draft_for_work(
+        &self,
+        session_id: &str,
+        events: &mpsc::Sender<HostEvent>,
+        control: &RunControl,
+    ) -> Result<(), String> {
+        let saved = self
+            .drafts
+            .materialize(session_id, events, control, async {
+                self.runtime
+                    .materialize_terminal_session(session_id)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            })
+            .await?;
+        if saved
+            && !control.is_cancelled()
+            && let Some(mode) = self
+                .runtime
+                .pending_sandbox_boundary_acknowledgement(session_id)
+                .map_err(|error| error.to_string())?
+        {
+            let acknowledged = self
+                .request_sandbox_acknowledgement(session_id, mode, events.clone(), control)
+                .await?;
+            let _ = events
+                .send(HostEvent::SandboxBoundaryAcknowledgement(Ok(
+                    acknowledged.then_some(mode)
+                )))
+                .await;
+        }
+        if control.is_cancelled() {
+            return Err("Session work was cancelled before it started.".into());
+        }
+        Ok(())
+    }
+
+    async fn request_sandbox_acknowledgement(
+        &self,
+        session_id: &str,
+        mode: SandboxBoundaryMode,
+        events: mpsc::Sender<HostEvent>,
+        control: &RunControl,
+    ) -> Result<bool, String> {
+        let acknowledge = sandbox_boundary_acknowledgement_choice(mode);
+        let (response_tx, response_rx) = oneshot::channel();
+        events
+            .send(HostEvent::Prompt(sandbox_boundary_prompt(
+                mode,
+                response_tx,
+            )))
+            .await
+            .map_err(|_| "interactive client disconnected".to_owned())?;
+        let response = tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
+            .await
+            .map_err(|_| "sandbox boundary acknowledgement timed out".to_owned())?
+            .map_err(|_| "sandbox boundary acknowledgement was dropped".to_owned())?;
+        if control.is_cancelled()
+            || !matches!(response, PromptResponse::Answer(answer) if answer == acknowledge)
+        {
+            return Ok(false);
+        }
+        self.runtime
+            .acknowledge_sandbox_boundary(session_id, mode)
+            .map_err(|error| error.to_string())?;
+        Ok(true)
     }
 
     async fn configured_models(&self) -> Result<Vec<ProviderRoute>, String> {
         Ok(self.runtime.model_profiles())
+    }
+
+    fn session_work(&self, session_id: &str) -> Result<WorkStateSnapshot, String> {
+        if self.drafts.contains(session_id)? {
+            Ok(empty_work(session_id))
+        } else {
+            self.runtime
+                .work_state(session_id)
+                .map_err(|error| error.to_string())
+        }
     }
     async fn default_model_route(&self) -> Result<ProviderRoute, String> {
         self.runtime
@@ -56,15 +136,23 @@ impl EmbeddedInteractiveHost {
             &self.configured_models().await?,
             &self.model_selections.get(session_id)?,
         )?;
-        let context = self.runtime.context_status(session_id).await.ok();
-        let summary = self
-            .runtime
-            .get_session(session_id)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("session not found: {session_id}"))?;
-        let usage_run_id = usage_selection.run_id(summary.last_run_id.as_deref());
-        let usage =
-            usage_run_id.and_then(|run_id| self.runtime.run_token_usage(session_id, run_id).ok());
+        let (context, usage, message_count) = if self.drafts.contains(session_id)? {
+            (None, None, 0)
+        } else {
+            let summary = self
+                .runtime
+                .get_session(session_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("session not found: {session_id}"))?;
+            let usage = usage_selection
+                .run_id(summary.last_run_id.as_deref())
+                .and_then(|run_id| self.runtime.run_token_usage(session_id, run_id).ok());
+            (
+                self.runtime.context_status(session_id).await.ok(),
+                usage,
+                summary.message_count,
+            )
+        };
         let approval = self.approvals.mode_snapshot()?;
         Ok(FooterState {
             role: route.role.clone(),
@@ -73,7 +161,7 @@ impl EmbeddedInteractiveHost {
                 .as_ref()
                 .map(|context| (context.token_estimate, route.limits.input_budget_tokens)),
             usage,
-            message_count: summary.message_count,
+            message_count,
             status: status.into(),
             approval_mode: approval.mode.unwrap_or(ApprovalMode::Deny).as_str().into(),
             approval_mode_revision: approval.revision,
@@ -347,6 +435,11 @@ impl EmbeddedInteractiveHost {
                     .await
             }
             "resume" => self.resume_session(arguments, session_id, events).await,
+            "work" if self.drafts.contains(session_id)? => Ok(HostCommandResult::document(
+                PresentationDocument::from_block(PresentationBlock::Text(
+                    "No work in this draft.".into(),
+                )),
+            )),
             "work" => Ok(HostCommandResult::document(work_state_document(
                 &self
                     .runtime
@@ -465,6 +558,11 @@ impl EmbeddedInteractiveHost {
             "telemetry" => self.telemetry_command(arguments, session_id),
             "plugins" => self.plugins_command(arguments).await,
             "plugin" => self.plugin_command(arguments, sticky_skills).await,
+            "context" if self.drafts.contains(session_id)? => Ok(HostCommandResult::document(
+                PresentationDocument::from_block(PresentationBlock::Text(
+                    "No saved context in this draft.".into(),
+                )),
+            )),
             "context" => self.context_command(arguments, session_id).await,
             "workflow" => self.workflow_command(arguments).await,
             "audit" if arguments == "verify" => self.result(
@@ -511,6 +609,9 @@ impl EmbeddedInteractiveHost {
         control: &RunControl,
     ) -> Result<HostCommandResult, String> {
         match arguments.trim() {
+            "" | "show" if self.drafts.contains(session_id)? => Ok(HostCommandResult::document(
+                PresentationDocument::from_block(PresentationBlock::Text("This conversation is an unsaved draft.".into())),
+            )),
             "" | "show" => self.result(
                 &self
                     .runtime
@@ -527,6 +628,9 @@ impl EmbeddedInteractiveHost {
             }
             "resume" => self.resume_session("", session_id, events).await,
             arguments if arguments == "export" || arguments.starts_with("export ") => {
+                if self.drafts.contains(session_id)? {
+                    return Err("This draft has no saved transcript to export.".into());
+                }
                 let (output, format) = crate::transcript_export::interactive_export_arguments(arguments.strip_prefix("export").unwrap_or_default())?;
                 crate::transcript_export::export_transcript_controlled(
                     crate::transcript_export::TranscriptSource::Embedded(&self.runtime),
@@ -1266,10 +1370,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         &self,
         session_id: &str,
     ) -> Result<Option<colossus_tui::SidebarSnapshot>, String> {
-        let work = self
-            .runtime
-            .work_state(session_id)
-            .map_err(|error| error.to_string())?;
+        let work = self.session_work(session_id)?;
         Ok(Some(super::sidebar::sidebar_snapshot(
             work,
             None,
@@ -1281,10 +1382,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         &self,
         session_id: &str,
     ) -> Result<Option<colossus_tui::SidebarSnapshot>, String> {
-        let work = self
-            .runtime
-            .work_state(session_id)
-            .map_err(|error| error.to_string())?;
+        let work = self.session_work(session_id)?;
         let servers = self
             .runtime
             .mcp_servers()
@@ -1350,6 +1448,10 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         Ok(collector.finish())
     }
 
+    fn close_session_draft(&self, session_id: &str) -> Result<(), String> {
+        self.drafts.close(session_id)
+    }
+
     async fn set_session_archived(&self, session_id: &str, archived: bool) -> Result<(), String> {
         let _operation = self.operations.enter(false).await?;
         self.runtime
@@ -1360,7 +1462,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
 
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
         let fresh_session = request.session_id.is_none() && !request.resume_latest;
-        let session = if let Some(session_id) = request.session_id {
+        let session_id = if let Some(session_id) = request.session_id {
             let lifecycle = self
                 .runtime
                 .session_lifecycle(&session_id)
@@ -1373,19 +1475,27 @@ impl InteractiveHost for EmbeddedInteractiveHost {
                 .get_session(&session_id)
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| format!("session not found: {session_id}"))?
+                .id
         } else if request.resume_latest {
             self.runtime
                 .latest_session()
                 .map_err(|error| error.to_string())?
+                .id
         } else {
-            self.runtime
-                .create_session(None)
-                .map_err(|error| error.to_string())?
+            self.drafts.allocate()?
         };
-        let transcript = self
-            .runtime
-            .session_messages_page(&session.id, None, 100)
-            .map_err(|error| error.to_string())?;
+        let (transcript, pending_sandbox_boundary_acknowledgement) = if fresh_session {
+            (empty_transcript(), None)
+        } else {
+            (
+                self.runtime
+                    .session_messages_page(&session_id, None, 100)
+                    .map_err(|error| error.to_string())?,
+                self.runtime
+                    .pending_sandbox_boundary_acknowledgement(&session_id)
+                    .map_err(|error| error.to_string())?,
+            )
+        };
         let preferences = self
             .runtime
             .presentation_preferences()
@@ -1402,7 +1512,9 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
             .collect::<Vec<_>>();
         Ok(InteractiveSnapshot {
-            session_id: session.id.clone(),
+            footer: self.footer(&session_id, "ready").await?,
+            session_id,
+            session_saved: !fresh_session,
             fresh_session,
             workspace: self.runtime.workspace().display().to_string(),
             sandbox_profile: self.runtime.sandbox_profile().to_owned(),
@@ -1410,12 +1522,8 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             preferences,
             history,
             completions: terminal_completion_values(&skill_names, &self.themes),
-            footer: self.footer(&session.id, "ready").await?,
             security_posture: self.runtime.security_posture().clone(),
-            pending_sandbox_boundary_acknowledgement: self
-                .runtime
-                .pending_sandbox_boundary_acknowledgement(&session.id)
-                .map_err(|error| error.to_string())?,
+            pending_sandbox_boundary_acknowledgement,
         })
     }
 
@@ -1426,26 +1534,8 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         events: mpsc::Sender<HostEvent>,
     ) -> Result<bool, String> {
         let _operation = self.operations.enter(false).await?;
-        let acknowledge = sandbox_boundary_acknowledgement_choice(mode);
-        let (response_tx, response_rx) = oneshot::channel();
-        events
-            .send(HostEvent::Prompt(sandbox_boundary_prompt(
-                mode,
-                response_tx,
-            )))
+        self.request_sandbox_acknowledgement(session_id, mode, events, &RunControl::default())
             .await
-            .map_err(|_| "interactive client disconnected".to_owned())?;
-        let response = tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
-            .await
-            .map_err(|_| "sandbox boundary acknowledgement timed out".to_owned())?
-            .map_err(|_| "sandbox boundary acknowledgement was dropped".to_owned())?;
-        if !matches!(response, PromptResponse::Answer(answer) if answer == acknowledge) {
-            return Ok(false);
-        }
-        self.runtime
-            .acknowledge_sandbox_boundary(session_id, mode)
-            .map_err(|error| error.to_string())?;
-        Ok(true)
     }
 
     async fn attach_image(&self, path: &str) -> Result<ModelImageReference, String> {
@@ -1475,6 +1565,10 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             .operations
             .enter(matches!(command, RuntimeCommand::Permissions(Some(_))))
             .await?;
+        if starts_session_work(&command) {
+            self.prepare_draft_for_work(session_id, &events, &control)
+                .await?;
+        }
         self.router
             .scope(events.clone(), async {
                 match command {
@@ -1539,7 +1633,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             .collect::<Vec<_>>();
         let (prompt, explicit_skills) =
             crate::resolve_skill_mentions(&request.prompt, &skill_names);
-        if prompt.is_empty() {
+        if prompt.trim().is_empty() {
             return Err("add a message after the qualified @PLUGIN/SKILL name".into());
         }
         request.prompt = prompt;
@@ -1553,6 +1647,8 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         self.runtime
             .model_route_with_options("primary", &options)
             .map_err(|error| error.to_string())?;
+        self.prepare_draft_for_work(&request.session_id, &events, &control)
+            .await?;
         let outcome = self
             .router
             .scope(
