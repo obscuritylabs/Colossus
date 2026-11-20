@@ -354,7 +354,7 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                 ),
                 (
                     "Select text".into(),
-                    "Drag the mouse to highlight; Ctrl+C copies using the terminal clipboard; Esc clears. F6 freezes the view for native terminal selection; inline mode uses native selection.".into(),
+                    "Drag to highlight, then press Ctrl+C or Ctrl+Insert to copy. Esc clears. For your terminal's Copy shortcut, press F6 and select text again. Inline mode normally uses terminal-native selection.".into(),
                 ),
             ]),
             PresentationBlock::Markdown("## Command families".into()),

@@ -30,10 +30,12 @@ import { ControlPlaneConnections } from "./ControlPlaneConnections";
 import { PluginsSurface } from "./PluginsSurface";
 import { WorkflowsSurface } from "./WorkflowsSurface";
 import { SchedulesSurface } from "./SchedulesSurface";
+import { AlwaysOnSurface, type AlwaysOnSurfaceProps } from "./AlwaysOnSurface";
 import type { ScheduleRunAttempt } from "../workflows";
 import type { WorkspaceSurface } from "./ProductRail";
 
 interface OperationsSurfaceProps {
+  alwaysOn?: AlwaysOnSurfaceProps;
   scheduleRunAttempts: Map<string, ScheduleRunAttempt>;
   onCreateWithAgent: (prompt: string) => void;
   agentStarting: boolean;
@@ -728,18 +730,34 @@ function SettingsView({
 }
 
 export function OperationsSurface(props: OperationsSurfaceProps) {
+  const mainRef = useRef<HTMLElement>(null);
   const navigationTriggerRef = useRef<HTMLButtonElement>(null);
   const previousNavigationOpen = useRef(props.workNavigationOpen);
+  const previousSurface = useRef<WorkspaceSurface | null>(null);
 
   useEffect(() => {
-    if (previousNavigationOpen.current && !props.workNavigationOpen) {
-      requestAnimationFrame(() => navigationTriggerRef.current?.focus());
-    }
+    const arrivingAtAlwaysOn =
+      props.surface === "always-on" &&
+      previousSurface.current !== props.surface;
+    const closingNavigation =
+      previousNavigationOpen.current && !props.workNavigationOpen;
+    previousSurface.current = props.surface;
     previousNavigationOpen.current = props.workNavigationOpen;
-  }, [props.workNavigationOpen]);
+    if (arrivingAtAlwaysOn || closingNavigation) {
+      const frame = requestAnimationFrame(() => {
+        (arrivingAtAlwaysOn ? mainRef : navigationTriggerRef).current?.focus();
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [props.surface, props.workNavigationOpen]);
 
   return (
-    <main className="operations-surface" id="primary-workspace" tabIndex={-1}>
+    <main
+      ref={mainRef}
+      className="operations-surface"
+      id="primary-workspace"
+      tabIndex={-1}
+    >
       {props.surface !== "settings" ? (
         <button
           ref={navigationTriggerRef}
@@ -756,6 +774,9 @@ export function OperationsSurface(props: OperationsSurfaceProps) {
       ) : null}
       {props.surface === "fleet" ? (
         <CapabilitiesSurface desktop={props.desktop} />
+      ) : null}
+      {props.surface === "always-on" && props.alwaysOn ? (
+        <AlwaysOnSurface {...props.alwaysOn} />
       ) : null}
       {props.surface === "workflows" ? (
         <WorkflowsSurface

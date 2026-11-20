@@ -28,6 +28,7 @@ import { terminalRequestForScope } from "./components/tools/TerminalDock";
 import {
   CommandFailure,
   addExternalTarget,
+  alwaysOnStatus,
   applyManagedModelConfiguration,
   archiveThread,
   cancelRun,
@@ -136,6 +137,7 @@ import type {
 } from "./components/WorkSidebar";
 import { WorkSurface } from "./components/WorkSurface";
 import { AlwaysOnControl } from "./components/AlwaysOnControl";
+import { useAlwaysOnInventory } from "./use-always-on-inventory";
 import type { SessionWorkspaceView } from "./components/SessionWorkspace";
 import type { WorkspaceFileOpenRequest } from "./components/WorkspaceFiles";
 import { WorkspaceFiles } from "./components/WorkspaceFiles";
@@ -1262,6 +1264,24 @@ export default function App() {
       );
     }
   }
+  const alwaysOnInventory = useAlwaysOnInventory(
+    !FIXTURE_MODE &&
+      startup === "ready" &&
+      (surface === "always-on" ||
+        (surface !== "settings" && desktop.selectedSpaceId !== null))
+      ? JSON.stringify([
+          targetRoutes.current.captureGeneration(),
+          desktop.selectedTargetId,
+          connection.state,
+          desktop.spaces.map(({ spaceId, archived, state, displayName }) => [
+            spaceId,
+            archived,
+            state,
+            displayName,
+          ]),
+        ])
+      : null,
+  );
   const connectingRef = useRef(false);
   const submitInFlight = useRef(false);
   const queuedMessagesRef = useRef<readonly QueuedMessage[]>([]);
@@ -5911,6 +5931,72 @@ export default function App() {
   const selectedTarget = desktop.targets.find(
     (target) => target.targetId === desktop.selectedTargetId,
   );
+  const alwaysOnWorkspace = alwaysOnInventory.rows?.find(
+    (row) => row.spaceId === desktop.selectedSpaceId,
+  );
+  const selectedAlwaysOnRoute = targetRoutes.current?.capture();
+  const showAlwaysOnEnrollment =
+    selectedAlwaysOnRoute?.kind === "managed_local" &&
+    selectedAlwaysOnRoute.targetId === selectedTarget?.targetId &&
+    selectedTarget.state === "ready" &&
+    connection.state === "connected" &&
+    connection.targetId === selectedAlwaysOnRoute.targetId &&
+    desktop.spaces.some(
+      (space) =>
+        space.spaceId === desktop.selectedSpaceId &&
+        !space.archived &&
+        space.state === "ready",
+    );
+
+  async function openAlwaysOnSession(route: TargetRoute, sessionId: string) {
+    const available = () =>
+      targetRoutes.current?.isCurrent(route) === true &&
+      !submitInFlight.current &&
+      !connectingRef.current;
+    if (!available()) return false;
+    const status = await alwaysOnStatus(route.targetId).catch(() => null);
+    if (!available() || status?.profile?.session_id !== sessionId) return false;
+    const page = await listRuns(route.targetId, {
+      pageToken: "",
+      sessionId,
+    }).catch(() => null);
+    const run = page?.runs.find(
+      (candidate) => candidate.sessionId === sessionId && !candidate.archived,
+    );
+    if (
+      !run ||
+      !available() ||
+      !targetRoutes.current?.bindRun(run.runId, route)
+    ) {
+      return false;
+    }
+    await openRun(run);
+    return true;
+  }
+
+  async function openWorkspaceAlwaysOnConversation(
+    spaceId: string,
+    sessionId: string,
+  ) {
+    if (submitInFlight.current || connectingRef.current) return false;
+    const space = desktopRef.current.spaces.find(
+      (candidate) => candidate.spaceId === spaceId && !candidate.archived,
+    );
+    if (space === undefined) return false;
+    if (desktopRef.current.selectedSpaceId !== spaceId) {
+      await handleSelectSpace(spaceId);
+    }
+    const route = targetRoutes.current?.capture() ?? null;
+    if (route?.kind !== "managed_local" || route.targetId !== space.targetId) {
+      return false;
+    }
+    const opened = await openAlwaysOnSession(route, sessionId);
+    if (!opened && targetRoutes.current?.isCurrent(route) === true) {
+      setRunLoadError("The enrolled conversation is unavailable.");
+    }
+    return opened;
+  }
+
   const alwaysOnRoute =
     activeRun === undefined
       ? (targetRoutes.current?.capture() ?? null)
@@ -5939,30 +6025,10 @@ export default function App() {
           !activeRun.archived
         }
         isCurrent={alwaysOnRouteIsCurrent}
-        onOpenConversation={async (sessionId) => {
-          const available = () =>
-            alwaysOnRouteIsCurrent() &&
-            !submitInFlight.current &&
-            !connectingRef.current;
-          if (!available()) return false;
-          const page = await listRuns(alwaysOnRoute.targetId, {
-            pageToken: "",
-            sessionId,
-          }).catch(() => null);
-          const run = page?.runs.find(
-            (candidate) =>
-              candidate.sessionId === sessionId && !candidate.archived,
-          );
-          if (
-            !run ||
-            !available() ||
-            !targetRoutes.current?.bindRun(run.runId, alwaysOnRoute)
-          ) {
-            return false;
-          }
-          await openRun(run);
-          return true;
-        }}
+        onOpenConversation={(sessionId) =>
+          openAlwaysOnSession(alwaysOnRoute, sessionId)
+        }
+        onProfileChanged={() => void alwaysOnInventory.refresh(true)}
       />
     ) : null;
   const terminalAvailable = selectedTarget?.terminalAvailable === true;
@@ -6276,6 +6342,19 @@ export default function App() {
           terminalConsentPending={desktop.terminalConsentPending === true}
           terminalAvailable={terminalAvailable}
           activeSessionId={activeForkDraft?.id ?? activeRun?.sessionId ?? null}
+          alwaysOnProfile={
+            showAlwaysOnEnrollment && alwaysOnWorkspace?.state === "enrolled"
+              ? alwaysOnWorkspace.profile
+              : undefined
+          }
+          onOpenAlwaysOnConversation={(sessionId) => {
+            if (desktop.selectedSpaceId !== null) {
+              void openWorkspaceAlwaysOnConversation(
+                desktop.selectedSpaceId,
+                sessionId,
+              );
+            }
+          }}
           pinnedSessionIds={pinnedThreadSessionIds}
           resolveThreadTitle={resolveThreadTitle}
           query={workQuery}
@@ -6725,6 +6804,20 @@ export default function App() {
           }
         >
           <OperationsSurface
+            alwaysOn={{
+              rows: FIXTURE_MODE ? [] : alwaysOnInventory.rows,
+              failed: alwaysOnInventory.failed,
+              disabled: connecting || submitting,
+              onRefresh: () => void alwaysOnInventory.refresh(),
+              onOpenConversation: openWorkspaceAlwaysOnConversation,
+              onSelectWorkspace: (spaceId) => {
+                if (spaceId !== desktop.selectedSpaceId) {
+                  void handleSelectSpace(spaceId);
+                } else if (desktop.selectedTargetId !== null) {
+                  void connect(desktop.selectedTargetId);
+                }
+              },
+            }}
             scheduleRunAttempts={scheduleRunAttempts.current}
             onCreateWithAgent={(prompt) =>
               void createAutomationWithAgent(prompt)

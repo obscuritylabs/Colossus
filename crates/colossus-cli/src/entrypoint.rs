@@ -1427,6 +1427,7 @@ async fn runtime_command(
                         resume_latest: resume,
                     },
                     screen_mode,
+                    allow_native_clipboard: !cli.desktop_worker_auth,
                     background_notice: Some(default_update_notice_provider()),
                     lifecycle: herdr.clone().map(|reporter| reporter as Arc<dyn colossus_tui::InteractiveLifecycleObserver>),
                 },

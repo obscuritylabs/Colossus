@@ -62,6 +62,7 @@ pub(super) async fn dispatch_to_worker_if_active(
         // process-local state and the command runs embedded.
         return Ok(false);
     }
+    let allow_native_clipboard = inherited_worker.is_none();
     let client = match inherited_worker {
         Some(client) => Some(client),
         None => WorkerClient::discover(config)?,
@@ -1263,6 +1264,7 @@ pub(super) async fn dispatch_to_worker_if_active(
                             resume_latest: *resume,
                         },
                         screen_mode,
+                        allow_native_clipboard,
                         background_notice: Some(default_update_notice_provider()),
                         lifecycle: herdr.clone().map(|reporter| {
                             reporter as Arc<dyn colossus_tui::InteractiveLifecycleObserver>

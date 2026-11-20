@@ -760,6 +760,7 @@ fn fixture_process() {
                     .map(|_| Arc::new(FixtureDictation) as Arc<dyn colossus_tui::LocalDictation>),
                 bootstrap: BootstrapRequest::default(),
                 screen_mode,
+                allow_native_clipboard: false,
                 background_notice: None,
                 lifecycle: None,
             },

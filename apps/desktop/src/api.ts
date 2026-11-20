@@ -42,7 +42,15 @@ export async function cancelConversationExport(
   });
 }
 
-import type { AlwaysOnProfile, AlwaysOnStatus } from "./types";
+import type {
+  AlwaysOnProfile,
+  AlwaysOnStatus,
+  AlwaysOnWorkspace,
+} from "./types";
+
+export function listDesktopAlwaysOn(): Promise<AlwaysOnWorkspace[]> {
+  return call("list_desktop_always_on");
+}
 
 export function alwaysOnStatus(targetId: string): Promise<AlwaysOnStatus> {
   return call("desktop_always_on_status", { targetId });

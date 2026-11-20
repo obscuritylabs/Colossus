@@ -272,6 +272,15 @@ export interface AlwaysOnStatus {
   profile: AlwaysOnProfile | null;
 }
 
+export type AlwaysOnWorkspace = {
+  spaceId: string;
+  displayName: string;
+} & (
+  | { state: "enrolled"; profile: AlwaysOnProfile }
+  | { state: "unenrolled" }
+  | { state: "unavailable" }
+);
+
 export interface ControlPlaneProfile {
   id: string;
   label: string;

@@ -1107,7 +1107,7 @@ jobs:
     needs: validate
     runs-on: windows-2025
     environment: release-signing
-    timeout-minutes: 100
+    timeout-minutes: 150
     permissions:
       contents: read
       id-token: write

@@ -148,6 +148,7 @@ const COMMANDS: &[&str] = &[
     "list_runs",
     "list_shell_sessions",
     "workflow_context",
+    "list_desktop_always_on",
     "desktop_always_on_status",
     "desktop_always_on_enable",
     "desktop_always_on_pause",

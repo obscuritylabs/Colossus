@@ -120,7 +120,7 @@ async fn native_terminal_preserves_process_across_attach_and_deduplicates_input(
     wrong_owner.owner = "human-b".into();
     assert!(service.execute("app:a", wrong_owner).await.is_err());
     #[cfg(windows)]
-    let command = "[IO.File]::AppendAllText('once.txt','x')\r";
+    let command = "if ($env:COLOSSUS_TERMINAL_MANAGED_CLIPBOARD -eq '1') { [IO.File]::AppendAllText('once.txt','x') } else { [IO.File]::WriteAllText('once.txt','missing terminal clipboard ownership') }\r";
     #[cfg(not(windows))]
     let command = "printf x >> once.txt\r";
     let input = Op::Write {

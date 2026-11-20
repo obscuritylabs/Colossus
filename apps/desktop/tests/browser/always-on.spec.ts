@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 interface FixtureCall {
@@ -10,17 +11,27 @@ interface AlwaysOnFixture {
   finishWake(): void;
   switchToExternal(): void;
   releaseOldStatus?: () => void;
+  releaseOldInventory?: () => void;
 }
 
 type FixtureWindow = { alwaysOnFixture: AlwaysOnFixture };
 
-async function installAlwaysOnFixture(page: Page, deferStatus = false) {
-  await page.addInitScript((deferStatus) => {
+async function installAlwaysOnFixture(
+  page: Page,
+  options: {
+    deferStatus?: boolean;
+    deferInventory?: boolean;
+    inventory?: boolean;
+  } = {},
+) {
+  await page.addInitScript(({ deferStatus, deferInventory, inventory }) => {
     const host = window as unknown as FixtureWindow & {
       __TAURI_INTERNALS__: unknown;
       __TAURI_EVENT_PLUGIN_INTERNALS__: unknown;
     };
     const managed = "always-on-managed";
+    const background = "always-on-background";
+    const sleeping = "always-on-sleeping";
     const external = "always-on-external";
     const workspace = {
       workspaceId: "always-on-workspace",
@@ -71,6 +82,49 @@ async function installAlwaysOnFixture(page: Page, deferStatus = false) {
       makeRun("first", first, "Workspace notes", firstTime, "Initial notes."),
       makeRun("second", second, "Release notes", firstTime, "Draft notes."),
     ];
+    const backgroundRun = makeRun(
+      "background-run",
+      "background-conversation",
+      "Background tracking",
+      firstTime,
+      "Background workspace notes.",
+    );
+    const backgroundProfile = {
+      session_id: backgroundRun.sessionId,
+      enabled: false,
+      revision: 3,
+      next_wake_at: nextWake,
+      pending: null,
+      last_wake: {
+        id: "previous",
+        completed_at: completedAt,
+        status: "completed",
+      },
+    };
+    if (inventory) {
+      localStorage.setItem(
+        "colossus.thread-pins:v1",
+        JSON.stringify([{ spaceId: managed, sessionIds: [first, second] }]),
+      );
+    }
+    const makeSpace = (
+      spaceId: string,
+      displayName: string,
+      state: string,
+    ) => ({
+      spaceId,
+      targetId: spaceId,
+      displayName,
+      displayPath: `/fixture/${spaceId}`,
+      archived: false,
+      lastOpenedAtMs: 0,
+      lastActivityAt: null,
+      state,
+      message: "Synthetic runtime ready.",
+      selected: selectedTargetId === spaceId,
+      attentionCount: 0,
+      providerConfigured: true,
+    });
     let selectedTargetId = managed;
     let profile: {
       session_id: string;
@@ -95,39 +149,34 @@ async function installAlwaysOnFixture(page: Page, deferStatus = false) {
         {
           targetId: selectedTargetId,
           kind:
-            selectedTargetId === managed ? "managed_local" : "external_daemon",
+            selectedTargetId === external ? "external_daemon" : "managed_local",
           label:
             selectedTargetId === managed
               ? workspace.displayName
-              : "External fixture",
+              : selectedTargetId === background
+                ? "Background Workspace"
+                : "External fixture",
           state: "ready",
           message: "Synthetic runtime ready.",
           selected: true,
           terminalAvailable: false,
-          workspace: selectedTargetId === managed ? workspace : null,
+          workspace: selectedTargetId === external ? null : workspace,
           failureCode: null,
         },
       ],
       selectedTargetId,
       spaces: [
-        {
-          spaceId: managed,
-          targetId: managed,
-          displayName: workspace.displayName,
-          displayPath: workspace.displayPath,
-          archived: false,
-          lastOpenedAtMs: 0,
-          lastActivityAt: null,
-          state: "ready",
-          message: "Synthetic runtime ready.",
-          selected: selectedTargetId === managed,
-          attentionCount: 0,
-          providerConfigured: true,
-        },
+        makeSpace(managed, workspace.displayName, "ready"),
+        ...(inventory
+          ? [
+              makeSpace(background, "Background Workspace", "ready"),
+              makeSpace(sleeping, "Sleeping Workspace", "sleeping"),
+            ]
+          : []),
       ],
-      selectedSpaceId: selectedTargetId === managed ? managed : null,
+      selectedSpaceId: selectedTargetId === external ? null : selectedTargetId,
       managedState: "ready",
-      workspace: selectedTargetId === managed ? workspace : null,
+      workspace: selectedTargetId === external ? null : workspace,
       provider: {
         configured: true,
         kind: "openai_compatible",
@@ -208,27 +257,87 @@ async function installAlwaysOnFixture(page: Page, deferStatus = false) {
         }
         if (command === "list_setup_packages" || command === "list_asides")
           return [];
+        if (command === "list_desktop_always_on") {
+          if (deferInventory) {
+            deferInventory = false;
+            await new Promise<void>((resolve) => {
+              fixture.releaseOldInventory = resolve;
+            });
+            return [
+              {
+                spaceId: managed,
+                displayName: "Old inventory snapshot",
+                state: "enrolled",
+                profile: backgroundProfile,
+              },
+            ];
+          }
+          return [
+            {
+              spaceId: managed,
+              displayName: workspace.displayName,
+              ...(profile
+                ? { state: "enrolled", profile }
+                : { state: "unenrolled" }),
+            },
+            ...(inventory
+              ? [
+                  {
+                    spaceId: background,
+                    displayName: "Background Workspace",
+                    state: "enrolled",
+                    profile: backgroundProfile,
+                  },
+                  {
+                    spaceId: sleeping,
+                    displayName: "Sleeping Workspace",
+                    state: "unavailable",
+                  },
+                ]
+              : []),
+          ];
+        }
+        if (command === "select_space") {
+          const spaceId = String(args.spaceId);
+          if (!inventory || spaceId !== background)
+            throw new Error("Unknown fixture Workspace.");
+          fixture.calls.push({ command, args });
+          selectedTargetId = spaceId;
+          return status();
+        }
         if (command === "list_runs") {
           const request = args.request as { sessionId?: string };
+          const targetRuns =
+            args.targetId === managed
+              ? runs
+              : args.targetId === background
+                ? [backgroundRun]
+                : [];
           return {
-            runs:
-              args.targetId === managed
-                ? runs.filter(
-                    (run) =>
-                      !request.sessionId || request.sessionId === run.sessionId,
-                  )
-                : [],
+            runs: targetRuns.filter(
+              (run) =>
+                !request.sessionId || request.sessionId === run.sessionId,
+            ),
             nextPageToken: "",
           };
         }
         if (command === "get_run") {
           const { runId } = args.request as { runId: string };
-          const run = runs.find((item) => item.runId === runId);
+          const run = [...runs, backgroundRun].find(
+            (item) => item.runId === runId,
+          );
           if (!run) throw new Error("Unknown fixture run.");
           return { run, pendingInteractions: [] };
         }
         if (!command.startsWith("desktop_always_on_")) return null;
         fixture.calls.push({ command, args });
+        if (
+          args.targetId === background &&
+          selectedTargetId === background &&
+          command === "desktop_always_on_status"
+        ) {
+          return { selectionEpoch: 42, profile: backgroundProfile };
+        }
         if (args.targetId !== managed || selectedTargetId !== managed) {
           throw new Error(
             "Fixture received a request for an unavailable target.",
@@ -294,7 +403,7 @@ async function installAlwaysOnFixture(page: Page, deferStatus = false) {
         return profile;
       },
     };
-  }, deferStatus);
+  }, options);
 }
 
 async function openThread(page: Page, title: string) {
@@ -309,7 +418,10 @@ test("an Always On conversation can wake, pause, and move at compact width", asy
   await installAlwaysOnFixture(page);
   await page.goto("/");
   await openThread(page, "Workspace notes");
-  const trigger = page.getByRole("button", { name: "Always On Agent" });
+  const trigger = page.getByRole("button", {
+    name: "Always On Agent",
+    exact: true,
+  });
   await trigger.press("Enter");
   const panel = page.getByRole("dialog", { name: "Always On Agent" });
   const enroll = panel.getByRole("button", { name: "Use this conversation" });
@@ -373,9 +485,12 @@ test("an Always On conversation can wake, pause, and move at compact width", asy
 test("a late Always On reply disappears when the selected target becomes external", async ({
   page,
 }) => {
-  await installAlwaysOnFixture(page, true);
+  await installAlwaysOnFixture(page, { deferStatus: true });
   await page.goto("/");
-  const trigger = page.getByRole("button", { name: "Always On Agent" });
+  const trigger = page.getByRole("button", {
+    name: "Always On Agent",
+    exact: true,
+  });
   await trigger.click();
   const panel = page.getByRole("dialog", { name: "Always On Agent" });
   await expect(panel.getByRole("status")).toHaveText("Checking status…");
@@ -397,4 +512,225 @@ test("a late Always On reply disappears when the selected target becomes externa
   );
   await expect(panel).toHaveCount(0);
   await expect(trigger).toHaveCount(0);
+});
+
+test("Always On Agents precede Pinned and open across local Workspaces", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1250, height: 780 });
+  await installAlwaysOnFixture(page, { inventory: true });
+  await page.goto("/");
+  const threads = page.getByRole("navigation", {
+    name: "Threads",
+    exact: true,
+  });
+  const pinned = threads.getByRole("heading", { name: "Pinned", exact: true });
+  await expect(pinned).toBeVisible();
+  await expect(
+    threads.getByRole("heading", { name: "Always On Agents" }),
+  ).toHaveCount(0);
+  await threads.getByRole("button", { name: /^Workspace notes/u }).click();
+  const trigger = page.getByRole("button", {
+    name: "Always On Agent",
+    exact: true,
+  });
+  await trigger.press("Enter");
+  const popover = page.getByRole("dialog", { name: "Always On Agent" });
+  await popover.getByRole("button", { name: "Use this conversation" }).click();
+  await expect(popover.getByText("Enabled", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  const agentsHeading = threads.getByRole("heading", {
+    name: "Always On Agents",
+  });
+  await expect(agentsHeading).toBeVisible();
+  expect((await agentsHeading.boundingBox())!.y).toBeLessThan(
+    (await pinned.boundingBox())!.y,
+  );
+  await expect(
+    threads.getByRole("button", { name: /^Workspace notes/u }),
+  ).toHaveCount(1);
+  await expect(
+    threads.getByRole("button", {
+      name: /^Thread actions for Workspace notes/u,
+    }),
+  ).toBeAttached();
+
+  const destination = page
+    .getByRole("navigation", { name: "Workspace destinations" })
+    .getByRole("button", { name: "Always On Agents", exact: true });
+  await destination.press("Enter");
+  await expect(destination).toHaveAttribute("aria-current", "page");
+  const main = page.getByRole("main");
+  await expect(
+    main.getByRole("heading", { name: "Always On Agents" }),
+  ).toBeVisible();
+  await expect(
+    main.getByText("2 agents · 1 Workspace unavailable"),
+  ).toBeVisible();
+  const agents = main.getByRole("list", { name: "Enrolled agents" });
+  await expect(agents.getByText("Enabled", { exact: true })).toBeVisible();
+  await expect(agents.getByText("Paused", { exact: true })).toBeVisible();
+  await expect(agents.getByText(/Last wake completed/)).toBeVisible();
+  const unavailable = main.getByRole("region", {
+    name: "Unavailable Workspaces",
+  });
+  await expect(
+    unavailable.getByText("Sleeping Workspace", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    unavailable.getByRole("button", {
+      name: "Open Workspace Sleeping Workspace",
+    }),
+  ).toBeEnabled();
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as FixtureWindow).alwaysOnFixture.calls.filter(
+        (call) => call.command === "select_space",
+      ),
+    ),
+  ).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("desktop-inventory.png") });
+
+  await agents
+    .getByRole("button", { name: "Open conversation in Background Workspace" })
+    .press("Enter");
+  await expect(
+    main.getByRole("heading", { name: "Background tracking" }),
+  ).toBeVisible();
+  await trigger.press("Enter");
+  await expect(
+    popover.getByRole("button", { name: "Resume", exact: true }),
+  ).toBeEnabled();
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as FixtureWindow).alwaysOnFixture.calls
+        .filter((call) => call.command === "select_space")
+        .map((call) => call.args.spaceId),
+    ),
+  ).toEqual(["always-on-background"]);
+});
+
+test("Always On inventory fits Large text and keyboard navigation across palettes", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 720 });
+  await installAlwaysOnFixture(page, { inventory: true });
+  const variants = [
+    { colorTheme: "light", darkPalette: "colossus", forcedColors: "none" },
+    { colorTheme: "dark", darkPalette: "colossus", forcedColors: "none" },
+    { colorTheme: "dark", darkPalette: "neutral", forcedColors: "none" },
+    { colorTheme: "dark", darkPalette: "black", forcedColors: "none" },
+    { colorTheme: "dark", darkPalette: "hacker", forcedColors: "none" },
+    { colorTheme: "dark", darkPalette: "colossus", forcedColors: "active" },
+  ] as const;
+  test.setTimeout(90_000);
+  await page.goto("/");
+  for (const variant of variants) {
+    const { forcedColors, ...preference } = variant;
+    await page.emulateMedia({ forcedColors });
+    await page.evaluate((appearance) => {
+      localStorage.setItem(
+        "colossus.desktop.appearance.v1",
+        JSON.stringify({ ...appearance, textSize: "large" }),
+      );
+    }, preference);
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-text-size",
+      "large",
+    );
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-theme",
+      variant.colorTheme,
+    );
+    if (variant.colorTheme === "dark") {
+      await expect(page.locator("html")).toHaveAttribute(
+        "data-palette",
+        variant.darkPalette,
+      );
+    }
+    await page
+      .getByRole("button", { name: "Open work navigation" })
+      .press("Enter");
+    await page
+      .getByRole("navigation", { name: "Workspace destinations" })
+      .getByRole("button", { name: "Always On Agents", exact: true })
+      .press("Enter");
+    const main = page.getByRole("main");
+    await expect(
+      main.getByRole("heading", { name: "Always On Agents" }),
+    ).toBeVisible();
+    await expect(main).toBeFocused();
+    const conversation = main.getByRole("button", {
+      name: "Open conversation in Background Workspace",
+    });
+    await expect(conversation).toBeVisible();
+    for (const element of [
+      main.getByRole("heading", { name: "Always On Agents" }),
+      main.getByRole("button", { name: "Refresh", exact: true }),
+      conversation,
+    ]) {
+      const bounds = (await element.boundingBox())!;
+      expect(bounds.x).toBeGreaterThanOrEqual(0);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+    }
+    await conversation.focus();
+    await expect(conversation).toBeFocused();
+    await page.keyboard.press("Tab");
+    const sleepingWorkspace = main.getByRole("button", {
+      name: "Open Workspace Sleeping Workspace",
+    });
+    await expect(sleepingWorkspace).toBeFocused();
+    if (variant.colorTheme === "light" || variant.darkPalette === "hacker") {
+      const result = await new AxeBuilder({ page })
+        .include("#primary-workspace")
+        .analyze();
+      expect(
+        result.violations.filter(
+          ({ impact }) => impact === "critical" || impact === "serious",
+        ),
+      ).toEqual([]);
+      await page.screenshot({
+        path: testInfo.outputPath(
+          `compact-${variant.colorTheme}-${variant.darkPalette}.png`,
+        ),
+      });
+    }
+  }
+});
+
+test("an earlier inventory response is discarded after the selected runtime changes", async ({
+  page,
+}) => {
+  await installAlwaysOnFixture(page, { inventory: true, deferInventory: true });
+  await page.goto("/");
+  await page
+    .getByRole("button", { name: "Open work navigation" })
+    .press("Enter");
+  await page
+    .getByRole("navigation", { name: "Workspace destinations" })
+    .getByRole("button", { name: "Always On Agents", exact: true })
+    .press("Enter");
+  const main = page.getByRole("main");
+  await expect(main.getByRole("status")).toHaveText(
+    "Checking Always On Agents…",
+  );
+  await page.evaluate(() =>
+    (window as unknown as FixtureWindow).alwaysOnFixture.switchToExternal(),
+  );
+  await expect(
+    main.getByRole("heading", { name: "Background Workspace" }),
+  ).toBeVisible();
+  await page.evaluate(async () => {
+    (
+      window as unknown as FixtureWindow
+    ).alwaysOnFixture.releaseOldInventory?.();
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+  });
+  await expect(
+    main.getByRole("heading", { name: "Background Workspace" }),
+  ).toBeVisible();
+  await expect(main.getByText("Old inventory snapshot")).toHaveCount(0);
 });

@@ -4,6 +4,15 @@ use super::*;
 
 const MAX_COPY_BYTES: usize = 64 * 1024;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum CopyFeedback {
+    #[default]
+    Ready,
+    Copied,
+    Requested,
+    Failed,
+}
+
 #[derive(Clone, Copy)]
 struct Range {
     anchor: Position,
@@ -17,6 +26,7 @@ pub(super) struct TextSelection {
     frame: Option<Buffer>,
     range: Option<Range>,
     pub(super) regions: Vec<Rect>,
+    pub(super) copy_feedback: CopyFeedback,
     pending_copy: Option<String>,
 }
 
@@ -27,6 +37,7 @@ impl TextSelection {
 
     pub(super) fn clear(&mut self) {
         self.range = None;
+        self.copy_feedback = CopyFeedback::Ready;
     }
 
     pub(super) fn remember(&mut self, buffer: &Buffer) {
@@ -51,6 +62,7 @@ impl TextSelection {
                     .find(|area| area.contains(point))
                     .unwrap_or(buffer.area);
                 let point = cell_start(buffer, point, area);
+                self.copy_feedback = CopyFeedback::Ready;
                 self.range = Some(Range {
                     anchor: point,
                     head: point,

@@ -68,6 +68,25 @@ Workspace state. An enabled profile keeps its worker eligible for background
 check-ins when other Workspaces are opened. Shutting down the worker stops wake
 processing. After restart, it can reconcile the latest missed scheduled wake once.
 
+### Find enrolled conversations
+
+Open **Always On Agents** in the left navigation. The page lists confirmed
+enrollments from running Managed Local workers across your nonarchived
+Workspaces. Each agent shows **Enabled** or **Paused**, any pending wake, the
+next scheduled wake when enabled, and the last outcome when available. Choose
+**Refresh** to check status again.
+
+Choose **Open conversation** to activate its Workspace and return to the
+enrolled thread. Use the **Always On** control in the Work header for wake,
+pause, resume, or move actions. In the selected Workspace's Threads sidebar,
+**Always On Agents** shows the enrolled conversation above **Pinned**. It
+appears once even if you have pinned it.
+
+**Unavailable Workspaces** lists Workspaces whose enrollment could not be
+confirmed, including those with stopped workers. Choose **Open Workspace** to
+activate a listed Workspace and check it there. Opening or refreshing the
+inventory reads status from running workers.
+
 ## Schedule a task
 
 In **Schedules**, choose **Schedule a task**, give it a name, and write instructions in

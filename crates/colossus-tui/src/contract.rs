@@ -1039,6 +1039,9 @@ pub struct TuiOptions {
     pub bootstrap: BootstrapRequest,
     /// Explicit screen mode.
     pub screen_mode: ScreenMode,
+    /// Allow a user-initiated copy to use the native clipboard on local Windows.
+    /// Leave disabled when the terminal host owns clipboard integration.
+    pub allow_native_clipboard: bool,
     /// Optional one-shot notice resolved after terminal startup.
     pub background_notice: Option<Arc<dyn BackgroundNoticeProvider>>,
     /// Optional integration with a terminal host's agent lifecycle.
@@ -1051,6 +1054,7 @@ impl std::fmt::Debug for TuiOptions {
             .debug_struct("TuiOptions")
             .field("bootstrap", &self.bootstrap)
             .field("screen_mode", &self.screen_mode)
+            .field("allow_native_clipboard", &self.allow_native_clipboard)
             .field("background_notice", &self.background_notice.is_some())
             .field("lifecycle", &self.lifecycle.is_some())
             .field("dictation", &self.dictation.is_some())

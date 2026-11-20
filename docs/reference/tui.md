@@ -35,7 +35,7 @@ interface. The default view fills the alternate screen. Add the global
 | `PageUp` / `PageDown` | Scroll the transcript in the default full-screen view. |
 | `Alt-PageUp` / `Alt-PageDown` | Scroll the right status sidebar independently. |
 | `End` | Return to live output in the full-screen view. |
-| Mouse drag, then `Ctrl-C` / `Ctrl-Insert` | Select rendered text and copy it through the terminal clipboard. Esc clears the selection. |
+| Mouse drag, then `Ctrl-C` / `Ctrl-Insert` | Copy the selected rendered text. Esc clears the selection. |
 | `F6` | Freeze the conversation view and enable terminal-native text selection. Drag to highlight text, then use your terminal's Copy shortcut. Press F6 or Esc to return. |
 | `Ctrl-C` | Copy an active rendered-text selection. Otherwise exit when idle, or request cancellation during a run; press again to exit. |
 | `Ctrl-D` | Exit from an empty, idle composer. |
@@ -46,15 +46,20 @@ and Ctrl-D submits a nonempty prompt.
 Ctrl-Enter and Alt-Enter also submit when your terminal reports them distinctly.
 `/multiline off` restores the default; `/multiline toggle` switches modes.
 
-Dragging selects the exact rendered cells and pauses screen updates while the
-agent continues working. Ctrl-C or Ctrl-Insert copies that selection using the
-terminal clipboard protocol; Esc clears it and displays new output.
+Dragging selects rendered text and pauses screen updates while the agent
+continues working. Press Ctrl-C or Ctrl-Insert to copy. A standalone TUI in a
+local Windows session writes directly to the Windows clipboard and shows
+**Selection copied** on success. Other sessions use the terminal clipboard
+protocol (OSC 52). **Copy requested** means Colossus sent a request to the
+terminal. Clipboard updates depend on terminal support. Esc clears the
+selection and displays new output.
 
-F6 instead releases mouse capture for terminal-native selection. In Desktop, copy
-native highlighted text with Ctrl-Shift-C (Cmd-C on macOS); other terminal emulators
-use their own Copy and Paste shortcuts. Pasting returns to the composer without
-submitting. Without an active rendered-text selection, Ctrl-C retains its normal
-interrupt behavior.
+If you see **Copy failed** or your terminal does not handle the request, press
+F6 to release mouse capture, drag to select the text again, and use your
+terminal's Copy shortcut. In the Desktop terminal, use this F6 workflow and
+copy the highlighted text with Ctrl-Shift-C (Cmd-C on macOS). Pasting returns
+to the composer without submitting. Ctrl-C retains its normal interrupt
+behavior when no rendered text is selected.
 
 Typing `/` at the start of a draft offers slash-command completion. Typing `@` at a
 skill token offers active plugin skills as `@PLUGIN/SKILL`. Esc closes suggestions.
