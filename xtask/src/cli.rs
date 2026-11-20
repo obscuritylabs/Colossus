@@ -9,7 +9,7 @@ Usage:
   cargo xtask quick <check|clippy|test> -p <package>... [-- <cargo-args>...]
   cargo xtask pr [--base <git-revision>]
   cargo xtask check <component> [--base <git-revision>]
-  cargo xtask desktop prepare --profile <debug|release> [--target <triple>]
+  cargo xtask desktop prepare --profile <debug|release> [--target <triple>] [--cli-only]
 
 Components:
   rust          Formatting, structure, metadata, Clippy, and workspace tests
@@ -93,6 +93,7 @@ pub(super) enum Invocation {
     DesktopPrepare {
         profile: DesktopProfile,
         target: Option<String>,
+        cli_only: bool,
     },
 }
 
@@ -189,7 +190,15 @@ fn parse_desktop(mut args: impl Iterator<Item = String>) -> Result<Invocation, S
     }
     let mut profile = None;
     let mut target = None;
+    let mut cli_only = false;
     while let Some(flag) = args.next() {
+        if flag == "--cli-only" {
+            if cli_only {
+                return Err(format!("repeated desktop argument `{flag}`\n\n{USAGE}"));
+            }
+            cli_only = true;
+            continue;
+        }
         let value = args
             .next()
             .ok_or_else(|| format!("{flag} requires a value\n\n{USAGE}"))?;
@@ -209,6 +218,7 @@ fn parse_desktop(mut args: impl Iterator<Item = String>) -> Result<Invocation, S
     Ok(Invocation::DesktopPrepare {
         profile: profile.ok_or_else(|| format!("desktop prepare requires --profile\n\n{USAGE}"))?,
         target,
+        cli_only,
     })
 }
 
@@ -274,7 +284,8 @@ mod tests {
             .unwrap(),
             Invocation::DesktopPrepare {
                 profile: DesktopProfile::Release,
-                target: Some("x86_64-pc-windows-msvc".to_owned())
+                target: Some("x86_64-pc-windows-msvc".to_owned()),
+                cli_only: false,
             }
         );
         assert_eq!(parse(strings(&["dev"])).unwrap(), Invocation::Dev);
@@ -291,6 +302,28 @@ mod tests {
                 base: Some("abc123".to_owned())
             }
         );
+    }
+
+    #[test]
+    fn parses_cli_only_desktop_preparation() {
+        let args = [
+            "desktop",
+            "prepare",
+            "--profile",
+            "release",
+            "--target",
+            "x86_64-pc-windows-msvc",
+            "--cli-only",
+        ];
+        assert_eq!(
+            parse(strings(&args)).unwrap(),
+            Invocation::DesktopPrepare {
+                profile: DesktopProfile::Release,
+                target: Some("x86_64-pc-windows-msvc".to_owned()),
+                cli_only: true,
+            }
+        );
+        assert!(parse(strings(&args).into_iter().chain(strings(&["--cli-only"]))).is_err());
     }
 
     #[test]

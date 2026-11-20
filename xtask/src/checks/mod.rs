@@ -26,9 +26,11 @@ pub(super) fn run(repository: &Repository, invocation: Invocation) -> Result<(),
         Invocation::Check { component, base } => {
             component_check(repository, component, base, &mut completed)
         }
-        Invocation::DesktopPrepare { profile, target } => {
-            desktop::prepare(repository, profile, target.as_deref())
-        }
+        Invocation::DesktopPrepare {
+            profile,
+            target,
+            cli_only,
+        } => desktop::prepare(repository, profile, target.as_deref(), cli_only),
     }
 }
 

@@ -9,6 +9,7 @@ pub(super) fn prepare(
     repository: &Repository,
     profile: DesktopProfile,
     requested_target: Option<&str>,
+    cli_only: bool,
 ) -> Result<(), String> {
     repository
         .task("node")
@@ -26,15 +27,19 @@ pub(super) fn prepare(
         .unwrap_or_else(|| host.clone());
     validate_target(&target)?;
 
-    let mut build = repository.task("cargo").args(["build", "--locked"]).args([
-        "--package",
-        "colossus-cli",
-        "--package",
-        "colossus-sidecar",
-        "--bins",
-        "--features",
-        "colossus-cli/dictation",
-    ]);
+    let binaries: &[(&str, &str)] = if cli_only {
+        &[("colossus-cli", "colossus")]
+    } else {
+        &[
+            ("colossus-cli", "colossus"),
+            ("colossus-sidecar", "colossus-sidecar"),
+        ]
+    };
+    let mut build = repository.task("cargo").args(["build", "--locked"]);
+    for &(package, _) in binaries {
+        build = build.args(["--package", package]);
+    }
+    build = build.args(["--bins", "--features", "colossus-cli/dictation"]);
     if profile == DesktopProfile::Release {
         build = build.arg("--release");
     }
@@ -71,12 +76,17 @@ pub(super) fn prepare(
     }
     fs::create_dir_all(&destination)
         .map_err(|error| format!("could not create desktop binaries directory: {error}"))?;
-    for name in ["colossus-sidecar", "colossus"] {
+    for &(_, name) in binaries.iter().rev() {
         let source = artifact_root.join(format!("{name}{extension}"));
         let output = destination.join(format!("{name}-{target}{extension}"));
         stage(&source, &output)?;
     }
-    eprintln!("Prepared Managed Local binaries for {target} ({profile_name}).");
+    let description = if cli_only {
+        "the Managed Local CLI"
+    } else {
+        "Managed Local binaries"
+    };
+    eprintln!("Prepared {description} for {target} ({profile_name}).");
     Ok(())
 }
 

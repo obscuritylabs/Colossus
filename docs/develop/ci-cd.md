@@ -301,6 +301,11 @@ limit during NSIS bundling. Every signature, inventory, installation, launch and
 uninstall check remains required; caches stay optional. The separate unsigned
 Windows Desktop validation job retains 100 minutes.
 
+Windows Desktop builds its bundled CLI with dictation support in a separate Cargo
+invocation from the browser-enabled sidecar. Signed packaging builds that sidecar
+once using the sealed inventory of the signed browser components. Standalone Windows
+CLI archives use their own release configuration.
+
 Stable releases additionally generate/test/package TypeScript, Python and Go SDKs,
 bind candidate metadata and checksums to the source commit, and require signed Windows
 x64 Desktop and x64/ARM64 CLI archives. SDK compatibility uses the latest reachable
