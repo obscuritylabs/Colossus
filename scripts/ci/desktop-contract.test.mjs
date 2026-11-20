@@ -312,7 +312,19 @@ test("Windows Desktop seals signed releases in the required order", () => {
     packaging,
     /desktop release version \$ReleaseVersion must match bundled CLI version \$BundledVersion/u,
   );
-  assert.match(packaging, /cargo xtask desktop prepare/u);
+  assert.equal((packaging.match(/cargo xtask desktop prepare/gu) ?? []).length, 1);
+  assert.match(
+    packaging,
+    /\$PrepareOptions = @\(\)\s*if \(\$BrowserPreview\) \{\s*\$PrepareOptions \+= ["']--cli-only["']\s*\}\s*cargo xtask desktop prepare --profile release --target \$Target @PrepareOptions/u,
+  );
+  assert.match(
+    packaging,
+    /if \(\$BrowserPreview\) \{\s*(?:#[^\r\n]*\r?\n\s*)*cargo build --locked --release --package colossus-sidecar --bin colossus-sidecar `\s*--target \$Target --target-dir \$TargetRoot --features windows-browser-functional-preview/u,
+  );
+  assert.match(
+    packaging,
+    /Copy-Item -LiteralPath \(Join-Path \$TargetRoot "\$Target\/release\/colossus-sidecar\.exe"\) -Destination \$StagedSidecar -Force/u,
+  );
   assert.match(packaging, /--no-sign/u);
   assert.match(packaging, /\[IO\.Path\]::GetTempPath\(\)/u);
   assert.match(packaging, /ConvertTo-Json -Compress -Depth 4/u);

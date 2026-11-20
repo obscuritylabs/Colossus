@@ -197,7 +197,9 @@ try {
     if ($Phase -in @("all", "build")) {
         node (Join-Path $PSScriptRoot "stage-dictation-model.mjs")
         if ($LASTEXITCODE -ne 0) { Fail "dictation model staging failed" }
-        cargo xtask desktop prepare --profile release --target $Target
+        $PrepareOptions = @()
+        if ($BrowserPreview) { $PrepareOptions += '--cli-only' }
+        cargo xtask desktop prepare --profile release --target $Target @PrepareOptions
         if ($LASTEXITCODE -ne 0) { Fail "desktop binary preparation failed" }
         if ($BrowserPreview) {
             # Compile after component signing/inventory; the sidecar independently
