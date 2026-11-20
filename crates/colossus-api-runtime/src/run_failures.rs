@@ -82,7 +82,7 @@ fn released_provider_failure(error: &ModelProviderError) -> RunFailure {
             ..
         } => RunFailure {
             code: code.clone(),
-            message: released_recoverable_provider_message(code, *http_status).into(),
+            message: released_recoverable_provider_message(code, *http_status),
             outcome: OutcomeCertainty::Known,
             recoverable: true,
             http_status: *http_status,
@@ -122,14 +122,19 @@ fn released_provider_failure(error: &ModelProviderError) -> RunFailure {
     }
 }
 
-fn released_recoverable_provider_message(code: &str, http_status: Option<u16>) -> &'static str {
-    match code {
-        "provider.temporarily_unavailable" => {
-            "provider endpoint returned HTTP 503; retry after the endpoint reports ready"
+fn released_recoverable_provider_message(code: &str, http_status: Option<u16>) -> String {
+    match (code, http_status) {
+        ("provider.temporarily_unavailable", Some(status)) => format!(
+            "provider endpoint returned HTTP {status}; retry after the endpoint reports ready"
+        ),
+        ("provider.temporarily_unavailable", None) => {
+            "the provider is temporarily unavailable; retry after the endpoint reports ready".into()
         }
-        "provider.invalid_tool_arguments" => "the provider returned invalid tool arguments",
-        _ if http_status.is_some() => "the provider returned a recoverable HTTP response",
-        _ => "the provider request failed with a recoverable error",
+        ("provider.invalid_tool_arguments", _) => {
+            "the provider returned invalid tool arguments".into()
+        }
+        (_, Some(_)) => "the provider returned a recoverable HTTP response".into(),
+        (_, None) => "the provider request failed with a recoverable error".into(),
     }
 }
 

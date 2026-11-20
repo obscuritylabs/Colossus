@@ -2419,7 +2419,7 @@ fn validate_update(run: &Run, kind: &RunUpdateKind) -> ApiResult<()> {
         RunUpdateKind::ProviderRetry { retry } => {
             if retry.max_retries != 5
                 || !(1..=5).contains(&retry.attempt)
-                || !matches!(retry.http_status, 502..=504)
+                || !colossus_contracts::ProviderRetry::supports_http_status(retry.http_status)
                 || (retry.state == colossus_contracts::ProviderRetryState::Backoff)
                     != retry.retry_at.is_some()
                 || retry.retry_at.as_ref().is_some_and(|value| {

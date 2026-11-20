@@ -1123,6 +1123,54 @@ fn released_updates_replay_in_sequence_and_reconstruct_after_restart() {
 }
 
 #[test]
+fn provider_http_500_progress_is_admitted_and_replayed() {
+    let (journal, repository, caller) = fixture();
+    let request = create_request("provider-recovery", "Run");
+    create_run(&repository, &caller, &request, "run-1", "session-1");
+    repository
+        .append_update(
+            &caller,
+            "run-1",
+            1,
+            RunUpdateKind::State {
+                status: RunStatus::Running,
+            },
+        )
+        .expect("running");
+    let retry = ProviderRetry {
+        attempt: 1,
+        max_retries: 5,
+        http_status: 500,
+        state: ProviderRetryState::Backoff,
+        retry_at: Some("2026-11-20T00:00:01Z".into()),
+    };
+    let error = repository
+        .append_update(
+            &caller,
+            "run-1",
+            2,
+            RunUpdateKind::ProviderRetry {
+                retry: ProviderRetry {
+                    http_status: 501,
+                    ..retry.clone()
+                },
+            },
+        )
+        .expect_err("HTTP 501 remains outside bounded recovery");
+    assert_eq!(error.violations[0].field, "update.provider_retry");
+    let update = repository
+        .append_update(&caller, "run-1", 2, RunUpdateKind::ProviderRetry { retry })
+        .expect("HTTP 500 progress");
+    let reopened = EventSourcedRunRepository::new(journal);
+    assert_eq!(
+        reopened
+            .updates_after(&caller, "run-1", 2, 32)
+            .expect("replay"),
+        [update]
+    );
+}
+
+#[test]
 fn update_catch_up_uses_only_bounded_ranged_stream_reads() {
     let journal = Arc::new(ReadCountingJournal::default());
     let durable: Arc<dyn EventJournal> = journal.clone();

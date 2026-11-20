@@ -4087,23 +4087,27 @@ mod tests {
 
     #[test]
     fn public_terminal_failure_preserves_safe_provider_response_metadata() {
-        let update = released_runtime_failure(&RuntimeError::Agent(
-            colossus_agent::AgentError::Provider(ModelProviderError::Recoverable {
-                code: "provider.temporarily_unavailable".into(),
-                message: "provider endpoint returned HTTP 503".into(),
-                http_status: Some(503),
-                retry_after_ms: Some(7_000),
-            }),
-        ));
-        assert_eq!(update.code, "provider.temporarily_unavailable");
-        assert_eq!(
-            update.message,
-            "provider endpoint returned HTTP 503; retry after the endpoint reports ready"
-        );
-        assert_eq!(update.outcome, OutcomeCertainty::Known);
-        assert!(update.recoverable);
-        assert_eq!(update.http_status, Some(503));
-        assert_eq!(update.retry_after_ms, Some(7_000));
+        for status in [500, 503] {
+            let update = released_runtime_failure(&RuntimeError::Agent(
+                colossus_agent::AgentError::Provider(ModelProviderError::Recoverable {
+                    code: "provider.temporarily_unavailable".into(),
+                    message: "private error text".into(),
+                    http_status: Some(status),
+                    retry_after_ms: Some(7_000),
+                }),
+            ));
+            assert_eq!(update.code, "provider.temporarily_unavailable");
+            assert_eq!(
+                update.message,
+                format!(
+                    "provider endpoint returned HTTP {status}; retry after the endpoint reports ready"
+                )
+            );
+            assert_eq!(update.outcome, OutcomeCertainty::Known);
+            assert!(update.recoverable);
+            assert_eq!(update.http_status, Some(status));
+            assert_eq!(update.retry_after_ms, Some(7_000));
+        }
     }
 
     #[test]
@@ -4179,7 +4183,7 @@ mod tests {
         let retry = colossus_contracts::ProviderRetry {
             attempt: 2,
             max_retries: 5,
-            http_status: 503,
+            http_status: 500,
             state: colossus_contracts::ProviderRetryState::Backoff,
             retry_at: Some("2026-10-03T00:00:04Z".into()),
         };

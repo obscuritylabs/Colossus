@@ -76,10 +76,11 @@ Use a key scoped to one Anthropic workspace. Multi-workspace selectors, workload
 identity federation, Claude subscription authentication, Bedrock, Vertex, and Foundry
 are not configured through this connection type.
 
-Authentication and unsupported model/effort errors remain explicit failures. An
-interrupted stream is not automatically replayed. Existing bounded HTTP 502–504
-recovery applies before response content starts; rate limits and overload remain
-reported failures. Inspect the existing provider doctor commands when troubleshooting.
+The [automatic provider retry policy](../../reference/configuration/providers-models.md#automatic-provider-retries)
+applies before response content starts. Inspect the original run after an
+interrupted stream. Check `provider doctor` for authentication, model, or effort
+errors. HTTP 429 rate limits and HTTP 529 overload responses are reported as
+failures.
 
 Prompt-cache controls, native compaction, token-count requests, PDF/document inputs,
 batch jobs, and Anthropic-hosted tools are not enabled by this adapter. Local tool

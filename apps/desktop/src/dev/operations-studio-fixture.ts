@@ -1487,17 +1487,38 @@ export function buildWorkflowScheduleFixture(): ChatState {
   };
 }
 
-export function buildProviderRetryFixture(): ChatState {
+export function buildProviderRetryFixture(variant: string | null): ChatState {
   const state = buildOperationsStudioFixture();
   const current = state.views.get(SELECTED_RUN_ID);
   if (current === undefined) throw new Error("Retry fixture requires a run.");
   const retryAt = new Date(Date.now() + 4_000).toISOString();
+  const exhausted = variant === "exhausted" || variant === "unknown";
+  const terminal: Run["terminal"] = exhausted
+    ? {
+        type: "failure",
+        failure: {
+          reason: "provider.temporarily_unavailable",
+          message: "Provider returned HTTP 500.",
+          outcomeCertainty: variant === "unknown" ? "unknown" : "known",
+          recoverable: true,
+          httpStatus: 500,
+        },
+      }
+    : null;
   const view: RunView = {
     ...current,
-    run: { ...current.run, status: "running", pendingInteractionCount: 0 },
+    run: {
+      ...current.run,
+      mode: "execute",
+      status: exhausted ? "failed" : "running",
+      terminal,
+      pendingInteractionCount: 0,
+    },
     pendingInteractions: [],
-    output: "",
+    output:
+      exhausted || variant === "partial" ? "Earlier output stays visible." : "",
     usage: null,
+    streamState: exhausted ? "complete" : "watching",
     updates: [
       ...current.updates.filter(
         (item) =>
@@ -1508,7 +1529,7 @@ export function buildProviderRetryFixture(): ChatState {
         retry: {
           attempt: 2,
           max_retries: 5,
-          http_status: 503,
+          http_status: 500,
           state: "backoff",
           retry_at: retryAt,
         },

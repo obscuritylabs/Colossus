@@ -110,12 +110,10 @@ private key.
 
 ## Recover from connection failures
 
-For HTTP 502–504 responses, the TUI and Desktop show a reconnecting status, retry count,
-and countdown. Colossus retries up to five times after 1, 2, 4, 8, and 16 seconds; a
-longer `Retry-After` takes precedence. All attempts share the original deadline.
-Retries stop once the response stream starts. Interrupted streams and uncertain
-transport failures are not replayed; inspect the original run before submitting again
-when its outcome is unknown.
+The TUI and Desktop show a reconnecting status, retry count, and countdown
+during [automatic provider retries](../../reference/configuration/providers-models.md#automatic-provider-retries).
+After an interrupted stream or a connection failure with an unknown outcome,
+inspect the original run before submitting again.
 
 - **Credential unavailable:** check the environment of the process running Colossus,
   then rerun `provider doctor compatible-provider`.

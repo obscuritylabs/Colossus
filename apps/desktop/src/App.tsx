@@ -193,6 +193,10 @@ import {
 } from "./state";
 import type { IdempotentAttempt, RunView } from "./state";
 import {
+  ProviderRetryRequests,
+  selectedProviderRetryRun,
+} from "./provider-retry";
+import {
   clearStoredWorkSidebarWidth,
   readStoredWorkSidebarWidth,
   storeWorkSidebarWidth,
@@ -938,12 +942,13 @@ interface RunSubmission {
   sessionId?: string;
   planRevision?: PlanRevisionTarget;
   branch?: CreateRunRequest["branch"];
+  providerRetrySourceRunId?: string;
 }
 
 type RunSubmissionResult =
   | { type: "accepted"; run: Run }
   | { type: "failed"; error: CommandError }
-  | { type: "stale" };
+  | { type: "stale"; dispatched: boolean };
 
 export default function App() {
   const { showSecurityWarnings } = useAppearance();
@@ -953,7 +958,9 @@ export default function App() {
       ? FIXTURE_SCENARIO === "thread-history"
         ? initialChatState
         : FIXTURE_SCENARIO === "provider-retry"
-          ? developmentFixtures().buildProviderRetryFixture()
+          ? developmentFixtures().buildProviderRetryFixture(
+              FIXTURE_QUERY.get("retry"),
+            )
           : FIXTURE_SCENARIO === "activity-comparison"
             ? FIXTURE_QUERY.get("imageViews") === "1"
               ? developmentFixtures().buildImageViewFixture(
@@ -1287,6 +1294,7 @@ export default function App() {
   const queuedMessagesRef = useRef<readonly QueuedMessage[]>([]);
   const queueDeliveryRef = useRef<string | null>(null);
   const createAttempt = useRef<RoutedAttempt | null>(null);
+  const providerRetryRequests = useRef(new ProviderRetryRequests());
   const scheduleRunAttempts = useRef(new Map<string, ScheduleRunAttempt>());
   const asideCreateAttempt = useRef<RoutedAttempt | null>(null);
   const cancelAttempts = useRef(new Map<string, IdempotentAttempt>());
@@ -2709,7 +2717,7 @@ export default function App() {
         connectingRef.current ||
         targetRoutes.current?.isCurrent(route) !== true
       ) {
-        return { type: "stale" };
+        return { type: "stale", dispatched: false };
       }
       const request: CreateRunRequest = {
         prompt: submission.executionPrompt ?? submission.prompt,
@@ -2804,9 +2812,30 @@ export default function App() {
           run = await createRun(route.targetId, request);
         }
         if (targetRoutes.current?.isCurrent(route) !== true) {
-          return { type: "stale" };
+          return { type: "stale", dispatched: true };
+        }
+        if (
+          submission.providerRetrySourceRunId !== undefined &&
+          (run.sessionId !== submission.sessionId ||
+            run.runId === submission.providerRetrySourceRunId)
+        ) {
+          return {
+            type: "failed",
+            error: {
+              ...FALLBACK_ACTION_ERROR,
+              message: "Could not confirm which run accepted the continuation.",
+              outcomeUnknown: true,
+            },
+          };
         }
         targetRoutes.current.bindRun(run.runId, route);
+        if (submission.mode === "execute") {
+          providerRetryRequests.current.rememberAccepted(
+            route.targetId,
+            run.runId,
+            submission.modelSelection ?? {},
+          );
+        }
         if (submission.sessionId === undefined) {
           setConversationModels((current) => {
             const next = { ...current };
@@ -2835,14 +2864,19 @@ export default function App() {
           runId: run.runId,
           prompt: submission.prompt,
         });
-        dispatch({ type: "select_run", runId: run.runId });
+        if (
+          submission.providerRetrySourceRunId === undefined ||
+          chatRef.current.activeRunId === submission.providerRetrySourceRunId
+        ) {
+          dispatch({ type: "select_run", runId: run.runId });
+        }
         if (!FIXTURE_MODE) {
           startWatch(run.runId, 0, route);
         }
         return { type: "accepted", run };
       } catch (error: unknown) {
         if (targetRoutes.current?.isCurrent(route) !== true) {
-          return { type: "stale" };
+          return { type: "stale", dispatched: true };
         }
         const failure = commandError(error);
         markConnectionFailure(failure, route);
@@ -2854,6 +2888,72 @@ export default function App() {
     },
     [markConnectionFailure, startWatch],
   );
+
+  async function retryProviderFailure(sourceRunId: string, route: TargetRoute) {
+    const source = selectedProviderRetryRun(chatRef.current);
+    if (
+      source?.runId !== sourceRunId ||
+      surface !== "work" ||
+      activeForkDraft !== undefined ||
+      planRevision !== null ||
+      composerError?.outcomeUnknown === true ||
+      dictation?.state.sending === true ||
+      submitInFlight.current ||
+      connectingRef.current ||
+      approvalModeChanging ||
+      cancelRequest.current !== null ||
+      queueDeliveryRef.current !== null ||
+      desktopRef.current.connection.state !== "connected" ||
+      desktopRef.current.selectedTargetId !== route.targetId ||
+      targetRoutes.current?.isCurrent(route) !== true ||
+      messagesForThread(
+        queuedMessagesRef.current,
+        route.targetId,
+        source.sessionId,
+      ).length > 0
+    ) {
+      return;
+    }
+
+    const request = providerRetryRequests.current.prepare(
+      route.targetId,
+      source,
+      conversationModels[
+        pluginSelectionKey(route.targetId, source.sessionId)
+      ] ?? {},
+    );
+    if (request === null) {
+      setActionError({
+        ...FALLBACK_ACTION_ERROR,
+        code: "retry_admission_limit",
+        message:
+          "Too many Retry requests are pending. Reopen a conversation with a pending Retry and use its original request before starting another.",
+      });
+      return;
+    }
+    setConversationFollowRequest((current) => current + 1);
+    const result = await performRunSubmission(
+      {
+        ...request,
+        prompt: "Continue",
+        attachments: [],
+        mode: "execute",
+        researchDepth: "standard",
+        researchSources: [],
+        maxTurns: USE_CONFIGURED_MAX_TURNS,
+        providerRetrySourceRunId: sourceRunId,
+      },
+      route,
+    );
+    providerRetryRequests.current.settle(route.targetId, sourceRunId, result);
+    if (
+      result.type === "failed" &&
+      targetRoutes.current?.isCurrent(route) === true &&
+      chatRef.current.activeRunId === sourceRunId
+    ) {
+      setActionError(result.error);
+    }
+  }
 
   async function createAutomationWithAgent(fullPrompt: string) {
     if (
@@ -5793,6 +5893,17 @@ export default function App() {
     !submitting &&
     !approvalModeChanging &&
     activeRun?.continuable !== false;
+  const providerRetryRun =
+    canCompose &&
+    activeRoute !== null &&
+    activeForkDraft === undefined &&
+    planRevision === null &&
+    composerError?.outcomeUnknown !== true &&
+    dictation?.state.sending !== true &&
+    !cancelling &&
+    activeQueuedMessages.length === 0
+      ? selectedProviderRetryRun(chat)
+      : null;
   const continuation =
     activeRun !== undefined && isTerminalStatus(activeRun.status);
   const promptBytes = utf8ByteLength(expandedPrompt);
@@ -6609,6 +6720,21 @@ export default function App() {
           }}
           title={title}
           view={activeView}
+          providerRetry={
+            providerRetryRun !== null && activeRoute !== null
+              ? {
+                  description: providerRetryRequests.current.description(
+                    activeRoute.targetId,
+                    providerRetryRun.runId,
+                  ),
+                  onRetry: () =>
+                    void retryProviderFailure(
+                      providerRetryRun.runId,
+                      activeRoute,
+                    ),
+                }
+              : undefined
+          }
           alwaysOnControl={alwaysOnControl}
           forkDraft={activeForkDraft !== undefined}
           inheritedViews={
