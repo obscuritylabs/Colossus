@@ -446,7 +446,7 @@ impl Workspace {
             return;
         }
         if self.channels.len() >= MAX_OPEN_SESSIONS {
-            self.active.append_entry(error_entry("This terminal has eight open sessions. Archive an idle open session to free a slot."));
+            self.active.append_entry(error_entry("This terminal has eight open sessions. Close an unused draft or archive an idle conversation to free a slot."));
             self.active.workspace_center = false;
             return;
         }

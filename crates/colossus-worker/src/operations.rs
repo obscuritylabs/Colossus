@@ -206,6 +206,15 @@ pub enum InteractiveWorkerRequest {
         /// Strict complete replacement profile.
         preferences: TerminalPreferences,
     },
+    /// Persist terminal settings for a draft after any required interactive consent.
+    TuiDraftPresentationSave {
+        /// Exact nonmaterialized terminal draft UUIDv7.
+        session_id: String,
+        /// Strict complete replacement profile.
+        preferences: TerminalPreferences,
+        /// Profile observed by the host when preparing the replacement.
+        expected_preferences: Box<TerminalPreferences>,
+    },
     /// Approve one exact optimistic Plan revision.
     PlanApprove {
         /// Exact durable session that selected the Plan.
@@ -315,6 +324,11 @@ pub enum WorkerOperation {
     /// Return the direct-execution boundary acknowledgement pending for one session.
     SandboxBoundaryStatus {
         /// Exact durable session.
+        session_id: String,
+    },
+    /// Determine whether a nonmaterialized draft's settings save needs consent.
+    TuiDraftPresentationBoundaryStatus {
+        /// Exact nonmaterialized terminal draft UUIDv7.
         session_id: String,
     },
     /// List provider profile readiness without network access.
@@ -448,6 +462,11 @@ pub enum WorkerOperation {
     SessionCreate {
         /// Optional bounded title.
         title: Option<String>,
+    },
+    /// Persist a native TUI draft when it first needs a durable session.
+    TuiSessionMaterialize {
+        /// Canonical UUIDv7 allocated by the terminal host.
+        session_id: String,
     },
     /// Reconstruct one session summary.
     SessionGet {

@@ -1,5 +1,205 @@
 use super::*;
 
+pub(super) const SAVE_TERMINAL_SETTINGS: &str = "Save terminal settings";
+
+pub(super) fn draft_preferences_prompt(
+    response: oneshot::Sender<PromptResponse>,
+) -> InteractivePrompt {
+    InteractivePrompt {
+        id: "terminal-draft-preferences".into(),
+        kind: InteractivePromptKind::Choice,
+        title: SAVE_TERMINAL_SETTINGS.into(),
+        document: PresentationDocument::from_block(PresentationBlock::Card {
+            title: SAVE_TERMINAL_SETTINGS.into(),
+            tone: PresentationTone::Warning,
+            body: vec![PresentationBlock::Markdown(
+                "Danger full access requires acknowledgement. This confirmation saves only these terminal settings for the unsaved conversation. Starting work still requires its own acknowledgement.".into(),
+            )],
+        }),
+        choices: vec![SAVE_TERMINAL_SETTINGS.into(), "Keep settings unchanged".into()],
+        initial_choice: None,
+        allow_free_form: false,
+        response,
+    }
+}
+
+pub(super) async fn persist_submitted_input<F>(
+    input: Option<String>,
+    events: &mpsc::Sender<HostEvent>,
+    write: impl FnOnce(String) -> F + Send,
+) where
+    F: std::future::Future<Output = Result<(), String>> + Send,
+{
+    if let Some(input) = input
+        && let Err(error) = write(input).await
+    {
+        let _ = events.send(HostEvent::HistoryWarning(error)).await;
+    }
+}
+
+pub(super) fn is_presentation_command(name: &str) -> bool {
+    matches!(
+        name,
+        "theme"
+            | "stream"
+            | "events"
+            | "reasoning"
+            | "suggestions"
+            | "multiline"
+            | "transcript"
+            | "trace"
+    )
+}
+
+pub(super) enum TerminalPreferenceCommand<'a> {
+    View(Box<HostCommandResult>),
+    Edit(TerminalPreferenceEdit<'a>),
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct TerminalPreferenceEdit<'a> {
+    name: &'a str,
+    argument: &'a str,
+    selected_theme: Option<&'a str>,
+}
+
+impl TerminalPreferenceEdit<'_> {
+    pub(super) fn apply(
+        self,
+        current: &mut TerminalPreferences,
+        themes: &ThemeLibrary,
+    ) -> Result<(), String> {
+        match self.name {
+            "theme" => {
+                if let Some(selected) = self.selected_theme {
+                    themes
+                        .select(selected, current)
+                        .map_err(|error| error.to_string())?;
+                } else if self.argument == "reset" {
+                    current.select_builtin_theme(ThemeName::Default);
+                } else {
+                    themes
+                        .select(self.argument, current)
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+            "stream" => {
+                current.stream_mode = match self.argument {
+                    "on" => colossus_contracts::StreamDisplayMode::On,
+                    "raw" => colossus_contracts::StreamDisplayMode::Raw,
+                    "off" => colossus_contracts::StreamDisplayMode::Off,
+                    _ => return Err("/stream expects on, raw, or off".into()),
+                };
+            }
+            "events" => {
+                current.events_mode = match self.argument {
+                    "compact" => colossus_contracts::EventDisplayMode::Compact,
+                    "verbose" => colossus_contracts::EventDisplayMode::Verbose,
+                    "off" => colossus_contracts::EventDisplayMode::Off,
+                    _ => return Err("/events expects compact, verbose, or off".into()),
+                };
+            }
+            "reasoning" => {
+                current.show_reasoning = parse_toggle(self.argument, current.show_reasoning)?;
+            }
+            "suggestions" => {
+                current.next_prompt_mode = match self.argument {
+                    "off" => colossus_contracts::NextPromptMode::Off,
+                    "on" | "local" => colossus_contracts::NextPromptMode::Local,
+                    "model" => colossus_contracts::NextPromptMode::Model,
+                    _ => return Err("/suggestions expects off, local, or model".into()),
+                };
+            }
+            "multiline" => {
+                current.multiline = parse_toggle(self.argument, current.multiline)?;
+            }
+            "transcript" => {
+                current.transcript_density = match self.argument {
+                    "comfortable" => colossus_contracts::TranscriptDensity::Comfortable,
+                    "compact" => colossus_contracts::TranscriptDensity::Compact,
+                    _ => return Err("/transcript expects comfortable or compact".into()),
+                };
+            }
+            "trace" => {
+                current.events_mode =
+                    if current.events_mode == colossus_contracts::EventDisplayMode::Off {
+                        colossus_contracts::EventDisplayMode::Compact
+                    } else {
+                        colossus_contracts::EventDisplayMode::Off
+                    };
+            }
+            _ => return Err("Unknown terminal preference command.".into()),
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn terminal_preference_command<'a>(
+    name: &'a str,
+    arguments: &'a str,
+    selected_theme: Option<&'a str>,
+    current: &TerminalPreferences,
+    themes: &ThemeLibrary,
+) -> Result<TerminalPreferenceCommand<'a>, String> {
+    if let Some(status) = presentation_status(name, arguments, current) {
+        return Ok(TerminalPreferenceCommand::View(Box::new(status)));
+    }
+    let argument = arguments.trim();
+    if name == "theme" && selected_theme.is_none() {
+        let document = if argument == "list" {
+            Some(themes.status_document(current.theme_name()))
+        } else if let Some(theme) = argument.strip_prefix("preview ") {
+            Some(
+                themes
+                    .preview_document(theme.trim())
+                    .map_err(|error| error.to_string())?,
+            )
+        } else if argument == "validate" {
+            Some(themes.validation_document())
+        } else if let Some(theme) = argument.strip_prefix("scaffold ") {
+            let scaffold = themes
+                .scaffold(theme.trim())
+                .map_err(|error| error.to_string())?;
+            Some(ThemeLibrary::scaffold_document(&scaffold))
+        } else {
+            None
+        };
+        if let Some(document) = document {
+            return Ok(TerminalPreferenceCommand::View(Box::new(
+                HostCommandResult::document(document),
+            )));
+        }
+    }
+    let edit = TerminalPreferenceEdit {
+        name,
+        argument,
+        selected_theme,
+    };
+    // Reject invalid commands before asking for permission to write. Reapply the
+    // edit to the latest profile once it is safe to enter the write path.
+    edit.apply(&mut current.clone(), themes)?;
+    Ok(TerminalPreferenceCommand::Edit(edit))
+}
+
+pub(super) fn terminal_preference_result(
+    name: &str,
+    preferences: TerminalPreferences,
+    themes: &ThemeLibrary,
+) -> Result<HostCommandResult, String> {
+    let document = if name == "theme" {
+        themes.selection_document(preferences.theme_name())
+    } else {
+        document_from_json(
+            &serde_json::to_value(&preferences).map_err(|error| error.to_string())?,
+            Some("Terminal preferences"),
+        )
+    };
+    Ok(HostCommandResult {
+        preferences: Some(preferences),
+        ..HostCommandResult::document(document)
+    })
+}
+
 /// Whole-profile UI saves may restore an older preview. Paid suggestions require
 /// the explicit suggestions command, never promotion by an unrelated snapshot.
 pub(super) fn preserve_model_opt_out(

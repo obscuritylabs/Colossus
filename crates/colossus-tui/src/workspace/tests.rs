@@ -26,6 +26,7 @@ impl InteractiveHost for NoWorkHost {
         _: RuntimeCommand,
         _: &str,
         _: &[String],
+        _: Option<String>,
         _: mpsc::Sender<HostEvent>,
         _: RunControl,
     ) -> Result<HostCommandResult, String> {
@@ -64,6 +65,7 @@ impl InteractiveHost for NoWorkHost {
         _: &str,
         preferences: TerminalPreferences,
         _: mpsc::Sender<HostEvent>,
+        _: RunControl,
     ) -> Result<TerminalPreferences, String> {
         Ok(preferences)
     }

@@ -371,6 +371,7 @@ pub(super) enum OperationKind {
 pub struct TuiState {
     /// Exact active durable session.
     pub session_id: String,
+    pub(super) session_saved: bool,
     /// Canonical workspace selected for this terminal process.
     pub(super) workspace: String,
     /// Effective sandbox profile shown as startup boundary context.
@@ -499,6 +500,7 @@ impl TuiState {
         footer.usage = run_usage.current().cloned();
         Self {
             session_id: snapshot.session_id,
+            session_saved: snapshot.session_saved,
             workspace: snapshot.workspace,
             sandbox_profile: snapshot.sandbox_profile,
             transcript,
@@ -679,6 +681,7 @@ impl TuiState {
         };
         Ok(InteractiveRunRequest {
             session_id: self.session_id.clone(),
+            submitted_input: None,
             prompt,
             images: self.pending_images.clone(),
             mode,

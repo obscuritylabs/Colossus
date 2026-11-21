@@ -130,6 +130,9 @@ async fn dispatch_general(
         WorkerOperation::SandboxBoundaryStatus { session_id } => Ok(serde_json::to_value(
             runtime.pending_sandbox_boundary_acknowledgement(&session_id)?,
         )?),
+        WorkerOperation::TuiDraftPresentationBoundaryStatus { session_id } => Ok(
+            serde_json::to_value(runtime.terminal_draft_presentation_boundary(&session_id)?)?,
+        ),
         WorkerOperation::ProviderProfiles => Ok(serde_json::to_value(runtime.provider_profiles())?),
         WorkerOperation::ProviderDoctor {
             profile,
@@ -190,6 +193,9 @@ async fn dispatch_general(
         }
         WorkerOperation::SessionCreate { title } => Ok(serde_json::to_value(
             runtime.create_session(title.as_deref())?,
+        )?),
+        WorkerOperation::TuiSessionMaterialize { session_id } => Ok(serde_json::to_value(
+            runtime.materialize_terminal_session(&session_id)?,
         )?),
         WorkerOperation::SessionGet { session_id } => {
             Ok(serde_json::to_value(runtime.get_session(&session_id)?)?)

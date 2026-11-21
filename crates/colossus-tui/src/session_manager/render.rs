@@ -55,7 +55,11 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut TuiState, area: Rect) {
             ));
         } else {
             actions.push((
-                "[a] Archive",
+                if entry.unsaved {
+                    "[a] Close draft"
+                } else {
+                    "[a] Archive"
+                },
                 WorkspaceAction::Archive(entry.summary.id.clone(), true),
             ));
         }
@@ -268,7 +272,11 @@ fn draw_preview(frame: &mut Frame<'_>, state: &TuiState, palette: &TerminalPalet
     }
     if !entry.archive_allowed && manager.tab != SessionTab::Archived {
         lines.push(Line::styled(
-            "Archive: stop work and clear draft/queue first",
+            if entry.unsaved {
+                "Close: stop work and clear draft/queue first"
+            } else {
+                "Archive: stop work and clear draft/queue first"
+            },
             ratatui_style(palette.warning_style()),
         ));
     }

@@ -30,6 +30,8 @@ pub enum WorkerPromptKind {
     Approval,
     /// Direct-execution boundary acknowledgement for the attached client.
     SandboxBoundaryAcknowledgement,
+    /// Consent for one settings save on the attached terminal's unsaved draft.
+    TerminalDraftPreferencesAcknowledgement,
     /// Tool-requested operator input.
     UserInput,
 }

@@ -52,11 +52,19 @@ impl InteractiveHost for WorkspaceHost {
         command: RuntimeCommand,
         session_id: &str,
         sticky_skills: &[String],
+        submitted_input: Option<String>,
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostCommandResult, String> {
         FixtureHost
-            .execute_command(command, session_id, sticky_skills, events, control)
+            .execute_command(
+                command,
+                session_id,
+                sticky_skills,
+                submitted_input,
+                events,
+                control,
+            )
             .await
     }
 
@@ -187,6 +195,7 @@ impl InteractiveHost for WorkspaceHost {
         _: &str,
         preferences: TerminalPreferences,
         _: mpsc::Sender<HostEvent>,
+        _: RunControl,
     ) -> Result<TerminalPreferences, String> {
         Ok(preferences)
     }

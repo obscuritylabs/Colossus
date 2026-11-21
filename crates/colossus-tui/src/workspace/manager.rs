@@ -135,7 +135,8 @@ impl Workspace {
                     status,
                     open: state.is_some(),
                     detail: sanitize_approval_field(&detail.chars().take(256).collect::<String>()),
-                    archive_allowed: state.is_none_or(can_archive),
+                    archive_allowed: state.is_none_or(can_close),
+                    unsaved: state.is_some_and(|state| !state.session_saved),
                 }
             })
             .collect();
@@ -295,15 +296,16 @@ impl Workspace {
             self.active.workspace_center = false;
             return;
         }
-        if archived && self.retained(&id).is_some_and(|state| !can_archive(state)) {
+        if archived && self.retained(&id).is_some_and(|state| !can_close(state)) {
             self.active.append_entry(error_entry(
-                "Stop work, then send or clear the draft and queued inputs before archiving.",
+                "Stop work, then send or clear the draft and queued inputs before closing the conversation.",
             ));
             self.active.workspace_center = false;
             return;
         }
         let replacement_needed =
             archived && id == self.active.session_id && self.background.is_empty();
+        let unsaved = archived && self.retained(&id).is_some_and(|state| !state.session_saved);
         if id == self.active.session_id {
             self.active.workspace_archiving = true;
         } else if let Some(state) = self.background.get_mut(&id) {
@@ -323,7 +325,11 @@ impl Workspace {
                 } else {
                     None
                 };
-                host.set_session_archived(&id, archived).await?;
+                if unsaved {
+                    host.close_session_draft(&id)?;
+                } else {
+                    host.set_session_archived(&id, archived).await?;
+                }
                 Ok(replacement)
             };
             let result = tokio::time::timeout(Duration::from_secs(30), update)
@@ -365,19 +371,24 @@ impl Workspace {
                 return;
             }
         };
-        let summary = self
-            .catalog
-            .iter()
-            .chain(&self.archived_catalog)
-            .find(|entry| entry.id == id)
-            .cloned();
-        self.catalog.retain(|entry| entry.id != id);
-        self.archived_catalog.retain(|entry| entry.id != id);
-        if let Some(summary) = summary {
-            if archived {
-                self.archived_catalog.insert(0, summary);
-            } else {
-                self.catalog.insert(0, summary);
+        // A draft's save reply may have been lost after committing. Closing the
+        // local pane still does not change the canonical catalog observation.
+        let closed_draft = archived && self.retained(id).is_some_and(|state| !state.session_saved);
+        if !closed_draft {
+            let summary = self
+                .catalog
+                .iter()
+                .chain(&self.archived_catalog)
+                .find(|entry| entry.id == id)
+                .cloned();
+            self.catalog.retain(|entry| entry.id != id);
+            self.archived_catalog.retain(|entry| entry.id != id);
+            if let Some(summary) = summary {
+                if archived {
+                    self.archived_catalog.insert(0, summary);
+                } else {
+                    self.catalog.insert(0, summary);
+                }
             }
         }
         if archived {
@@ -433,7 +444,7 @@ impl Workspace {
     }
 }
 
-fn can_archive(state: &TuiState) -> bool {
+fn can_close(state: &TuiState) -> bool {
     !state.is_busy()
         && state.overlay.is_none()
         && !state.workspace_archiving

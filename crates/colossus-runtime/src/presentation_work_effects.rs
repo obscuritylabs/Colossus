@@ -11,6 +11,16 @@ impl EffectExecutor for PresentationEffectExecutor {
         request: &EffectRequest,
         _permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        self.apply(request, None)
+    }
+}
+
+impl PresentationEffectExecutor {
+    fn apply(
+        &self,
+        request: &EffectRequest,
+        draft: Option<&TerminalDraftPreferencesExecutor<'_>>,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
         let operation: PresentationOperation = serde_json::from_value(request.content.clone())
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         if request.action != operation.action() || request.resource != operation.resource() {
@@ -19,12 +29,18 @@ impl EffectExecutor for PresentationEffectExecutor {
             ));
         }
         let output = match operation {
-            PresentationOperation::Save { preferences } => serde_json::to_vec(
-                &self
-                    .repository
-                    .save(preferences, request.actor.clone())
-                    .map_err(|error| ExecutionError::Failed(error.to_string()))?,
-            ),
+            PresentationOperation::Save { preferences } => {
+                let actor = request.actor.clone();
+                let committed = if let Some(draft) = draft {
+                    draft.validate_before_save()?;
+                    self.repository
+                        .save_if_current(&draft.expected_preferences, preferences, actor)
+                } else {
+                    self.repository.save(preferences, actor)
+                }
+                .map_err(|error| ExecutionError::Failed(error.to_string()))?;
+                serde_json::to_vec(&committed)
+            }
             PresentationOperation::AppendHistory { entry } => serde_json::to_vec(
                 &self
                     .repository
@@ -38,6 +54,53 @@ impl EffectExecutor for PresentationEffectExecutor {
             bytes: output,
             effect_succeeded: true,
         })
+    }
+}
+
+pub(super) struct TerminalDraftPreferencesExecutor<'a> {
+    pub(super) presentation: &'a PresentationEffectExecutor,
+    pub(super) sessions: &'a dyn SessionRepository,
+    pub(super) draft_id: &'a str,
+    pub(super) expected_preferences: TerminalPreferences,
+    pub(super) control: &'a RunControl,
+}
+
+impl TerminalDraftPreferencesExecutor<'_> {
+    fn validate_before_save(&self) -> Result<(), ExecutionError> {
+        if self
+            .sessions
+            .get_session(self.draft_id)
+            .map_err(|error| ExecutionError::Failed(error.to_string()))?
+            .is_some()
+        {
+            return Err(ExecutionError::Failed(
+                "terminal settings draft has already been saved".into(),
+            ));
+        }
+        if self.control.is_cancelled() {
+            return Err(ExecutionError::Failed(
+                "terminal settings save was cancelled".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl EffectExecutor for TerminalDraftPreferencesExecutor<'_> {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        _permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        if request.action != "presentation.preferences.update"
+            || request.context.session_id.as_deref() != Some(self.draft_id)
+        {
+            return Err(ExecutionError::Failed(
+                "terminal settings request does not match its draft".into(),
+            ));
+        }
+        self.presentation.apply(request, Some(self))
     }
 }
 

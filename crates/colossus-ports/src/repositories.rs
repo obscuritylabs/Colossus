@@ -243,6 +243,14 @@ pub trait PresentationRepository: Send + Sync {
         actor: Actor,
     ) -> Result<TerminalPreferences, StoreError>;
 
+    /// Replace a previously observed profile only while its snapshot is current.
+    fn save_if_current(
+        &self,
+        expected: &TerminalPreferences,
+        preferences: TerminalPreferences,
+        actor: Actor,
+    ) -> Result<TerminalPreferences, StoreError>;
+
     /// Reconstruct the newest bounded terminal submissions in chronological order.
     fn list_history(&self, limit: usize) -> Result<Vec<String>, StoreError>;
 

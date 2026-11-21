@@ -39,7 +39,8 @@ use colossus_policy::{
 };
 use colossus_ports::{
     EventJournal, ExternalWorkQueue, ModelProvider, ModelProviderError, PolicyDecisionPoint,
-    PresentationRepository, ProjectionStore, RiskEvaluationError, RiskEvaluator, ToolExecutor,
+    PresentationRepository, ProjectionStore, RiskEvaluationError, RiskEvaluator, RunControl,
+    ToolExecutor,
 };
 use colossus_presentation::EventSourcedPresentationRepository;
 use colossus_projection::EFFECT_RECOVERY_PROJECTION;
@@ -929,6 +930,147 @@ async fn interactive_presentation_mutations_retain_the_session_boundary_acknowle
     assert_eq!(
         runtime.terminal_history(10).expect("history"),
         ["persisted input"]
+    );
+}
+
+#[tokio::test]
+async fn acknowledged_draft_settings_save_leaves_session_and_work_authority_unchanged() {
+    let temporary = private_tempdir();
+    let root = temporary.path().canonicalize().expect("canonical root");
+    let workspace = root.join("workspace");
+    fs::create_dir(&workspace).expect("workspace");
+    let home = ColossusHome::ensure_at(root.join("home")).expect("home");
+    let mut config = RuntimeConfig::offline_template(workspace.join("state.redb"));
+    config.sandbox.backend = "danger_full_access".into();
+    config.sandbox.acknowledge_danger_full_access = false;
+    let runtime = Runtime::open_with_options(
+        &config,
+        Arc::new(DenyApproval),
+        None,
+        RuntimeOpenOptions::for_workspace(&workspace)
+            .expect("workspace options")
+            .with_colossus_home(home.root())
+            .expect("home binding"),
+    )
+    .expect("runtime");
+    let draft = uuid::Uuid::now_v7().to_string();
+    let initial = runtime
+        .presentation_preferences()
+        .expect("initial settings");
+    let after = TerminalPreferences {
+        theme: colossus_contracts::ThemeName::HighContrast,
+        ..initial.clone()
+    };
+    let mode = Some(SandboxBoundaryMode::DangerFullAccess);
+    assert_eq!(
+        runtime
+            .terminal_draft_presentation_boundary(&draft)
+            .unwrap(),
+        mode
+    );
+    assert!(
+        runtime
+            .terminal_draft_presentation_boundary("noncanonical")
+            .is_err()
+    );
+    assert!(
+        runtime
+            .pending_sandbox_boundary_acknowledgement(&draft)
+            .is_err()
+    );
+    for (acknowledged_mode, cancelled) in [
+        (None, false),
+        (Some(SandboxBoundaryMode::External), false),
+        (mode, true),
+    ] {
+        let control = RunControl::default();
+        if cancelled {
+            control.cancel();
+        }
+        assert!(
+            runtime
+                .save_terminal_draft_preferences(
+                    &draft,
+                    after.clone(),
+                    initial.clone(),
+                    acknowledged_mode,
+                    &control,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(runtime.presentation_preferences().unwrap(), initial);
+    }
+    assert_eq!(
+        runtime
+            .save_terminal_draft_preferences(
+                &draft,
+                after.clone(),
+                initial.clone(),
+                mode,
+                &RunControl::default(),
+            )
+            .await
+            .expect("explicit draft settings consent"),
+        after
+    );
+    assert!(runtime.get_session(&draft).unwrap().is_none());
+    assert!(runtime.list_sessions(100).unwrap().is_empty());
+    assert!(
+        runtime
+            .append_terminal_history_for_session(&draft, "no inherited consent")
+            .await
+            .is_err()
+    );
+    let events = runtime.journal().read_global(1, 100).unwrap();
+    let grants: Vec<_> = events
+        .iter()
+        .filter(|event| event.event_type == "sandbox.boundary.acknowledged.v1")
+        .collect();
+    assert_eq!(grants.len(), 1);
+    let grant = grants[0];
+    assert_eq!(grant.context.session_id.as_deref(), Some(draft.as_str()));
+    let payload = runtime.journal().decrypt_payload(grant).unwrap();
+    assert_eq!(payload["scope"], "terminal_draft_preferences_request");
+    assert!(
+        payload["request_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
+    );
+    assert!(payload.get("preferences").is_none());
+    assert!(payload.get("sandbox_boundary_acknowledgement").is_none());
+
+    assert!(
+        runtime
+            .save_terminal_draft_preferences(
+                &draft,
+                initial.clone(),
+                initial,
+                mode,
+                &RunControl::default(),
+            )
+            .await
+            .is_err(),
+        "a settings snapshot from before another save cannot overwrite it"
+    );
+    assert_eq!(runtime.presentation_preferences().unwrap(), after);
+    runtime.materialize_terminal_session(&draft).unwrap();
+    assert_eq!(
+        runtime
+            .pending_sandbox_boundary_acknowledgement(&draft)
+            .unwrap(),
+        mode
+    );
+    assert!(
+        runtime
+            .terminal_draft_presentation_boundary(&draft)
+            .is_err()
+    );
+    runtime.set_session_archived(&draft, true).unwrap();
+    assert!(
+        runtime
+            .terminal_draft_presentation_boundary(&draft)
+            .is_err()
     );
 }
 

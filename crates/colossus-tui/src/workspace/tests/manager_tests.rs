@@ -46,11 +46,12 @@ impl InteractiveHost for AsyncWorkHost {
         command: RuntimeCommand,
         id: &str,
         skills: &[String],
+        submitted_input: Option<String>,
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostCommandResult, String> {
         NoWorkHost
-            .execute_command(command, id, skills, events, control)
+            .execute_command(command, id, skills, submitted_input, events, control)
             .await
     }
     async fn run_turn(
@@ -84,8 +85,11 @@ impl InteractiveHost for AsyncWorkHost {
         id: &str,
         preferences: TerminalPreferences,
         events: mpsc::Sender<HostEvent>,
+        control: RunControl,
     ) -> Result<TerminalPreferences, String> {
-        NoWorkHost.save_preferences(id, preferences, events).await
+        NoWorkHost
+            .save_preferences(id, preferences, events, control)
+            .await
     }
     async fn older_messages(&self, id: &str, before: u64) -> Result<SessionMessagePage, String> {
         NoWorkHost.older_messages(id, before).await
@@ -134,6 +138,39 @@ fn draw(workspace: &mut Workspace) -> String {
         .draw(|frame| crate::render::render(frame, workspace, 0, ScreenMode::Alternate))
         .expect("draw");
     terminal.backend().to_string()
+}
+
+#[tokio::test]
+async fn closing_idle_draft_frees_its_slot_without_archiving() {
+    let mut draft = source("draft");
+    draft.session_saved = false;
+    let (mut workspace, mut events) =
+        Workspace::new(ScreenMode::Alternate, TuiState::from_snapshot(draft));
+    open_snapshot(&mut workspace, "saved");
+    // Discovery can independently learn that a draft save reply was lost.
+    workspace
+        .catalog
+        .push(summary("draft", "Discovered session"));
+    workspace.open_manager(SessionTab::Open);
+    workspace.workspace_manager.select(Some("draft".into()));
+    assert!(draw(&mut workspace).contains("Close draft"));
+    workspace.workspace_action = Some(WorkspaceAction::Archive("draft".into(), true));
+    workspace.process_action(host());
+    let result = tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("draft close timeout")
+        .expect("draft close result");
+    workspace.receive(result, host());
+    assert_eq!(workspace.session_id, "saved");
+    assert!(!workspace.background.contains_key("draft"));
+    assert!(!workspace.channels.contains_key("draft"));
+    assert!(workspace.archived_catalog.is_empty());
+    assert!(
+        workspace
+            .catalog
+            .iter()
+            .any(|session| session.id == "draft")
+    );
 }
 
 #[tokio::test]
