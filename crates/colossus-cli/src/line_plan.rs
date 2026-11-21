@@ -354,6 +354,7 @@ impl WorkerPromptHandler for LineWorkerPromptHandler {
             WorkerPromptKind::Approval | WorkerPromptKind::SandboxBoundaryAcknowledgement => {
                 colossus_presentation::PresentationTone::Warning
             }
+            WorkerPromptKind::TerminalDraftPreferencesAcknowledgement => return Ok(None),
             WorkerPromptKind::UserInput => colossus_presentation::PresentationTone::Neutral,
         };
         write_stderr_document(&PresentationDocument::from_block(PresentationBlock::Card {

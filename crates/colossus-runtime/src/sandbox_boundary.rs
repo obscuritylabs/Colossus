@@ -131,6 +131,31 @@ fn record_sandbox_boundary_acknowledgement(
     Ok(())
 }
 
+pub(super) fn record_terminal_draft_preferences_acknowledgement(
+    journal: &dyn EventJournal,
+    request: &EffectRequest,
+    mode: SandboxBoundaryMode,
+) -> Result<(), StoreError> {
+    let acknowledgement_id = Uuid::now_v7();
+    journal.append(NewEvent {
+        event_version: 1,
+        stream_id: format!("sandbox-boundary-ack:{acknowledgement_id}"),
+        expected_stream_version: 0,
+        classification: EventClassification::Policy,
+        event_type: "sandbox.boundary.acknowledged.v1".into(),
+        actor: request.actor.clone(),
+        context: request.context.clone(),
+        payload: json!({
+            "backend": mode.as_backend(),
+            "scope": "terminal_draft_preferences_request",
+            "colossus_process_isolation": false,
+            "external_boundary_asserted": false,
+            "request_id": &request.request_id,
+        }),
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,7 +8,7 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 /// Exact authenticated worker protocol version.
 ///
-/// Version 29 adds explicit native terminal draft materialization.
+/// Version 29 adds native terminal draft materialization and scoped settings saves.
 /// Version 28 adds immutable released transcript reads to private worker clients.
 /// Version 27 combines canonical session archive/restore and archived discovery
 /// with opt-in next-prompt generation and strict suggestion-mode preferences.

@@ -99,11 +99,14 @@ Their pending native checks remain separate from implementation and historical t
 Evidence and owned follow-ups:
 
 - **Unsaved TUI conversations:** The [Sessions guide](../use/sessions.md#start-a-clean-conversation)
-  describes when the TUI saves a draft. The regression in
-  `crates/colossus-cli/src/tui_host/preferences_concurrency_tests.rs` exercises idle
-  launches, a preference write, rejected empty input, first work, and exact resume
-  against embedded and authenticated worker hosts. `desktop_owner` and `test_owner`
-  own acceptance through the bundled TUI in the installed Managed Local application.
+  describes when the TUI saves a draft. The [Terminal UI guide](../use/terminal-ui.md#write-and-review-a-turn)
+  explains how sandbox acknowledgement affects settings saves and prompt history.
+  Regressions in `crates/colossus-cli/src/tui_host/preferences_concurrency_tests.rs`
+  exercise both embedded and authenticated worker hosts, including idle launches,
+  a scoped settings save, rejected empty input, history ordering around work
+  acknowledgement, retry with the same ID, and exact resume. `desktop_owner` and
+  `test_owner` own acceptance through the bundled TUI in the installed Managed Local
+  application.
 - **Windows functional browser:** [Release packaging](releasing.md#developer-previews-and-desktop)
   and [ADR 0008](adr/0008-owned-chromium-browser.md) distinguish application channel
   from browser authority. `scripts/ci/browser-release-policy.test.ps1` exercises

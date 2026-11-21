@@ -35,8 +35,7 @@ impl EmbeddedInteractiveHost {
         events: &mpsc::Sender<HostEvent>,
         control: &RunControl,
     ) -> Result<(), String> {
-        let saved = self
-            .drafts
+        self.drafts
             .materialize(session_id, events, control, async {
                 self.runtime
                     .materialize_terminal_session(session_id)
@@ -44,8 +43,7 @@ impl EmbeddedInteractiveHost {
                     .map_err(|error| error.to_string())
             })
             .await?;
-        if saved
-            && !control.is_cancelled()
+        if !control.is_cancelled()
             && let Some(mode) = self
                 .runtime
                 .pending_sandbox_boundary_acknowledgement(session_id)
@@ -59,6 +57,11 @@ impl EmbeddedInteractiveHost {
                     acknowledged.then_some(mode)
                 )))
                 .await;
+            if !acknowledged {
+                return Err(
+                    "Session work was cancelled without sandbox boundary acknowledgement.".into(),
+                );
+            }
         }
         if control.is_cancelled() {
             return Err("Session work was cancelled before it started.".into());
@@ -183,29 +186,20 @@ impl EmbeddedInteractiveHost {
         &self,
         name: &str,
         arguments: &str,
+        session_id: &str,
         events: &mpsc::Sender<HostEvent>,
+        control: &RunControl,
     ) -> Result<Option<HostCommandResult>, String> {
-        if !matches!(
-            name,
-            "theme"
-                | "stream"
-                | "events"
-                | "reasoning"
-                | "suggestions"
-                | "multiline"
-                | "transcript"
-                | "trace"
-        ) {
+        if !is_presentation_command(name) {
             return Ok(None);
         }
-        // Human theme selection must not block an opt-out in another session.
-        // Its preview snapshot is never the profile written after selection.
+        let current = self
+            .runtime
+            .presentation_preferences()
+            .map_err(|error| error.to_string())?;
+        // Theme preview must finish before authorizing and committing a write.
         let selected_theme = if name == "theme" && arguments.trim().is_empty() {
-            let preferences = self
-                .runtime
-                .presentation_preferences()
-                .map_err(|error| error.to_string())?;
-            let Some(selected) = browse_themes(events, &self.themes, &preferences).await? else {
+            let Some(selected) = browse_themes(events, &self.themes, &current).await? else {
                 return Ok(Some(HostCommandResult::document(
                     PresentationDocument::new(),
                 )));
@@ -214,135 +208,115 @@ impl EmbeddedInteractiveHost {
         } else {
             None
         };
-        let _edit = self.operations.edit_preferences().await;
-        let mut preferences = self
+        let edit = match terminal_preference_command(
+            name,
+            arguments,
+            selected_theme.as_deref(),
+            &current,
+            &self.themes,
+        )? {
+            TerminalPreferenceCommand::View(result) => return Ok(Some(*result)),
+            TerminalPreferenceCommand::Edit(edit) => edit,
+        };
+        let preferences = self
+            .update_terminal_preferences(session_id, events, control, |current| {
+                let mut preferences = current.clone();
+                edit.apply(&mut preferences, &self.themes)?;
+                Ok(preferences)
+            })
+            .await?;
+        terminal_preference_result(name, preferences, &self.themes).map(Some)
+    }
+
+    async fn update_terminal_preferences(
+        &self,
+        session_id: &str,
+        events: &mpsc::Sender<HostEvent>,
+        control: &RunControl,
+        edit: impl FnOnce(&TerminalPreferences) -> Result<TerminalPreferences, String> + Send,
+    ) -> Result<TerminalPreferences, String> {
+        if control.is_cancelled() {
+            return Err("Terminal settings save was cancelled.".into());
+        }
+        let draft = self.drafts.contains(session_id)?;
+        let boundary = if draft {
+            self.runtime
+                .terminal_draft_presentation_boundary(session_id)
+                .map_err(|error| error.to_string())?
+        } else {
+            None
+        };
+        let presentation = self.operations.enter_presentation().await;
+        let edit_guard = self.operations.edit_preferences().await;
+        let current = self
             .runtime
             .presentation_preferences()
             .map_err(|error| error.to_string())?;
-        if let Some(status) = presentation_status(name, arguments, &preferences) {
-            return Ok(Some(status));
+        let preferences = edit(&current)?;
+        if boundary.is_some() {
+            // Require the canonical profile captured before a human delay.
+            // The runtime compares it immediately before the draft save.
+            drop(edit_guard);
+            drop(presentation);
+            let (response_tx, response_rx) = oneshot::channel();
+            events
+                .send(HostEvent::Prompt(draft_preferences_prompt(response_tx)))
+                .await
+                .map_err(|_| "interactive client disconnected".to_owned())?;
+            let response = tokio::time::timeout(INTERACTIVE_PROMPT_TIMEOUT, response_rx)
+                .await
+                .map_err(|_| "Terminal settings acknowledgement timed out.".to_owned())?
+                .map_err(|_| "Terminal settings acknowledgement was dropped.".to_owned())?;
+            if !matches!(response, PromptResponse::Answer(answer) if answer == SAVE_TERMINAL_SETTINGS)
+            {
+                return Err("Terminal settings were left unchanged.".into());
+            }
         }
-        let changed = match name {
-            "theme" => {
-                let argument = arguments.trim();
-                if let Some(selected) = selected_theme.as_deref() {
-                    self.themes
-                        .select(selected, &mut preferences)
-                        .map_err(|error| error.to_string())?;
-                    true
-                } else if argument == "list" {
-                    return Ok(Some(HostCommandResult::document(
-                        self.themes.status_document(preferences.theme_name()),
-                    )));
-                } else if argument == "reset" {
-                    preferences.select_builtin_theme(ThemeName::Default);
-                    true
-                } else if let Some(theme) = argument.strip_prefix("preview ") {
-                    return Ok(Some(HostCommandResult::document(
-                        self.themes
-                            .preview_document(theme.trim())
-                            .map_err(|error| error.to_string())?,
-                    )));
-                } else if argument == "validate" {
-                    return Ok(Some(HostCommandResult::document(
-                        self.themes.validation_document(),
-                    )));
-                } else if let Some(theme) = argument.strip_prefix("scaffold ") {
-                    let scaffold = self
-                        .themes
-                        .scaffold(theme.trim())
-                        .map_err(|error| error.to_string())?;
-                    return Ok(Some(HostCommandResult::document(
-                        ThemeLibrary::scaffold_document(&scaffold),
-                    )));
+        if control.is_cancelled() || (draft && !self.drafts.contains(session_id)?) {
+            return Err("Terminal settings save was cancelled.".into());
+        }
+        self.router
+            .scope(events.clone(), async {
+                if draft {
+                    self.runtime
+                        .save_terminal_draft_preferences(
+                            session_id,
+                            preferences,
+                            current,
+                            boundary,
+                            control,
+                        )
+                        .await
                 } else {
-                    self.themes
-                        .select(argument, &mut preferences)
-                        .map_err(|error| error.to_string())?;
-                    true
+                    self.runtime
+                        .save_presentation_preferences_for_session(session_id, preferences)
+                        .await
                 }
-            }
-            "stream" => {
-                preferences.stream_mode = match arguments.trim() {
-                    "on" => colossus_contracts::StreamDisplayMode::On,
-                    "raw" => colossus_contracts::StreamDisplayMode::Raw,
-                    "off" => colossus_contracts::StreamDisplayMode::Off,
-                    _ => return Err("/stream expects on, raw, or off".into()),
-                };
-                true
-            }
-            "events" => {
-                preferences.events_mode = match arguments.trim() {
-                    "compact" => colossus_contracts::EventDisplayMode::Compact,
-                    "verbose" => colossus_contracts::EventDisplayMode::Verbose,
-                    "off" => colossus_contracts::EventDisplayMode::Off,
-                    _ => return Err("/events expects compact, verbose, or off".into()),
-                };
-                true
-            }
-            "reasoning" => {
-                preferences.show_reasoning = parse_toggle(arguments, preferences.show_reasoning)?;
-                true
-            }
-            "suggestions" => {
-                preferences.next_prompt_mode = match arguments.trim() {
-                    "off" => colossus_contracts::NextPromptMode::Off,
-                    "on" | "local" => colossus_contracts::NextPromptMode::Local,
-                    "model" => colossus_contracts::NextPromptMode::Model,
-                    _ => return Err("/suggestions expects off, local, or model".into()),
-                };
-                true
-            }
-            "multiline" => {
-                preferences.multiline = parse_toggle(arguments, preferences.multiline)?;
-                true
-            }
-            "transcript" => {
-                preferences.transcript_density = match arguments.trim() {
-                    "comfortable" => colossus_contracts::TranscriptDensity::Comfortable,
-                    "compact" => colossus_contracts::TranscriptDensity::Compact,
-                    _ => return Err("/transcript expects comfortable or compact".into()),
-                };
-                true
-            }
-            "trace" => {
-                preferences.events_mode =
-                    if preferences.events_mode == colossus_contracts::EventDisplayMode::Off {
-                        colossus_contracts::EventDisplayMode::Compact
-                    } else {
-                        colossus_contracts::EventDisplayMode::Off
-                    };
-                true
-            }
-            _ => false,
-        };
-        if !changed {
-            return Ok(None);
-        }
-        let preferences = self
-            .runtime
-            .save_presentation_preferences(preferences)
+            })
             .await
-            .map_err(|error| error.to_string())?;
-        let document = if name == "theme" {
-            self.themes.selection_document(preferences.theme_name())
-        } else {
-            document_from_json(
-                &serde_json::to_value(&preferences).map_err(|error| error.to_string())?,
-                Some("Terminal preferences"),
+            .map_err(|error| error.to_string())
+    }
+
+    async fn append_authorized_history(
+        &self,
+        session_id: &str,
+        entry: String,
+        events: mpsc::Sender<HostEvent>,
+        control: &RunControl,
+    ) -> Result<(), String> {
+        let _presentation = self.operations.enter_presentation().await;
+        if control.is_cancelled() {
+            return Ok(());
+        }
+        self.router
+            .scope(
+                events,
+                self.runtime
+                    .append_terminal_history_for_session(session_id, &entry),
             )
-        };
-        Ok(Some(HostCommandResult {
-            document,
-            session: None,
-            preferences: Some(preferences),
-            completions: None,
-            sticky_skills: None,
-            footer: None,
-            plan_selection: PlanSelectionUpdate::Unchanged,
-            continue_queue: true,
-            clear_transcript: false,
-        }))
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     async fn execute_known(
@@ -354,7 +328,10 @@ impl EmbeddedInteractiveHost {
         events: &mpsc::Sender<HostEvent>,
         control: &RunControl,
     ) -> Result<HostCommandResult, String> {
-        if let Some(result) = self.presentation_command(name, arguments, events).await? {
+        if let Some(result) = self
+            .presentation_command(name, arguments, session_id, events, control)
+            .await?
+        {
             return Ok(result);
         }
         if name == "model" || name == "effort" {
@@ -1558,6 +1535,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         command: RuntimeCommand,
         session_id: &str,
         sticky_skills: &[String],
+        submitted_input: Option<String>,
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostCommandResult, String> {
@@ -1565,9 +1543,16 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             .operations
             .enter(matches!(command, RuntimeCommand::Permissions(Some(_))))
             .await?;
-        if starts_session_work(&command) {
+        if command.starts_session_work() {
             self.prepare_draft_for_work(session_id, &events, &control)
                 .await?;
+            persist_submitted_input(submitted_input, &events, |input| {
+                self.append_authorized_history(session_id, input, events.clone(), &control)
+            })
+            .await;
+            if control.is_cancelled() {
+                return Err("Session work was cancelled before it started.".into());
+            }
         }
         self.router
             .scope(events.clone(), async {
@@ -1649,6 +1634,13 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             .map_err(|error| error.to_string())?;
         self.prepare_draft_for_work(&request.session_id, &events, &control)
             .await?;
+        persist_submitted_input(request.submitted_input.take(), &events, |input| {
+            self.append_authorized_history(&request.session_id, input, events.clone(), &control)
+        })
+        .await;
+        if control.is_cancelled() {
+            return Err("Session work was cancelled before it started.".into());
+        }
         let outcome = self
             .router
             .scope(
@@ -1824,41 +1816,35 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         entry: String,
         events: mpsc::Sender<HostEvent>,
     ) -> Result<(), String> {
-        let _presentation = self.operations.enter_presentation().await;
-        self.router
-            .scope(
-                events,
-                self.runtime
-                    .append_terminal_history_for_session(session_id, &entry),
-            )
+        let boundary = if self.drafts.contains(session_id)? {
+            self.runtime
+                .terminal_draft_presentation_boundary(session_id)
+        } else {
+            self.runtime
+                .pending_sandbox_boundary_acknowledgement(session_id)
+        }
+        .map_err(|error| error.to_string())?;
+        if boundary == Some(SandboxBoundaryMode::DangerFullAccess) {
+            // The TUI already remembers the submitted line for local recall.
+            return Ok(());
+        }
+        self.append_authorized_history(session_id, entry, events, &RunControl::default())
             .await
-            .map(|_| ())
-            .map_err(|error| error.to_string())
     }
 
     async fn save_preferences(
         &self,
         session_id: &str,
-        preferences: TerminalPreferences,
+        mut preferences: TerminalPreferences,
         events: mpsc::Sender<HostEvent>,
+        control: RunControl,
     ) -> Result<TerminalPreferences, String> {
-        let _presentation = self.operations.enter_presentation().await;
-        let _edit = self.operations.edit_preferences().await;
-        let current = self
-            .runtime
-            .presentation_preferences()
-            .map_err(|error| error.to_string())?;
-        let mut preferences = preferences;
-        super::common::preserve_model_opt_out(&mut preferences, &current);
-
-        self.router
-            .scope(
-                events,
-                self.runtime
-                    .save_presentation_preferences_for_session(session_id, preferences),
-            )
-            .await
-            .map_err(|error| error.to_string())
+        let _operation = self.operations.enter(false).await?;
+        self.update_terminal_preferences(session_id, &events, &control, |current| {
+            preserve_model_opt_out(&mut preferences, current);
+            Ok(preferences)
+        })
+        .await
     }
 
     async fn older_messages(

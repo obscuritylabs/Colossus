@@ -21,6 +21,9 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::StateDoctor => "state_doctor",
         WorkerOperation::SandboxDoctor => "sandbox_doctor",
         WorkerOperation::SandboxBoundaryStatus { .. } => "sandbox_boundary_status",
+        WorkerOperation::TuiDraftPresentationBoundaryStatus { .. } => {
+            "tui_draft_presentation_boundary_status"
+        }
         WorkerOperation::ProviderProfiles => "provider_profiles",
         WorkerOperation::ProviderDoctor { .. } => "provider_doctor",
         WorkerOperation::ProviderModels { .. } => "provider_models",
@@ -50,6 +53,9 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
             }
             InteractiveWorkerRequest::PresentationSave { .. } => {
                 "run_interactive.presentation_save"
+            }
+            InteractiveWorkerRequest::TuiDraftPresentationSave { .. } => {
+                "run_interactive.tui_draft_presentation_save"
             }
             InteractiveWorkerRequest::PlanApprove { .. } => "run_interactive.plan_approve",
             InteractiveWorkerRequest::PlanDiscard { .. } => "run_interactive.plan_discard",

@@ -681,6 +681,7 @@ impl TuiState {
         };
         Ok(InteractiveRunRequest {
             session_id: self.session_id.clone(),
+            submitted_input: None,
             prompt,
             images: self.pending_images.clone(),
             mode,

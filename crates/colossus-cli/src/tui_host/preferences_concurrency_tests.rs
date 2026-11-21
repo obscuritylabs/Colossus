@@ -144,6 +144,7 @@ async fn command(
             },
             session_id,
             &[],
+            None,
             events,
             RunControl::default(),
         ),
@@ -194,6 +195,7 @@ async fn assert_read_only_transcript_export(
             },
             &session.session_id,
             &[],
+            None,
             events,
             control
         )
@@ -231,6 +233,7 @@ async fn fixture_turn(
 ) -> Result<HostRunResult, String> {
     let (events, mut receiver) = mpsc::channel(8);
     let request = InteractiveRunRequest {
+        submitted_input: None,
         session_id: session_id.into(),
         prompt: prompt.into(),
         images: Vec::new(),
@@ -267,7 +270,7 @@ async fn assert_tui_saves_only_after_work(host: &dyn InteractiveHost) -> String 
     let mut preferences = idle.preferences;
     preferences.show_reasoning = true;
     let updated = host
-        .save_preferences(&idle.session_id, preferences, events)
+        .save_preferences(&idle.session_id, preferences, events, RunControl::default())
         .await
         .expect("change presentation without saving a conversation");
     assert!(updated.show_reasoning);
@@ -363,6 +366,240 @@ async fn idle_tui_launches_stay_out_of_history_in_both_hosts() {
     fixture.stop().await;
 }
 
+fn unacknowledged_full_access_fixture(root: &Path) -> RuntimeConfig {
+    let mut config = fixture_config(root);
+    config.sandbox.backend = "danger_full_access".into();
+    config.sandbox.acknowledge_danger_full_access = false;
+    config
+}
+
+async fn next_fixture_event(events: &mut mpsc::Receiver<HostEvent>) -> HostEvent {
+    tokio::time::timeout(Duration::from_secs(5), events.recv())
+        .await
+        .expect("interactive fixture event deadline")
+        .expect("interactive fixture event")
+}
+
+async fn draft_settings_prompt(events: &mut mpsc::Receiver<HostEvent>) -> InteractivePrompt {
+    let HostEvent::Prompt(prompt) = next_fixture_event(events).await else {
+        panic!("expected settings-only acknowledgement");
+    };
+    assert_eq!(prompt.title, SAVE_TERMINAL_SETTINGS);
+    assert_eq!(
+        prompt.choices,
+        [SAVE_TERMINAL_SETTINGS, "Keep settings unchanged"]
+    );
+    assert!(prompt.initial_choice.is_none());
+    assert!(!prompt.allow_free_form);
+    prompt
+}
+
+async fn assert_full_access_draft_presentation_and_retry(host: Arc<dyn InteractiveHost>) {
+    let draft = host.bootstrap(BootstrapRequest::default()).await.unwrap();
+    assert!(!draft.session_saved);
+    assert!(draft.pending_sandbox_boundary_acknowledgement.is_none());
+    let (events, mut receiver) = mpsc::channel(16);
+    host.append_history(&draft.session_id, "/status".into(), events.clone())
+        .await
+        .expect("unacknowledged history remains local without a prompt");
+    assert!(receiver.try_recv().is_err());
+    let second_draft = host.bootstrap(BootstrapRequest::default()).await.unwrap();
+    assert_eq!(second_draft.history, draft.history);
+    assert!(host.session_catalog(false).await.unwrap().is_empty());
+
+    let mut stale = draft.preferences.clone();
+    stale.multiline = !stale.multiline;
+    let stale_task = {
+        let host = Arc::clone(&host);
+        let id = draft.session_id.clone();
+        let events = events.clone();
+        tokio::spawn(async move {
+            host.save_preferences(&id, stale, events, RunControl::default())
+                .await
+        })
+    };
+    let stale_prompt = draft_settings_prompt(&mut receiver).await;
+    assert_eq!(
+        host.presentation_preferences().await.unwrap(),
+        draft.preferences
+    );
+
+    // An interactive menu selection takes this real slash-command path. It
+    // must reach its own prompt while the first snapshot waits for a human.
+    let show_reasoning = !draft.preferences.show_reasoning;
+    let command_task = {
+        let host = Arc::clone(&host);
+        let events = events.clone();
+        tokio::spawn(async move {
+            host.execute_command(
+                RuntimeCommand::Known {
+                    name: "reasoning".into(),
+                    arguments: if show_reasoning { "on" } else { "off" }.into(),
+                },
+                &second_draft.session_id,
+                &[],
+                None,
+                events,
+                RunControl::default(),
+            )
+            .await
+        })
+    };
+    let command_prompt = draft_settings_prompt(&mut receiver).await;
+    command_prompt
+        .response
+        .send(PromptResponse::Answer(SAVE_TERMINAL_SETTINGS.into()))
+        .unwrap();
+    let changed = tokio::time::timeout(Duration::from_secs(5), command_task)
+        .await
+        .expect("settings command deadline")
+        .unwrap()
+        .expect("settings command saved");
+    assert_eq!(changed.preferences.unwrap().show_reasoning, show_reasoning);
+    stale_prompt
+        .response
+        .send(PromptResponse::Answer(SAVE_TERMINAL_SETTINGS.into()))
+        .unwrap();
+    let stale_result = tokio::time::timeout(Duration::from_secs(5), stale_task)
+        .await
+        .expect("stale settings deadline")
+        .unwrap();
+    assert!(
+        stale_result.is_err(),
+        "stale snapshot must not replace current settings"
+    );
+    assert_eq!(
+        host.presentation_preferences()
+            .await
+            .unwrap()
+            .show_reasoning,
+        show_reasoning
+    );
+    assert_eq!(
+        host.presentation_preferences().await.unwrap().multiline,
+        draft.preferences.multiline
+    );
+    assert!(host.session_catalog(false).await.unwrap().is_empty());
+    assert!(receiver.try_recv().is_err());
+
+    let acknowledge =
+        sandbox_boundary_acknowledgement_choice(SandboxBoundaryMode::DangerFullAccess);
+    for (attempt, (line, cancel, answer)) in [
+        ("Cancelled first input", true, acknowledge),
+        (
+            "Declined first input",
+            false,
+            "Keep process execution blocked",
+        ),
+        ("Accepted first input", false, acknowledge),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let control = RunControl::default();
+        let task = {
+            let host = Arc::clone(&host);
+            let request = InteractiveRunRequest {
+                session_id: draft.session_id.clone(),
+                submitted_input: Some(line.into()),
+                prompt: line.into(),
+                images: Vec::new(),
+                mode: AgentRunMode::Execute,
+                explicit_skills: Vec::new(),
+                sticky_skills: Vec::new(),
+                include_provider_response_diagnostics: false,
+            };
+            let (tx, rx) = mpsc::channel(64);
+            let work_control = control.clone();
+            (
+                tokio::spawn(async move { host.run_turn(request, tx, work_control).await }),
+                rx,
+            )
+        };
+        let (completion, mut work_events) = task;
+        if attempt == 0 {
+            let HostEvent::SessionSaved { session_id } = next_fixture_event(&mut work_events).await
+            else {
+                panic!("first work should save the draft's exact ID");
+            };
+            assert_eq!(session_id, draft.session_id);
+        }
+        let HostEvent::Prompt(prompt) = next_fixture_event(&mut work_events).await else {
+            panic!("the attempt must request full work acknowledgement exactly once");
+        };
+        assert_eq!(
+            prompt.kind,
+            InteractivePromptKind::SandboxBoundaryAcknowledgement
+        );
+        assert_eq!(
+            host.bootstrap(BootstrapRequest::default())
+                .await
+                .unwrap()
+                .history,
+            draft.history
+        );
+        assert!(prompt.choices.iter().any(|choice| choice == answer));
+        if cancel {
+            control.cancel();
+        }
+        let _ = prompt.response.send(PromptResponse::Answer(answer.into()));
+        let result = tokio::time::timeout(Duration::from_secs(10), completion)
+            .await
+            .expect("first work deadline")
+            .unwrap();
+        if !cancel && answer == acknowledge {
+            assert!(matches!(
+                result.unwrap().outcome,
+                AgentRunOutcome::Completed { .. }
+            ));
+        } else {
+            assert!(result.is_err(), "unaccepted acknowledgement must stop work");
+            while let Ok(event) = work_events.try_recv() {
+                assert!(!matches!(
+                    event,
+                    HostEvent::Run(_) | HostEvent::SandboxBoundaryAcknowledgement(Ok(Some(_)))
+                ));
+            }
+        }
+    }
+    let saved = host
+        .bootstrap(BootstrapRequest {
+            session_id: Some(draft.session_id.clone()),
+            resume_latest: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(saved.history, ["Accepted first input"]);
+    assert_eq!(host.session_catalog(false).await.unwrap().len(), 1);
+    assert_eq!(saved.session_id, draft.session_id);
+    let prompts = saved
+        .transcript
+        .messages
+        .iter()
+        .filter(|entry| entry.message.role == ModelMessageRole::User)
+        .map(|entry| entry.message.content.plain_text())
+        .collect::<Vec<_>>();
+    assert_eq!(prompts, ["Accepted first input"]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_access_draft_settings_and_first_input_preserve_authority_in_both_hosts() {
+    let embedded = tempfile::tempdir().unwrap();
+    let (host, _) = embedded_host_with_config(
+        embedded.path(),
+        &unacknowledged_full_access_fixture(embedded.path()),
+    );
+    assert_full_access_draft_presentation_and_retry(host).await;
+    let worker = tempfile::tempdir().unwrap();
+    let fixture = WorkerFixture::open_with_config(
+        worker.path(),
+        &unacknowledged_full_access_fixture(worker.path()),
+    )
+    .await;
+    assert_full_access_draft_presentation_and_retry(Arc::clone(&fixture.host)).await;
+    fixture.stop().await;
+}
+
 fn external_boundary_fixture(root: &Path) -> RuntimeConfig {
     let mut config = fixture_config(root);
     config.sandbox.backend = "external".into();
@@ -392,6 +629,7 @@ async fn cancel_first_work_at_boundary(host: Arc<dyn InteractiveHost>) -> String
                 },
                 &session_id,
                 &[],
+                None,
                 events,
                 control,
             )
@@ -564,6 +802,7 @@ async fn assert_theme_and_snapshot_cannot_restore_model(host: Arc<dyn Interactiv
                 },
                 &session_id,
                 &[],
+                None,
                 events,
                 RunControl::default(),
             )
@@ -618,19 +857,34 @@ async fn assert_theme_and_snapshot_cannot_restore_model(host: Arc<dyn Interactiv
 
     let (events, _receiver) = mpsc::channel(8);
     let restored = host
-        .save_preferences(&session_id, stale_model.clone(), events.clone())
+        .save_preferences(
+            &session_id,
+            stale_model.clone(),
+            events.clone(),
+            RunControl::default(),
+        )
         .await
         .expect("old UI snapshot save");
     assert_eq!(restored.next_prompt_mode, NextPromptMode::Off);
     assert_eq!(host.presentation_preferences().await.unwrap(), restored);
 
     let reset = host
-        .save_preferences(&session_id, TerminalPreferences::default(), events.clone())
+        .save_preferences(
+            &session_id,
+            TerminalPreferences::default(),
+            events.clone(),
+            RunControl::default(),
+        )
         .await
         .expect("reset permits Local default");
     assert_eq!(reset.next_prompt_mode, NextPromptMode::Local);
     let restored = host
-        .save_preferences(&session_id, stale_model.clone(), events.clone())
+        .save_preferences(
+            &session_id,
+            stale_model.clone(),
+            events.clone(),
+            RunControl::default(),
+        )
         .await
         .expect("old Model snapshot after Local");
     assert_eq!(restored.next_prompt_mode, NextPromptMode::Local);
@@ -641,7 +895,7 @@ async fn assert_theme_and_snapshot_cannot_restore_model(host: Arc<dyn Interactiv
         .expect("explicit Model opt-in");
     assert_eq!(explicit.next_prompt_mode, NextPromptMode::Model);
     let roundtrip = host
-        .save_preferences(&session_id, explicit, events)
+        .save_preferences(&session_id, explicit, events, RunControl::default())
         .await
         .expect("current Model snapshot roundtrip");
     assert_eq!(roundtrip.next_prompt_mode, NextPromptMode::Model);

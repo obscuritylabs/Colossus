@@ -776,6 +776,50 @@ fn preferences_reconstruct_from_immutable_events_and_validate_schema() {
 }
 
 #[test]
+fn checked_preferences_save_rejects_a_changed_profile() {
+    let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+    let repository = EventSourcedPresentationRepository::new(Arc::clone(&journal));
+    let other_writer = EventSourcedPresentationRepository::new(Arc::clone(&journal));
+    let actor = Actor {
+        actor_type: ActorType::User,
+        id: "terminal-user".into(),
+    };
+    let expected = repository.load().expect("original preferences");
+    let current = TerminalPreferences {
+        theme: ThemeName::HighContrast,
+        ..expected.clone()
+    };
+    other_writer
+        .save(current.clone(), actor.clone())
+        .expect("other writer saves");
+    let proposed = TerminalPreferences {
+        multiline: true,
+        ..expected.clone()
+    };
+
+    repository
+        .save_if_current(&expected, proposed.clone(), actor.clone())
+        .expect_err("stale draft must not overwrite the other writer");
+    assert_eq!(repository.load().expect("current preferences"), current);
+    assert_eq!(
+        journal
+            .read_stream("presentation:repl")
+            .expect("events")
+            .len(),
+        1
+    );
+
+    let proposed = TerminalPreferences {
+        theme: current.theme,
+        ..proposed
+    };
+    repository
+        .save_if_current(&current, proposed.clone(), actor)
+        .expect("current snapshot can be updated");
+    assert_eq!(repository.load().expect("saved preferences"), proposed);
+}
+
+#[test]
 fn event_sourced_repository_passes_shared_conformance() {
     let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
     let repository = EventSourcedPresentationRepository::new(journal);

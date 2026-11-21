@@ -97,8 +97,10 @@ pub struct InteractiveSnapshot {
 /// Request for one normal provider/tool turn.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractiveRunRequest {
-    /// Exact durable session.
+    /// Exact session or terminal-owned draft.
     pub session_id: String,
+    /// Original submitted input, persisted only after the host admits the work.
+    pub submitted_input: Option<String>,
     /// Complete user prompt after local skill-mention parsing.
     pub prompt: String,
     /// Ordered verified encrypted image references queued for this submission.
@@ -242,6 +244,27 @@ pub enum RuntimeCommand {
     Permissions(Option<InteractiveApprovalMode>),
     /// Typed plan lifecycle operation whose policy and persistence remain host-owned.
     Plan(PlanHostCommand),
+}
+
+impl RuntimeCommand {
+    /// Whether the host can start new work in an unsaved terminal draft.
+    pub fn starts_session_work(&self) -> bool {
+        match self {
+            Self::Shell { command } => {
+                !command.trim().is_empty() && !command.contains('\0') && command.len() <= 64 * 1024
+            }
+            Self::Known { name, arguments } => match name.as_str() {
+                "goal" => {
+                    !arguments.trim().is_empty()
+                        && arguments.trim() != "resume"
+                        && !arguments.starts_with("resume ")
+                }
+                "research" => !matches!(arguments.trim(), "" | "list"),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
 }
 
 /// Process-local handling for policy decisions that require operator approval.
@@ -987,6 +1010,7 @@ pub trait InteractiveHost: Send + Sync {
         command: RuntimeCommand,
         session_id: &str,
         sticky_skills: &[String],
+        submitted_input: Option<String>,
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostCommandResult, String>;
@@ -1023,6 +1047,7 @@ pub trait InteractiveHost: Send + Sync {
         session_id: &str,
         preferences: TerminalPreferences,
         events: mpsc::Sender<HostEvent>,
+        control: RunControl,
     ) -> Result<TerminalPreferences, String>;
 
     /// Load the next older bounded transcript page.

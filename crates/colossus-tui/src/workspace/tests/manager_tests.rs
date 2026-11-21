@@ -46,11 +46,12 @@ impl InteractiveHost for AsyncWorkHost {
         command: RuntimeCommand,
         id: &str,
         skills: &[String],
+        submitted_input: Option<String>,
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostCommandResult, String> {
         NoWorkHost
-            .execute_command(command, id, skills, events, control)
+            .execute_command(command, id, skills, submitted_input, events, control)
             .await
     }
     async fn run_turn(
@@ -84,8 +85,11 @@ impl InteractiveHost for AsyncWorkHost {
         id: &str,
         preferences: TerminalPreferences,
         events: mpsc::Sender<HostEvent>,
+        control: RunControl,
     ) -> Result<TerminalPreferences, String> {
-        NoWorkHost.save_preferences(id, preferences, events).await
+        NoWorkHost
+            .save_preferences(id, preferences, events, control)
+            .await
     }
     async fn older_messages(&self, id: &str, before: u64) -> Result<SessionMessagePage, String> {
         NoWorkHost.older_messages(id, before).await

@@ -791,6 +791,20 @@ async fn dispatch_interactive(
                 .save_presentation_preferences_for_session(&session_id, preferences)
                 .await?,
         )?),
+        InteractiveWorkerRequest::TuiDraftPresentationSave {
+            session_id,
+            preferences,
+            expected_preferences,
+        } => {
+            Box::pin(save_terminal_draft_preferences(
+                runtime,
+                &session_id,
+                preferences,
+                *expected_preferences,
+                control,
+            ))
+            .await
+        }
         InteractiveWorkerRequest::PlanApprove {
             session_id,
             plan_id,
@@ -840,6 +854,52 @@ async fn dispatch_interactive(
                 .await?,
         )?),
     }
+}
+
+async fn save_terminal_draft_preferences(
+    runtime: &Runtime,
+    session_id: &str,
+    preferences: TerminalPreferences,
+    expected_preferences: TerminalPreferences,
+    control: &RunControl,
+) -> Result<Value, WorkerError> {
+    let mode = runtime.terminal_draft_presentation_boundary(session_id)?;
+    if mode.is_some() && !control.is_cancelled() {
+        let bridge = ACTIVE_INTERACTIVE_RUN
+            .try_with(Clone::clone)
+            .map_err(|_| WorkerError::Protocol("no interactive worker client attached".into()))?;
+        const SAVE_SETTINGS: &str = "Save terminal settings";
+        let answer = bridge
+            .request(WorkerPrompt {
+                command_context: None,
+                prompt_id: Uuid::now_v7().to_string(),
+                kind: WorkerPromptKind::TerminalDraftPreferencesAcknowledgement,
+                title: SAVE_SETTINGS.into(),
+                question: "Danger full access is configured and still needs acknowledgement. Allow this terminal settings save for the unsaved conversation?".into(),
+                choices: vec![SAVE_SETTINGS.into(), "Keep settings unchanged".into()],
+                allow_free_form: false,
+                details: Value::Null,
+            })
+            .await
+            .map_err(WorkerError::Protocol)?;
+        if !control.is_cancelled() && answer.as_deref() != Some(SAVE_SETTINGS) {
+            return Err(RuntimeError::Gateway(colossus_policy::GatewayError::Denied(
+                "terminal settings save was declined".into(),
+            ))
+            .into());
+        }
+    }
+    Ok(serde_json::to_value(
+        runtime
+            .save_terminal_draft_preferences(
+                session_id,
+                preferences,
+                expected_preferences,
+                mode,
+                control,
+            )
+            .await?,
+    )?)
 }
 
 async fn handle_interactive_connection<S>(

@@ -262,6 +262,7 @@ impl InteractiveHost for FixtureHost {
         command: RuntimeCommand,
         _session_id: &str,
         _sticky_skills: &[String],
+        _: Option<String>,
         events: mpsc::Sender<HostEvent>,
         _control: RunControl,
     ) -> Result<HostCommandResult, String> {
@@ -540,6 +541,7 @@ impl InteractiveHost for FixtureHost {
         _session_id: &str,
         preferences: TerminalPreferences,
         _events: mpsc::Sender<HostEvent>,
+        _: RunControl,
     ) -> Result<TerminalPreferences, String> {
         Ok(preferences)
     }

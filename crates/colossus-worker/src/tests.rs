@@ -1076,6 +1076,112 @@ async fn hosted_worker_fixture() -> HostedWorkerFixture {
     hosted_worker_fixture_with_configure(|_| {}).await
 }
 
+struct DraftSettingsPromptHandler {
+    answer: Option<&'static str>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl WorkerPromptHandler for DraftSettingsPromptHandler {
+    async fn prompt(&self, prompt: WorkerPrompt) -> Result<Option<String>, WorkerError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        assert_eq!(
+            prompt.kind,
+            WorkerPromptKind::TerminalDraftPreferencesAcknowledgement
+        );
+        assert_eq!(
+            prompt.choices,
+            ["Save terminal settings", "Keep settings unchanged"]
+        );
+        assert!(!prompt.allow_free_form);
+        assert!(prompt.command_context.is_none());
+        Ok(self.answer.map(str::to_owned))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authenticated_draft_settings_prompt_authorizes_only_the_selected_save() {
+    let fixture = hosted_worker_fixture_with_home(true, |config| {
+        config.sandbox.backend = "danger_full_access".into();
+        config.sandbox.acknowledge_danger_full_access = false;
+    })
+    .await;
+    let draft = Uuid::now_v7().to_string();
+    let initial = fixture.runtime.presentation_preferences().unwrap();
+    let updated = TerminalPreferences {
+        theme: colossus_contracts::ThemeName::HighContrast,
+        ..initial.clone()
+    };
+    let operation = || WorkerOperation::RunInteractive {
+        model_options: None,
+        request: InteractiveWorkerRequest::TuiDraftPresentationSave {
+            session_id: draft.clone(),
+            preferences: updated.clone(),
+            expected_preferences: Box::new(initial.clone()),
+        },
+        approval_mode: None,
+        sandbox_boundary_acknowledgement: None,
+    };
+    let status = fixture
+        .client
+        .call(WorkerOperation::TuiDraftPresentationBoundaryStatus {
+            session_id: draft.clone(),
+        })
+        .await
+        .expect("draft boundary status");
+    assert_eq!(
+        serde_json::from_value::<Option<SandboxBoundaryMode>>(status).unwrap(),
+        Some(SandboxBoundaryMode::DangerFullAccess)
+    );
+    let mut forged = serde_json::to_value(operation()).unwrap();
+    forged["request"]["acknowledged"] = json!(true);
+    assert!(serde_json::from_value::<WorkerOperation>(forged).is_err());
+    assert_eq!(
+        operation_name(&operation()),
+        "run_interactive.tui_draft_presentation_save"
+    );
+
+    let mut observer = SilentSocketObserver;
+    for answer in [
+        Some("Keep settings unchanged"),
+        Some("Save terminal settings"),
+    ] {
+        let prompts = DraftSettingsPromptHandler {
+            answer,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let result = fixture
+            .client
+            .call_interactive::<TerminalPreferences>(
+                operation(),
+                &mut observer,
+                &prompts,
+                &RunControl::default(),
+            )
+            .await;
+        assert_eq!(prompts.calls.load(std::sync::atomic::Ordering::Acquire), 1);
+        if answer == Some("Save terminal settings") {
+            assert_eq!(result.expect("acknowledged settings saved"), updated);
+        } else {
+            assert!(
+                matches!(result, Err(WorkerError::Remote(message)) if message.contains("declined"))
+            );
+            assert_eq!(fixture.runtime.presentation_preferences().unwrap(), initial);
+        }
+        assert!(fixture.runtime.get_session(&draft).unwrap().is_none());
+        assert!(fixture.runtime.list_sessions(100).unwrap().is_empty());
+    }
+    assert_eq!(fixture.runtime.presentation_preferences().unwrap(), updated);
+    assert!(
+        fixture
+            .runtime
+            .append_terminal_history_for_session(&draft, "no prior work authorization")
+            .await
+            .is_err()
+    );
+    fixture.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authenticated_terminal_draft_materialization_is_exact_and_idempotent() {
     let fixture = hosted_worker_fixture().await;

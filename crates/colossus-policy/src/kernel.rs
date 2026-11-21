@@ -249,6 +249,7 @@ const MAX_SANDBOX_BOUNDARY_SESSION_ACKNOWLEDGEMENTS: usize = 4_096;
 
 tokio::task_local! {
     static ACTIVE_SANDBOX_BOUNDARY_ACKNOWLEDGEMENT: Option<String>;
+    static ACTIVE_TERMINAL_DRAFT_PREFERENCES: TerminalDraftPreferencesAcknowledgement;
 }
 
 /// Scope one worker-issued acknowledgement to the current interactive operation.
@@ -295,6 +296,12 @@ struct ScopedSandboxBoundaryAcknowledgement {
     mode: SandboxBoundaryMode,
 }
 
+struct TerminalDraftPreferencesAcknowledgement {
+    gate: Weak<SandboxBoundaryGate>,
+    request_id: String,
+    draft_id: String,
+}
+
 /// Process-local acknowledgement state for backends that do not isolate processes.
 pub struct SandboxBoundaryGate {
     mode: Option<SandboxBoundaryMode>,
@@ -322,6 +329,46 @@ impl SandboxBoundaryGate {
     /// Whether configuration explicitly acknowledged this boundary for headless callers.
     pub const fn globally_acknowledged(&self) -> bool {
         self.globally_acknowledged
+    }
+
+    /// Scope trusted terminal consent to one preflight preference request.
+    ///
+    /// The runtime supplies the ID of its freshly constructed request after
+    /// explicit consent. Policy and the gateway still authorize and execute
+    /// the request. This scope cannot be captured as a session acknowledgement.
+    pub async fn execute_terminal_draft_preferences(
+        self: &Arc<Self>,
+        gateway: &EffectGateway,
+        request: EffectRequest,
+        executor: &dyn EffectExecutor,
+    ) -> Result<ReleasedEffectResult, GatewayError> {
+        let draft_id = request.context.session_id.clone().ok_or_else(|| {
+            GatewayError::Safety("terminal settings acknowledgement requires a draft".into())
+        })?;
+        self.with_terminal_draft_preferences_acknowledgement(
+            request.request_id.clone(),
+            draft_id,
+            gateway.execute(request, executor),
+        )
+        .await
+    }
+
+    async fn with_terminal_draft_preferences_acknowledgement<F: Future>(
+        self: &Arc<Self>,
+        request_id: String,
+        draft_id: String,
+        future: F,
+    ) -> F::Output {
+        ACTIVE_TERMINAL_DRAFT_PREFERENCES
+            .scope(
+                TerminalDraftPreferencesAcknowledgement {
+                    gate: Arc::downgrade(self),
+                    request_id,
+                    draft_id,
+                },
+                future,
+            )
+            .await
     }
 
     /// Whether this session still needs an interactive acknowledgement.
@@ -484,7 +531,9 @@ impl SandboxBoundaryGate {
                 mode.as_backend()
             )));
         }
-        if self.acknowledged(request.context.session_id.as_deref(), mode) {
+        if self.acknowledged(request.context.session_id.as_deref(), mode)
+            || self.terminal_draft_preferences_acknowledged(request, mode)
+        {
             return Ok(());
         }
         let requirement = match mode {
@@ -499,6 +548,96 @@ impl SandboxBoundaryGate {
             "{} process execution is not acknowledged; {requirement}",
             mode.as_backend()
         )))
+    }
+
+    fn terminal_draft_preferences_acknowledged(
+        &self,
+        request: &EffectRequest,
+        mode: SandboxBoundaryMode,
+    ) -> bool {
+        if mode != SandboxBoundaryMode::DangerFullAccess
+            || request.phase != EffectPhase::PreEffect
+            || request.actor.actor_type != ActorType::User
+            || request.actor.id != "terminal-user"
+            || request.action != "presentation.preferences.update"
+            || request.resource != "presentation:repl"
+            || !matches!(request.capabilities.as_slice(), [capability] if capability == "presentation.preferences.update")
+        {
+            return false;
+        }
+        ACTIVE_TERMINAL_DRAFT_PREFERENCES
+            .try_with(|active| {
+                std::ptr::eq(active.gate.as_ptr(), self)
+                    && active.request_id == request.request_id
+                    && request.context.session_id.as_deref() == Some(active.draft_id.as_str())
+            })
+            .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod terminal_draft_preferences_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn draft_preferences_acknowledgement_matches_only_its_gateway_request() {
+        let mode = SandboxBoundaryMode::DangerFullAccess;
+        let gate = Arc::new(SandboxBoundaryGate::new(Some(mode), false));
+        let draft = Uuid::now_v7().to_string();
+        let mut request = effect_request(
+            Actor {
+                actor_type: ActorType::User,
+                id: "terminal-user".into(),
+            },
+            "presentation.preferences.update",
+            "presentation:repl",
+            Value::Null,
+        );
+        request.capabilities = vec![request.action.clone()];
+        request.context.session_id = Some(draft.clone());
+        assert!(gate.validate(&request, mode).is_err());
+        gate.with_terminal_draft_preferences_acknowledgement(
+            request.request_id.clone(),
+            draft.clone(),
+            async {
+                gate.validate(&request, mode)
+                    .expect("exact settings request");
+                assert_eq!(gate.acknowledged_mode(Some(&draft)), None);
+
+                let mut other = request.clone();
+                other.request_id = Uuid::now_v7().to_string();
+                assert!(gate.validate(&other, mode).is_err());
+                other.clone_from(&request);
+                other.context.session_id = Some(Uuid::now_v7().to_string());
+                assert!(gate.validate(&other, mode).is_err());
+                other.clone_from(&request);
+                other.actor = system_actor("terminal-user");
+                assert!(gate.validate(&other, mode).is_err());
+                other.clone_from(&request);
+                other.action = "presentation.history.append".into();
+                other.resource = "presentation:history".into();
+                other.capabilities = vec![other.action.clone()];
+                assert!(gate.validate(&other, mode).is_err());
+                assert!(
+                    SandboxBoundaryGate::new(Some(mode), false)
+                        .validate(&request, mode)
+                        .is_err()
+                );
+
+                let captured = SandboxBoundaryScope::capture();
+                let detached_gate = Arc::clone(&gate);
+                let detached_request = request.clone();
+                let admitted =
+                    tokio::spawn(captured.scope(async move {
+                        detached_gate.validate(&detached_request, mode).is_ok()
+                    }))
+                    .await
+                    .expect("detached task");
+                assert!(!admitted);
+            },
+        )
+        .await;
+        assert!(gate.validate(&request, mode).is_err());
     }
 }
 

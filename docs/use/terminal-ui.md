@@ -175,8 +175,13 @@ chooser. Slash completion shows each setting once; type the setting followed by 
 space to see direct argument shortcuts. `/theme list` and other theme tools remain
 available alongside the theme picker.
 
+If the TUI asks for sandbox acknowledgement while saving a terminal setting in an
+unsaved draft, your choice applies to that save. The conversation stays out of
+**History** until you start work.
+
 You can continue typing while a run is active. Colossus queues up to eight future
-turns; after a failure or cancellation, it pauses the queue for your decision.
+turns. Queued work stays in this terminal's prompt history until the host starts
+it. After a failure or cancellation, Colossus pauses the queue for your decision.
 
 After a known provider failure, an inline **Retry** and **Dismiss** notice appears
 above the composer. Tab selects an action and Enter activates it; ordinary slash
@@ -187,8 +192,13 @@ Uncertain tool outcomes require reconciliation and do not offer this action.
 
 Use Ctrl-R to open full-screen prompt history. Type to filter, use Up/Down to
 choose, and press Enter to place a prompt in your draft. Esc keeps the draft you
-had before opening history. To include a supported image, use `/attach PATH`,
-inspect the queue with `/attachments`, and remove one with `/detach INDEX`.
+had before opening history. When danger full access still needs acknowledgement,
+display and settings commands in a draft stay in prompt history until you exit.
+The TUI saves the first work input after you acknowledge the boundary for that
+conversation.
+
+To include a supported image, use `/attach PATH`, inspect the queue with
+`/attachments`, and remove one with `/detach INDEX`.
 
 When an action needs approval, a decision dock opens above the preserved draft.
 Read the summary, inspect the exact request and protections if needed, then select

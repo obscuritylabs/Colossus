@@ -38,9 +38,9 @@ impl SessionDrafts {
         events: &mpsc::Sender<HostEvent>,
         control: &RunControl,
         persist: impl Future<Output = Result<(), String>>,
-    ) -> Result<bool, String> {
+    ) -> Result<(), String> {
         if !self.contains(id)? {
-            return Ok(false);
+            return Ok(());
         }
         if control.is_cancelled() {
             return Err("Session work was cancelled before it started.".into());
@@ -57,10 +57,9 @@ impl SessionDrafts {
                 .await
                 .map_err(|_| "interactive client disconnected".to_owned())?;
         }
-        Ok(promoted)
+        Ok(())
     }
 }
-
 pub(super) fn empty_transcript() -> SessionMessagePage {
     SessionMessagePage {
         messages: Vec::new(),
@@ -78,23 +77,5 @@ pub(super) fn empty_work(session_id: &str) -> WorkStateSnapshot {
         actionable_plans: Vec::new(),
         current_goals: Vec::new(),
         current_subagents: Vec::new(),
-    }
-}
-
-pub(super) fn starts_session_work(command: &RuntimeCommand) -> bool {
-    match command {
-        RuntimeCommand::Shell { command } => {
-            !command.trim().is_empty() && !command.contains('\0') && command.len() <= 64 * 1024
-        }
-        RuntimeCommand::Known { name, arguments } => match name.as_str() {
-            "goal" => {
-                !arguments.trim().is_empty()
-                    && arguments.trim() != "resume"
-                    && !arguments.starts_with("resume ")
-            }
-            "research" => !matches!(arguments.trim(), "" | "list"),
-            _ => false,
-        },
-        _ => false,
     }
 }

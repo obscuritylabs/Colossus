@@ -159,7 +159,7 @@ pub(super) fn advance_session(
         return;
     }
     if let Some(command) = state.pending_setting_command.take() {
-        start_line(state, command.into(), host, event_tx);
+        start_input(state, command.into(), false, host, event_tx);
     } else if let Some(command) = state.pending_plan_command.take() {
         handle_plan_command(state, command, host, event_tx);
     } else if let Some(request) = state.pending_plan_execution.take() {
@@ -1200,22 +1200,19 @@ pub(super) fn submit_line(
     }
     state.dismiss_welcome();
     state.remember_history(&line);
-    let history_host = Arc::clone(&host);
-    let history_tx = event_tx.clone();
-    let history_session_id = state.session_id.clone();
-    let history_line = line.clone();
-    tokio::spawn(async move {
-        if let Err(error) = history_host
-            .append_history(&history_session_id, history_line, history_tx.clone())
-            .await
-        {
-            let _ = history_tx.send(HostEvent::HistoryWarning(error)).await;
-        }
-    });
+    let command = parse_interactive_command(&line);
+    if !starts_work(&command) {
+        persist_display_input(
+            state.session_id.clone(),
+            line.clone(),
+            Arc::clone(&host),
+            event_tx.clone(),
+        );
+    }
 
     if state.is_busy() {
         if matches!(
-            parse_interactive_command(&line),
+            command,
             InteractiveCommand::Local(LocalCommand::Help | LocalCommand::Preferences)
         ) {
             start_line(state, line, host, event_tx);
@@ -1231,9 +1228,45 @@ pub(super) fn submit_line(
     start_line(state, line, host, event_tx);
 }
 
+fn persist_display_input(
+    session_id: String,
+    input: String,
+    host: Arc<dyn InteractiveHost>,
+    events: mpsc::Sender<HostEvent>,
+) {
+    tokio::spawn(async move {
+        if let Err(error) = host
+            .append_history(&session_id, input, events.clone())
+            .await
+        {
+            let _ = events.send(HostEvent::HistoryWarning(error)).await;
+        }
+    });
+}
+
+fn starts_work(command: &InteractiveCommand) -> bool {
+    match command {
+        InteractiveCommand::Turn(_) | InteractiveCommand::Research(ResearchCommand::Run { .. }) => {
+            true
+        }
+        InteractiveCommand::Runtime(command) => command.starts_session_work(),
+        _ => false,
+    }
+}
+
 pub(super) fn start_line(
     state: &mut TuiState,
     line: String,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+) {
+    start_input(state, line, true, host, event_tx);
+}
+
+fn start_input(
+    state: &mut TuiState,
+    line: String,
+    submitted: bool,
     host: Arc<dyn InteractiveHost>,
     event_tx: mpsc::Sender<HostEvent>,
 ) {
@@ -1241,17 +1274,19 @@ pub(super) fn start_line(
         state.overlay = Some(Overlay::SettingsPicker(picker));
         return;
     }
-    match parse_interactive_command(&line) {
+    let command = parse_interactive_command(&line);
+    let submitted_input = (submitted && starts_work(&command)).then_some(line);
+    match command {
         InteractiveCommand::Empty => {}
         InteractiveCommand::Local(command) => handle_local_command(state, command, host, event_tx),
         InteractiveCommand::Runtime(command) => {
-            start_host_command(state, command, host, event_tx);
+            start_host_command_with_input(state, command, submitted_input, host, event_tx);
         }
         InteractiveCommand::Plan(command) => {
             handle_plan_command(state, command, host, event_tx);
         }
         InteractiveCommand::Research(command) => {
-            handle_research_command(state, command, host, event_tx);
+            handle_research_command(state, command, submitted_input, host, event_tx);
         }
         InteractiveCommand::Invalid(message) => state.append_entry(error_entry(&message)),
         InteractiveCommand::Turn(prompt) => {
@@ -1264,16 +1299,17 @@ pub(super) fn start_line(
             }
             if let Some(command) = state.research_turn_command(prompt.clone()) {
                 state.append_entry(user_entry(&prompt, TranscriptKind::User));
-                start_host_command(state, command, host, event_tx);
+                start_host_command_with_input(state, command, submitted_input, host, event_tx);
                 return;
             }
-            let request = match state.run_request(prompt.clone()) {
+            let mut request = match state.run_request(prompt.clone()) {
                 Ok(request) => request,
                 Err(error) => {
                     state.append_entry(error_entry(&error));
                     return;
                 }
             };
+            request.submitted_input = submitted_input;
             state.append_entry(user_entry_with_images(
                 &prompt,
                 &state.pending_images,
@@ -1306,6 +1342,27 @@ fn start_host_command(
     host: Arc<dyn InteractiveHost>,
     event_tx: mpsc::Sender<HostEvent>,
 ) {
+    start_host_command_with_input(state, command, None, host, event_tx);
+}
+
+fn start_host_command_with_input(
+    state: &mut TuiState,
+    command: RuntimeCommand,
+    mut submitted_input: Option<String>,
+    host: Arc<dyn InteractiveHost>,
+    event_tx: mpsc::Sender<HostEvent>,
+) {
+    if !command.starts_session_work()
+        && let Some(input) = submitted_input.take()
+    {
+        // Research mode can translate a plain input such as `list` into a read-only command.
+        persist_display_input(
+            state.session_id.clone(),
+            input,
+            Arc::clone(&host),
+            event_tx.clone(),
+        );
+    }
     state.provider_recovery = None;
     state.operation = Some(OperationKind::Command);
     state.begin_run_usage(command_starts_run_usage(&command));
@@ -1334,6 +1391,7 @@ fn start_host_command(
                 command,
                 &session_id,
                 &sticky_skills,
+                submitted_input,
                 task_tx.clone(),
                 control,
             )
@@ -1460,6 +1518,7 @@ fn handle_plan_command(
 fn handle_research_command(
     state: &mut TuiState,
     command: ResearchCommand,
+    submitted_input: Option<String>,
     host: Arc<dyn InteractiveHost>,
     event_tx: mpsc::Sender<HostEvent>,
 ) {
@@ -1490,12 +1549,13 @@ fn handle_research_command(
             host,
             event_tx,
         ),
-        ResearchCommand::Run { question } => start_host_command(
+        ResearchCommand::Run { question } => start_host_command_with_input(
             state,
             RuntimeCommand::Known {
                 name: "research".into(),
                 arguments: question,
             },
+            submitted_input,
             host,
             event_tx,
         ),
@@ -1697,11 +1757,13 @@ pub(super) fn handle_local_command(
             };
             state.operation = Some(OperationKind::Command);
             state.activity = Some("saving terminal preferences".into());
+            let control = RunControl::default();
+            state.control = Some(control.clone());
             let task_tx = event_tx.clone();
             let session_id = state.session_id.clone();
             tokio::spawn(async move {
                 let result = host
-                    .save_preferences(&session_id, preferences, task_tx.clone())
+                    .save_preferences(&session_id, preferences, task_tx.clone(), control)
                     .await
                     .map(|preferences| {
                         OperationResult::Command(HostCommandResult {
