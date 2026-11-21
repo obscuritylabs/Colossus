@@ -241,8 +241,20 @@ an endless byte-drip stream. Set it explicitly when a deployment needs a tighter
 
 With the built-in policy, these provider timeouts are not silently reduced to
 `sandbox.timeoutMs`; the sandbox limit continues to govern ordinary sandbox effects. An
-OPA decision may impose a stricter provider obligation. Colossus does not automatically
-retry an ambiguous failed generation request.
+OPA decision may impose a stricter provider obligation.
+
+### Automatic provider retries
+
+Colossus retries a provider request up to five times after a confirmed HTTP 500,
+502, 503, or 504 response received before model output for that request begins.
+The standard delays are 1, 2, 4, 8, and 16 seconds. A longer supported
+`Retry-After` takes precedence if it fits within the applicable deadline. All
+attempts share that deadline. If a qualifying status still prevents completion
+when retries end, Colossus reports `provider.temporarily_unavailable` with the
+final HTTP status as a recoverable failure.
+
+For an interrupted stream, timeout, or other transport error with an uncertain
+outcome, inspect the existing run before submitting more work.
 
 ## Model profiles
 
@@ -542,10 +554,8 @@ sandbox:
 ```
 
 Set `toolCalls` or `streaming` to `off` if the local server or selected model does not
-implement that contract. A server that is still loading may return HTTP 503; Colossus
-retries HTTP 502–504 responses up to five times before model output begins, within the
-existing request deadline. Exhaustion reports a recoverable temporary-unavailability
-error. Transport failures, timeouts and partially received output are not replayed.
+implement that contract. A server that is still loading may return HTTP 503, which
+follows the [automatic provider retry policy](#automatic-provider-retries).
 
 ### Offline echo route
 
@@ -616,7 +626,7 @@ tool authority.
 | A `host:` credential is unavailable | Run through an application that supplies the matching in-memory resolver |
 | The context profile is rejected | Correct the model window or reduce `maxOutputTokens` so the input budget remains positive |
 | A compatible server returns HTTP 400 | Verify model ID, tool support, streaming support, and the server's OpenAI compatibility |
-| A compatible server returns HTTP 503 | Wait for the model to load, rerun diagnostics, and explicitly resubmit the turn |
+| A compatible server still returns HTTP 503 after automatic retries | Wait for the model to load, rerun diagnostics, and continue the saved conversation |
 
 ## Validate the result
 

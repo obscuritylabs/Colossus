@@ -1,5 +1,6 @@
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use colossus_contracts::ProviderRetry;
 use std::fmt;
 
 const MAX_HOST_CREDENTIALS: usize = 64;
@@ -428,16 +429,18 @@ pub(super) fn provider_execution_error(error: ProviderError) -> ExecutionError {
             "provider transport failed after execution began; outcome is unknown: {message}"
         )),
         ProviderError::Status {
-            status: status @ 502..=504,
+            status,
             retry_after_ms,
-        } => ExecutionError::Recoverable {
-            code: "provider.temporarily_unavailable".into(),
-            message: format!(
-                "provider endpoint returned HTTP {status}; retry after the endpoint reports ready"
-            ),
-            http_status: Some(status),
-            retry_after_ms,
-        },
+        } if ProviderRetry::supports_http_status(u32::from(status)) => {
+            ExecutionError::Recoverable {
+                code: "provider.temporarily_unavailable".into(),
+                message: format!(
+                    "provider endpoint returned HTTP {status}; retry after the endpoint reports ready"
+                ),
+                http_status: Some(status),
+                retry_after_ms,
+            }
+        }
         ProviderError::Status { status, .. } => ExecutionError::HttpStatus {
             status,
             message: format!("provider endpoint returned HTTP {status}"),
@@ -1125,7 +1128,7 @@ impl ProviderExecutor {
             if include_response_diagnostics {
                 return Ok(ProviderJsonResponse::HttpError(diagnostic));
             }
-            if !matches!(diagnostic.status, 502..=504)
+            if !ProviderRetry::supports_http_status(u32::from(diagnostic.status))
                 && let Some(failure) = classify_response_diagnostic(&diagnostic)
             {
                 return Err(ProviderError::Rejected(failure));
@@ -1635,7 +1638,7 @@ impl ProviderExecutor {
                 )
                 .await;
             }
-            if !matches!(diagnostic.status, 502..=504)
+            if !ProviderRetry::supports_http_status(u32::from(diagnostic.status))
                 && let Some(failure) = classify_response_diagnostic(&diagnostic)
             {
                 return Err(ExecutionError::ProviderRejected(failure));
@@ -1964,7 +1967,7 @@ async fn report_retry(
     if let Some(observer) = observer.as_deref_mut() {
         emit_stream_item(
             ProviderStreamItem::Retry {
-                retry: colossus_contracts::ProviderRetry {
+                retry: ProviderRetry {
                     attempt,
                     max_retries: 5,
                     http_status,

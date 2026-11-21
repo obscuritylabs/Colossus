@@ -179,6 +179,7 @@ interface WorkSurfaceProps {
     response: InteractionAnswer,
   ) => Promise<void>;
   onResume: () => void;
+  providerRetry?: { description: string; onRetry: () => void } | undefined;
   onSuggestion: (suggestion: string) => void;
   onSelectParticipant: (participant: AgentParticipant) => void;
   onBackToThreadDetails: () => void;
@@ -276,6 +277,7 @@ export function WorkSurface({
   onConnect,
   onRespond,
   onResume,
+  providerRetry,
   onSuggestion,
   onSelectParticipant,
   onBackToThreadDetails,
@@ -1458,6 +1460,11 @@ export function WorkSurface({
                           onLoadViewedImage={onLoadViewedImage}
                           onInspectSchedule={onInspectSchedule}
                           view={conversationView}
+                          providerRetry={
+                            conversationView.run.runId === view.run.runId
+                              ? providerRetry
+                              : undefined
+                          }
                           activityComparison={activityComparisonEnabled}
                           planContinuationAvailable={canContinuePlanFromRun(
                             conversationView.run.runId,

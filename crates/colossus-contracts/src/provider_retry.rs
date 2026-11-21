@@ -29,3 +29,11 @@ pub struct ProviderRetry {
     /// UTC RFC3339 backoff deadline; present only while waiting.
     pub retry_at: Option<String>,
 }
+
+impl ProviderRetry {
+    /// Confirmed upstream statuses eligible for bounded retry before model output.
+    #[must_use]
+    pub const fn supports_http_status(status: u32) -> bool {
+        matches!(status, 500 | 502..=504)
+    }
+}

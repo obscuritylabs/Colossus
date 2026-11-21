@@ -1946,7 +1946,7 @@ fn update_from_proto(value: proto::RunUpdate) -> ApiResult<RunUpdate> {
             };
             if retry.max_retries != 5
                 || !(1..=5).contains(&retry.attempt)
-                || !matches!(retry.http_status, 502..=504)
+                || !colossus_api::ProviderRetry::supports_http_status(retry.http_status)
                 || (state == colossus_api::ProviderRetryState::Backoff) != retry.retry_at.is_some()
                 || retry.retry_at.as_ref().is_some_and(|value| {
                     value.len() > 64 || value.parse::<prost_types::Timestamp>().is_err()
@@ -3819,12 +3819,20 @@ mod tests {
             created_at: Some("2026-10-03T00:00:00Z".parse().expect("timestamp")),
             update: Some(run_update::Update::ProviderRetry(retry)),
         };
-        let released = update_from_proto(update(retry.clone())).expect("typed recovery");
-        assert!(
-            matches!(released.update, RunUpdateKind::ProviderRetry(progress)
-            if progress.attempt == 2 && progress.state == colossus_api::ProviderRetryState::Backoff
-            && progress.retry_at.as_deref() == Some("2026-10-03T00:00:04Z"))
-        );
+        for status in [500, 502, 503, 504] {
+            let released = update_from_proto(update(proto::ProviderRetry {
+                http_status: status,
+                ..retry.clone()
+            }))
+            .expect("typed recovery");
+            assert!(
+                matches!(released.update, RunUpdateKind::ProviderRetry(progress)
+                if progress.attempt == 2
+                    && progress.http_status == status
+                    && progress.state == colossus_api::ProviderRetryState::Backoff
+                    && progress.retry_at.as_deref() == Some("2026-10-03T00:00:04Z"))
+            );
+        }
         for invalid in [
             proto::ProviderRetry {
                 attempt: 0,
@@ -3840,6 +3848,10 @@ mod tests {
             },
             proto::ProviderRetry {
                 http_status: 401,
+                ..retry.clone()
+            },
+            proto::ProviderRetry {
+                http_status: 501,
                 ..retry.clone()
             },
             proto::ProviderRetry {

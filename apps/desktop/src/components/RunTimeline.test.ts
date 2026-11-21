@@ -902,4 +902,13 @@ describe("provider recovery presentation", () => {
       ).not.toContain("provider-retry-status");
     }
   });
+
+  it("keeps automatic retry progress visible alongside already released output", () => {
+    const markup = renderOutput("Earlier response", "running", "watching", [
+      retryUpdate("backoff"),
+    ]);
+    expect(markup).toContain("Earlier response");
+    expect(markup).toContain("Retry 2 of 5");
+    expect(markup.match(/Reconnecting to provider/g)).toHaveLength(1);
+  });
 });
