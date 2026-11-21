@@ -1,5 +1,36 @@
 use super::*;
 
+fn validate_terminal_draft_id(id: &str) -> Result<(), RuntimeError> {
+    if id.len() == 36
+        && Uuid::parse_str(id).is_ok_and(|parsed| {
+            parsed.get_version_num() == 7
+                && parsed.get_variant() == uuid::Variant::RFC4122
+                && parsed.to_string() == id
+        })
+    {
+        return Ok(());
+    }
+    Err(StoreError::Adapter("terminal draft session ID must be a canonical UUIDv7".into()).into())
+}
+
+fn terminal_preferences_request(
+    preferences: TerminalPreferences,
+    session_id: Option<&str>,
+) -> Result<EffectRequest, RuntimeError> {
+    let operation = PresentationOperation::Save { preferences };
+    let action = operation.action();
+    let mut request = effect_request(
+        terminal_actor(),
+        action,
+        operation.resource(),
+        serde_json::to_value(&operation)
+            .map_err(|error| RuntimeError::Config(error.to_string()))?,
+    );
+    request.capabilities = vec![action.into()];
+    request.context.session_id = session_id.map(str::to_owned);
+    Ok(request)
+}
+
 impl Runtime {
     /// Reconstruct the current canonical terminal presentation profile.
     pub fn presentation_preferences(&self) -> Result<TerminalPreferences, RuntimeError> {
@@ -30,21 +61,83 @@ impl Runtime {
         preferences: TerminalPreferences,
         session_id: Option<&str>,
     ) -> Result<TerminalPreferences, RuntimeError> {
-        let operation = PresentationOperation::Save { preferences };
-        let action = operation.action();
-        let mut request = effect_request(
-            terminal_actor(),
-            action,
-            "presentation:repl",
-            serde_json::to_value(&operation)
-                .map_err(|error| RuntimeError::Config(error.to_string()))?,
-        );
-        request.capabilities = vec![action.into()];
-        request.context.session_id = session_id.map(str::to_owned);
+        let request = terminal_preferences_request(preferences, session_id)?;
         let result = self
             .gateway
             .execute(request, self.presentation_executor.as_ref())
             .await?;
+        serde_json::from_slice(&result.bytes)
+            .map_err(|error| RuntimeError::Config(error.to_string()))
+    }
+
+    /// Return the additional consent required to save terminal settings on a draft.
+    ///
+    /// This is a read. A direct-execution session acknowledgement still requires a
+    /// separate prompt and a durable session.
+    pub fn terminal_draft_presentation_boundary(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SandboxBoundaryMode>, RuntimeError> {
+        validate_terminal_draft_id(session_id)?;
+        if self.get_session(session_id)?.is_some() {
+            return Err(StoreError::Adapter(
+                "terminal settings draft has already been saved".into(),
+            )
+            .into());
+        }
+        // External boundaries apply to process effects. It is ambient resource
+        // authority that requires acknowledgement for this presentation effect.
+        let gate = &self.sandbox_boundary_gate;
+        Ok((gate.mode() == Some(SandboxBoundaryMode::DangerFullAccess)
+            && !gate.globally_acknowledged())
+        .then_some(SandboxBoundaryMode::DangerFullAccess))
+    }
+
+    /// Save one terminal presentation profile without materializing its draft.
+    ///
+    /// The trusted interactive host supplies the confirmed mode from its own
+    /// prompt. Consent authorizes only this settings request through the gateway.
+    /// The expected profile guards against replacing settings changed during the
+    /// prompt. An ordinary run still needs its own session acknowledgement.
+    pub async fn save_terminal_draft_preferences(
+        &self,
+        session_id: &str,
+        preferences: TerminalPreferences,
+        expected_preferences: TerminalPreferences,
+        acknowledged_mode: Option<SandboxBoundaryMode>,
+        control: &RunControl,
+    ) -> Result<TerminalPreferences, RuntimeError> {
+        let pending = self.terminal_draft_presentation_boundary(session_id)?;
+        if control.is_cancelled() {
+            return Err(GatewayError::Safety("terminal settings save was cancelled".into()).into());
+        }
+        if pending != acknowledged_mode {
+            return Err(GatewayError::Safety(
+                "terminal settings save requires the exact configured boundary acknowledgement"
+                    .into(),
+            )
+            .into());
+        }
+        let request = terminal_preferences_request(preferences, Some(session_id))?;
+        let executor = TerminalDraftPreferencesExecutor {
+            presentation: self.presentation_executor.as_ref(),
+            sessions: self.sessions.as_ref(),
+            draft_id: session_id,
+            expected_preferences,
+            control,
+        };
+        let result = if let Some(mode) = acknowledged_mode {
+            super::sandbox_boundary::record_terminal_draft_preferences_acknowledgement(
+                self.journal.as_ref(),
+                &request,
+                mode,
+            )?;
+            self.sandbox_boundary_gate
+                .execute_terminal_draft_preferences(&self.gateway, request, &executor)
+                .await?
+        } else {
+            self.gateway.execute(request, &executor).await?
+        };
         serde_json::from_slice(&result.bytes)
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }
@@ -100,15 +193,48 @@ impl Runtime {
     pub fn create_session(&self, title: Option<&str>) -> Result<SessionSummary, RuntimeError> {
         let id = Uuid::now_v7().to_string();
         self.sessions
-            .create_session(
-                &id,
-                title,
-                Actor {
-                    actor_type: ActorType::User,
-                    id: "terminal-user".into(),
-                },
-            )
+            .create_session(&id, title, terminal_actor())
             .map_err(Into::into)
+    }
+
+    /// Save a native terminal draft at its locally allocated UUIDv7.
+    ///
+    /// Repeating this explicit operation after an uncertain reply returns the
+    /// same active terminal-owned session. Native reads and runs cannot create a
+    /// session by presenting an unknown identifier.
+    pub fn materialize_terminal_session(&self, id: &str) -> Result<SessionSummary, RuntimeError> {
+        validate_terminal_draft_id(id)?;
+        let actor = terminal_actor();
+        let stream = format!("session:{id}");
+        let conflict = match self.sessions.create_session(id, None, actor.clone()) {
+            Ok(session) => return Ok(session),
+            Err(error) => error,
+        };
+        if !matches!(
+            &conflict,
+            StoreError::Conflict { stream_id, expected: 0, actual: 1.. }
+                if stream_id == &stream
+        ) {
+            return Err(conflict.into());
+        }
+        let created = self.journal.read_stream_from(&stream, 0, 1)?;
+        if !created.first().is_some_and(|event| {
+            event.context.session_id.as_deref() == Some(id) && event.actor == actor
+        }) {
+            return Err(conflict.into());
+        }
+        let Some(lifecycle) = self.sessions.session_lifecycle(id)? else {
+            return Err(conflict.into());
+        };
+        if lifecycle.archived {
+            return Err(StoreError::Adapter(
+                "session is archived; restore it before starting work".into(),
+            )
+            .into());
+        }
+        self.sessions
+            .get_session(id)?
+            .ok_or_else(|| conflict.into())
     }
 
     /// Materialize one caller-owned session whose identifier was durably allocated by

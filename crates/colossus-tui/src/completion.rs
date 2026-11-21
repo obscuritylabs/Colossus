@@ -46,7 +46,7 @@ pub(super) fn command_description(command: &str) -> Option<&'static str> {
         "/resume" => "Browse and resume prior sessions",
         "/sessions" => "List durable sessions",
         "/session show" => "Show a session by ID",
-        "/session new" => "Start a new durable session",
+        "/session new" => "Open a draft that saves when you start work",
         "/session resume" => "Resume a session by ID",
         "/session export" | "/export" => "Export the active conversation to a new file",
         "/work" => "Show current work items",

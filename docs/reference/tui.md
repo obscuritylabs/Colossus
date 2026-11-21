@@ -147,7 +147,7 @@ Use `/help` for arguments and commands available in your installed version.
 | --- | --- |
 | Help and exit | `/help`, `/exit` |
 | Sessions | `/sessions`, `/session show`, `/session new`, `/session resume [SESSION_ID]`, `/resume [SESSION_ID]` |
-| Conversation export | `/session export PATH [--format FORMAT]`, `/export PATH [--format FORMAT]` export the current session to a new file; quote paths containing spaces. |
+| Conversation export | `/session export PATH [--format FORMAT]`, `/export PATH [--format FORMAT]` export the current saved session to a new file. Quote paths containing spaces. |
 | Permissions | `/permissions` opens a chooser; `/permissions deny\|ask\|risk-auto\|full-access` sets a mode directly |
 | Model selection | `/model` and `/effort` open searchable pickers; `/model PROFILE` and `/effort high` set a value directly. Use `default` to restore the configured setting. |
 | Tools and work | `/tools`, `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/goal resume GOAL_ID`, `/agents`, `/agents drain` |
@@ -167,8 +167,11 @@ Use `/help` for arguments and commands available in your installed version.
 
 `/decisions` lists active workspace decisions. `/tasks` and `/plans` show records in
 the current session. `/sessions` opens Open in the Sessions browser; `/resume`
-without an ID opens History in the same browser. `/session new` and `/resume SESSION_ID` navigate immediately,
-including during a run; the previous session keeps working. `/research QUESTION`
+without an ID opens History in the same browser. `/session new` opens an unsaved
+draft. `/resume SESSION_ID` opens a saved session. Both navigate immediately
+while any work in the previous session continues. See
+[Start a clean conversation](../use/sessions.md#start-a-clean-conversation).
+`/research QUESTION`
 uses standard depth with
 repository, web, and MCP sources; use the CLI `research run` route to choose depth
 or sources explicitly.

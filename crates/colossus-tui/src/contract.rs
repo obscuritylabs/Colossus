@@ -69,6 +69,8 @@ pub struct SidebarSnapshot {
 pub struct InteractiveSnapshot {
     /// Exact active durable session.
     pub session_id: String,
+    /// Whether this conversation has a canonical session record.
+    pub session_saved: bool,
     /// Whether this process created the session during this bootstrap.
     pub fresh_session: bool,
     /// Canonical workspace selected for this terminal process.
@@ -95,8 +97,10 @@ pub struct InteractiveSnapshot {
 /// Request for one normal provider/tool turn.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractiveRunRequest {
-    /// Exact durable session.
+    /// Exact session or terminal-owned draft.
     pub session_id: String,
+    /// Original submitted input, persisted only after the host admits the work.
+    pub submitted_input: Option<String>,
     /// Complete user prompt after local skill-mention parsing.
     pub prompt: String,
     /// Ordered verified encrypted image references queued for this submission.
@@ -240,6 +244,27 @@ pub enum RuntimeCommand {
     Permissions(Option<InteractiveApprovalMode>),
     /// Typed plan lifecycle operation whose policy and persistence remain host-owned.
     Plan(PlanHostCommand),
+}
+
+impl RuntimeCommand {
+    /// Whether the host can start new work in an unsaved terminal draft.
+    pub fn starts_session_work(&self) -> bool {
+        match self {
+            Self::Shell { command } => {
+                !command.trim().is_empty() && !command.contains('\0') && command.len() <= 64 * 1024
+            }
+            Self::Known { name, arguments } => match name.as_str() {
+                "goal" => {
+                    !arguments.trim().is_empty()
+                        && arguments.trim() != "resume"
+                        && !arguments.starts_with("resume ")
+                }
+                "research" => !matches!(arguments.trim(), "" | "list"),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
 }
 
 /// Process-local handling for policy decisions that require operator approval.
@@ -786,6 +811,11 @@ pub struct InteractivePrompt {
 
 /// Typed background event consumed by the sole terminal owner.
 pub enum HostEvent {
+    /// User activity materialized the exact local conversation.
+    SessionSaved {
+        /// The stable draft identifier now backed by a canonical session.
+        session_id: String,
+    },
     /// Optional auxiliary text, fenced to its completed source generation.
     NextPrompt {
         /// Selected canonical session when generation began.
@@ -866,8 +896,9 @@ pub trait BackgroundNoticeProvider: Send + Sync {
 
 /// Optional observer of the active terminal session's user-facing lifecycle.
 pub trait InteractiveLifecycleObserver: Send + Sync {
-    /// Report the selected durable session and whether the terminal is working or
-    /// waiting for an operator decision. Neither state includes transcript content.
+    /// Report the selected durable session ID (empty for an unsaved draft) and
+    /// whether the terminal is working or waiting for an operator decision.
+    /// Neither state includes transcript content.
     fn observe(&self, session_id: &str, working: bool, blocked: bool, approval_mode: &str);
 }
 
@@ -929,6 +960,11 @@ pub trait InteractiveHost: Send + Sync {
         Err("Session archival is unavailable in this host.".into())
     }
 
+    /// Forget local state for an unused draft without modifying saved sessions.
+    fn close_session_draft(&self, _session_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Read at most 100 durable child jobs for this session, including terminal history.
     /// Hosts without child-agent discovery may retain the empty default.
     async fn subagents(&self, _session_id: &str) -> Result<Vec<SubagentJob>, String> {
@@ -974,6 +1010,7 @@ pub trait InteractiveHost: Send + Sync {
         command: RuntimeCommand,
         session_id: &str,
         sticky_skills: &[String],
+        submitted_input: Option<String>,
         events: mpsc::Sender<HostEvent>,
         control: RunControl,
     ) -> Result<HostCommandResult, String>;
@@ -1010,6 +1047,7 @@ pub trait InteractiveHost: Send + Sync {
         session_id: &str,
         preferences: TerminalPreferences,
         events: mpsc::Sender<HostEvent>,
+        control: RunControl,
     ) -> Result<TerminalPreferences, String>;
 
     /// Load the next older bounded transcript page.

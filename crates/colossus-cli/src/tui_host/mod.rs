@@ -49,6 +49,9 @@ use std::{
 };
 use tokio::sync::{mpsc, oneshot};
 
+mod session_drafts;
+use session_drafts::{SessionDrafts, empty_transcript, empty_work};
+
 const INTERACTIVE_PROMPT_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const APPROVAL_CONTENT_PREVIEW_CHARACTERS: usize = 64 * 1024;
 

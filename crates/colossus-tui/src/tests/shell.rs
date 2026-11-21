@@ -87,6 +87,7 @@ async fn shell_submission_preserves_trailing_source_through_history_queue_and_di
         assert_eq!(state.history.last().unwrap(), "!printf %s foo\\ ");
         if queued {
             assert!(received_commands.try_recv().is_err());
+            assert!(received_history.try_recv().is_err());
             assert_eq!(state.queue.front().unwrap(), "!printf %s foo\\ ");
             state.operation = None;
             let line = state.queue.pop_front().expect("queued shell command");
@@ -97,6 +98,7 @@ async fn shell_submission_preserves_trailing_source_through_history_queue_and_di
             .unwrap()
             .unwrap();
         assert_eq!(saved, "!printf %s foo\\ ");
+        assert!(received_history.try_recv().is_err());
         let command = tokio::time::timeout(Duration::from_secs(1), received_commands.recv())
             .await
             .unwrap()
@@ -135,9 +137,13 @@ impl InteractiveHost for ShellHost {
         command: RuntimeCommand,
         _: &str,
         _: &[String],
+        submitted_input: Option<String>,
         _: mpsc::Sender<HostEvent>,
         _: RunControl,
     ) -> Result<HostCommandResult, String> {
+        if let Some(input) = submitted_input {
+            self.history.send(input).unwrap();
+        }
         self.commands.send(command).unwrap();
         Err("shell fixture finished".into())
     }
@@ -175,6 +181,7 @@ impl InteractiveHost for ShellHost {
         _: &str,
         preferences: TerminalPreferences,
         _: mpsc::Sender<HostEvent>,
+        _: RunControl,
     ) -> Result<TerminalPreferences, String> {
         Ok(preferences)
     }

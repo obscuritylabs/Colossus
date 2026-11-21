@@ -98,6 +98,7 @@ pub fn non_public_network_address(ip: IpAddr) -> bool {
                 || ip.is_documentation()
                 || ip.is_unspecified()
                 || ip.octets()[0] == 0
+                || ip.octets()[0] >= 240
                 || matches!(ip.octets(), [100, second, _, _] if (64..=127).contains(&second))
                 || matches!(ip.octets(), [198, second, _, _] if matches!(second, 18 | 19))
         }
@@ -113,3 +114,6 @@ pub fn non_public_network_address(ip: IpAddr) -> bool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

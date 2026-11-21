@@ -1,4 +1,5 @@
 use super::*;
+use colossus_contracts::EventEnvelope;
 
 /// Immutable-journal implementation of the presentation preference port.
 pub struct EventSourcedPresentationRepository {
@@ -10,12 +11,12 @@ impl EventSourcedPresentationRepository {
     pub fn new(journal: Arc<dyn EventJournal>) -> Self {
         Self { journal }
     }
-}
 
-impl PresentationRepository for EventSourcedPresentationRepository {
-    fn load(&self) -> Result<TerminalPreferences, StoreError> {
-        let events = self.journal.read_stream(PREFERENCES_STREAM)?;
-        let Some(event) = events.last() else {
+    fn preferences_from_event(
+        &self,
+        event: Option<&EventEnvelope>,
+    ) -> Result<TerminalPreferences, StoreError> {
+        let Some(event) = event else {
             return Ok(TerminalPreferences::default());
         };
         if event.event_type != PREFERENCES_UPDATED {
@@ -35,15 +36,14 @@ impl PresentationRepository for EventSourcedPresentationRepository {
         Ok(preferences)
     }
 
-    fn save(
+    fn append_preferences(
         &self,
         preferences: TerminalPreferences,
         actor: Actor,
+        stream_length: usize,
     ) -> Result<TerminalPreferences, StoreError> {
-        validate_preferences(&preferences)?;
         let expected_stream_version =
-            u64::try_from(self.journal.read_stream(PREFERENCES_STREAM)?.len())
-                .map_err(|error| StoreError::Adapter(error.to_string()))?;
+            u64::try_from(stream_length).map_err(|error| StoreError::Adapter(error.to_string()))?;
         self.journal.append(NewEvent {
             event_version: 1,
             stream_id: PREFERENCES_STREAM.into(),
@@ -58,6 +58,42 @@ impl PresentationRepository for EventSourcedPresentationRepository {
             payload: json!({"preferences": &preferences}),
         })?;
         Ok(preferences)
+    }
+}
+
+impl PresentationRepository for EventSourcedPresentationRepository {
+    fn load(&self) -> Result<TerminalPreferences, StoreError> {
+        let events = self.journal.read_stream(PREFERENCES_STREAM)?;
+        self.preferences_from_event(events.last())
+    }
+
+    fn save(
+        &self,
+        preferences: TerminalPreferences,
+        actor: Actor,
+    ) -> Result<TerminalPreferences, StoreError> {
+        validate_preferences(&preferences)?;
+        let events = self.journal.read_stream(PREFERENCES_STREAM)?;
+        self.append_preferences(preferences, actor, events.len())
+    }
+
+    fn save_if_current(
+        &self,
+        expected: &TerminalPreferences,
+        preferences: TerminalPreferences,
+        actor: Actor,
+    ) -> Result<TerminalPreferences, StoreError> {
+        validate_preferences(&preferences)?;
+        let events = self.journal.read_stream(PREFERENCES_STREAM)?;
+        if &self.preferences_from_event(events.last())? != expected {
+            return Err(StoreError::Adapter(
+                "Terminal settings changed while acknowledgement was pending. Reopen settings and try again."
+                    .into(),
+            ));
+        }
+        // Use the version of the same snapshot we just compared, so another writer
+        // cannot change the profile between the comparison and the append.
+        self.append_preferences(preferences, actor, events.len())
     }
 
     fn list_history(&self, limit: usize) -> Result<Vec<String>, StoreError> {

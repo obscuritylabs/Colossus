@@ -38,6 +38,7 @@ pub(super) struct ManagerEntry {
     pub(super) open: bool,
     pub(super) detail: String,
     pub(super) archive_allowed: bool,
+    pub(super) unsaved: bool,
     pub(super) companion_allowed: bool,
 }
 
@@ -175,6 +176,7 @@ fn ensure_entries(state: &mut TuiState) {
             status: row.status,
             open: true,
             detail: String::new(),
+            unsaved: false,
             archive_allowed: !matches!(
                 row.status,
                 WorkspaceSessionStatus::Running | WorkspaceSessionStatus::Waiting

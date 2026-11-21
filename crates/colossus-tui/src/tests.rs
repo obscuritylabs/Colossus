@@ -93,6 +93,7 @@ mod next_prompt;
 
 pub(super) fn snapshot() -> InteractiveSnapshot {
     InteractiveSnapshot {
+        session_saved: true,
         session_id: "019f-test".into(),
         fresh_session: false,
         workspace: "/workspace/Colossus".into(),
