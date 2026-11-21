@@ -12,14 +12,21 @@ use colossus_ports::{EventJournal, PolicyDecisionPoint, PolicyError};
 use colossus_testkit::InMemoryEventJournal;
 use serde_json::{Value, json};
 use std::{
-    env,
-    net::TcpListener,
+    env, io,
+    net::{SocketAddr, TcpListener},
     path::Path,
-    process::{Child, Command, Stdio},
+    process::{Command as StdCommand, Stdio},
     sync::Arc,
     time::Duration,
 };
 use tempfile::tempdir;
+use tokio::{
+    io::AsyncReadExt,
+    net::TcpStream,
+    process::{Child, Command},
+    task::JoinHandle,
+    time::{Instant, sleep_until, timeout, timeout_at},
+};
 
 const POLICY: &str = r#"
 package colossus
@@ -101,62 +108,149 @@ effect := {"decision_id": "invalid-live-response"} if {
 }
 "#;
 
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const DIAGNOSTIC_TIMEOUT: Duration = Duration::from_millis(250);
+const REAP_TIMEOUT: Duration = Duration::from_secs(1);
+const STARTUP_STDERR_LIMIT: usize = 4096;
+
 struct OpaProcess {
     child: Child,
+    address: SocketAddr,
+    started: Instant,
+    stderr: JoinHandle<io::Result<(Vec<u8>, bool)>>,
+}
+
+impl OpaProcess {
+    fn spawn(command: &mut Command, address: SocketAddr) -> Self {
+        let started = Instant::now();
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("start OPA");
+        let mut child_stderr = child.stderr.take().expect("OPA stderr pipe");
+        let stderr = tokio::spawn(async move {
+            let mut retained = Vec::with_capacity(STARTUP_STDERR_LIMIT);
+            let mut buffer = [0; 1024];
+            let mut truncated = false;
+            loop {
+                let count = child_stderr.read(&mut buffer).await?;
+                if count == 0 {
+                    return Ok((retained, truncated));
+                }
+                // Keep draining after reaching the cap so OPA cannot block on stderr.
+                let copy = count.min(STARTUP_STDERR_LIMIT - retained.len());
+                retained.extend_from_slice(&buffer[..copy]);
+                truncated |= copy < count;
+            }
+        });
+        Self {
+            child,
+            address,
+            started,
+            stderr,
+        }
+    }
+
+    async fn wait_until_ready(&mut self, policy: &OpaPolicy) {
+        let deadline = self.started + STARTUP_TIMEOUT;
+        let mut last_error = None;
+        let mut polls = 0;
+        let reason = loop {
+            if let Some(failure) = self.child_failure() {
+                break failure;
+            }
+            if Instant::now() >= deadline {
+                break "startup deadline elapsed".into();
+            }
+            polls += 1;
+            match timeout_at(deadline, PolicyDecisionPoint::doctor(policy)).await {
+                Ok(Ok(_)) => match self.child_failure() {
+                    Some(failure) => break failure,
+                    None => return,
+                },
+                Ok(Err(error)) => last_error = Some(error.to_string()),
+                Err(_) => {
+                    break self
+                        .child_failure()
+                        .unwrap_or_else(|| "health request exceeded startup deadline".into());
+                }
+            }
+            sleep_until((Instant::now() + STARTUP_POLL_INTERVAL).min(deadline)).await;
+        };
+
+        let elapsed = self.started.elapsed();
+        // A direct TCP probe can diagnose transport failures, but readiness still requires doctor.
+        let tcp = match timeout(DIAGNOSTIC_TIMEOUT, TcpStream::connect(self.address)).await {
+            Ok(Ok(_)) => "connected".into(),
+            Ok(Err(error)) => format!("failed ({error})"),
+            Err(_) => "timed out".into(),
+        };
+        let cleanup = timeout(REAP_TIMEOUT, self.child.kill()).await;
+        let stderr = match timeout(DIAGNOSTIC_TIMEOUT, &mut self.stderr).await {
+            Ok(Ok(Ok((retained, truncated)))) => {
+                let suffix = if truncated { " (truncated)" } else { "" };
+                format!("{:?}{suffix}", String::from_utf8_lossy(&retained))
+            }
+            Ok(Ok(Err(error))) => format!("read failed ({error})"),
+            Ok(Err(error)) => format!("capture failed ({error})"),
+            Err(_) => "capture timed out".into(),
+        };
+        panic!(
+            "OPA did not become ready at {} after {elapsed:?} ({polls} health requests): {reason}; last health error: {last_error:?}; direct TCP: {tcp}; cleanup: {cleanup:?}; startup stderr: {stderr}",
+            self.address
+        );
+    }
+
+    fn child_failure(&mut self) -> Option<String> {
+        match self.child.try_wait() {
+            Ok(None) => None,
+            Ok(Some(status)) => Some(format!("child exited ({status})")),
+            Err(error) => Some(format!("could not read child status ({error})")),
+        }
+    }
 }
 
 impl Drop for OpaProcess {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.stderr.abort();
     }
 }
 
-fn start_opa(binary: &Path, policy: &Path, address: &str) -> OpaProcess {
-    let child = Command::new(binary)
-        .args(["run", "--server", "--addr", address])
-        .arg(policy)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start OPA");
-    OpaProcess { child }
+fn opa_command(binary: &Path, address: SocketAddr) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .args(["run", "--server", "--addr"])
+        .arg(address.to_string());
+    command
 }
 
 fn start_opa_mtls(
     binary: &Path,
     policy: &Path,
-    address: &str,
+    address: SocketAddr,
     ca: &Path,
     certificate: &Path,
     private_key: &Path,
 ) -> OpaProcess {
-    let child = Command::new(binary)
-        .args([
-            "run",
-            "--server",
-            "--addr",
-            address,
-            "--authentication=tls",
-            "--tls-ca-cert-file",
-        ])
-        .arg(ca)
-        .arg("--tls-cert-file")
-        .arg(certificate)
-        .arg("--tls-private-key-file")
-        .arg(private_key)
-        .arg(policy)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start mTLS OPA");
-    OpaProcess { child }
+    OpaProcess::spawn(
+        opa_command(binary, address)
+            .args(["--authentication=tls", "--tls-ca-cert-file"])
+            .arg(ca)
+            .arg("--tls-cert-file")
+            .arg(certificate)
+            .arg("--tls-private-key-file")
+            .arg(private_key)
+            .arg(policy),
+        address,
+    )
 }
 
 fn openssl(binary: &Path, arguments: &[&str], directory: &Path) {
-    let output = Command::new(binary)
+    let output = StdCommand::new(binary)
         .args(arguments)
         .current_dir(directory)
         .output()
@@ -284,18 +378,6 @@ fn opa_policy(base_url: String) -> OpaPolicy {
     .expect("OPA policy")
 }
 
-async fn wait_until_ready(policy: &OpaPolicy) {
-    let mut last_error = None;
-    for _ in 0..40 {
-        match PolicyDecisionPoint::doctor(policy).await {
-            Ok(_) => return,
-            Err(error) => last_error = Some(error.to_string()),
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    panic!("OPA did not become ready: {last_error:?}");
-}
-
 struct StaticExecutor(&'static [u8]);
 
 #[async_trait]
@@ -321,13 +403,12 @@ async fn live_opa_enforces_decisions_approval_release_readiness_and_outage() {
     let policy_path = directory.path().join("policy.rego");
     std::fs::write(&policy_path, POLICY).expect("policy");
     let listener = TcpListener::bind("127.0.0.1:0").expect("reserve OPA port");
-    let port = listener.local_addr().expect("OPA address").port();
+    let address = listener.local_addr().expect("OPA address");
     drop(listener);
-    let address = format!("127.0.0.1:{port}");
     let base_url = format!("http://{address}/");
-    let mut process = start_opa(&binary, &policy_path, &address);
+    let mut process = OpaProcess::spawn(opa_command(&binary, address).arg(&policy_path), address);
     let policy = opa_policy(base_url.clone());
-    wait_until_ready(&policy).await;
+    process.wait_until_ready(&policy).await;
 
     let doctor = PolicyDecisionPoint::doctor(&policy)
         .await
@@ -444,8 +525,7 @@ async fn live_opa_enforces_decisions_approval_release_readiness_and_outage() {
             .any(|event| event.event_type == "effect.release_denied.v1")
     );
 
-    process.child.kill().expect("stop OPA");
-    process.child.wait().expect("wait for OPA");
+    process.child.kill().await.expect("stop and reap OPA");
     let outage = PolicyDecisionPoint::decide(
         &policy,
         &effect_request(
@@ -471,13 +551,12 @@ async fn live_opa_mtls_requires_and_accepts_a_pinned_client_identity() {
     std::fs::write(&policy_path, POLICY).expect("policy");
     generate_mtls_identity(&openssl_binary, directory.path());
     let listener = TcpListener::bind("127.0.0.1:0").expect("reserve OPA TLS port");
-    let port = listener.local_addr().expect("OPA TLS address").port();
+    let address = listener.local_addr().expect("OPA TLS address");
     drop(listener);
-    let address = format!("127.0.0.1:{port}");
-    let _process = start_opa_mtls(
+    let mut process = start_opa_mtls(
         &opa_binary,
         &policy_path,
-        &address,
+        address,
         &directory.path().join("ca.crt"),
         &directory.path().join("server.crt"),
         &directory.path().join("server.key"),
@@ -488,7 +567,7 @@ async fn live_opa_mtls_requires_and_accepts_a_pinned_client_identity() {
     identity.extend_from_slice(
         &std::fs::read(directory.path().join("client.key")).expect("client key"),
     );
-    let base_url = format!("https://127.0.0.1:{port}/");
+    let base_url = format!("https://{address}/");
     let policy = OpaPolicy::new(OpaConfig {
         base_url: base_url.clone(),
         decision_path: "colossus/effect".into(),
@@ -500,7 +579,7 @@ async fn live_opa_mtls_requires_and_accepts_a_pinned_client_identity() {
         timeout: Duration::from_secs(2),
     })
     .expect("mTLS OPA policy");
-    wait_until_ready(&policy).await;
+    process.wait_until_ready(&policy).await;
     let decision = PolicyDecisionPoint::decide(
         &policy,
         &effect_request(
@@ -529,4 +608,5 @@ async fn live_opa_mtls_requires_and_accepts_a_pinned_client_identity() {
         .await
         .expect_err("OPA must reject a client without an identity");
     assert!(matches!(error, PolicyError::Unavailable(_)));
+    process.child.kill().await.expect("stop and reap mTLS OPA");
 }
