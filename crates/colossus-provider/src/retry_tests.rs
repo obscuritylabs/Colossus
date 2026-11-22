@@ -60,6 +60,12 @@ async fn sequence_server(replies: Vec<Reply>) -> SequenceServer {
                 body,
             });
             let (status, content_type, retry_after, body) = match reply {
+                Reply::Status(500, retry_after) => (
+                    500,
+                    "application/json",
+                    retry_after,
+                    r#"{"error":{"code":"server_error","message":"private error text"}}"#.into(),
+                ),
                 Reply::Status(status, retry_after) => (
                     status,
                     "application/json",
@@ -109,14 +115,14 @@ fn retry_profile(base_url: String, kind: ProviderKind) -> ProviderProfile {
 
 #[test]
 fn retry_policy_is_bounded_and_respects_server_backoff() {
-    for status in 502..=504 {
+    for status in [500, 502, 503, 504] {
         let delays = (0..5)
             .map(|attempt| super::super::retry::retry_delay(status, attempt, None).expect("retry"))
             .collect::<Vec<_>>();
         assert_eq!(delays, [1, 2, 4, 8, 16].map(Duration::from_secs));
         assert!(super::super::retry::retry_delay(status, 5, None).is_none());
     }
-    for status in [400, 401, 403, 408, 429, 500] {
+    for status in [400, 401, 403, 408, 429, 501, 505] {
         assert!(super::super::retry::retry_delay(status, 0, None).is_none());
     }
     assert_eq!(
@@ -132,7 +138,7 @@ fn retry_policy_is_bounded_and_respects_server_backoff() {
 #[tokio::test]
 async fn streaming_generation_retries_mixed_gateway_errors_with_incrementing_backoff() {
     let server = sequence_server(vec![
-        Reply::Status(502, None),
+        Reply::Status(500, None),
         Reply::Status(503, None),
         Reply::Status(504, None),
         Reply::Stream(
@@ -174,8 +180,12 @@ async fn streaming_generation_retries_mixed_gateway_errors_with_incrementing_bac
         })
         .collect::<Vec<_>>();
     assert_eq!(progress.len(), 7);
-    for (pair, attempt) in progress[..6].chunks(2).zip(1..=3) {
+    for ((pair, attempt), status) in progress[..6].chunks(2).zip(1..=3).zip([500, 503, 504]) {
         assert_eq!(pair[0].attempt, attempt);
+        assert_eq!(pair[1].attempt, attempt);
+        assert_eq!(pair[0].max_retries, 5);
+        assert_eq!(pair[0].http_status, status);
+        assert_eq!(pair[1].http_status, status);
         assert_eq!(
             pair[0].state,
             colossus_contracts::ProviderRetryState::Backoff
@@ -206,7 +216,7 @@ async fn non_streaming_generation_retries_both_provider_protocols() {
         ),
     ] {
         let server =
-            sequence_server(vec![Reply::Status(502, Some("2")), Reply::Json(response)]).await;
+            sequence_server(vec![Reply::Status(500, Some("2")), Reply::Json(response)]).await;
         let profile = retry_profile(server.base_url, kind);
         let executor = ProviderExecutor::new(profile.clone());
         let result = retry_gateway(&profile)
@@ -228,7 +238,7 @@ async fn non_streaming_generation_retries_both_provider_protocols() {
 #[tokio::test]
 async fn exhausted_retries_preserve_the_last_recoverable_http_status() {
     let server = sequence_server(
-        [502, 503, 504, 502, 503, 504]
+        [500, 502, 503, 504, 502, 500]
             .map(|status| Reply::Status(status, Some("0")))
             .into(),
     )
@@ -242,13 +252,21 @@ async fn exhausted_retries_preserve_the_last_recoverable_http_status() {
     assert!(matches!(
         error,
         GatewayError::RecoverableExecution {
-            http_status: Some(504),
+            code,
+            message,
+            http_status: Some(500),
             retry_after_ms: Some(0),
-            ..
-        }
+        } if code == "provider.temporarily_unavailable"
+            && message == "provider endpoint returned HTTP 500; retry after the endpoint reports ready"
     ));
     server.task.await.expect("server");
-    assert_eq!(server.requests.lock().expect("requests").len(), 6);
+    let requests = server.requests.lock().expect("requests");
+    assert_eq!(requests.len(), 6);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.body == requests[0].body)
+    );
 }
 
 #[tokio::test]
@@ -276,7 +294,7 @@ async fn non_retryable_status_and_uncertain_transport_failures_are_not_replayed(
 
 #[tokio::test]
 async fn retry_backoff_stops_at_the_existing_generation_deadline() {
-    let server = sequence_server(vec![Reply::Status(503, None)]).await;
+    let server = sequence_server(vec![Reply::Status(500, None)]).await;
     let profile = ProviderProfile::new(
         "short-deadline",
         ProviderKind::OpenAiCompatible,
@@ -294,7 +312,7 @@ async fn retry_backoff_stops_at_the_existing_generation_deadline() {
     assert!(matches!(
         error,
         GatewayError::RecoverableExecution {
-            http_status: Some(503),
+            http_status: Some(500),
             ..
         }
     ));
@@ -305,7 +323,7 @@ async fn retry_backoff_stops_at_the_existing_generation_deadline() {
 
 #[tokio::test]
 async fn oversized_retry_after_does_not_replay_a_confirmed_gateway_failure() {
-    for status in 502..=504 {
+    for status in [500, 502, 503, 504] {
         let server = sequence_server(vec![Reply::Status(status, Some("86401"))]).await;
         let profile = retry_profile(server.base_url, ProviderKind::OpenAiCompatible);
         let mut released = ReleasedItems::default();

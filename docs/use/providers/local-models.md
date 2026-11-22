@@ -91,9 +91,10 @@ both diagnostics before submitting more work.
 
 - **Connection refused:** start the server and check its bind address and port, then
   rerun `provider doctor local-provider`.
-- **HTTP 503 while loading:** Colossus retries up to five times with increasing
-  delays within the request deadline. If it still fails, wait for the server to report
-  readiness and rerun `models doctor local` before resubmitting the test request.
+- **HTTP 503 while loading:** Colossus follows the
+  [automatic provider retry policy](../../reference/configuration/providers-models.md#automatic-provider-retries).
+  If it still fails, wait for the server to report readiness and rerun
+  `models doctor local` before resubmitting the test request.
 - **HTTP 400 or malformed response:** check the exact model ID, catalog and Chat
   Completions compatibility. Correct the output-token parameter or disable unsupported
   tool-call and streaming capabilities, then rerun `models doctor local`.

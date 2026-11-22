@@ -160,13 +160,13 @@ every provider. Local compatible models that wrap that single object in one whol
 prose, multiple fences, unknown fields, malformed JSON, and unsupported values still fail
 closed and fall back to the configured approval behavior.
 
-Some local servers return HTTP 503 while a model is loading. Colossus reports that status
-as `provider.temporarily_unavailable` with `Recoverable: yes` and does not retry the turn
-implicitly. Wait until the endpoint reports ready, run `models doctor` again, and then
-resubmit the turn. `/events verbose` includes the structured numeric `HTTP status` in the
-run-error card while keeping provider response headers and bodies private. Other client
-errors, including HTTP 400 schema rejection, remain terminal so configuration and
-compatibility failures are not mislabeled as startup delay.
+Some local servers return HTTP 503 while a model is loading. If the
+[automatic provider retries](../reference/configuration/providers-models.md#automatic-provider-retries)
+end with `provider.temporarily_unavailable` and `Recoverable: yes`, wait until
+the endpoint reports ready and run `models doctor` again before continuing the
+saved conversation. `/events verbose` includes the structured numeric `HTTP status`
+in the run-error card while keeping response headers and bodies private. For
+HTTP 400 schema rejection, check the provider configuration and tool compatibility.
 
 Specialized roles include `risk_evaluator`, `context_summarizer`,
 `subagent_default`, `research_planner`, `research_worker`, and

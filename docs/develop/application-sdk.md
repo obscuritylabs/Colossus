@@ -914,6 +914,17 @@ their bounded read-only retry policy. Embedded and custom checked streams instea
 fail closed when reconciliation is unavailable or does not exactly match; a clean
 close is never accepted as silent completion.
 
+The existing `colossus.api.v1alpha1` field `ProviderRetry.http_status` accepts
+HTTP 500 alongside 502–504. When upgrading a runtime independently, update
+Rust SDK clients with the earlier status allowlist, including Desktop v0.12.2.
+Those clients reject an HTTP 500 retry event in live or replayed watches.
+Managed Local Desktop bundles matching runtime and decoder versions. Older API
+runtimes also reject affected run history when they read a journal containing
+these events. Before upgrading, make a
+[verified state backup](../get-started/upgrade-compatibility.md#2-preserve-the-current-authority-set).
+For rollback, use that pre-upgrade backup with its matching key material and
+secure anchor when protected storage is configured.
+
 `Run.title` follows the canonical session title when one is set. Its `title_revision`
 is the session-title index stream version, independent of the run's `last_sequence`.
 Compare positive title revisions only within the same `session_id`; a lower revision

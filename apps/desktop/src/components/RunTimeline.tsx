@@ -25,6 +25,7 @@ import {
   IconPlayerPlay,
   IconPlayerStop,
   IconPlug,
+  IconRefresh,
   IconSearch,
   IconSparkles,
   IconTargetArrow,
@@ -83,6 +84,7 @@ interface RunTimelineProps {
     strategy: { type: "direct" } | { type: "goal"; maxIterations: number },
   ) => Promise<void>;
   onOpenResearchSources?: () => void;
+  providerRetry?: { description: string; onRetry: () => void } | undefined;
 }
 
 const ViewedImageActivity = lazy(() =>
@@ -735,9 +737,7 @@ function liveRunStatus(view: RunView): { label: string; detail: string } {
 }
 
 function LiveRunStatus({ view }: { view: RunView }) {
-  const retry = currentProviderRetry(view);
   const status = liveRunStatus(view);
-  if (retry !== null) return <RetryStatus retry={retry} />;
   return (
     <div className="feed-entry live-run-status">
       <span className="feed-marker" aria-hidden="true">
@@ -1130,6 +1130,7 @@ export function RunTimeline({
   onRevisePlan,
   onExecutePlan,
   onOpenResearchSources,
+  providerRetry,
 }: RunTimelineProps) {
   const hasTerminalFeedItem = view.updates.some(
     ({ update }) => update.type === "failure" || update.type === "cancellation",
@@ -1143,7 +1144,9 @@ export function RunTimeline({
   const timelineItems = compactTimelineItems(view.updates);
   const userTimelineItems = timelineItems.filter(isUserMessageItem);
   const activityItems = timelineItems.filter(isVisibleActivityItem);
-  const showLiveStatus = isGenerating && view.output === "";
+  const retryProgress = isGenerating ? currentProviderRetry(view) : null;
+  const showLiveStatus =
+    isGenerating && view.output === "" && retryProgress === null;
   const partialResponse =
     view.output !== "" &&
     !isGenerating &&
@@ -1219,8 +1222,22 @@ export function RunTimeline({
           )}
         </ConversationEntry>
       ) : null}
+      {retryProgress !== null ? <RetryStatus retry={retryProgress} /> : null}
       {!hasTerminalFeedItem && view.run.terminal !== null ? (
         <TerminalSummary terminal={view.run.terminal} />
+      ) : null}
+      {providerRetry !== undefined ? (
+        <div className="response-utilities">
+          <button
+            className="button secondary compact"
+            type="button"
+            onClick={providerRetry.onRetry}
+            title={providerRetry.description}
+          >
+            <IconRefresh size={15} stroke={1.8} aria-hidden="true" />
+            Retry
+          </button>
+        </div>
       ) : null}
       {plan !== null ? (
         <PlanResultCard

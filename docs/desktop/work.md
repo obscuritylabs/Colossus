@@ -87,6 +87,17 @@ The queue and its pause are part of the current Desktop session. For work that m
 
 The permission selector beside the composer controls what happens when an effect needs approval. **Ask** shows an approval card. **Deny** fails such effects closed. **Risk auto** evaluates eligible low-risk effects, while **Full access** satisfies approval obligations without prompting. Your selection applies directly between managed runs. This selector does not change the workspace's access profile or execution boundary. [See the full access model](settings.md#approval-mode).
 
+## Recover from a provider error
+
+While Colossus [retries a provider request](../reference/configuration/providers-models.md#automatic-provider-retries),
+the conversation shows the attempt count and countdown. If your latest Execute
+turn ends with a recoverable HTTP 500, 502, 503, or 504 failure, choose **Retry**
+when the provider is ready. Desktop sends `Continue` in the same saved
+conversation, keeping your unsent draft and any partial response. It uses
+the failed run's model settings when Desktop has them, or the current
+conversation's model selection for reopened history. If the live run feed
+disconnects, choose **Resume** to reconnect to the existing run.
+
 ## Return to a conversation
 
 Select a thread in the sidebar to read its released messages and continue it. The expanded thread list loads older available pages as you scroll. Long histories show a limited number of rows at once; scrolling moves through the loaded summaries and continues loading older pages. Opening Desktop starts with recent threads and loads a conversation's messages when you select it.
