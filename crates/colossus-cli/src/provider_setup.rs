@@ -163,7 +163,7 @@ async fn discover(
 
 fn choose_model(models: &[ProviderModelInfo]) -> Result<ProviderModelInfo, Box<dyn Error>> {
     eprintln!(
-        "Loaded {} models. Unknown capabilities stay disabled unless overridden with setup flags.",
+        "Loaded {} models. Auto can try features with unknown support. Use setup flags to set a feature to off or on.",
         models.len()
     );
     let filter = if models.len() > 40 {

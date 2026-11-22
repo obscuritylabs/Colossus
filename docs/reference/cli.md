@@ -123,7 +123,7 @@ positional:
 | `workflow schedule` | `create SCHEDULE_ID NAME VERSION`, `list`, `show SCHEDULE_ID`, `enable SCHEDULE_ID`, `disable SCHEDULE_ID`, `tick` |
 | `workflow webhook` | `create WEBHOOK_ID NAME VERSION`, `list`, `show WEBHOOK_ID`, `enable WEBHOOK_ID`, `disable WEBHOOK_ID`, `ingest WEBHOOK_ID`, `serve` |
 | `workflow subscription` | `create SUBSCRIPTION_ID NAME VERSION`, `list`, `show SUBSCRIPTION_ID`, `enable SUBSCRIPTION_ID`, `disable SUBSCRIPTION_ID`, `tick` |
-| `provider` | `presets`, `discover [--preset ID] [--base-url URL] [--credential-env NAME \| --no-credential]`, `setup [--preset ID] [--model ID] [--local]`, `profiles`, `doctor [PROFILE] [--include-provider-response]`, `models [PROFILE]` |
+| `provider` | `presets`, `discover [--preset ID] [--base-url URL] [--credential-env NAME \| --no-credential]`, [`setup`](#provider-setup), `profiles`, `doctor [PROFILE] [--include-provider-response]`, `models [PROFILE]` |
 | `codex` | `[--codex-bin PATH] login [--device-code]`, `[--codex-bin PATH] status`, `[--codex-bin PATH] logout` |
 | `search` | `profiles`, `query QUERY` |
 | `models` | `profiles`, `doctor [PROFILE] [--include-provider-response]`, `routes`, `route [ROLE]` |
@@ -148,6 +148,21 @@ positional:
 | `integrations` | `list`, `show NAME`, `connect NAME`, `import-openapi NAME SPEC`, `disconnect NAME`, `call TOOL ARGUMENTS` |
 | `mcp` | `servers`, `tools`, `doctor SERVER`, `call SERVER TOOL ARGUMENTS`, `auth login SERVER [--manual]`, `auth status SERVER`, `auth logout SERVER` |
 | Top-level execution | `acp`, `run [PROMPT]`, `echo MESSAGE`, `tui`, `worker` |
+
+### Provider setup
+
+```text
+colossus provider setup [--local] [--preset ID] [--base-url URL]
+    [--credential-env NAME | --no-credential] [--model ID]
+    [--context-window-tokens COUNT] [--max-output-tokens COUNT]
+    [--tool-calls MODE] [--streaming MODE] [--image-inputs MODE] [--server-compaction MODE]
+```
+
+Pass the name of the credential environment variable to `--credential-env`.
+Omit `--model` in a terminal to choose from the provider catalog. Supply `--model`
+with the exact model ID to skip catalog discovery. Outside a terminal, specify both
+`--preset` and `--model`. Each capability mode accepts `off`, `auto`, or `on`.
+See [model capability modes](configuration/providers-models.md#capabilities).
 
 ## Important defaults and bounds
 
