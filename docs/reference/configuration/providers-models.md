@@ -409,7 +409,10 @@ timeouts, 5xx responses, rate limits, malformed output and context overflow do n
 Evidence is scoped to the provider, canonical endpoint and model, lasts 15 minutes, and
 resets with runtime configuration reload. No failed generation is automatically replayed.
 Images and tools are never silently removed from a failed request.
-`colossus model doctor` reports feature modes and observations separately from its probe.
+`colossus models doctor [PROFILE]` reports feature modes and observations separately
+from its bounded generation probe. `PROFILE` is the configured model profile name and
+defaults to the profile for the primary role. Use `colossus provider doctor [PROFILE]`
+to check catalog readiness for a provider profile.
 
 ### Responses server compaction
 
