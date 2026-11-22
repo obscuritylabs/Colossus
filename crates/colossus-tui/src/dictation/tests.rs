@@ -3,6 +3,28 @@ use std::sync::{
     Mutex,
     atomic::{AtomicUsize, Ordering},
 };
+
+#[test]
+fn changed_dictation_clears_stale_draft_edit_history() {
+    let mut state = TuiState::from_snapshot(crate::tests::snapshot());
+    state.composer.insert("typed draft");
+    assert!(state.composer.undo_edit());
+
+    let update = |revision, text: &str| DictationUpdate::Transcript {
+        segment: 0,
+        revision,
+        settled: false,
+        text: text.into(),
+    };
+    apply(&mut state, 0, None, Ok(vec![update(1, "")]));
+    assert!(state.composer.has_edit_history());
+
+    apply(&mut state, 0, None, Ok(vec![update(2, "new speech")]));
+    assert_eq!(state.composer.draft, "new speech");
+    assert!(!state.composer.undo_edit());
+    assert!(!state.composer.redo_edit());
+}
+
 #[derive(Default)]
 struct Recorder {
     calls: Mutex<Vec<DictationAction>>,

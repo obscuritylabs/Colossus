@@ -1,11 +1,15 @@
 use super::*;
+use unicode_segmentation::GraphemeCursor;
+
+mod edits;
+use edits::{ComposerEdits, EditDirection};
 
 pub(super) const LARGE_PASTE_CHAR_THRESHOLD: usize = 1_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PendingPaste {
     placeholder: String,
-    text: String,
+    text: Arc<str>,
     start: usize,
     end: usize,
 }
@@ -17,6 +21,21 @@ struct SavedComposerDraft {
     pending_pastes: Vec<PendingPaste>,
 }
 
+impl SavedComposerDraft {
+    fn retained_size(draft: &str, pending_pastes: &[PendingPaste]) -> usize {
+        pending_pastes.iter().fold(
+            draft.len().saturating_add(std::mem::size_of::<Self>()),
+            |bytes, paste| {
+                // Charge shared paste text to every snapshot that can restore it.
+                bytes
+                    .saturating_add(std::mem::size_of::<PendingPaste>())
+                    .saturating_add(paste.placeholder.len())
+                    .saturating_add(paste.text.len())
+            },
+        )
+    }
+}
+
 #[derive(Debug, Default)]
 pub(super) struct Composer {
     pub(super) draft: String,
@@ -24,6 +43,7 @@ pub(super) struct Composer {
     pub(super) history_index: Option<usize>,
     history_draft: Option<SavedComposerDraft>,
     pending_pastes: Vec<PendingPaste>,
+    edits: ComposerEdits,
     pub(super) completion_index: Option<usize>,
     pub(super) completion_hidden: bool,
     preferred_column: Option<usize>,
@@ -36,19 +56,25 @@ pub(super) enum ComposerVerticalDirection {
 
 impl Composer {
     pub(super) fn insert(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.record_edit();
+        self.insert_text(text);
+    }
+
+    fn insert_text(&mut self, text: &str) {
         let inserted_at = self.cursor;
         let inserted_bytes = text.len();
-        if inserted_bytes > 0 {
-            self.pending_pastes.retain_mut(|pending| {
-                if inserted_at <= pending.start {
-                    pending.start += inserted_bytes;
-                    pending.end += inserted_bytes;
-                    true
-                } else {
-                    inserted_at >= pending.end
-                }
-            });
-        }
+        self.pending_pastes.retain_mut(|pending| {
+            if inserted_at <= pending.start {
+                pending.start += inserted_bytes;
+                pending.end += inserted_bytes;
+                true
+            } else {
+                inserted_at >= pending.end
+            }
+        });
         self.draft.insert_str(self.cursor, text);
         self.cursor += inserted_bytes;
         self.prune_edited_pastes();
@@ -64,11 +90,12 @@ impl Composer {
 
         let placeholder = self.next_large_paste_placeholder(char_count);
         let start = self.cursor;
-        self.insert(&placeholder);
+        self.record_edit();
+        self.insert_text(&placeholder);
         let end = start + placeholder.len();
         self.pending_pastes.push(PendingPaste {
             placeholder,
-            text,
+            text: Arc::from(text),
             start,
             end,
         });
@@ -78,6 +105,7 @@ impl Composer {
         if self.cursor == 0 {
             return;
         }
+        self.record_edit();
         let previous = previous_boundary(&self.draft, self.cursor);
         self.adjust_pending_pastes_for_removal(previous, self.cursor);
         self.draft.drain(previous..self.cursor);
@@ -90,6 +118,7 @@ impl Composer {
         if self.cursor == self.draft.len() {
             return;
         }
+        self.record_edit();
         let next = next_boundary(&self.draft, self.cursor);
         self.adjust_pending_pastes_for_removal(self.cursor, next);
         self.draft.drain(self.cursor..next);
@@ -149,6 +178,7 @@ impl Composer {
     }
 
     pub(super) fn take(&mut self) -> String {
+        self.clear_edit_history();
         let draft = std::mem::take(&mut self.draft);
         let pending_pastes = std::mem::take(&mut self.pending_pastes);
         self.cursor = 0;
@@ -161,6 +191,7 @@ impl Composer {
     }
 
     pub(super) fn clear(&mut self) {
+        self.clear_edit_history();
         self.draft.clear();
         self.pending_pastes.clear();
         self.cursor = 0;
@@ -168,6 +199,7 @@ impl Composer {
     }
 
     pub(super) fn set(&mut self, value: String) {
+        self.clear_edit_history();
         self.cursor = value.len();
         self.draft = value;
         self.pending_pastes.clear();
@@ -176,6 +208,69 @@ impl Composer {
         self.completion_index = None;
         self.completion_hidden = true;
         self.preferred_column = None;
+    }
+
+    pub(super) fn undo_edit(&mut self) -> bool {
+        self.restore_edit(EditDirection::Undo)
+    }
+
+    pub(super) fn redo_edit(&mut self) -> bool {
+        self.restore_edit(EditDirection::Redo)
+    }
+
+    pub(super) fn has_edit_history(&self) -> bool {
+        self.history_index.is_none() && !self.edits.is_empty()
+    }
+
+    pub(super) fn clear_edit_history(&mut self) {
+        self.edits.clear();
+    }
+
+    fn record_edit(&mut self) {
+        self.edits.discard(EditDirection::Redo);
+        // A recall preview is temporary. Editing it replaces the previously unsent draft.
+        if let Some(previous) = &self.history_draft {
+            let bytes =
+                SavedComposerDraft::retained_size(&previous.draft, &previous.pending_pastes);
+            self.edits
+                .push(EditDirection::Undo, bytes, || previous.clone());
+        } else {
+            self.snapshot_edit(EditDirection::Undo);
+        }
+    }
+
+    fn snapshot_edit(&mut self, direction: EditDirection) {
+        let bytes = SavedComposerDraft::retained_size(&self.draft, &self.pending_pastes);
+        self.edits.push(direction, bytes, || SavedComposerDraft {
+            draft: self.draft.clone(),
+            cursor: self.cursor,
+            pending_pastes: self.pending_pastes.clone(),
+        });
+    }
+
+    fn restore_edit(&mut self, direction: EditDirection) -> bool {
+        if self.history_index.is_some() {
+            return false;
+        }
+        let Some(saved) = self.edits.pop(direction) else {
+            return false;
+        };
+        self.snapshot_edit(direction.opposite());
+        self.draft = saved.draft;
+        self.cursor = Self::grapheme_boundary(&self.draft, saved.cursor);
+        self.pending_pastes = saved.pending_pastes;
+        self.reset_navigation();
+        true
+    }
+
+    fn grapheme_boundary(draft: &str, cursor: usize) -> usize {
+        let cursor = draft.floor_char_boundary(cursor);
+        let mut grapheme = GraphemeCursor::new(cursor, draft.len(), true);
+        if grapheme.is_boundary(draft, 0) == Ok(true) {
+            cursor
+        } else {
+            grapheme.prev_boundary(draft, 0).ok().flatten().unwrap_or(0)
+        }
     }
 
     pub(super) fn reset_navigation(&mut self) {
@@ -1033,20 +1128,15 @@ impl TuiState {
         let kind = self
             .structured_completion_context()
             .map(|context| context.kind);
-        let Some(suffix) = self.ghost_text().map(str::to_owned) else {
+        let Some(mut suffix) = self.ghost_text().map(str::to_owned) else {
             return false;
         };
-        self.composer.insert(&suffix);
         if kind == Some(CompletionKind::Skill)
-            && !self
-                .composer
-                .draft
-                .chars()
-                .next_back()
-                .is_some_and(char::is_whitespace)
+            && !suffix.chars().next_back().is_some_and(char::is_whitespace)
         {
-            self.composer.insert(" ");
+            suffix.push(' ');
         }
+        self.composer.insert(&suffix);
         true
     }
 

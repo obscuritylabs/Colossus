@@ -22,6 +22,8 @@ interface. The default view fills the alternate screen. Add the global
 | `Enter` | Send the prompt. |
 | `Shift-Enter` | Insert a newline if your terminal reports the modifier. |
 | `Ctrl-J` | Insert a newline, including when Shift-Enter is indistinguishable from Enter. |
+| `Ctrl-Z` / `F7` | Undo an edit in the focused draft. |
+| `Ctrl-Y` / `F8` | Redo an edit in the focused draft. |
 | `Ctrl-R` | Search earlier submitted prompts. |
 | `F2` | Open or close the Sessions browser on its Open tab. |
 | `F3` | Toggle compact tool summaries and expanded inline results in the conversation. Keeps the draft and reading position. |
@@ -37,7 +39,7 @@ interface. The default view fills the alternate screen. Add the global
 | `End` | Return to live output in the full-screen view. |
 | Mouse drag, then `Ctrl-C` / `Ctrl-Insert` | Copy the selected rendered text. Esc clears the selection. |
 | `F6` | Freeze the conversation view and enable terminal-native text selection. Drag to highlight text, then use your terminal's Copy shortcut. Press F6 or Esc to return. |
-| `Ctrl-C` | Copy an active rendered-text selection. Otherwise exit when idle, or request cancellation during a run; press again to exit. |
+| `Ctrl-C` | Copy an active rendered-text selection or discard a draft. With an empty draft, request cancellation during a run or exit when idle. |
 | `Ctrl-D` | Exit from an empty, idle composer. |
 
 If Shift-Enter submits instead of inserting a newline, use Ctrl-J or open
@@ -45,6 +47,23 @@ If Shift-Enter submits instead of inserting a newline, use Ctrl-J or open
 and Ctrl-D submits a nonempty prompt.
 Ctrl-Enter and Alt-Enter also submit when your terminal reports them distinctly.
 `/multiline off` restores the default; `/multiline toggle` switches modes.
+
+Use F7 and F8 if your terminal intercepts Ctrl-Z or Ctrl-Y. Typing and deletion
+record one edit per keypress. A paste or an accepted completion is one edit.
+Undo and redo restore the draft text, cursor, and any original large-paste
+marker with its bound text. A marker typed by hand is literal text. Making a
+new edit after undo discards the redo path.
+
+Each open workspace session keeps up to 32 edits and 8 MiB of retained draft
+data across undo and redo. Switching sessions preserves each draft's own edit
+history. Sending or discarding the draft, closing its session, or exiting the
+TUI clears its edit history. Replacing it through Ctrl-R or dictation clears
+earlier edit history. Use `/attach` and `/detach` to manage attachments.
+
+During a run, undo and redo apply only to the unsent draft. An open approval
+dock keeps key precedence. Ctrl-R and Up/Down still recall submitted prompts.
+While browsing with Up/Down, press Down past the newest entry to return to the
+live draft and its edit history.
 
 Dragging selects rendered text and pauses screen updates while the agent
 continues working. Press Ctrl-C or Ctrl-Insert to copy. A standalone TUI in a

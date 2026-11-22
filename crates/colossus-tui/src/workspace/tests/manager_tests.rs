@@ -146,6 +146,10 @@ async fn closing_idle_draft_frees_its_slot_without_archiving() {
     draft.session_saved = false;
     let (mut workspace, mut events) =
         Workspace::new(ScreenMode::Alternate, TuiState::from_snapshot(draft));
+    workspace.composer.insert("discarded draft");
+    assert!(workspace.composer.undo_edit());
+    assert!(workspace.composer.has_edit_history());
+    assert_eq!(workspace.draft(), "");
     open_snapshot(&mut workspace, "saved");
     // Discovery can independently learn that a draft save reply was lost.
     workspace
@@ -171,6 +175,74 @@ async fn closing_idle_draft_frees_its_slot_without_archiving() {
             .iter()
             .any(|session| session.id == "draft")
     );
+    open_snapshot(&mut workspace, "draft");
+    assert!(!workspace.composer.redo_edit());
+    assert_eq!(workspace.draft(), "");
+}
+
+#[tokio::test]
+async fn draft_edit_shortcuts_keep_running_work_queues_and_approvals_in_their_slots() {
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
+    workspace.operation = Some(OperationKind::Run);
+    workspace.control = Some(RunControl::default());
+    workspace.queue.push_back("accepted work".into());
+    workspace.composer.insert("Alpha");
+    workspace.composer.insert(" draft");
+
+    open_snapshot(&mut workspace, "beta");
+    workspace.composer.insert("Beta");
+    workspace.composer.insert(" draft");
+    workspace.switch("alpha");
+
+    let edit_key = |workspace: &mut Workspace, code, modifiers| {
+        let sender = workspace.sender();
+        crate::app::handle_key(
+            workspace,
+            KeyEvent::new(code, modifiers),
+            host(),
+            sender,
+            ScreenMode::Alternate,
+        );
+    };
+    edit_key(&mut workspace, KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert_eq!(workspace.draft(), "Alpha");
+    assert_eq!(workspace.background["beta"].draft(), "Beta draft");
+    assert!(workspace.is_busy());
+    assert_eq!(workspace.queue.len(), 1);
+    assert_eq!(
+        workspace.queue.front().map(String::as_str),
+        Some("accepted work")
+    );
+
+    let (prompt, mut answer) = approval("alpha-one-use");
+    workspace.receive(
+        WorkspaceEvent::Session {
+            id: "alpha".into(),
+            event: Box::new(prompt),
+        },
+        host(),
+    );
+    edit_key(&mut workspace, KeyCode::F(8), KeyModifiers::NONE);
+    assert_eq!(workspace.draft(), "Alpha");
+    assert!(workspace.overlay.is_some());
+    assert!(answer.try_recv().is_err());
+
+    workspace.switch("beta");
+    edit_key(&mut workspace, KeyCode::F(7), KeyModifiers::NONE);
+    assert_eq!(workspace.draft(), "Beta");
+    assert_eq!(workspace.background["alpha"].draft(), "Alpha");
+    assert!(workspace.background["alpha"].overlay.is_some());
+    edit_key(&mut workspace, KeyCode::Char('y'), KeyModifiers::CONTROL);
+    assert_eq!(workspace.draft(), "Beta draft");
+
+    workspace.switch("alpha");
+    assert!(workspace.cancel_focus());
+    edit_key(&mut workspace, KeyCode::F(8), KeyModifiers::NONE);
+    assert_eq!(workspace.draft(), "Alpha draft");
+    assert_eq!(workspace.queue.len(), 1);
 }
 
 #[tokio::test]

@@ -209,6 +209,9 @@ fn composer_hint(
         );
     }
     let draft_rows = layout.cursor_stops.last().map_or(1, |stop| stop.row + 1);
+    if state.composer.has_edit_history() {
+        hints.push("Ctrl+Z/Y undo/redo".to_owned());
+    }
     hints.push("F6 select text".to_owned());
     if draft_rows > visible_rows {
         hints.insert(0, format!("row {}/{}", layout.cursor_row + 1, draft_rows));
