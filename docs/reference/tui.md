@@ -180,6 +180,7 @@ Use `/help` for arguments and commands available in your installed version.
 | Display | `/stream`, `/events`, `/reasoning`, `/transcript`, `/multiline` open setting choosers; direct value arguments remain supported. `/trace` toggles compact events. |
 | Next prompt | `/suggestions` opens a chooser; `/suggestions off\|local\|model` saves the mode. Local is the default and makes no provider request. Model makes one bounded auxiliary request per completed source turn and reports its tokens separately. Tab inserts a suggestion into the empty draft; Esc dismisses it. |
 | Preferences | `/tui prefs`, `/tui save`, `/tui reset` |
+| Support report | [`/support-report PATH [--replace]`](#save-a-support-report) |
 | Telemetry and diagnostics | `/telemetry`, `/telemetry metrics`, `/audit verify`, `/projection status`, `/models doctor [PROFILE]`, `/provider doctor [PROFILE]`, `/provider diagnostics` |
 | Workflows | `/workflow list`, `/workflow status`; schedule `list`, `show`, `enable`, `disable`, `tick`; webhook `list`, `show`, `enable`, `disable`; subscription `list`, `show`, `enable`, `disable`, `tick` |
 | Bundles | `/bundle verify` |
@@ -202,6 +203,16 @@ available only through the CLI. See [export formats, scope, and recovery](../use
 
 `/context status` shows the current session's model input budget and active
 snapshot. See [Context and snapshots](../use/sessions-context.md) to interpret it.
+
+### Save a support report
+
+Enter `/support-report PATH [--replace]` in the interactive TUI. Quote paths that
+contain spaces. Relative destinations resolve from the TUI workspace directory.
+Add `--replace` only when you want to overwrite an existing file. The command
+uses the TUI host's last observed worker status, when available. While the save
+is in progress, press Esc to request cancellation. The
+[CLI support report](cli.md#local-support-report) covers startup failures and
+redirected input. It also describes the file format.
 
 ## Plan workflow
 

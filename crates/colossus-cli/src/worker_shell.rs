@@ -94,6 +94,9 @@ pub(super) async fn worker_line_runner(
         if line.is_empty() {
             continue;
         }
+        if crate::support_report::redirect_line_mode(line) {
+            continue;
+        }
         if let Some(herdr) = herdr {
             herdr.report(&active_session_id, AgentState::Working);
         }

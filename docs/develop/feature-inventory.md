@@ -37,6 +37,7 @@ the owning crates and tests.
 | Owned browser control and native Chromium development adapters | `colossus-contracts`, `colossus-ports`, `colossus-browser`, `colossus-browser-bridge`, `colossus-browser-presentation`, `colossus-sandbox`, runtime/worker/SDK browser adapters, `native/browser`, Desktop native adapter | [Owned Chromium browser](adr/0008-owned-chromium-browser.md#current-enablement-and-remaining-work) | Shared authority, private transport, host cleanup, artifact release and Linux profile protection tests; actual Core open/snapshot/run-finish, four-channel read-only presentation, five-host profile restart/reset and per-request PKI conformance. The Mac temporary HTTP Core diagnostic passed real page control, screenshots, Retina frames and direct-host shutdown; its complete helper/crash/HTTPS/PKI and Desktop foreground acceptance remain outstanding. Linux native NSS TLS and macOS human preview retain their own scopes. Linux direct-key-denial and Windows/broker acceptance, same-page agent-to-human transfer, encrypted/quota-bound persistent profiles and management, multi-origin human SSO and production-accepted packages remain incomplete. Windows x64 stable and preview installers select the ordinary-user functional edition; exact signed installed acceptance remains separate. Production component modes stay disabled. |
 | Offline Desktop and local TUI dictation | `crates/colossus-native-dictation`, `apps/desktop/src-tauri/src/dictation.rs` | [Evaluate offline Desktop dictation](desktop-dictation.md) | Bounded model/audio/revision tests; continuous send and cancellation tests; native macOS/Windows measurements and permission acceptance still required |
 | Terminal and presentation | `colossus-presentation`, `colossus-tui`, interface adapters | [Terminal UI](../use/terminal-ui.md), [Extensions and presentation](extensions-presentation.md) | Semantic document, reducer, layout, PTY, and restoration tests |
+| Local terminal support reports | `colossus-cli` support report collector and native save; `colossus-tui` slash command | [Save a local support report](../admin/troubleshooting.md#save-a-local-support-report), [Report format](../reference/cli.md#local-support-report) | Early CLI dispatch, bounded allowlisted JSON, and destination safety checks |
 | Fleet human terminals | `colossus-terminal`, API/SDK/gRPC, connector/Control Plane, `apps/web` | [Enable a web shell](../cloud/connect-runtimes.md#enable-a-web-shell), [ADR 0011](adr/0011-fleet-human-terminals.md) | Native PTY input, ownership and replay tests; authenticated two-replica Fleet transport and web terminal acceptance |
 | Releases and updates | `colossus-update`, CLI installers, release workflows | [Core release operations](releasing.md), [Upgrade and compatibility](../get-started/upgrade-compatibility.md) | Release-contract, clean-install, signature, channel, and platform jobs |
 
@@ -77,6 +78,7 @@ Their pending native checks remain separate from implementation and historical t
 
 | Capability | Public API / SDK | CLI / TUI | Desktop | VS Code | Web |
 | --- | --- | --- | --- | --- | --- |
+| Local terminal support reports | Intentional difference. Collection and saving belong to the local terminal host. | CLI saves before runtime startup. The running TUI records its host mode and any last-observed worker status. | Settings has its own [Export diagnostics](../desktop/settings.md#desktop-preferences-and-support). Managed Local uses the shared TUI binary. Installed-bundle acceptance is pending. | Terminal support reports are unavailable in the extension. | Intentional difference. Hosted diagnostics require a separate service-side decision. |
 | Packaged owned Chromium functional edition | Existing typed browser contracts, caller authority and capability discovery; installed edition determines availability | Standalone archives do not include a browser host; this change adds no separate CLI/TUI browser payload | Windows x64 stable and preview installers select the functional edition with sandbox and compiler-bound signed component; exact signed installed acceptance remains separate. Human WebView2 sign-in stays separate. macOS/Linux retain their existing boundaries. | No browser host or native presenter is shipped | No native browser host is shipped; the user's browser remains separate |
 | Progressive Desktop thread history | Existing authenticated run discovery and bounded pages; full run reads retain their contract | Existing session browsers and history commands retain their workflows | Supported: older pages load while scrolling, thin summaries survive beyond the former 200-entry cutoff, and a virtual list bounds rendered rows; reopening an evicted native binding revalidates its source | Existing extension history workflow; no host change | Existing web history workflow; no host change |
 | Unsaved TUI conversations | Intentional difference: application runs use their own server-managed session lifecycle | Supported in embedded and authenticated worker hosts. Starting work saves a draft for History, resume, and export. The CLI can also explicitly save an empty session. | Supported in the bundled Managed Local TUI. Native conversations follow the Desktop composer workflow. Packaged TUI acceptance pending. | Intentional difference: the extension owns its composer and conversation lifecycle | Intentional difference: the web composer uses application runs and their server-managed session lifecycle |
@@ -100,6 +102,18 @@ Their pending native checks remain separate from implementation and historical t
 
 Evidence and owned follow-ups:
 
+- **Local terminal support reports:** `crates/colossus-cli/src/support_report.rs`
+  owns the report and its save operation. `crates/colossus-cli/tests/support_report.rs`
+  exercises a save before runtime startup. TUI tests in
+  `crates/colossus-tui/src/support_report/tests.rs` cover destination parsing,
+  cancellation, and preservation of conversation state. The `support_report_tui`
+  CLI test target covers saving through a real terminal in embedded and
+  authenticated worker modes, including an observed disconnect. `desktop_owner`
+  and `test_owner` own acceptance through the TUI in a newly packaged Managed
+  Local installation.
+  `vscode_owner` owns assessing a local extension-host adapter and
+  `maintenance_coordinator` owns triaging any Hosted diagnostics workflow under
+  [issue #388](https://github.com/obscuritylabs/Colossus/issues/388).
 - **Unsaved TUI conversations:** The [Sessions guide](../use/sessions.md#start-a-clean-conversation)
   describes when the TUI saves a draft. The [Terminal UI guide](../use/terminal-ui.md#write-and-review-a-turn)
   explains how sandbox acknowledgement affects settings saves and prompt history.

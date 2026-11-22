@@ -260,6 +260,19 @@ integration with `herdr pane get "$HERDR_PANE_ID"` or `herdr agent list`.
 If the TUI is connected to an active worker, `--approval-mode` sets the mode for that
 TUI client without changing the worker default for other clients.
 
+## Save a support report
+
+To capture local diagnostics while the TUI is open, enter the following in
+the composer.
+
+```text
+/support-report "support report.json"
+```
+
+Open the saved file to review it before sharing. If you cannot start the TUI,
+save the report from your shell. See [troubleshooting](../admin/troubleshooting.md#save-a-local-support-report)
+and the [TUI command reference](../reference/tui.md#save-a-support-report).
+
 ## What's next?
 
 <div class="grid cards" markdown>
