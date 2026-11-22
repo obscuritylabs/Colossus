@@ -336,7 +336,11 @@ pub(super) fn apply(
                 } else {
                     " "
                 };
-                state.composer.draft = format!("{}{separator}{speech}", state.dictation.base);
+                let draft = format!("{}{separator}{speech}", state.dictation.base);
+                if draft != state.composer.draft {
+                    state.composer.clear_edit_history();
+                    state.composer.draft = draft;
+                }
                 state.composer.cursor = state.composer.draft.len();
             }
             DictationUpdate::Level(level) => {

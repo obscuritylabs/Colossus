@@ -156,6 +156,10 @@ that send Shift-Enter as plain Enter. Use `/multiline` to choose Enter behavior:
 Enter can add lines while Ctrl-D sends the prompt. Direct shortcuts such as
 `/multiline on` and `/multiline off` remain available.
 
+Press Ctrl-Z to undo an edit in your draft and Ctrl-Y to redo it. Use F7 and F8
+if your terminal intercepts those chords. See the [composer keys](../reference/tui.md#compose-and-navigate)
+for edit history, large pastes, and submitted prompt recall.
+
 Start a draft with `!` to run a shell command directly, such as `!git status`.
 It uses the existing approval, sandbox, cancellation, and audit path without asking
 the model. Each command starts in the workspace; directory and environment changes

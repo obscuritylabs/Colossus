@@ -344,6 +344,10 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                     "Up/Down move through draft rows; Up on the first row starts history; Down past newest restores the draft; Ctrl-R searches".into(),
                 ),
                 (
+                    "Undo and redo".into(),
+                    "Ctrl+Z undoes an unsent draft edit and Ctrl+Y redoes it. Use F7 and F8 if your terminal intercepts those shortcuts.".into(),
+                ),
+                (
                     "Cancel".into(),
                     "Ctrl-C clears a draft; when empty, it cancels an active run or exits"
                         .into(),

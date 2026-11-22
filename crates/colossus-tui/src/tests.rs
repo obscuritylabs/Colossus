@@ -2095,6 +2095,10 @@ fn structured_completion_tracks_slash_commands_and_skill_tokens() {
     assert_eq!(state.ghost_text(), Some("gin-authoring"));
     assert!(state.accept_completion());
     assert_eq!(state.draft(), "please @plugin-authoring ");
+    assert!(state.composer.undo_edit());
+    assert_eq!(state.draft(), "please @plu");
+    assert!(state.composer.redo_edit());
+    assert_eq!(state.draft(), "please @plugin-authoring ");
 }
 
 #[test]

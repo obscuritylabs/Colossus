@@ -494,7 +494,7 @@ pub(super) fn handle_text_selection_key(state: &mut TuiState, key: KeyEvent) -> 
     false
 }
 
-fn handle_key(
+pub(super) fn handle_key(
     state: &mut TuiState,
     key: KeyEvent,
     host: Arc<dyn InteractiveHost>,
@@ -558,6 +558,18 @@ fn handle_key(
         }
         KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             state.composer.move_to(state.composer.draft.len());
+        }
+        KeyCode::Char('z' | 'Z') if key.modifiers == KeyModifiers::CONTROL => {
+            state.composer.undo_edit();
+        }
+        KeyCode::Char('y' | 'Y') if key.modifiers == KeyModifiers::CONTROL => {
+            state.composer.redo_edit();
+        }
+        KeyCode::F(7) if key.modifiers.is_empty() => {
+            state.composer.undo_edit();
+        }
+        KeyCode::F(8) if key.modifiers.is_empty() => {
+            state.composer.redo_edit();
         }
         KeyCode::Char(character)
             if !key

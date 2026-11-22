@@ -27,6 +27,8 @@ use tokio::sync::{mpsc, oneshot};
 
 #[path = "pty_history/agents.rs"]
 mod agents;
+#[path = "pty_history/composer_edits.rs"]
+mod composer_edits;
 #[cfg(windows)]
 #[path = "pty_history/native_console.rs"]
 mod native_console;
@@ -365,6 +367,9 @@ impl InteractiveHost for FixtureHost {
         events: mpsc::Sender<HostEvent>,
         _control: RunControl,
     ) -> Result<HostRunResult, String> {
+        if let Ok(expected) = std::env::var(composer_edits::EXPECTED_PROMPT_ENV) {
+            return composer_edits::accept_submission(request, &expected);
+        }
         if std::env::var_os("COLOSSUS_TUI_UNICODE_ROUNDTRIP_FIXTURE").is_some() {
             return Err(if request.prompt == MULTILINE_DRAFT {
                 "Native Unicode draft matched".into()
@@ -769,6 +774,9 @@ fn fixture_process() {
             },
         ))
         .expect("fixture TUI");
+    if std::env::var_os(composer_edits::EXPECTED_PROMPT_ENV).is_some() {
+        composer_edits::assert_single_submission();
+    }
 }
 
 #[cfg(unix)]
