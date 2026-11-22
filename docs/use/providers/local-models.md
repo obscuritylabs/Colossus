@@ -7,16 +7,44 @@ type: how-to
 
 # Connect a local model server
 
-Start your model server and load the model before configuring Colossus. It must expose
-compatible `GET /v1/models` and `POST /v1/chat/completions` endpoints. Ollama, LM Studio,
-and vLLM can expose these APIs, but support depends on the server version, model, and
-enabled features.
+Start your model server and load the model before configuring Colossus. Generation
+requires a compatible `POST /v1/chat/completions` endpoint. Catalog discovery and the
+provider readiness check use `GET /v1/models`. Ollama, LM Studio, and vLLM can expose
+these APIs, with support depending on the server version, model, and enabled features.
 
-Use a current configuration created by `colossus config init` (schema version 3).
-Have the model's exact catalog ID, context and output limits, and tool-call and
-streaming capabilities available.
+## Create a workspace-local configuration
+
+From the workspace folder, replace `MODEL_ID` with the exact ID loaded by an
+unauthenticated Ollama server on its default port.
+
+```bash
+colossus provider setup --local --preset ollama --no-credential --model MODEL_ID
+```
+
+Use `--preset lmstudio` for LM Studio on its default port. If your server uses a
+different address, set `--base-url` to its API base URL, including `/v1`. Setup
+skips catalog discovery when you supply `--model`. It creates `.colossus/config.yaml`
+and refuses to replace an existing file. To update an existing configuration, use
+the YAML instructions below.
+
+Review `colossus config effective` before giving the agent work. Setup uses the
+standard full-access and plaintext-storage defaults. Choose the appropriate
+[access settings](../../admin/access-and-approvals.md), [sandbox](../../admin/sandbox.md),
+and [storage](../../admin/storage-worker.md) for the workspace.
+
+```bash
+colossus provider doctor setup-provider
+colossus models doctor primary
+```
+
+`provider doctor` checks the catalog endpoint. `models doctor` checks whether the
+configured model can generate a response with one bounded request. Check each
+report's `ready` field.
 
 ## Configure the loopback route
+
+Use an existing schema version 3 configuration or create one with `colossus config init`.
+Have the exact model ID, context and output limits, and supported features available.
 
 The example assumes an unauthenticated server at `http://127.0.0.1:11434/v1`.
 Confirm the server's actual bind address and port first.
@@ -83,9 +111,9 @@ model's exact ID. After both diagnostics succeed, send a small test request:
 colossus -w . run "Reply with exactly: connected"
 ```
 
-To check failure handling, stop the server and run `provider doctor local-provider`.
-It should fail against this endpoint. Restart the server, reload the model, and rerun
-both diagnostics before submitting more work.
+If the server is stopped, `provider doctor local-provider` reports `"ready": false`.
+Restart the server, reload the model, and rerun both diagnostics before submitting
+more work.
 
 ## Troubleshoot the server
 

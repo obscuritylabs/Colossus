@@ -119,7 +119,7 @@ model by number or exact ID.
 
     The connection depends on the server and selected model supporting the required
     API calls. See [local model setup](../use/providers/local-models.md) for LM Studio,
-    compatibility, and manual model entry.
+    server compatibility, and manual model entry.
 
 For Groq, Together AI, DeepSeek, Mistral, LM Studio, or a custom compatible endpoint,
 run `colossus provider presets` to see the choices, then
@@ -135,8 +135,8 @@ colossus models doctor
 
 The route command should name the selected model and provider. `models doctor` sends
 one bounded generation probe and reports `"ready": true` when the selected route
-works. If the model catalog is unavailable but you know the exact model ID, add
-`--model MODEL_ID` to your setup command.
+works. `provider doctor` checks catalog readiness separately. If you know the exact
+model ID, add `--model MODEL_ID` to setup to skip catalog discovery.
 
 For authenticated providers, the generated file contains a credential **reference**,
 not the key itself. Setup also uses the standard full-access and plaintext-storage
