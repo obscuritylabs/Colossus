@@ -90,7 +90,8 @@ pub use colossus_worker_protocol::{AlwaysOnCommand, WorkerApprovalMode};
 pub use frames::{WorkerPrompt, WorkerPromptKind};
 pub use native_browser::NativeBrowserServerConfig;
 pub use operations::{
-    InteractiveWorkerRequest, SandboxBoundaryAcknowledgement, WorkerError, WorkerOperation,
+    ContextCompactionOutcome, InteractiveWorkerRequest, SandboxBoundaryAcknowledgement,
+    WorkerError, WorkerOperation,
 };
 pub use public_api::{PublicApiDeploymentMode, PublicApiHostOptions, PublicApiReadyMetadata};
 pub use public_credentials::{

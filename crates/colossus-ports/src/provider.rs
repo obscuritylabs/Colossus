@@ -165,6 +165,23 @@ pub trait ModelProvider: Send + Sync {
         context: ExecutionContext,
     ) -> Result<ProviderTurn, ModelProviderError>;
 
+    /// Execute a provider turn for an interruptible local operation.
+    /// Adapters that interrupt dispatched turns must settle their effect boundary.
+    async fn turn_controlled(
+        &self,
+        role: &str,
+        request: ModelRequest,
+        context: ExecutionContext,
+        control: &RunControl,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        if control.is_cancelled() {
+            return Err(ModelProviderError::Failed(
+                "model turn was cancelled before it started".into(),
+            ));
+        }
+        self.turn(role, request, context).await
+    }
+
     /// Execute one provider turn while observing safe events as they are released.
     async fn turn_stream(
         &self,

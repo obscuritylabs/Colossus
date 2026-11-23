@@ -543,7 +543,9 @@ pub(super) fn handle_key(
     }
     match key.code {
         KeyCode::Esc => {
-            state.hide_completion();
+            if !state.cancel_context_compaction() {
+                state.hide_completion();
+            }
         }
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if let Some(line) = handle_composer_ctrl_d(state) {
@@ -1386,7 +1388,14 @@ fn start_host_command_with_input(
         );
     }
     state.provider_recovery = None;
-    state.operation = Some(OperationKind::Command);
+    let is_context_compaction = state.session_saved
+        && matches!(&command, RuntimeCommand::Known { name, arguments }
+            if name == "context" && arguments.trim() == "compact");
+    state.operation = Some(if is_context_compaction {
+        OperationKind::ContextCompaction
+    } else {
+        OperationKind::Command
+    });
     state.begin_run_usage(command_starts_run_usage(&command));
     state.started_at = Some(Instant::now());
     state.activity = Some(if let RuntimeCommand::Shell { command } = &command {
@@ -1399,6 +1408,8 @@ fn start_host_command_with_input(
             temporary: false,
         });
         "running shell command".into()
+    } else if is_context_compaction {
+        "Compacting context · Esc stops".into()
     } else {
         format!("running /{}", runtime_command_name(&command))
     });

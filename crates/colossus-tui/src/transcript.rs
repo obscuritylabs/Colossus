@@ -357,6 +357,10 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                         .into(),
                 ),
                 (
+                    "Context compaction".into(),
+                    "When /context compact is running, press Esc to request cancellation and keep your draft.".into(),
+                ),
+                (
                     "Event details".into(),
                     "Click a tool row or F3 to inspect; Left/Right changes event; Esc closes.".into(),
                 ),

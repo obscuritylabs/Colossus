@@ -200,6 +200,11 @@ fn released_provider_rejection(failure: &colossus_contracts::ProviderFailure) ->
 
 fn released_context_failure(error: &ContextError) -> RunFailure {
     match error {
+        ContextError::Cancelled => generic_failure(
+            "context.cancelled",
+            "context compaction was cancelled",
+            OutcomeCertainty::Known,
+        ),
         ContextError::BudgetExceeded(budget) => {
             generic_failure(budget.code(), &budget.to_string(), OutcomeCertainty::Known)
         }

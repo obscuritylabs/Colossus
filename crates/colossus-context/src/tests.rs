@@ -13,6 +13,9 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+#[path = "compaction_cancellation_tests.rs"]
+mod compaction_cancellation;
+
 struct SummaryProvider {
     output: Option<String>,
     calls: AtomicUsize,

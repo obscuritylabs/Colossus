@@ -202,6 +202,13 @@ impl WorkerClient {
         if control.is_cancelled() {
             return Err(WorkerError::Cancelled);
         }
+        let retain_reply_on_cancel_write_failure = matches!(
+            &operation,
+            WorkerOperation::RunInteractive {
+                request: InteractiveWorkerRequest::ContextCompact { .. },
+                ..
+            }
+        );
         let request = signed_request(
             self.authentication_key.expose(),
             operation,
@@ -210,9 +217,12 @@ impl WorkerClient {
         write_message(&mut stream, &request, MAX_REQUEST_BYTES).await?;
         drive_interactive_client(
             stream,
-            self.authentication_key.expose(),
-            &request.request_id,
-            &connection_nonce,
+            InteractiveClientConnection {
+                key: self.authentication_key.expose(),
+                request_id: &request.request_id,
+                connection_nonce: &connection_nonce,
+                retain_reply_on_cancel_write_failure,
+            },
             observer,
             prompts,
             control,
@@ -260,11 +270,60 @@ impl WorkerClient {
     }
 }
 
+pub(super) struct InteractiveClientConnection<'a> {
+    pub(super) key: &'a [u8; 32],
+    pub(super) request_id: &'a str,
+    pub(super) connection_nonce: &'a str,
+    pub(super) retain_reply_on_cancel_write_failure: bool,
+}
+
+#[derive(Default)]
+struct InteractiveCancellation {
+    requested: bool,
+    write_failure: Option<(tokio::time::Instant, WorkerError)>,
+}
+
+impl InteractiveCancellation {
+    async fn request(
+        &mut self,
+        writer: &mut (impl AsyncWrite + Unpin),
+        connection: &InteractiveClientConnection<'_>,
+        sequence: &mut u64,
+    ) -> Result<(), WorkerError> {
+        *sequence = sequence.saturating_add(1);
+        self.requested = true;
+        let result = write_signed_client_frame(
+            writer,
+            connection.key,
+            connection.request_id,
+            connection.connection_nonce,
+            *sequence,
+            ClientFrameContent::Cancel,
+        )
+        .await;
+        match result {
+            Err(error @ WorkerError::Io(_)) if connection.retain_reply_on_cancel_write_failure => {
+                // A completed operation may have closed its read side after
+                // sending its terminal frame. Allow bounded time to read it.
+                self.write_failure =
+                    Some((tokio::time::Instant::now() + Duration::from_secs(2), error));
+                Ok(())
+            }
+            result => result,
+        }
+    }
+
+    async fn failed_reply_deadline(&self) {
+        match &self.write_failure {
+            Some((deadline, _)) => tokio::time::sleep_until(*deadline).await,
+            None => std::future::pending().await,
+        }
+    }
+}
+
 pub(super) async fn drive_interactive_client<S, T>(
     stream: S,
-    key: &[u8; 32],
-    request_id: &str,
-    connection_nonce: &str,
+    connection: InteractiveClientConnection<'_>,
     observer: &mut dyn RunEventObserver,
     prompts: &dyn WorkerPromptHandler,
     control: &RunControl,
@@ -286,33 +345,31 @@ where
     }));
     let mut server_sequence = 0_u64;
     let mut client_sequence = 0_u64;
-    let mut cancellation_sent = false;
+    let mut cancellation = InteractiveCancellation::default();
     let mut cancellation_poll = tokio::time::interval(Duration::from_millis(50));
     cancellation_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         let frame = tokio::select! {
             biased;
-            _ = cancellation_poll.tick(), if !cancellation_sent => {
+            _ = cancellation_poll.tick(), if !cancellation.requested => {
                 if control.is_cancelled() {
-                    client_sequence = client_sequence.saturating_add(1);
-                    write_signed_client_frame(
-                        &mut writer,
-                        key,
-                        request_id,
-                        connection_nonce,
-                        client_sequence,
-                        ClientFrameContent::Cancel,
-                    )
-                    .await?;
-                    cancellation_sent = true;
+                    cancellation.request(&mut writer, &connection, &mut client_sequence).await?;
                 }
                 continue;
             }
             frame = frame_rx.recv() => frame.ok_or_else(|| {
                 WorkerError::Protocol("worker response stream closed".into())
             })??,
+            _ = cancellation.failed_reply_deadline() => {
+                return Err(cancellation.write_failure.take().expect("cancel write failed").1);
+            }
         };
-        let content = validate_frame(key, request_id, &mut server_sequence, &frame)?;
+        let content = validate_frame(
+            connection.key,
+            connection.request_id,
+            &mut server_sequence,
+            &frame,
+        )?;
         match content {
             WorkerFrameContent::Event { event } => observer
                 .observe(event)
@@ -320,9 +377,7 @@ where
                 .map_err(|error| WorkerError::Remote(error.to_string()))?,
             WorkerFrameContent::Notice { notice } => prompts.notice(notice).await?,
             WorkerFrameContent::Prompt { prompt } => {
-                if cancellation_sent {
-                    // The server will release this waiter when it processes the
-                    // already-authenticated cancellation frame.
+                if cancellation.requested {
                     continue;
                 }
                 let prompt_id = prompt.prompt_id.clone();
@@ -335,17 +390,7 @@ where
                             if !control.is_cancelled() {
                                 continue;
                             }
-                            client_sequence = client_sequence.saturating_add(1);
-                            write_signed_client_frame(
-                                &mut writer,
-                                key,
-                                request_id,
-                                connection_nonce,
-                                client_sequence,
-                                ClientFrameContent::Cancel,
-                            )
-                            .await?;
-                            cancellation_sent = true;
+                            cancellation.request(&mut writer, &connection, &mut client_sequence).await?;
                             break None;
                         }
                         frame = frame_rx.recv() => {
@@ -354,8 +399,12 @@ where
                                     "worker response stream closed while prompting".into(),
                                 )
                             })??;
-                            let content =
-                                validate_frame(key, request_id, &mut server_sequence, &frame)?;
+                            let content = validate_frame(
+                                connection.key,
+                                connection.request_id,
+                                &mut server_sequence,
+                                &frame,
+                            )?;
                             match content {
                                 WorkerFrameContent::Event { event } => observer
                                     .observe(event)
@@ -390,25 +439,17 @@ where
                     continue;
                 };
                 if control.is_cancelled() {
-                    client_sequence = client_sequence.saturating_add(1);
-                    write_signed_client_frame(
-                        &mut writer,
-                        key,
-                        request_id,
-                        connection_nonce,
-                        client_sequence,
-                        ClientFrameContent::Cancel,
-                    )
-                    .await?;
-                    cancellation_sent = true;
+                    cancellation
+                        .request(&mut writer, &connection, &mut client_sequence)
+                        .await?;
                     continue;
                 }
                 client_sequence = client_sequence.saturating_add(1);
                 write_signed_client_frame(
                     &mut writer,
-                    key,
-                    request_id,
-                    connection_nonce,
+                    connection.key,
+                    connection.request_id,
+                    connection.connection_nonce,
                     client_sequence,
                     ClientFrameContent::PromptResponse { prompt_id, answer },
                 )

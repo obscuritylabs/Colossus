@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
@@ -56,6 +57,33 @@ impl EffectExecutor for ContextEffectExecutor {
         request: &EffectRequest,
         _permit: ExecutionPermit,
     ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        self.execute_operation(request, None).await
+    }
+}
+
+pub(super) struct ControlledContextEffect<'a> {
+    pub(super) executor: &'a ContextEffectExecutor,
+    pub(super) control: &'a RunControl,
+    pub(super) cancelled: AtomicBool,
+}
+
+#[async_trait]
+impl EffectExecutor for ControlledContextEffect<'_> {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        _permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        self.executor.execute_operation(request, Some(self)).await
+    }
+}
+
+impl ContextEffectExecutor {
+    async fn execute_operation(
+        &self,
+        request: &EffectRequest,
+        controlled: Option<&ControlledContextEffect<'_>>,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
         let operation: ContextOperation = serde_json::from_value(request.content.clone())
             .map_err(|error| ExecutionError::Failed(error.to_string()))?;
         if request.action != operation.action()
@@ -72,18 +100,42 @@ impl EffectExecutor for ContextEffectExecutor {
                     .status_for_role(&session_id, &role)
                     .map_err(context_execution_error)?,
             ),
-            ContextOperation::Compact { session_id, role } => serde_json::to_value(
-                self.service
-                    .compact_for_role_with_context(
-                        &session_id,
-                        &role,
-                        "You are Colossus.",
-                        &self.tool_definitions,
-                        request.context.clone(),
-                    )
-                    .await
-                    .map_err(context_execution_error)?,
-            ),
+            ContextOperation::Compact { session_id, role } => {
+                let prepared = if let Some(controlled) = controlled {
+                    self.service
+                        .compact_for_role_with_context_controlled(
+                            &session_id,
+                            &role,
+                            "You are Colossus.",
+                            &self.tool_definitions,
+                            request.context.clone(),
+                            controlled.control,
+                        )
+                        .await
+                        .map_err(|error| match error {
+                            ContextError::Cancelled => {
+                                controlled.cancelled.store(true, Ordering::Release);
+                                context_execution_error(error)
+                            }
+                            ContextError::Store(StoreError::OutcomeUnknown(_)) => {
+                                ExecutionError::OutcomeUnknown(error.to_string())
+                            }
+                            _ => context_execution_error(error),
+                        })?
+                } else {
+                    self.service
+                        .compact_for_role_with_context(
+                            &session_id,
+                            &role,
+                            "You are Colossus.",
+                            &self.tool_definitions,
+                            request.context.clone(),
+                        )
+                        .await
+                        .map_err(context_execution_error)?
+                };
+                serde_json::to_value(prepared)
+            }
             ContextOperation::Snapshots { session_id } => serde_json::to_value(
                 self.service
                     .list_snapshots(&session_id)
@@ -171,7 +223,7 @@ pub(super) fn context_tool_session(context: &ExecutionContext) -> Result<String,
 
 pub(super) async fn execute_context_effect(
     gateway: &EffectGateway,
-    executor: &ContextEffectExecutor,
+    executor: &dyn EffectExecutor,
     actor: Actor,
     context: ExecutionContext,
     operation: ContextOperation,

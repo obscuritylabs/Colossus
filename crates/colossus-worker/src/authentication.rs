@@ -61,6 +61,20 @@ pub(super) fn validate_request(
         &request.authentication_tag,
         "worker request",
     )?;
+    if let WorkerOperation::RunInteractive {
+        request: InteractiveWorkerRequest::ContextCompact { .. },
+        approval_mode,
+        sandbox_boundary_acknowledgement,
+        model_options,
+    } = &request.operation
+        && (approval_mode.is_some()
+            || sandbox_boundary_acknowledgement.is_some()
+            || model_options.is_some())
+    {
+        return Err(WorkerError::Protocol(
+            "interactive context compaction does not accept authority or model overrides".into(),
+        ));
+    }
     replay
         .lock()
         .map_err(|error| WorkerError::Protocol(error.to_string()))?

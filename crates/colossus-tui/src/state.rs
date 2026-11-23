@@ -459,6 +459,7 @@ pub(super) enum Overlay {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum OperationKind {
     Command,
+    ContextCompaction,
     Run,
 }
 
@@ -1208,6 +1209,17 @@ impl TuiState {
             return true;
         }
         false
+    }
+
+    pub(super) fn cancel_context_compaction(&mut self) -> bool {
+        if self.operation != Some(OperationKind::ContextCompaction) {
+            return false;
+        }
+        if let Some(control) = &self.control {
+            control.cancel();
+            self.activity = Some("Stopping context compaction".into());
+        }
+        true
     }
 
     pub(super) fn interrupt_or_exit(&mut self) {

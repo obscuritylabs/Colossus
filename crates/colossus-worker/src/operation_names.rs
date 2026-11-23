@@ -45,6 +45,7 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
             InteractiveWorkerRequest::GitHubPullRequest { .. } => {
                 "run_interactive.github_pull_request"
             }
+            InteractiveWorkerRequest::ContextCompact { .. } => "run_interactive.context_compact",
             InteractiveWorkerRequest::SandboxBoundaryAcknowledge { .. } => {
                 "run_interactive.sandbox_boundary_acknowledge"
             }

@@ -131,6 +131,21 @@ pub enum WorkerError {
     Busy(String),
 }
 
+/// The authenticated worker's settlement of a manual context compaction.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ContextCompactionOutcome {
+    /// The context operation finished with a prepared view.
+    Completed {
+        /// The prepared context and resulting snapshot state.
+        prepared: Box<colossus_contracts::PreparedContext>,
+    },
+    /// Cancellation won before the snapshot write was admitted.
+    Cancelled,
+    /// The worker could not establish the durable outcome.
+    OutcomeUnknown,
+}
+
 /// One operation carried by the authenticated current-protocol interactive duplex channel.
 ///
 /// The request selects application behavior only. Prompts, notices, released run
@@ -155,6 +170,13 @@ pub enum InteractiveWorkerRequest {
     GitHubPullRequest {
         /// Arguments validated against the connector's read operation schema.
         arguments: Value,
+    },
+    /// Force a context snapshot for the attached terminal's exact saved session.
+    ContextCompact {
+        /// Exact durable session displayed by the attached client.
+        session_id: String,
+        /// Logical model role whose budget governs the snapshot.
+        role: String,
     },
     /// Prompt for and issue one client-scoped direct-execution acknowledgement.
     SandboxBoundaryAcknowledge {

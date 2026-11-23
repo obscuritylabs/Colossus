@@ -1040,6 +1040,11 @@ fn help_is_generated_from_the_available_command_catalog() {
     assert!(normalized.contains("schedule list"), "{rendered}");
     assert!(normalized.contains("/theme hacker"), "{rendered}");
     assert!(normalized.contains("/mcp tools"), "{rendered}");
+    assert!(
+        normalized.contains("When /context compact is running, press Esc to request cancellation"),
+        "{rendered}"
+    );
+    assert!(normalized.contains("keep your draft."), "{rendered}");
     assert!(!normalized.contains("@repo-review"), "{rendered}");
 }
 
@@ -4000,6 +4005,45 @@ fn failed_or_cancelled_runs_pause_the_queue_and_cancellation_is_cooperative() {
     );
     assert!(state.queue_paused);
     assert!(matches!(state.overlay, Some(Overlay::QueuePaused)));
+}
+
+#[test]
+fn context_compaction_cancellation_keeps_the_draft_and_waits_for_the_host() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    let control = RunControl::default();
+    state.control = Some(control.clone());
+    state.operation = Some(OperationKind::Command);
+    assert!(!state.cancel_context_compaction());
+    assert!(!control.is_cancelled());
+
+    state.operation = Some(OperationKind::ContextCompaction);
+    state.composer.insert("keep this draft");
+    state.queue.push_back("keep this queued turn".into());
+    assert!(state.cancel_context_compaction());
+    assert!(control.is_cancelled());
+    assert!(state.is_busy());
+    assert!(!state.queue_paused);
+    assert_eq!(state.draft(), "keep this draft");
+    assert_eq!(
+        state.activity.as_deref(),
+        Some("Stopping context compaction")
+    );
+
+    handle_host_event(
+        &mut state,
+        HostEvent::OperationFinished(Box::new(Ok(OperationResult::Command(HostCommandResult {
+            continue_queue: false,
+            ..HostCommandResult::document(PresentationDocument::from_block(
+                PresentationBlock::Text("Context compaction cancelled".into()),
+            ))
+        })))),
+    );
+    assert!(!state.is_busy());
+    assert!(state.queue_paused);
+    assert!(matches!(state.overlay, Some(Overlay::QueuePaused)));
+    assert_eq!(state.session_id, "019f-test");
+    assert_eq!(state.draft(), "keep this draft");
+    assert_eq!(state.queue.front().unwrap(), "keep this queued turn");
 }
 
 #[test]

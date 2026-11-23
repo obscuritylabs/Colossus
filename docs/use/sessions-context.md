@@ -106,6 +106,18 @@ threshold has not been reached. Restore changes which immutable snapshot is
 active; it does not delete later messages or rewrite the snapshot. Both actions
 follow the configured authorization rules.
 
+While `/context compact` is running in the full-screen Terminal UI, press **Esc**
+to request cancellation. The terminal keeps your draft while it waits. If it
+reports **Context compaction cancelled**, the prior context and saved messages
+remain intact, and you can keep working in the same session. A provider that
+already accepted the summary request may still process it. If the snapshot
+write already began, it can finish after you press Esc.
+
+A lost worker reply or an uncertain snapshot write can lead to **Context
+compaction outcome unknown**. Inspect `/context status` or `/context list` before
+retrying. The terminal pauses queued turns after cancellation or an unknown
+outcome.
+
 From a shell, use the matching commands with the session ID:
 
 ```bash

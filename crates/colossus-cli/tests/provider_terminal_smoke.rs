@@ -2443,14 +2443,14 @@ data: [DONE]
     }
 }
 
-fn goal_usage_process(
+fn provider_pty_process(
     binary: &Path,
     config: &Path,
     home: &process_support::IsolatedUserHome,
 ) -> Command {
     let mut command = Command::new(binary);
     command
-        .current_dir(config.parent().expect("goal usage workspace"))
+        .current_dir(config.parent().expect("provider PTY workspace"))
         .arg("--config")
         .arg(config)
         .env("HOME", home.path())
@@ -2464,6 +2464,317 @@ fn goal_usage_process(
         .env("TEMP", home.temporary_directory())
         .env("TMP", home.temporary_directory());
     command
+}
+
+fn start_provider_pty_worker(
+    binary: &Path,
+    config: &Path,
+    home: &process_support::IsolatedUserHome,
+) -> ChildGuard {
+    let process = provider_pty_process(binary, config, home)
+        .arg("worker")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start provider PTY worker");
+    let mut worker = ChildGuard(process);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let output = provider_pty_process(binary, config, home)
+            .args(["worker", "--status"])
+            .output()
+            .expect("provider PTY worker status");
+        if output.status.success() {
+            return worker;
+        }
+        assert!(
+            worker.0.try_wait().expect("worker exit status").is_none() && Instant::now() < deadline,
+            "provider PTY worker failed to start: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn provider_pty_terminal(
+    binary: &Path,
+    config: &Path,
+    home: &process_support::IsolatedUserHome,
+    with_worker: bool,
+    session_id: Option<&str>,
+) -> terminal_support::Terminal {
+    let mut command = portable_pty::CommandBuilder::new(binary);
+    command.cwd(config.parent().expect("provider PTY workspace"));
+    command.arg("--config");
+    command.arg(config);
+    command.args(["--alt-screen", "--approval-mode", "full-access"]);
+    if with_worker {
+        command.arg("--worker-required");
+    }
+    command.arg("tui");
+    if let Some(session_id) = session_id {
+        command.args(["--session", session_id]);
+    }
+    command.env("HOME", home.path());
+    command.env("COLOSSUS_HOME", home.colossus_home());
+    command.env("COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY", JOURNAL_KEY);
+    command.env("COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY", SIGNING_KEY);
+    #[cfg(windows)]
+    {
+        command.env("USERPROFILE", home.path());
+        command.env("LOCALAPPDATA", home.local_app_data());
+        command.env("TEMP", home.temporary_directory());
+        command.env("TMP", home.temporary_directory());
+    }
+    let terminal = terminal_support::Terminal::start(command);
+    terminal.wait("Enter sends");
+    terminal
+}
+
+fn stop_provider_pty_worker(
+    binary: &Path,
+    config: &Path,
+    home: &process_support::IsolatedUserHome,
+    worker: &mut ChildGuard,
+) {
+    let output = provider_pty_process(binary, config, home)
+        .args(["worker", "--shutdown"])
+        .output()
+        .expect("shutdown provider PTY worker");
+    assert!(
+        output.status.success(),
+        "shutdown provider PTY worker: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    wait_for_exit(&mut worker.0);
+}
+
+#[test]
+fn tui_escape_cancels_manual_context_compaction_in_both_hosts() {
+    const NEXT: &str = "Continue after compaction stopped";
+    const SUMMARY: &str = "late-context-summary";
+    let binary = Path::new(env!("CARGO_BIN_EXE_colossus"));
+    for with_worker in [false, true] {
+        let case = if with_worker { "worker" } else { "embedded" };
+        let directory = tempdir().expect("context compaction PTY workspace");
+        let home = process_support::isolated_user_home(directory.path());
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listen for the context summarizer");
+        listener
+            .set_nonblocking(true)
+            .expect("bound the accept wait");
+        let origin = format!("http://{}", listener.local_addr().expect("summary address"));
+        let config = write_failure_config(directory.path(), &origin, "echo");
+        let mut document: Value =
+            serde_json::from_slice(&fs::read(&config).expect("read compaction config"))
+                .expect("config JSON");
+        document["access"]["actions"]["allow"] = json!([
+            "context.compact",
+            "context.show",
+            "context.snapshots",
+            "plugin.list",
+            "presentation.history.append",
+            "provider.openai.chat"
+        ]);
+        document["providers"]["profiles"]["echo"] = json!({
+            "kind": "echo",
+            "baseUrl": null,
+            "credentialReference": null,
+            "timeoutMs": 5000
+        });
+        document["providers"]["profiles"]["failure"]["timeoutMs"] = json!(60_000);
+        document["models"]["profiles"]["echo"] = json!({
+            "providerProfile": "echo",
+            "model": "echo",
+            "contextWindowTokens": 32768,
+            "maxOutputTokens": 4096,
+            "capabilities": {"toolCalls": true, "streaming": true}
+        });
+        document["models"]["roles"] = json!({"primary": "echo", "context_summarizer": "failure"});
+        document["plugins"] = json!({"enabled": false});
+        document["context"] = json!({
+            "autoCompaction": false,
+            "compactAtPercent": 70,
+            "targetPercent": 45,
+            "preserveRecentMessages": 2,
+            "modelAssisted": false
+        });
+        let write_config = |document: &Value| {
+            fs::write(&config, serde_json::to_vec_pretty(document).unwrap()).expect("write config");
+        };
+        write_config(&document);
+        let invoke = |arguments: &[&str]| -> Value {
+            let output = provider_pty_process(binary, &config, &home)
+                .args(arguments)
+                .output()
+                .expect("run Colossus");
+            assert!(
+                output.status.success(),
+                "{case} {arguments:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            serde_json::from_slice(&output.stdout).expect("CLI result JSON")
+        };
+        let first = invoke(&["run", "The original requirement survives compaction"]);
+        let session = first["session_id"].as_str().expect("existing session");
+        invoke(&[
+            "run",
+            "Keep this implementation detail",
+            "--session",
+            session,
+        ]);
+        invoke(&["context", "compact", session]);
+        invoke(&[
+            "run",
+            "Additional history since the snapshot",
+            "--session",
+            session,
+        ]);
+        let baseline_status = invoke(&["context", "status", session]);
+        let baseline_snapshots = invoke(&["context", "list", session]);
+        assert_eq!(baseline_snapshots.as_array().map(Vec::len), Some(1));
+        assert_eq!(baseline_snapshots[0]["strategy"], "deterministic");
+        assert!(baseline_status["active_snapshot_id"].is_string());
+        assert_eq!(
+            baseline_snapshots[0]["id"],
+            baseline_status["active_snapshot_id"]
+        );
+        let baseline_messages = invoke(&["sessions", "messages", session]);
+        let baseline_messages = baseline_messages.as_array().expect("canonical messages");
+        assert_eq!(baseline_messages.len(), 6);
+
+        document["context"]["modelAssisted"] = json!(true);
+        write_config(&document);
+        let mut worker = with_worker.then(|| start_provider_pty_worker(binary, &config, &home));
+        let terminal = provider_pty_terminal(binary, &config, &home, with_worker, Some(session));
+        terminal.send(b"\x1b[200~/context compact\x1b[201~");
+        terminal.wait_for_composer("/context compact", |draft| draft == "/context compact");
+        terminal.send(b"\r");
+        terminal.wait("Esc stops");
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut summarizer = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "{case} summarizer was never called"
+                    );
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => panic!("{case} summarizer accept: {error}"),
+            }
+        };
+        summarizer
+            .set_nonblocking(false)
+            .expect("read the complete request");
+        let request = request_body(&read_request(&mut summarizer));
+        assert_eq!(request["model"], "failure-model");
+        assert!(
+            request["messages"]
+                .to_string()
+                .contains("The original requirement"),
+            "{case} did not send the saved history to the summarizer"
+        );
+
+        terminal.send(format!("\x1b[200~{NEXT}\x1b[201~").as_bytes());
+        terminal.wait_for_composer("draft while the summarizer is stalled", |draft| {
+            draft == NEXT
+        });
+        terminal.send(b"\x1b");
+        terminal.wait("The prior context remains active.");
+        let confirmed = terminal
+            .wait_for_composer("draft after compaction cancellation", |draft| draft == NEXT);
+        assert!(
+            confirmed.contains("Context compaction cancelled"),
+            "{case}: {confirmed}"
+        );
+
+        // The listener withholds any provider result until cancellation is confirmed.
+        // The client may have already closed its side of the connection.
+        let late_response = format!(
+            r#"data: {{"id":"late-summary","choices":[{{"index":0,"delta":{{"content":"{SUMMARY}"}},"finish_reason":"stop"}}]}}
+
+data: [DONE]
+
+"#
+        );
+        let _ = write!(
+            summarizer,
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            late_response.len(),
+            late_response
+        );
+        drop(summarizer);
+
+        terminal.send(b"\r");
+        terminal.wait_for_composer("next prompt submitted", str::is_empty);
+        terminal.wait_until("next turn echoes in the same session", |screen| {
+            screen.matches(NEXT).count() >= 2
+        });
+        // The echo can paint before its canonical message is committed. A
+        // subsequent context command reaches the host after the run settles.
+        terminal.command("/context status", "Safety reserve");
+        drop(terminal);
+        if let Some(worker) = worker.as_mut() {
+            stop_provider_pty_worker(binary, &config, &home, worker);
+        }
+
+        let status = invoke(&["context", "status", session]);
+        assert_eq!(
+            status["active_snapshot_id"],
+            baseline_status["active_snapshot_id"]
+        );
+        assert_eq!(invoke(&["context", "list", session]), baseline_snapshots);
+        let messages = invoke(&["sessions", "messages", session]);
+        let messages = messages
+            .as_array()
+            .expect("canonical messages after reopen");
+        assert_eq!(
+            messages.len(),
+            baseline_messages.len() + 2,
+            "{case}: the next turn must persist exactly one user and one assistant message"
+        );
+        assert_eq!(
+            &messages[..baseline_messages.len()],
+            baseline_messages,
+            "{case}"
+        );
+        for (message, role) in messages[baseline_messages.len()..]
+            .iter()
+            .zip(["user", "assistant"])
+        {
+            assert_eq!(message["message"]["role"], role);
+            assert_eq!(message["message"]["content"], NEXT);
+        }
+
+        // The local compaction settled before any snapshot append. The already
+        // dispatched HTTP request has its own, uncertain remote outcome.
+        let audit = invoke(&["audit", "show", "--limit", "1000"]);
+        let audit = audit.as_array().expect("audit evidence");
+        let unknown = audit
+            .iter()
+            .filter(|event| {
+                event["context"]["session_id"] == session
+                    && event["event_type"] == "effect.outcome_unknown.v1"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            unknown.len(),
+            1,
+            "{case}: expected one uncertain provider effect"
+        );
+        let correlation = &unknown[0]["context"]["correlation_id"];
+        assert!(
+            audit.iter().any(|event| {
+                event["event_type"] == "effect.failed.v1"
+                    && event["context"]["session_id"] == session
+                    && &event["context"]["correlation_id"] == correlation
+                    && event["stream_id"] != unknown[0]["stream_id"]
+            }),
+            "{case}: expected failed local compaction evidence for the same operation"
+        );
+    }
 }
 
 #[test]
@@ -2528,52 +2839,8 @@ data: [DONE]
                 serde_json::to_vec_pretty(&document).expect("goal config JSON"),
             )
             .expect("write goal config");
-            let mut worker = with_worker.then(|| {
-                let process = goal_usage_process(binary, &config, &home)
-                    .arg("worker")
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .expect("start goal usage worker");
-                let worker = ChildGuard(process);
-                let deadline = Instant::now() + Duration::from_secs(10);
-                loop {
-                    if goal_usage_process(binary, &config, &home)
-                        .args(["worker", "--status"])
-                        .output()
-                        .expect("goal worker status")
-                        .status
-                        .success()
-                    {
-                        break;
-                    }
-                    assert!(Instant::now() < deadline, "goal usage worker did not start");
-                    thread::sleep(Duration::from_millis(20));
-                }
-                worker
-            });
-            let mut command = portable_pty::CommandBuilder::new(binary);
-            command.cwd(directory.path());
-            command.arg("--config");
-            command.arg(&config);
-            command.args(["--alt-screen", "--approval-mode", "full-access"]);
-            if with_worker {
-                command.arg("--worker-required");
-            }
-            command.arg("tui");
-            command.env("HOME", home.path());
-            command.env("COLOSSUS_HOME", home.colossus_home());
-            command.env("COLOSSUS_PROVIDER_TERMINAL_JOURNAL_KEY", JOURNAL_KEY);
-            command.env("COLOSSUS_PROVIDER_TERMINAL_SIGNING_KEY", SIGNING_KEY);
-            #[cfg(windows)]
-            {
-                command.env("USERPROFILE", home.path());
-                command.env("LOCALAPPDATA", home.local_app_data());
-                command.env("TEMP", home.temporary_directory());
-                command.env("TMP", home.temporary_directory());
-            }
-            let terminal = terminal_support::Terminal::start(command);
-            terminal.wait("Enter sends");
+            let mut worker = with_worker.then(|| start_provider_pty_worker(binary, &config, &home));
+            let terminal = provider_pty_terminal(binary, &config, &home, with_worker, None);
             terminal.resize(40, 140);
             terminal.command(
                 "/goal Prove final iteration token accounting",
@@ -2656,17 +2923,9 @@ data: [DONE]
             // Dropping the TUI does not stop a separately hosted worker or its writer lease.
             drop(terminal);
             if let Some(worker) = worker.as_mut() {
-                assert!(
-                    goal_usage_process(binary, &config, &home)
-                        .args(["worker", "--shutdown"])
-                        .output()
-                        .expect("shutdown goal worker")
-                        .status
-                        .success()
-                );
-                wait_for_exit(&mut worker.0);
+                stop_provider_pty_worker(binary, &config, &home, worker);
             }
-            let goals = goal_usage_process(binary, &config, &home)
+            let goals = provider_pty_process(binary, &config, &home)
                 .args(["goals", "list"])
                 .output()
                 .expect("list completed goals");

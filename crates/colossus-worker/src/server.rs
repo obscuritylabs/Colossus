@@ -681,6 +681,20 @@ async fn dispatch_interactive(
         InteractiveWorkerRequest::GitHubPullRequest { arguments } => {
             Ok(runtime.call_github_pull_request(arguments, control).await?)
         }
+        InteractiveWorkerRequest::ContextCompact { session_id, role } => {
+            let outcome = match runtime
+                .compact_context_for_role_controlled(&session_id, &role, control)
+                .await
+            {
+                Ok(Some(prepared)) => ContextCompactionOutcome::Completed {
+                    prepared: Box::new(prepared),
+                },
+                Ok(None) => ContextCompactionOutcome::Cancelled,
+                Err(error) if error.outcome_unknown() => ContextCompactionOutcome::OutcomeUnknown,
+                Err(error) => return Err(error.into()),
+            };
+            Ok(serde_json::to_value(outcome)?)
+        }
         InteractiveWorkerRequest::SandboxBoundaryAcknowledge { session_id, mode } => {
             let bridge = ACTIVE_INTERACTIVE_RUN.try_with(Clone::clone).map_err(|_| {
                 WorkerError::Protocol("no interactive worker client attached".into())
@@ -1079,8 +1093,8 @@ where
     bridge.cancel_run(control).await;
     reader_task.abort();
     if settle_without_client {
-        // Release any pending approval and keep polling the bounded read so an
-        // already-dispatched effect can record its terminal result.
+        // Keep polling the controlled operation so an already-dispatched effect
+        // can settle without a client to receive the terminal result.
         drop(outbound_rx);
         let _ = run.await;
     }
@@ -1189,6 +1203,7 @@ where
                     settle_without_client: matches!(
                         &request,
                         InteractiveWorkerRequest::GitHubPullRequest { .. }
+                            | InteractiveWorkerRequest::ContextCompact { .. }
                     ),
                 },
                 request,

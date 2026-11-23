@@ -11,7 +11,7 @@ use colossus_contracts::{
 };
 use colossus_ports::{
     ContextBudgetExceeded, ContextBudgetScope, ContextError, ContextPreparationRequest,
-    ContextPreparer, ContextRepository, EventJournal, MemoryRetriever, ModelProvider,
+    ContextPreparer, ContextRepository, EventJournal, MemoryRetriever, ModelProvider, RunControl,
     SessionRepository, StoreError, WorkRepository,
 };
 use colossus_tools::project_model_tool_observations;
