@@ -468,6 +468,7 @@ use model_selection::*;
 mod operations;
 use operations::HostOperationGate;
 mod embedded;
+mod integrations;
 mod plugins;
 mod shell;
 mod sidebar;

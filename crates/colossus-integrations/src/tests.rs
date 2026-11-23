@@ -368,7 +368,12 @@ fn native_manifests_cover_github_and_searxng_auth_contracts() {
     )
     .expect("GitHub");
     assert_eq!(github.status, IntegrationStatus::PendingAuth);
-    assert_eq!(github.operations.len(), 5);
+    assert_eq!(github.operations.len(), 6);
+    assert!(github.operations.iter().any(|operation| {
+        operation.tool.name == "github.pull_request"
+            && operation.method == "GET"
+            && !operation.accepts_body
+    }));
     assert_eq!(github.scopes, ["repo", "workflow"]);
 
     let searxng = compile_native(

@@ -297,6 +297,38 @@ fn interactive_shell_preserves_exact_source_and_session_without_accepting_author
 }
 
 #[test]
+fn interactive_github_read_has_a_fixed_operation_identity() {
+    let arguments = json!({"owner": "owner", "repo": "repository", "number": 42});
+    let operation = WorkerOperation::RunInteractive {
+        model_options: None,
+        request: InteractiveWorkerRequest::GitHubPullRequest {
+            arguments: arguments.clone(),
+        },
+        approval_mode: Some(WorkerApprovalMode::Ask),
+        sandbox_boundary_acknowledgement: None,
+    };
+    assert_eq!(
+        operation_name(&operation),
+        "run_interactive.github_pull_request"
+    );
+    let mut encoded = serde_json::to_value(operation).expect("encode GitHub read request");
+    assert_eq!(
+        encoded["request"],
+        json!({"kind": "github_pull_request", "arguments": arguments})
+    );
+    assert!(matches!(
+        serde_json::from_value::<WorkerOperation>(encoded.clone()).expect("decode GitHub read"),
+        WorkerOperation::RunInteractive {
+            request: InteractiveWorkerRequest::GitHubPullRequest { arguments: decoded },
+            approval_mode: Some(WorkerApprovalMode::Ask),
+            ..
+        } if decoded == arguments
+    ));
+    encoded["request"]["tool"] = json!("github.issue_create");
+    assert!(serde_json::from_value::<WorkerOperation>(encoded).is_err());
+}
+
+#[test]
 fn interactive_presentation_requests_bind_the_acknowledged_session() {
     let history = WorkerOperation::RunInteractive {
         model_options: None,
@@ -1593,6 +1625,7 @@ async fn interactive_socket_preserves_event_notice_prompt_order() {
                 key: &key,
                 request_id: SOCKET_TEST_REQUEST_ID,
                 connection_nonce: SOCKET_TEST_CONNECTION_NONCE,
+                settle_without_client: false,
             },
             outbound_rx,
             bridge,
@@ -1662,6 +1695,7 @@ async fn interactive_socket_cancel_releases_waiter_and_rejects_late_prompt() {
                 key: &key,
                 request_id: SOCKET_TEST_REQUEST_ID,
                 connection_nonce: SOCKET_TEST_CONNECTION_NONCE,
+                settle_without_client: false,
             },
             outbound_rx,
             bridge,
@@ -1799,6 +1833,7 @@ async fn interactive_socket_disconnect_cancels_server_and_clears_waiters() {
                 key: &key,
                 request_id: SOCKET_TEST_REQUEST_ID,
                 connection_nonce: SOCKET_TEST_CONNECTION_NONCE,
+                settle_without_client: false,
             },
             outbound_rx,
             bridge,
@@ -1829,6 +1864,52 @@ async fn interactive_socket_disconnect_cancels_server_and_clears_waiters() {
     assert!(server_result.is_err());
     assert!(cancelled);
     assert_eq!(pending, 0);
+}
+
+#[tokio::test]
+async fn interactive_socket_disconnect_settles_bounded_operation() {
+    let key = [26_u8; 32];
+    let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (settled_tx, settled_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (outbound_tx, outbound_rx) = tokio::sync::mpsc::channel(8);
+        let bridge = InteractiveRunBridge::new(outbound_tx, None);
+        let control = RunControl::default();
+        let run = async {
+            started_tx.send(()).expect("client observes effect start");
+            while !control.is_cancelled() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            settled_tx
+                .send(())
+                .expect("client observes effect settlement");
+            Ok(Value::Null)
+        };
+        server::drive_interactive_connection(
+            server_stream,
+            server::InteractiveConnectionContext {
+                key: &key,
+                request_id: SOCKET_TEST_REQUEST_ID,
+                connection_nonce: SOCKET_TEST_CONNECTION_NONCE,
+                settle_without_client: true,
+            },
+            outbound_rx,
+            bridge,
+            &control,
+            run,
+        )
+        .await
+    });
+
+    started_rx.await.expect("operation begins");
+    drop(client_stream);
+    let server_result = tokio::time::timeout(Duration::from_secs(2), server)
+        .await
+        .expect("disconnected operation settlement timeout")
+        .expect("server task");
+    assert!(server_result.is_err());
+    settled_rx.await.expect("active operation settled");
 }
 
 #[tokio::test]

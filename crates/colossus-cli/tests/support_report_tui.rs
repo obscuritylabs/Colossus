@@ -222,8 +222,10 @@ fn worker_tui_saves_a_local_report_after_an_observed_disconnect() {
     fixture.assert_no_durable_input();
 
     drop(worker);
-    // Use an existing operation to observe the disconnected worker before reporting.
-    terminal.command("/tools", "worker is unavailable");
+    terminal.command(
+        r#"/integration call github.pull_request {"owner":"acme","repo":"tools","number":42}"#,
+        "worker is unavailable",
+    );
     report_command(&terminal, "after.json", "Support report saved.");
     assert_report(
         &fixture.workspace.join("after.json"),

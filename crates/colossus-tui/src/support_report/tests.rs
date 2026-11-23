@@ -37,7 +37,7 @@ fn parses_one_literal_destination_and_requires_explicit_replacement() {
 }
 
 #[tokio::test]
-async fn save_bypasses_history_and_queue_and_escape_preserves_approval() {
+async fn save_bypasses_history_and_queue_and_respects_focused_approval() {
     let mut source = snapshot();
     source.session_saved = false;
     let mut state = TuiState::from_snapshot(source);
@@ -99,13 +99,18 @@ async fn save_bypasses_history_and_queue_and_escape_preserves_approval() {
         events.clone(),
         ScreenMode::Alternate,
     );
+    assert!(!first.control.is_cancelled());
+    assert!(matches!(decision.try_recv(), Ok(PromptResponse::Cancelled)));
+    assert!(state.overlay.is_none());
+    handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        host.clone(),
+        events.clone(),
+        ScreenMode::Alternate,
+    );
     assert!(first.control.is_cancelled());
     assert!(!run_control.is_cancelled());
-    assert!(matches!(
-        decision.try_recv(),
-        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
-    ));
-    assert!(state.overlay.is_some());
     first
         .response
         .send(Err("Support report save cancelled.".into()))

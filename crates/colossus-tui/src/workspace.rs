@@ -204,11 +204,16 @@ impl Workspace {
                     let activity = matches!(
                         event.as_ref(),
                         HostEvent::Run(_) | HostEvent::Prompt(_) | HostEvent::OperationFinished(_)
+                    ) || matches!(
+                        event.as_ref(),
+                        HostEvent::ControlledPrompt { control, .. } if !control.is_cancelled()
                     );
                     // Legacy host commands may return a session selection. Keep
                     // that navigation out of the origin session's reducer.
                     let mut event = *event;
-                    if let HostEvent::Prompt(request) = &mut event {
+                    if let HostEvent::Prompt(request)
+                    | HostEvent::ControlledPrompt { request, .. } = &mut event
+                    {
                         let label = self
                             .catalog
                             .iter()

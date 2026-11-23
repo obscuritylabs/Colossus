@@ -18,6 +18,27 @@ fn prompt(id: &str) -> (HostEvent, oneshot::Receiver<PromptResponse>) {
 }
 
 #[test]
+fn cancelled_controlled_prompt_delivered_late_does_not_take_focus() {
+    let mut state = TuiState::from_snapshot(snapshot());
+    state.composer.insert("keep this draft");
+    let (event, mut answer) = prompt("late approval");
+    let HostEvent::Prompt(request) = event else {
+        panic!("fixture prompt");
+    };
+    let control = RunControl::default();
+    let event = HostEvent::ControlledPrompt {
+        request,
+        control: control.clone(),
+    };
+    control.cancel();
+    handle_host_event(&mut state, event);
+    assert_eq!(answer.try_recv(), Ok(PromptResponse::Cancelled));
+    assert!(state.overlay.is_none());
+    assert!(state.pending_prompts.is_empty());
+    assert_eq!(state.draft(), "keep this draft");
+}
+
+#[test]
 fn simultaneous_child_prompts_wait_for_each_own_decision() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.composer.insert("keep this draft");

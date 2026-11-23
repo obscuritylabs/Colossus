@@ -1,4 +1,5 @@
 use super::*;
+use integrations::{pull_request_arguments, pull_request_document};
 
 /// Embedded application adapter. It never writes to stdout/stderr or owns terminal state.
 pub(crate) struct EmbeddedInteractiveHost {
@@ -564,7 +565,7 @@ impl EmbeddedInteractiveHost {
                     .map_err(|error| error.to_string())?,
                 Some("Integrations"),
             ),
-            "integration" => self.integration_command(arguments).await,
+            "integration" => self.integration_command(arguments, control).await,
             "mcp" => self.mcp_command(arguments).await,
             _ => Ok(HostCommandResult::document(
                 PresentationDocument::from_block(PresentationBlock::Card {
@@ -1094,7 +1095,24 @@ impl EmbeddedInteractiveHost {
         )
     }
 
-    async fn integration_command(&self, arguments: &str) -> Result<HostCommandResult, String> {
+    async fn integration_command(
+        &self,
+        arguments: &str,
+        control: &RunControl,
+    ) -> Result<HostCommandResult, String> {
+        let (command, input) = arguments
+            .split_once(char::is_whitespace)
+            .unwrap_or((arguments, ""));
+        if command == "call" {
+            let arguments = pull_request_arguments(input)?;
+            let result = with_prompt_control(
+                control,
+                self.runtime.call_github_pull_request(arguments, control),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            return Ok(HostCommandResult::document(pull_request_document(&result)));
+        }
         if let Some(name) = arguments.strip_prefix("show ") {
             return self.result(
                 &self
@@ -1114,7 +1132,7 @@ impl EmbeddedInteractiveHost {
                 Some("Integration disconnected"),
             );
         }
-        Err("/integration expects show or disconnect".into())
+        Err("/integration expects show, disconnect, or call github.pull_request JSON".into())
     }
 
     async fn mcp_command(&self, arguments: &str) -> Result<HostCommandResult, String> {

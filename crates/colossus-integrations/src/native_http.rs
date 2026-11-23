@@ -14,7 +14,7 @@ pub(super) fn resolve_environment(reference: &str) -> Result<String, ExecutionEr
 pub(super) fn validate_request_credentials(
     operation: &IntegrationRequest,
     disclosed: &[CredentialReference],
-    repository: &dyn IntegrationRepository,
+    invocation_connection: Option<&IntegrationConnection>,
 ) -> Result<(), ExecutionError> {
     let mut expected = match operation {
         IntegrationRequest::ImportOpenApi {
@@ -26,10 +26,8 @@ pub(super) fn validate_request_credentials(
             ..
         } => credential_reference.iter().cloned().collect(),
         IntegrationRequest::Disconnect { .. } => Vec::new(),
-        IntegrationRequest::Invoke { connection, .. } => repository
-            .get_integration(connection)
-            .map_err(execution)?
-            .map(|connection| connection.credential_reference.into_iter().collect())
+        IntegrationRequest::Invoke { .. } => invocation_connection
+            .map(|connection| connection.credential_reference.iter().cloned().collect())
             .unwrap_or_default(),
     };
     expected.sort();

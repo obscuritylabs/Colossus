@@ -467,6 +467,28 @@ struct TuiPromptRoute {
     sender: mpsc::Sender<HostEvent>,
 }
 
+struct TuiPromptControl(RunControl);
+
+pub(super) async fn with_prompt_control<F: std::future::Future>(
+    control: &RunControl,
+    operation: F,
+) -> F::Output {
+    colossus_ports::RunInteractionContext::capture()
+        .with(Arc::new(TuiPromptControl(control.clone())))
+        .scope(operation)
+        .await
+}
+
+pub(super) fn prompt_event(request: InteractivePrompt) -> HostEvent {
+    match colossus_ports::RunInteractionContext::current::<TuiPromptControl>() {
+        Some(control) => HostEvent::ControlledPrompt {
+            request,
+            control: control.0.clone(),
+        },
+        None => HostEvent::Prompt(request),
+    }
+}
+
 /// Operation-scoped TUI destination shared by trusted approval and input providers.
 #[derive(Default)]
 pub(crate) struct TuiPromptRouter {
@@ -520,7 +542,7 @@ impl TuiPromptRouter {
         let sender = self.sender()?;
         let (response_tx, response_rx) = oneshot::channel();
         sender
-            .send(HostEvent::Prompt(InteractivePrompt {
+            .send(prompt_event(InteractivePrompt {
                 id,
                 kind,
                 title,

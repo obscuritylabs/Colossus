@@ -3,6 +3,9 @@
 #[path = "support/process.rs"]
 mod process_support;
 
+#[path = "native_integrations_smoke/github_pull_request.rs"]
+mod github_pull_request;
+
 use process_support::tempdir;
 use serde_json::Value;
 use std::{
@@ -197,7 +200,12 @@ sandbox:
 
     let tools = run(binary, &config, &workspace, &["tools", "list"]);
     let tools = String::from_utf8_lossy(&tools.stdout);
-    for name in ["github.repos", "github.issues", "searxng.search"] {
+    for name in [
+        "github.repos",
+        "github.issues",
+        "github.pull_request",
+        "searxng.search",
+    ] {
         assert!(tools.contains(name), "missing dynamic tool {name}");
     }
 
@@ -218,10 +226,27 @@ sandbox:
         github.accept().is_err(),
         "denied native call opened a socket"
     );
+    let denied_observation = run(
+        binary,
+        &config,
+        &workspace,
+        &[
+            "integrations",
+            "call",
+            "github.pull_request",
+            r#"{"owner":"maintainers","repo":"tools","number":4821}"#,
+        ],
+    );
+    assert!(!denied_observation.status.success());
+    assert!(
+        github.accept().is_err(),
+        "denied observation opened a socket"
+    );
     github.set_nonblocking(false).expect("blocking");
 
+    let github_repos = github.try_clone().expect("GitHub repository fixture");
     let github_server = thread::spawn(move || {
-        let (mut stream, _) = github.accept().expect("GitHub accept");
+        let (mut stream, _) = github_repos.accept().expect("GitHub accept");
         let request = read_request(&mut stream);
         assert!(request.starts_with("GET /user/repos?visibility=private&per_page=5 HTTP/1.1"));
         let lower = request.to_ascii_lowercase();
@@ -249,6 +274,7 @@ sandbox:
         String::from_utf8_lossy(&github_call.stderr)
     );
     assert!(!String::from_utf8_lossy(&github_call.stdout).contains("github-secret"));
+    github_pull_request::assert_exact_head_observation(binary, &config, &workspace, github);
 
     let searx_server = thread::spawn(move || {
         let (mut stream, _) = searxng.accept().expect("SearXNG accept");

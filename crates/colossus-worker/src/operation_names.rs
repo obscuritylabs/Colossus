@@ -42,6 +42,9 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::RunInteractive { request, .. } => match request {
             InteractiveWorkerRequest::PluginManage { .. } => "run_interactive.plugin_manage",
             InteractiveWorkerRequest::ShellRun { .. } => "run_interactive.shell_run",
+            InteractiveWorkerRequest::GitHubPullRequest { .. } => {
+                "run_interactive.github_pull_request"
+            }
             InteractiveWorkerRequest::SandboxBoundaryAcknowledge { .. } => {
                 "run_interactive.sandbox_boundary_acknowledge"
             }

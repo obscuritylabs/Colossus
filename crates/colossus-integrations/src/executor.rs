@@ -254,15 +254,10 @@ impl IntegrationExecutor {
     async fn invoke(
         &self,
         permit: &ExecutionPermit,
-        connection_name: &str,
+        connection: &IntegrationConnection,
         tool_name: &str,
         arguments: &Value,
     ) -> Result<Value, ExecutionError> {
-        let connection = self
-            .repository
-            .get_integration(connection_name)
-            .map_err(execution)?
-            .ok_or_else(|| execution("integration connection is unavailable"))?;
         if connection.status != IntegrationStatus::Connected {
             return Err(execution("integration is not connected"));
         }
@@ -275,10 +270,32 @@ impl IntegrationExecutor {
             .map_err(execution)?
             .validate(arguments)
             .map_err(execution)?;
+        let limit = usize::try_from(
+            permit
+                .obligations()
+                .max_output_bytes
+                .min(operation.tool.max_output_bytes),
+        )
+        .map_err(execution)?;
+        if connection.kind == IntegrationKind::Native
+            && connection.name == "github"
+            && tool_name == super::github_observation::OPERATION
+        {
+            let query = super::github_observation::PullRequestQuery::parse(arguments)?;
+            let url = query.url(connection)?;
+            let http = super::http_transport::IntegrationHttp::new(
+                connection,
+                &url,
+                permit,
+                &self.tls_roots,
+            )
+            .await?;
+            return query.observe(connection, &http, limit).await;
+        }
         let prepared = if connection.kind == IntegrationKind::Native {
-            prepare_native_request(&connection, tool_name, arguments)?
+            prepare_native_request(connection, tool_name, arguments)?
         } else {
-            let mut url = operation_url(&connection, operation, arguments)?;
+            let mut url = operation_url(connection, operation, arguments)?;
             add_query(&mut url, operation, arguments)?;
             PreparedHttpRequest {
                 method: reqwest::Method::from_bytes(operation.method.as_bytes())
@@ -290,63 +307,14 @@ impl IntegrationExecutor {
                     .flatten(),
             }
         };
-        let matched = require_origin(&prepared.url, permit)?;
-        let PreparedHttpRequest { method, url, body } = prepared;
-        let host = url
-            .host_str()
-            .ok_or_else(|| execution("integration URL has no host"))?;
-        let port = url
-            .port_or_known_default()
-            .ok_or_else(|| execution("integration URL has no port"))?;
-        let allow_non_public = matched == NetworkDestinationMatch::Ambient
-            || (matched == NetworkDestinationMatch::Exact
-                && (host.eq_ignore_ascii_case("localhost")
-                    || host.parse::<IpAddr>().is_ok_and(non_public_network_address)));
-        let addresses = resolve_integration_addresses(host, port, allow_non_public).await?;
-        let client = self
-            .tls_roots
-            .configure_reqwest(reqwest::Client::builder())
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .resolve_to_addrs(host, &addresses)
-            .timeout(Duration::from_millis(permit.obligations().timeout_ms))
-            .build()
-            .map_err(execution)?;
-        let mut request = client
-            .request(method.clone(), url)
-            .header("accept", "application/json")
-            .header("user-agent", "colossus/0.6");
-        let credential_value = connection
-            .credential_reference
-            .as_deref()
-            .map(resolve_environment)
-            .transpose()?;
-        let mut sensitive_values = credential_value.iter().cloned().collect::<Vec<_>>();
-        if let Some((name, value)) = auth_header(&connection.auth, credential_value.as_deref())? {
-            if let Ok(value) = value.to_str() {
-                sensitive_values.push(value.into());
-                if let Some((_, token)) = value.split_once(' ') {
-                    sensitive_values.push(token.into());
-                }
-            }
-            request = request.header(name, value);
-        }
-        if connection.name == "github" {
-            request = request.header("x-github-api-version", "2022-11-28");
-        }
-        if let Some(body) = body.as_ref() {
-            request = request.json(body);
-        }
-        let response = request.send().await.map_err(|error| {
-            if method == reqwest::Method::GET {
-                execution(format!("integration request failed: {}", error.classify()))
-            } else {
-                ExecutionError::OutcomeUnknown(format!(
-                    "integration transport failed after a potentially mutating request: {}",
-                    error.classify()
-                ))
-            }
-        })?;
+        let http = super::http_transport::IntegrationHttp::new(
+            connection,
+            &prepared.url,
+            permit,
+            &self.tls_roots,
+        )
+        .await?;
+        let response = http.send(prepared).await?;
         let status = response.status().as_u16();
         let content_type = response
             .headers()
@@ -356,20 +324,11 @@ impl IntegrationExecutor {
             .chars()
             .take(256)
             .collect::<String>();
-        let limit = usize::try_from(
-            permit
-                .obligations()
-                .max_output_bytes
-                .min(operation.tool.max_output_bytes),
-        )
-        .map_err(execution)?;
         let mut bytes = bounded_response(response, limit.saturating_sub(1_024)).await?;
-        for secret in &sensitive_values {
-            bytes = redact_exact_secret(&bytes, secret.as_bytes());
-        }
+        http.redact(&mut bytes);
         let result = serde_json::from_slice(&bytes)
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
-        let result = normalize_native_response(&connection, tool_name, arguments, result)?;
+        let result = normalize_native_response(connection, tool_name, arguments, result)?;
         Ok(json!({
             "status_code": status,
             "content_type": content_type,
@@ -410,10 +369,18 @@ impl EffectExecutor for IntegrationExecutor {
                 "integration request does not match its authorized action and resource",
             ));
         }
+        // Validate the exact connection snapshot that dispatch will use.
+        let invocation_connection = match &operation {
+            IntegrationRequest::Invoke { connection, .. } => self
+                .repository
+                .get_integration(connection)
+                .map_err(execution)?,
+            _ => None,
+        };
         validate_request_credentials(
             &operation,
             &request.credential_references,
-            self.repository.as_ref(),
+            invocation_connection.as_ref(),
         )?;
         let value = match operation {
             IntegrationRequest::ImportOpenApi {
@@ -461,11 +428,14 @@ impl EffectExecutor for IntegrationExecutor {
             )
             .map_err(execution)?,
             IntegrationRequest::Invoke {
-                connection,
                 tool_name,
                 arguments,
+                ..
             } => {
-                self.invoke(&permit, &connection, &tool_name, &arguments)
+                let connection = invocation_connection
+                    .as_ref()
+                    .ok_or_else(|| execution("integration connection is unavailable"))?;
+                self.invoke(&permit, connection, &tool_name, &arguments)
                     .await?
             }
         };

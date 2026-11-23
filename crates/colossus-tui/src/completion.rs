@@ -106,7 +106,7 @@ pub(super) fn command_description(command: &str) -> Option<&'static str> {
         "/bundle verify" => "Verify a local bundle",
         "/integrations" => "List configured integrations",
         "/integration show" => "Show integration details",
-        "/integration call" => "Call an integration operation",
+        "/integration call" => "Inspect a GitHub pull request and its head checks",
         "/integration disconnect" => "Disconnect an integration",
         "/mcp servers" => "List configured MCP servers",
         "/mcp tools" => "List MCP tools",
