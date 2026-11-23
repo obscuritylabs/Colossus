@@ -936,6 +936,19 @@ pub trait InteractiveHost: Send + Sync {
     async fn presentation_preferences(&self) -> Result<TerminalPreferences, String> {
         Err("Canonical terminal preferences are unavailable in this host.".into())
     }
+
+    /// Save a local support report after the operator supplies a destination.
+    /// The host reads cached diagnostics, honors cooperative cancellation before publication,
+    /// and replaces an existing report only when explicitly requested.
+    async fn save_support_report(
+        &self,
+        _output: std::path::PathBuf,
+        _replace: bool,
+        _control: RunControl,
+    ) -> Result<(), String> {
+        Err(crate::support_report::UNAVAILABLE.into())
+    }
+
     /// Resolve session, transcript, preferences, history, completions, and footer.
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String>;
 

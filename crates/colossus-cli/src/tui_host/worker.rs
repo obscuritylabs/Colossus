@@ -1,4 +1,5 @@
 use super::*;
+use crate::support_report::{HostFacts, WorkerObservation};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use integrations::{pull_request_arguments, pull_request_document};
 use uuid::Uuid;
@@ -261,6 +262,7 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
 /// Worker-backed application adapter with the same TUI state and documents as embedded mode.
 pub(crate) struct WorkerInteractiveHost {
     client: Arc<WorkerClient>,
+    worker_observation: Mutex<WorkerObservation>,
     themes: ThemeLibrary,
     model_selections: ModelSelections,
     approval_mode: HostApprovalModes,
@@ -277,6 +279,7 @@ impl WorkerInteractiveHost {
     ) -> Self {
         Self {
             client: Arc::new(client),
+            worker_observation: Mutex::new(WorkerObservation::Unobserved),
             themes,
             model_selections: ModelSelections::default(),
             approval_mode: HostApprovalModes::new(approval_mode),
@@ -352,8 +355,7 @@ impl WorkerInteractiveHost {
         };
         let prompts = TuiWorkerPromptHandler { sender: events };
         let result = self
-            .client
-            .call_interactive::<AcknowledgementResult>(
+            .call_worker_interactive::<AcknowledgementResult>(
                 WorkerOperation::RunInteractive {
                     model_options: None,
                     request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
@@ -425,10 +427,30 @@ impl WorkerInteractiveHost {
     }
 
     async fn value(&self, operation: WorkerOperation) -> Result<Value, String> {
-        self.client
-            .call(operation)
-            .await
-            .map_err(|error| error.to_string())
+        let outcome = self.client.call(operation).await;
+        self.record_worker_observation(&outcome);
+        outcome.map_err(|error| error.to_string())
+    }
+
+    async fn call_worker_interactive<T: serde::de::DeserializeOwned>(
+        &self,
+        operation: WorkerOperation,
+        observer: &mut dyn RunEventObserver,
+        prompts: &dyn WorkerPromptHandler,
+        control: &RunControl,
+    ) -> Result<T, WorkerError> {
+        let outcome = self
+            .client
+            .call_interactive(operation, observer, prompts, control)
+            .await;
+        self.record_worker_observation(&outcome);
+        outcome
+    }
+
+    fn record_worker_observation<T>(&self, outcome: &Result<T, WorkerError>) {
+        if let Ok(mut observation) = self.worker_observation.lock() {
+            observation.record(outcome);
+        }
     }
 
     async fn document(
@@ -462,7 +484,7 @@ impl WorkerInteractiveHost {
                 };
                 let result = with_prompt_control(
                     control,
-                    self.client.call_interactive(
+                    self.call_worker_interactive(
                         WorkerOperation::RunInteractive {
                             model_options: None,
                             request: InteractiveWorkerRequest::GitHubPullRequest { arguments },
@@ -800,20 +822,19 @@ impl WorkerInteractiveHost {
         let prompts = TuiWorkerPromptHandler {
             sender: events.clone(),
         };
-        self.client
-            .call_interactive(
-                WorkerOperation::RunInteractive {
-                    model_options: None,
-                    request,
-                    approval_mode: self.interactive_approval_mode()?,
-                    sandbox_boundary_acknowledgement: acknowledgement,
-                },
-                &mut observer,
-                &prompts,
-                control,
-            )
-            .await
-            .map_err(|error| error.to_string())
+        self.call_worker_interactive(
+            WorkerOperation::RunInteractive {
+                model_options: None,
+                request,
+                approval_mode: self.interactive_approval_mode()?,
+                sandbox_boundary_acknowledgement: acknowledgement,
+            },
+            &mut observer,
+            &prompts,
+            control,
+        )
+        .await
+        .map_err(|error| error.to_string())
     }
 
     async fn append_authorized_history(
@@ -831,25 +852,24 @@ impl WorkerInteractiveHost {
             sender: events.clone(),
         };
         let prompts = TuiWorkerPromptHandler { sender: events };
-        self.client
-            .call_interactive::<String>(
-                WorkerOperation::RunInteractive {
-                    model_options: None,
-                    request: InteractiveWorkerRequest::PresentationHistoryAppend {
-                        session_id: session_id.into(),
-                        entry,
-                    },
-                    approval_mode: self.interactive_approval_mode()?,
-                    sandbox_boundary_acknowledgement: self
-                        .sandbox_boundary_acknowledgement(session_id)?,
+        self.call_worker_interactive::<String>(
+            WorkerOperation::RunInteractive {
+                model_options: None,
+                request: InteractiveWorkerRequest::PresentationHistoryAppend {
+                    session_id: session_id.into(),
+                    entry,
                 },
-                &mut observer,
-                &prompts,
-                control,
-            )
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+                approval_mode: self.interactive_approval_mode()?,
+                sandbox_boundary_acknowledgement: self
+                    .sandbox_boundary_acknowledgement(session_id)?,
+            },
+            &mut observer,
+            &prompts,
+            control,
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
     }
 
     async fn execute_known(
@@ -1065,8 +1085,7 @@ impl WorkerInteractiveHost {
                     sender: events.clone(),
                 };
                 let outcome = self
-                    .client
-                    .call_interactive::<GoalRunOutcome>(
+                    .call_worker_interactive::<GoalRunOutcome>(
                         WorkerOperation::RunInteractive {
                             model_options: self.model_selections.for_request(session_id)?,
                             request: InteractiveWorkerRequest::GoalResume {
@@ -1226,8 +1245,7 @@ impl WorkerInteractiveHost {
                             sender: events.clone(),
                         };
                         let result = self
-                            .client
-                            .call_interactive::<Value>(
+                            .call_worker_interactive::<Value>(
                                 WorkerOperation::RunInteractive {
                                     model_options: None,
                                     request: InteractiveWorkerRequest::PluginManage { request },
@@ -1622,8 +1640,7 @@ impl WorkerInteractiveHost {
         };
         let prompts = TuiWorkerPromptHandler { sender: events };
         let plan = match self
-            .client
-            .call_interactive::<PlanRecord>(
+            .call_worker_interactive::<PlanRecord>(
                 WorkerOperation::RunInteractive {
                     request,
                     model_options: None,
@@ -1681,6 +1698,25 @@ impl WorkerInteractiveHost {
 
 #[async_trait]
 impl InteractiveHost for WorkerInteractiveHost {
+    async fn save_support_report(
+        &self,
+        output: PathBuf,
+        replace: bool,
+        control: RunControl,
+    ) -> Result<(), String> {
+        let observation = self
+            .worker_observation
+            .lock()
+            .map_or(WorkerObservation::Unobserved, |observation| *observation);
+        crate::support_report::save_interactive(
+            HostFacts::Worker(observation),
+            output,
+            replace,
+            control,
+        )
+        .await
+    }
+
     async fn predict_next_prompt(
         &self,
         session_id: &str,
@@ -1970,29 +2006,27 @@ impl InteractiveHost for WorkerInteractiveHost {
     }
     async fn attach_image(&self, path: &str) -> Result<ModelImageReference, String> {
         let _operation = self.operations.enter(false).await?;
-        self.client
-            .call_interactive::<ModelImageReference>(
-                WorkerOperation::RunInteractive {
-                    model_options: None,
-                    request: InteractiveWorkerRequest::ImageAttach {
-                        path: PathBuf::from(path),
-                    },
-                    approval_mode: self.interactive_approval_mode()?,
-                    sandbox_boundary_acknowledgement: None,
+        self.call_worker_interactive::<ModelImageReference>(
+            WorkerOperation::RunInteractive {
+                model_options: None,
+                request: InteractiveWorkerRequest::ImageAttach {
+                    path: PathBuf::from(path),
                 },
-                &mut PreviewWorkerObserver,
-                &PreviewWorkerPrompts,
-                &RunControl::default(),
-            )
-            .await
-            .map_err(|error| error.to_string())
+                approval_mode: self.interactive_approval_mode()?,
+                sandbox_boundary_acknowledgement: None,
+            },
+            &mut PreviewWorkerObserver,
+            &PreviewWorkerPrompts,
+            &RunControl::default(),
+        )
+        .await
+        .map_err(|error| error.to_string())
     }
 
     async fn preview_image(&self, image: &ModelImageReference) -> Result<Vec<u8>, String> {
         let _operation = self.operations.enter(false).await?;
         let encoded = self
-            .client
-            .call_interactive::<String>(
+            .call_worker_interactive::<String>(
                 WorkerOperation::RunInteractive {
                     model_options: None,
                     request: InteractiveWorkerRequest::ImagePreview {
@@ -2043,8 +2077,7 @@ impl InteractiveHost for WorkerInteractiveHost {
                 };
                 let prompts = TuiWorkerPromptHandler { sender: events };
                 let result: Value = self
-                    .client
-                    .call_interactive(
+                    .call_worker_interactive(
                         WorkerOperation::RunInteractive {
                             model_options: None,
                             request: InteractiveWorkerRequest::ShellRun {
@@ -2141,8 +2174,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         };
         let prompts = TuiWorkerPromptHandler { sender: events };
         let outcome = self
-            .client
-            .call_interactive::<AgentRunOutcome>(
+            .call_worker_interactive::<AgentRunOutcome>(
                 WorkerOperation::RunInteractive {
                     model_options: self.model_selections.for_request(&request.session_id)?,
                     request: InteractiveWorkerRequest::Run {
@@ -2227,8 +2259,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         };
         let prompts = TuiWorkerPromptHandler { sender: events };
         let outcome = self
-            .client
-            .call_interactive::<PlanExecutionOutcome>(
+            .call_worker_interactive::<PlanExecutionOutcome>(
                 WorkerOperation::RunInteractive {
                     model_options: self.model_selections.for_request(&request.session_id)?,
                     request: InteractiveWorkerRequest::PlanExecute {

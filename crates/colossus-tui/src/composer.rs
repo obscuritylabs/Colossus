@@ -60,7 +60,15 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
                 ])
             }),
     );
-    let action = if state.preferences.multiline {
+    let support_report =
+        crate::support_report::arguments(state.composer.draft.trim_start()).is_some();
+    let action = if support_report {
+        if state.preferences.multiline {
+            "Ctrl+D saves"
+        } else {
+            "Enter saves"
+        }
+    } else if state.preferences.multiline {
         "Ctrl+D sends"
     } else if state.is_busy() {
         "Enter queues"
@@ -82,6 +90,8 @@ pub(super) fn render_composer(frame: &mut Frame<'_>, state: &mut TuiState, area:
             | InteractivePromptKind::ModelSelection => "decision",
         };
         format!(" Message · paused for {decision} ")
+    } else if support_report {
+        format!(" Support report · {action} ")
     } else if state.composer.draft.trim_start().starts_with('!') {
         format!(" Shell · {action} ")
     } else {
@@ -184,7 +194,11 @@ fn composer_hint(
         );
     }
     if state.docked_decision_active() {
-        return truncate_width_with_ellipsis(" Draft preserved · respond above ", width);
+        let hint = state
+            .support_report
+            .notice()
+            .unwrap_or("Draft preserved · respond above");
+        return truncate_width_with_ellipsis(&format!(" {hint} "), width);
     }
     let mut hints = Vec::new();
     if state.suggested_next_prompt().is_some() && !state.composer.completion_hidden {
@@ -236,6 +250,9 @@ fn composer_hint(
         "@ skills".to_owned(),
         "Ctrl+R history".to_owned(),
     ]);
+    if let Some(notice) = state.support_report.notice() {
+        hints.insert(0, notice.to_owned());
+    }
     let mut hint = String::new();
     for segment in hints {
         let candidate = if hint.is_empty() {

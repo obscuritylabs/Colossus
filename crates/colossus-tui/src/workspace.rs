@@ -422,6 +422,8 @@ impl Workspace {
             next.transcript_epoch = self.epoch;
             next.workspace_center = false;
             next.workspace_hits.clear();
+            // A local support report belongs to the terminal, even after a session switch.
+            next.support_report = std::mem::take(&mut self.active.support_report);
             let prior = std::mem::replace(&mut self.active, next);
             self.background.insert(prior.session_id.clone(), prior);
         }
@@ -644,6 +646,7 @@ impl Workspace {
     }
 
     pub(super) fn cancel_all(&mut self) {
+        self.active.support_report.cancel();
         for state in std::iter::once(&mut self.active).chain(self.background.values_mut()) {
             state.queue.clear();
             state.queue_paused = true;
@@ -657,7 +660,9 @@ impl Workspace {
     }
 
     pub(super) fn any_busy(&self) -> bool {
-        self.active.is_busy() || self.background.values().any(TuiState::is_busy)
+        self.active.support_report.is_pending()
+            || self.active.is_busy()
+            || self.background.values().any(TuiState::is_busy)
     }
 }
 

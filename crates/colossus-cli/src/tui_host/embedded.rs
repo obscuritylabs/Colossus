@@ -1326,6 +1326,21 @@ impl EmbeddedInteractiveHost {
 
 #[async_trait]
 impl InteractiveHost for EmbeddedInteractiveHost {
+    async fn save_support_report(
+        &self,
+        output: PathBuf,
+        replace: bool,
+        control: RunControl,
+    ) -> Result<(), String> {
+        crate::support_report::save_interactive(
+            crate::support_report::HostFacts::Embedded,
+            output,
+            replace,
+            control,
+        )
+        .await
+    }
+
     async fn predict_next_prompt(
         &self,
         session_id: &str,

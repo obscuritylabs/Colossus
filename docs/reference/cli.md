@@ -65,6 +65,7 @@ model output.
 | Command | Purpose |
 | --- | --- |
 | `update` | Check or apply an install-aware stable release without opening a workspace |
+| `support` | Save a local support report without opening a workspace or connecting to a worker |
 | `config` | Create and inspect strict YAML configuration |
 | `audit` | Verify, inspect, anchor, and export journal evidence |
 | `policy` | Diagnose built-in or OPA policy |
@@ -111,6 +112,7 @@ positional:
 | Group | Leaf routes |
 | --- | --- |
 | `update` | `[--version vX.Y.Z]`, `check` |
+| `support` | [`report --output PATH [--replace]`](#local-support-report) |
 | `config` | `init [--local] [--development] [--from PATH] [--access-profile PROFILE] [--sandbox-profile PROFILE] [--storage-keys MODE]`, `show`, `effective` |
 | `audit` | `verify`, `show`, `export`, `anchor-status`, `exporter-status`, `exporter-drain`, `exporter-reset` |
 | `policy` | `doctor` |
@@ -304,12 +306,35 @@ colossus COMMAND --help
 colossus COMMAND SUBCOMMAND --help
 ```
 
+## Local support report
+
+`support report --output PATH [--replace]` saves a JSON file of at most 64 KiB.
+The CLI prints a short confirmation after a successful save.
+The CLI handles this command before workspace, configuration, or worker startup.
+Relative destinations resolve from the directory where you invoked `colossus`.
+Choose a file in an existing local directory and leave the directory in place
+until the save finishes. On Windows, use a drive-letter path for an absolute
+destination. The save preserves an existing regular file unless you pass `--replace`.
+
+The report contains `schema_version` (currently `1`), `colossus_version`,
+`platform` (OS and architecture), `runtime_mode`, and a categorical `worker`
+observation. `runtime_mode` is `unresolved` for the one-shot command and can be
+`embedded` or `worker` in the TUI. An embedded TUI records `not_applicable`
+for `worker.status`. The worker-backed TUI samples authenticated host operations
+and records `last_observed_available` or `unavailable` with a reason. The
+one-shot command reports `unavailable` with reason `not_observed` because it has
+no worker observation.
+
+The save makes no worker or provider requests and uploads nothing. The report
+excludes credentials, endpoints, filesystem paths, raw errors and logs, and
+conversation content. See [Save a local support report](../admin/troubleshooting.md#save-a-local-support-report).
+
 ## JSON output contracts
 
-With `--output json`, one JSON value is written to stdout; diagnostics and optional
-streamed text stay on stderr. The acknowledged danger-full-access posture warning is
-emitted on stderr even when stdout is redirected or JSON output is selected. It never
-contaminates the one-value JSON stdout contract. Lists are arrays unless the command
+With `--output json`, structured commands write one JSON value to stdout.
+Diagnostics and optional streamed text stay on stderr. The acknowledged danger-full-access
+posture warning is emitted on stderr even when stdout is redirected or JSON output is selected.
+It never contaminates the one-value JSON stdout contract. Lists are arrays unless the command
 returns a named page or status
 contract. Important roots are:
 

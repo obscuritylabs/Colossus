@@ -62,6 +62,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         while let Ok(host_event) = event_rx.try_recv() {
             state.receive(host_event, Arc::clone(&host));
         }
+        state.support_report.poll();
         let event_tx = state.sender();
         state.refresh_catalog(Arc::clone(&host));
         state.sync_rows();
@@ -141,6 +142,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             state.receive(event, Arc::clone(&host));
             state.cancel_all();
         }
+        state.support_report.poll();
     }
     terminal.finish()?;
     Ok(())
@@ -519,6 +521,9 @@ pub(super) fn handle_key(
     }
     if state.overlay.is_some() {
         handle_overlay_key(state, key);
+        return;
+    }
+    if key.code == KeyCode::Esc && state.support_report.cancel() {
         return;
     }
     if key.code == KeyCode::F(3) {
@@ -1201,6 +1206,10 @@ pub(super) fn submit_line(
     if line.is_empty() {
         return;
     }
+    if let Some(arguments) = crate::support_report::arguments(&line) {
+        state.support_report.start(arguments, host);
+        return;
+    }
     if state.workspace_archiving {
         return;
     }
@@ -1210,6 +1219,7 @@ pub(super) fn submit_line(
     if crate::dictation::command(state, &line, event_tx.clone()) {
         return;
     }
+    state.support_report.clear_notice();
     state.dismiss_welcome();
     state.remember_history(&line);
     let command = parse_interactive_command(&line);

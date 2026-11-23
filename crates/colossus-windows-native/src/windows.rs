@@ -38,7 +38,7 @@ use windows_sys::Win32::{
         FILE_ALL_ACCESS, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
         FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
         FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_ID_INFO, FILE_READ_ATTRIBUTES,
-        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileIdInfo,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, FileIdInfo,
         GetFileInformationByHandle, GetFileInformationByHandleEx, READ_CONTROL, SYNCHRONIZE,
     },
     System::{
@@ -696,6 +696,13 @@ pub(super) fn open_bound_immutable_file(path: &Path) -> Result<BoundPathInner, W
     open_bound_with_access(path, BoundKind::File, GENERIC_READ, true)
 }
 
+pub(super) fn open_bound_stable_directory(
+    path: &Path,
+) -> Result<BoundPathInner, WindowsNativeError> {
+    // Metadata-only opens do not take part in the kernel's share-access check.
+    open_bound_with_access(path, BoundKind::Directory, FILE_TRAVERSE, true)
+}
+
 pub(super) fn open_bound_file_read_write(
     path: &Path,
 ) -> Result<BoundPathInner, WindowsNativeError> {
@@ -797,10 +804,11 @@ fn open_bound_with_mode(
         }
         let leaf = index + 1 == components.len();
         let component_kind = if leaf { kind } else { BoundKind::Directory };
+        let pin_directory = immutable && matches!(kind, BoundKind::Directory);
         let opened = open_exact(
             &candidate,
             component_kind,
-            if leaf { file_access } else { 0 },
+            if leaf || pin_directory { file_access } else { 0 },
             immutable,
             !appcontainer || leaf,
         )
