@@ -492,6 +492,7 @@ pub struct TuiState {
     /// Process-local canonical selected plan; cleared on session switches and restart.
     pub selected_plan: Option<PlanRecord>,
     pub(super) composer: Composer,
+    pub(super) support_report: crate::support_report::SupportReportState,
     pub(super) next_prompt: crate::next_prompt::NextPromptState,
     pub(super) dictation: crate::dictation::DictationState,
     pub(super) history: Vec<String>,
@@ -611,10 +612,11 @@ impl TuiState {
             mode: InteractiveMode::Execute,
             selected_plan: None,
             composer: Composer::default(),
+            support_report: crate::support_report::SupportReportState::default(),
             next_prompt: crate::next_prompt::NextPromptState::default(),
             dictation: crate::dictation::DictationState::default(),
             history: snapshot.history,
-            completions: with_mode_completions(snapshot.completions),
+            completions: with_local_completions(snapshot.completions),
             sticky_skills: Vec::new(),
             provider_response_diagnostics: false,
             pending_images: Vec::new(),
@@ -794,7 +796,7 @@ impl TuiState {
     }
 
     pub(super) fn set_completions(&mut self, completions: Vec<String>) {
-        self.completions = with_mode_completions(completions);
+        self.completions = with_local_completions(completions);
     }
 
     pub(super) fn apply_plan_selection(
@@ -1294,11 +1296,17 @@ const RESEARCH_COMPLETIONS: &[&str] = &[
     "/research list",
 ];
 
-fn with_mode_completions(mut completions: Vec<String>) -> Vec<String> {
+fn with_local_completions(mut completions: Vec<String>) -> Vec<String> {
     for completion in PLAN_COMPLETIONS.iter().chain(RESEARCH_COMPLETIONS.iter()) {
         if !completions.iter().any(|candidate| candidate == completion) {
             completions.push((*completion).into());
         }
+    }
+    if !completions
+        .iter()
+        .any(|command| command == crate::support_report::COMMAND)
+    {
+        completions.push(crate::support_report::COMMAND.into());
     }
     completions
 }

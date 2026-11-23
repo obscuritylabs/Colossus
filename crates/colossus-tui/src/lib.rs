@@ -120,6 +120,7 @@ mod settings_picker;
 mod sidebar;
 mod startup;
 mod state;
+mod support_report;
 mod terminal;
 mod theme_picker;
 mod tool_details;

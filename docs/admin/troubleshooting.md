@@ -7,7 +7,9 @@ type: reference
 
 # Troubleshooting
 
-Begin with bounded, credential-safe diagnostics:
+If startup fails, begin with a [local support report](#save-a-local-support-report).
+
+Use the component checks below to narrow down a failure.
 
 ```bash
 colossus --config .colossus/config.yaml config show
@@ -21,6 +23,22 @@ colossus --config .colossus/config.yaml models routes
 colossus --config .colossus/config.yaml search profiles
 colossus --config .colossus/config.yaml tools list
 ```
+
+## Save a local support report
+
+Run this from your shell even if Colossus cannot open its configuration,
+workspace, or worker.
+
+```bash
+colossus support report --output "support report.json"
+```
+
+The file is saved in the invocation directory. To keep an existing report,
+choose a new filename. Pass `--replace` to overwrite the chosen file deliberately.
+From an open TUI, use its [support-report command](../reference/tui.md#save-a-support-report)
+to include the last worker connection outcome the TUI observed, if available.
+The [report format](../reference/cli.md#local-support-report) describes how to
+interpret an unobserved worker. Review the JSON file before sharing it.
 
 ## Symptom map
 

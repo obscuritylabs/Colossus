@@ -37,6 +37,8 @@ mod native_console;
 mod selection;
 #[path = "pty_history/status.rs"]
 mod status;
+#[path = "pty_history/support_report.rs"]
+mod support_report;
 #[path = "pty_history/tool_activity.rs"]
 mod tool_activity;
 #[path = "pty_history/workspace.rs"]
@@ -96,6 +98,15 @@ impl colossus_tui::LocalDictation for FixtureDictation {
 
 #[async_trait]
 impl InteractiveHost for FixtureHost {
+    async fn save_support_report(
+        &self,
+        output: std::path::PathBuf,
+        replace: bool,
+        control: RunControl,
+    ) -> Result<(), String> {
+        support_report::save_fixture(output, replace, control).await
+    }
+
     async fn sidebar_status(
         &self,
         _: &str,

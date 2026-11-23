@@ -87,6 +87,15 @@ impl std::fmt::Debug for BoundPath {
 }
 
 impl BoundPath {
+    /// Keep a directory and its ancestors in place for a brief publication.
+    ///
+    /// All components reject reparse points. Retained handles share reads and
+    /// writes while denying deletion and replacement until the binding drops.
+    #[cfg(windows)]
+    pub fn open_stable_directory(path: &Path) -> Result<Self, WindowsNativeError> {
+        crate::windows::open_bound_stable_directory(path).map(Self::from_inner)
+    }
+
     /// Adopt an exact profile handle transferred by the supervising parent over
     /// its private bootstrap. The parent must retain verified ancestry and the
     /// allocation until full process cleanup. This consumes existing native file

@@ -118,6 +118,11 @@ async fn runtime_command(
         Err(error) => error.exit(),
     };
     set_output_mode(cli.output);
+    if let Command::Support(command) = &cli.command {
+        return crate::support_report::run(command)
+            .await
+            .map_err(Into::into);
+    }
     if let Command::Worktree(command) = &cli.command {
         if cli.worker_required
             || cli.desktop_worker_auth
@@ -582,6 +587,7 @@ async fn runtime_command(
             acp_approvals.as_ref().ok_or("ACP approval bridge is unavailable")?.clone(),
         ).await?,
         Command::Cloud(_) => unreachable!("handled before runtime construction"),
+        Command::Support(_) => unreachable!("handled before runtime construction"),
         Command::DevelopmentCredentials(_) => unreachable!("handled before runtime construction"),
         Command::Update(_) => unreachable!("handled before runtime construction"),
         Command::AlwaysOn(_) => unreachable!("handled before runtime construction"),

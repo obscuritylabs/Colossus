@@ -308,12 +308,16 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
         tone: PresentationTone::Neutral,
         body: vec![
             PresentationBlock::Text(
-                "Type a message to run the agent. Slash commands operate durable state. This list is generated from the commands available in the current terminal.".into(),
+                "Type a message to run the agent. This list is generated from the commands available in the current terminal.".into(),
             ),
             PresentationBlock::KeyValue(vec![
                 (
                     "Shell".into(),
                     "!command runs in the workspace without a model turn; !source script && command shares shell state within one invocation".into(),
+                ),
+                (
+                    "Support report".into(),
+                    "/support-report PATH [--replace] saves local diagnostics. Quote paths containing spaces. Add --replace to overwrite an existing file. Esc requests cancellation while saving.".into(),
                 ),
                 (
                     "Send".into(),
@@ -399,6 +403,7 @@ fn command_help_category(command: &str) -> &'static str {
                 || command.starts_with("/telemetry")
                 || command.starts_with("/audit")
                 || command.starts_with("/projection")
+                || command == crate::support_report::COMMAND
                 || command == "/trace" =>
         {
             "Runtime"

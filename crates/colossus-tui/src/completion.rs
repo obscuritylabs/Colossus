@@ -7,6 +7,7 @@ pub(super) const ROOMY_COMPLETION_MENU_WIDTH: u16 = 96;
 pub(super) fn command_description(command: &str) -> Option<&'static str> {
     let description = match command {
         "/help" => "Show commands and keyboard shortcuts",
+        crate::support_report::COMMAND => "Save a local support report to an explicit file",
         "/tui prefs" => "Show terminal preferences",
         "/tui save" => "Save terminal preferences",
         "/tui reset" => "Restore default terminal preferences",

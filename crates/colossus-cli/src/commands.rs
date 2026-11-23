@@ -2,6 +2,8 @@ use super::*;
 
 #[derive(Subcommand)]
 pub(super) enum Command {
+    /// Save a local diagnostic report for support.
+    Support(crate::support_report::SupportCommand),
     /// Manage local Git worktrees without loading a provider or runtime.
     Worktree(crate::worktree_args::WorktreeCommand),
     /// Explicit offline development-only credential preparation and reviewed rewrap.
