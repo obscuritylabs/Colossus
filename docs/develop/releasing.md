@@ -459,6 +459,11 @@ with a timestamp before release upload. A passing GitHub signing smoke run is
 recorded in the release PR; ordinary branch and manual validation builds do not
 receive signing authority.
 
+The browser payload verifier checks the embedded signature of each browser
+executable and DLL during sealing and after installation using Windows
+Authenticode policy. It verifies the publisher and timestamp from that signature,
+regardless of the vendor catalog signatures available on the Windows runner.
+
 ### Release asset OCI images
 
 `Publish Colossus release image` packages every uploaded asset of an already-published

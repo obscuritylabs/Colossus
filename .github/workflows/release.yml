@@ -1295,7 +1295,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'installed signed browser inventory failed' }
             foreach ($image in @(Get-ChildItem -LiteralPath $component -Recurse -File |
                 Where-Object Extension -In @('.exe', '.dll'))) {
-              ./scripts/ci/verify-authenticode.ps1 -Path $image.FullName
+              ./scripts/ci/verify-authenticode.ps1 -Path $image.FullName -RequireEmbeddedSignature
             }
           }
           $application = Start-Process -FilePath $installed[0].FullName -PassThru
