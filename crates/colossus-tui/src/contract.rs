@@ -864,6 +864,13 @@ pub enum HostEvent {
     Notice(PresentationDocument),
     /// A trusted bridge needs focused operator input.
     Prompt(InteractivePrompt),
+    /// A prompt whose operation may have been cancelled while the event was in transit.
+    ControlledPrompt {
+        /// Focus-taking, one-use operator request.
+        request: InteractivePrompt,
+        /// Cancellation signal of the operation that owns the request.
+        control: RunControl,
+    },
     /// The host prepared a searchable master-detail session browser.
     SessionBrowser(InteractiveSessionBrowser),
     /// The host prepared a searchable theme browser with exact live previews.

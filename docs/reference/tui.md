@@ -174,7 +174,7 @@ Use `/help` for arguments and commands available in your installed version.
 | Context | `/context status`, `/context list`, `/context compact`, `/context restore` |
 | Memory and research | `/memories`, `/memory search`, `/research`, `/research list` |
 | Skills and plugins | `/plugins`, `/plugins show`, `/plugin skills`, `/plugin active`, `/plugin use`, `/plugin clear`, `/plugin show`, `/plugin resources`, `/plugin read` |
-| MCP and integrations | `/mcp servers`, `/mcp tools`, `/mcp auth login SERVER`, `/mcp auth complete SERVER CALLBACK_URL`, `/mcp auth status SERVER`, `/mcp auth logout SERVER`, `/integrations`, `/integration show`, `/integration call`, `/integration disconnect` |
+| MCP and integrations | `/mcp servers`, `/mcp tools`, `/mcp auth login SERVER`, `/mcp auth complete SERVER CALLBACK_URL`, `/mcp auth status SERVER`, `/mcp auth logout SERVER`, `/integrations`, `/integration show`, `/integration call github.pull_request JSON`, `/integration disconnect` |
 | Images | `/attach PATH`, `/attachments`, `/detach INDEX`, `/detach all` |
 | Theme | `/theme`, `/theme list`, `/theme preview`, `/theme validate`, `/theme scaffold`, `/theme reset` |
 | Display | `/stream`, `/events`, `/reasoning`, `/transcript`, `/multiline` open setting choosers; direct value arguments remain supported. `/trace` toggles compact events. |
@@ -194,6 +194,10 @@ while any work in the previous session continues. See
 uses standard depth with
 repository, web, and MCP sources; use the CLI `research run` route to choose depth
 or sources explicitly.
+
+Pass inline JSON to `/integration call github.pull_request JSON` to read a pull
+request through the connected GitHub integration and active permission mode.
+See [Inspect a pull request and its head checks](../extend/integrations.md#inspect-a-pull-request-and-its-head-checks).
 
 Conversation export reads the retained canonical snapshot across runs, including
 messages outside the viewport. `FORMAT` accepts `markdown` (default), `text`, or

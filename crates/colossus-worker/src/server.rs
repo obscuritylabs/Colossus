@@ -678,6 +678,9 @@ async fn dispatch_interactive(
         InteractiveWorkerRequest::PluginManage { request } => {
             Ok(Box::pin(runtime.manage_plugin(request)).await?)
         }
+        InteractiveWorkerRequest::GitHubPullRequest { arguments } => {
+            Ok(runtime.call_github_pull_request(arguments, control).await?)
+        }
         InteractiveWorkerRequest::SandboxBoundaryAcknowledge { session_id, mode } => {
             let bridge = ACTIVE_INTERACTIVE_RUN.try_with(Clone::clone).map_err(|_| {
                 WorkerError::Protocol("no interactive worker client attached".into())
@@ -953,6 +956,7 @@ pub(super) struct InteractiveConnectionContext<'a> {
     pub(super) key: &'a [u8; 32],
     pub(super) request_id: &'a str,
     pub(super) connection_nonce: &'a str,
+    pub(super) settle_without_client: bool,
 }
 
 pub(super) async fn drive_interactive_connection<S, F>(
@@ -972,6 +976,7 @@ where
         key,
         request_id,
         connection_nonce,
+        settle_without_client,
     } = context;
     let (mut reader, mut writer) = tokio::io::split(stream);
     let (client_tx, mut client_rx) = tokio::sync::mpsc::channel(16);
@@ -1000,7 +1005,7 @@ where
     }));
 
     let mut sequence = 0_u64;
-    loop {
+    let transport_error = loop {
         tokio::select! {
             result = &mut run => {
                 // A runtime future may become ready immediately after enqueueing its
@@ -1044,18 +1049,14 @@ where
                     sequence,
                     content,
                 ).await {
-                    bridge.cancel_run(control).await;
-                    reader_task.abort();
-                    return Err(error);
+                    break error;
                 }
             }
             client = client_rx.recv() => {
                 match client {
                     Some(Ok(ClientFrameContent::PromptResponse { prompt_id, answer })) => {
                         if let Err(error) = bridge.respond(&prompt_id, answer).await {
-                            bridge.cancel_run(control).await;
-                            reader_task.abort();
-                            return Err(error);
+                            break error;
                         }
                     }
                     Some(Ok(ClientFrameContent::Cancel)) => {
@@ -1064,21 +1065,26 @@ where
                         bridge.cancel_run(control).await;
                     }
                     Some(Err(error)) => {
-                        bridge.cancel_run(control).await;
-                        reader_task.abort();
-                        return Err(error);
+                        break error;
                     }
                     None => {
-                        bridge.cancel_run(control).await;
-                        reader_task.abort();
-                        return Err(WorkerError::Protocol(
+                        break WorkerError::Protocol(
                             "interactive worker client disconnected".into(),
-                        ));
+                        );
                     }
                 }
             }
         }
+    };
+    bridge.cancel_run(control).await;
+    reader_task.abort();
+    if settle_without_client {
+        // Release any pending approval and keep polling the bounded read so an
+        // already-dispatched effect can record its terminal result.
+        drop(outbound_rx);
+        let _ = run.await;
     }
+    Err(transport_error)
 }
 
 fn interactive_error(error: &WorkerError) -> String {
@@ -1180,6 +1186,10 @@ where
                     key,
                     request_id: &request_id,
                     connection_nonce: &connection_nonce,
+                    settle_without_client: matches!(
+                        &request,
+                        InteractiveWorkerRequest::GitHubPullRequest { .. }
+                    ),
                 },
                 request,
                 approval_mode,

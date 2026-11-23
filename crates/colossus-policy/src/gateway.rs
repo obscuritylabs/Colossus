@@ -1,4 +1,5 @@
 use super::*;
+use colossus_ports::RunControl;
 
 mod fence;
 
@@ -472,6 +473,25 @@ impl EffectGateway {
         Ok(())
     }
 
+    fn reject_cancelled_effect(
+        &self,
+        request: &EffectRequest,
+        decision: &PolicyDecision,
+        control: Option<&RunControl>,
+    ) -> Result<(), GatewayError> {
+        if control.is_some_and(RunControl::is_cancelled) {
+            let reason = "effect cancelled before dispatch";
+            self.event(
+                request,
+                "effect.denied.v1",
+                EventClassification::Effect,
+                json!({"decision_id": decision.decision_id, "reason": reason, "source": "cancellation"}),
+            )?;
+            return Err(GatewayError::Denied(reason.into()));
+        }
+        Ok(())
+    }
+
     async fn decide(&self, request: &EffectRequest) -> Result<PolicyDecision, GatewayError> {
         let decision = match async {
             let policy_request = self.kernel.policy_projection(request)?;
@@ -613,7 +633,19 @@ impl EffectGateway {
     ) -> Result<ReleasedEffectResult, GatewayError> {
         // Do not embed the full approval/policy state machine in every caller's
         // async state. Nested worker dispatch must fit the default Tokio stack.
-        Box::pin(self.execute_internal(request, executor, false)).await
+        Box::pin(self.execute_internal(request, executor, false, None)).await
+    }
+
+    /// Execute a bounded effect with cancellation before approval and permit issuance.
+    ///
+    /// After dispatch, the effect still settles through quarantine, release, and audit.
+    pub async fn execute_controlled(
+        &self,
+        request: EffectRequest,
+        executor: &dyn EffectExecutor,
+        control: &RunControl,
+    ) -> Result<ReleasedEffectResult, GatewayError> {
+        Box::pin(self.execute_internal(request, executor, false, Some(control))).await
     }
 
     /// Authorize one streaming effect and release only gateway-approved normalized chunks.
@@ -628,7 +660,7 @@ impl EffectGateway {
             executor,
             observer: tokio::sync::Mutex::new(observer),
         };
-        Box::pin(self.execute_internal(request, &bridge, true)).await
+        Box::pin(self.execute_internal(request, &bridge, true, None)).await
     }
 
     async fn execute_internal(
@@ -636,6 +668,7 @@ impl EffectGateway {
         request: EffectRequest,
         executor: &dyn EffectExecutor,
         chunks_already_released: bool,
+        control: Option<&RunControl>,
     ) -> Result<ReleasedEffectResult, GatewayError> {
         self.verify_execution_fence()?;
         if self.journal.is_recovery_mode() {
@@ -680,6 +713,7 @@ impl EffectGateway {
             };
         let mut decision = self.decide(&request).await?;
         if decision.outcome == DecisionOutcome::RequireApproval {
+            self.reject_cancelled_effect(&request, &decision, control)?;
             if let Some(context) = &command_context {
                 self.event(
                     &request,
@@ -689,6 +723,7 @@ impl EffectGateway {
                 )?;
             }
             let risk_auto_approved = self.review_risk(&mut request, &decision).await?;
+            self.reject_cancelled_effect(&request, &decision, control)?;
             let request_hash = sha256_hex(&canonical_bytes(&request)?);
             let approval = if risk_auto_approved {
                 Ok(Some(approval_proof(
@@ -803,6 +838,7 @@ impl EffectGateway {
                 return Err(GatewayError::Denied(reason.into()));
             }
         }
+        self.reject_cancelled_effect(&request, &decision, control)?;
         let request_hash = sha256_hex(&canonical_bytes(&request)?);
         let permit = self.mint_permit(&request, request_hash, &decision)?;
         self.authenticate_and_consume(&permit, &request, &decision)?;

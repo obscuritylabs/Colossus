@@ -1,5 +1,6 @@
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use integrations::{pull_request_arguments, pull_request_document};
 use uuid::Uuid;
 
 pub(super) fn worker_run_outcome(
@@ -234,7 +235,7 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
         };
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
-            .send(HostEvent::Prompt(InteractivePrompt {
+            .send(prompt_event(InteractivePrompt {
                 id: prompt.prompt_id,
                 kind,
                 title: prompt.title.clone(),
@@ -439,6 +440,55 @@ impl WorkerInteractiveHost {
             &self.value(operation).await?,
             title,
         )))
+    }
+
+    async fn integration_command(
+        &self,
+        arguments: &str,
+        events: &mpsc::Sender<HostEvent>,
+        control: &RunControl,
+    ) -> Result<HostCommandResult, String> {
+        let (command, input) = arguments
+            .split_once(char::is_whitespace)
+            .unwrap_or((arguments, ""));
+        match command {
+            "call" => {
+                let arguments = pull_request_arguments(input)?;
+                let mut observer = WorkerChannelObserver {
+                    sender: events.clone(),
+                };
+                let prompts = TuiWorkerPromptHandler {
+                    sender: events.clone(),
+                };
+                let result = with_prompt_control(
+                    control,
+                    self.client.call_interactive(
+                        WorkerOperation::RunInteractive {
+                            model_options: None,
+                            request: InteractiveWorkerRequest::GitHubPullRequest { arguments },
+                            approval_mode: self.interactive_approval_mode()?,
+                            sandbox_boundary_acknowledgement: None,
+                        },
+                        &mut observer,
+                        &prompts,
+                        control,
+                    ),
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+                Ok(HostCommandResult::document(pull_request_document(&result)))
+            }
+            "show" if !input.trim().is_empty() => {
+                self.document(
+                    WorkerOperation::IntegrationGet {
+                        name: input.trim().into(),
+                    },
+                    Some("Integration"),
+                )
+                .await
+            }
+            _ => Err("/integration expects show or call github.pull_request JSON".into()),
+        }
     }
 
     async fn session_work(&self, session_id: &str) -> Result<WorkStateSnapshot, String> {
@@ -1415,15 +1465,7 @@ impl WorkerInteractiveHost {
                 )
                 .await
             }
-            "integration" if arguments.starts_with("show ") => {
-                self.document(
-                    WorkerOperation::IntegrationGet {
-                        name: arguments.trim_start_matches("show ").trim().into(),
-                    },
-                    Some("Integration"),
-                )
-                .await
-            }
+            "integration" => self.integration_command(arguments, events, control).await,
             "mcp" => {
                 let operation = match arguments.trim() {
                     "servers" => WorkerOperation::McpServers,

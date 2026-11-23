@@ -14,7 +14,7 @@ use colossus_contracts::{
 };
 use colossus_ports::{
     ApprovalProvider, EventJournal, PolicyDecisionPoint, PolicyError, RiskEvaluationError,
-    RiskEvaluator,
+    RiskEvaluator, RunControl,
 };
 use colossus_testkit::InMemoryEventJournal;
 use std::sync::{
@@ -1321,6 +1321,90 @@ async fn approval_is_reevaluated_before_execution() {
             .count(),
         3
     );
+}
+
+#[tokio::test]
+async fn controlled_effect_cancellation_during_policy_evaluation_fences_approval_and_dispatch() {
+    for cancel_during_reevaluation in [false, true] {
+        let control = RunControl::default();
+        let journal: Arc<dyn EventJournal> = Arc::new(InMemoryEventJournal::default());
+        let approvals = Arc::new(RiskAutoApproval {
+            prompts: AtomicUsize::new(0),
+            notices: Mutex::new(Vec::new()),
+        });
+        let gateway = EffectGateway::new(
+            Arc::clone(&journal),
+            Arc::new(CancelOnPolicyDecision {
+                control: control.clone(),
+                policy: BuiltInPolicy::offline_default()
+                    .with_action("provider.echo", DecisionOutcome::RequireApproval),
+                cancel_during_reevaluation,
+            }),
+            Arc::clone(&approvals) as Arc<dyn ApprovalProvider>,
+            SafetyKernel::new([]),
+            [9_u8; 32],
+        );
+        let executor = CountingExecutor {
+            calls: AtomicUsize::new(0),
+        };
+        let result = gateway
+            .execute_controlled(
+                effect_request(
+                    system_actor("test"),
+                    "provider.echo",
+                    "echo",
+                    serde_json::json!({"content": "x"}),
+                ),
+                &executor,
+                &control,
+            )
+            .await;
+        assert!(
+            matches!(result, Err(GatewayError::Denied(reason)) if reason.contains("cancelled"))
+        );
+        assert_eq!(
+            approvals.prompts.load(Ordering::Acquire),
+            usize::from(cancel_during_reevaluation)
+        );
+        assert_eq!(executor.calls.load(Ordering::Acquire), 0);
+        let names = journal
+            .read_global(1, 20)
+            .expect("events")
+            .into_iter()
+            .map(|event| event.event_type)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names.iter().any(|name| name == "approval.granted.v1"),
+            cancel_during_reevaluation
+        );
+        assert!(names.iter().any(|name| name == "policy.decided.v1"));
+        assert!(names.iter().any(|name| name == "effect.denied.v1"));
+        assert!(!names.iter().any(|name| name == "effect.started.v1"));
+    }
+}
+
+struct CancelOnPolicyDecision {
+    control: RunControl,
+    policy: BuiltInPolicy,
+    cancel_during_reevaluation: bool,
+}
+
+#[async_trait]
+impl PolicyDecisionPoint for CancelOnPolicyDecision {
+    async fn decide(
+        &self,
+        request: &colossus_contracts::EffectRequest,
+    ) -> Result<colossus_contracts::PolicyDecision, PolicyError> {
+        let decision = self.policy.decide(request).await?;
+        if request.approval.is_some() == self.cancel_during_reevaluation {
+            self.control.cancel();
+        }
+        Ok(decision)
+    }
+
+    async fn doctor(&self) -> Result<serde_json::Value, PolicyError> {
+        self.policy.doctor().await
+    }
 }
 
 #[tokio::test]

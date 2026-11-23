@@ -50,6 +50,9 @@ use schema::*;
 mod native_http;
 use native_http::*;
 
+mod github_observation;
+mod http_transport;
+
 mod repository;
 pub use repository::*;
 

@@ -142,6 +142,21 @@ pub(super) fn github_operations() -> Result<Vec<IntegrationOperation>, StoreErro
             64_000,
         )?,
         native_operation(
+            super::github_observation::OPERATION,
+            "Read one pull request and bounded check evidence for its observed head commit.",
+            github_repo_schema(
+                json!({
+                    "owner":{"type":"string","minLength":1,"maxLength":100,"pattern":"^[A-Za-z0-9_.-]+$","not":{"enum":[".",".."]}},
+                    "repo":{"type":"string","minLength":1,"maxLength":100,"pattern":"^[A-Za-z0-9_.-]+$","not":{"enum":[".",".."]}},
+                    "number":{"type":"integer","minimum":1,"maximum":u32::MAX}
+                }),
+                &["number"],
+            ),
+            "GET",
+            "/repos/{owner}/{repo}/pulls/{number}",
+            64_000,
+        )?,
+        native_operation(
             "github.checks",
             "List check runs for a GitHub commit ref.",
             github_repo_schema(

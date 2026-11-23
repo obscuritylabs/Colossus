@@ -240,6 +240,33 @@ impl Runtime {
         tool_name: &str,
         arguments: Value,
     ) -> Result<Value, RuntimeError> {
+        self.call_integration_tool_with_control(tool_name, arguments, None)
+            .await
+    }
+
+    /// Read one pull request with cooperative cancellation before the connector starts.
+    ///
+    /// A read already in progress settles with the usual bounded gateway and audit lifecycle.
+    pub async fn call_github_pull_request(
+        &self,
+        arguments: Value,
+        control: &RunControl,
+    ) -> Result<Value, RuntimeError> {
+        self.call_integration_tool_with_control("github.pull_request", arguments, Some(control))
+            .await
+    }
+
+    async fn call_integration_tool_with_control(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+        control: Option<&RunControl>,
+    ) -> Result<Value, RuntimeError> {
+        if control.is_some_and(RunControl::is_cancelled) {
+            return Err(RuntimeError::Config(
+                "integration read cancelled before dispatch".into(),
+            ));
+        }
         let (operation, credentials) = self
             .integration_executor
             .invocation(tool_name, arguments)?
@@ -255,10 +282,15 @@ impl Runtime {
         );
         request.capabilities = vec!["integration.invoke".into()];
         request.credential_references = credentials;
-        let released = self
-            .gateway
-            .execute(request, self.integration_effect_executor.as_ref())
-            .await?;
+        let executor = self.integration_effect_executor.as_ref();
+        let released = match control {
+            Some(control) => {
+                self.gateway
+                    .execute_controlled(request, executor, control)
+                    .await?
+            }
+            None => self.gateway.execute(request, executor).await?,
+        };
         serde_json::from_slice(&released.bytes)
             .map_err(|error| RuntimeError::Config(error.to_string()))
     }

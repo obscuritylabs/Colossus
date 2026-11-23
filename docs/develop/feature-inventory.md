@@ -77,6 +77,7 @@ Their pending native checks remain separate from implementation and historical t
 
 | Capability | Public API / SDK | CLI / TUI | Desktop | VS Code | Web |
 | --- | --- | --- | --- | --- | --- |
+| Inspect a GitHub pull request and its head checks | The granted native operation can run through existing agent turns. A dedicated human action requires an authenticated API and SDK contract. | The CLI uses `integrations call`. Embedded and authenticated worker TUIs use `/integration call`. See [Integrations](../extend/integrations.md#inspect-a-pull-request-and-its-head-checks). | The bundled Managed Local TUI uses the shared command. Packaged acceptance is pending. The native Git inspector reads the local checkout. | A dedicated editor action requires the human API. | A dedicated web action requires the human API and a deployment that grants the relevant repository authority. |
 | Packaged owned Chromium functional edition | Existing typed browser contracts, caller authority and capability discovery; installed edition determines availability | Standalone archives do not include a browser host; this change adds no separate CLI/TUI browser payload | Windows x64 stable and preview installers select the functional edition with sandbox and compiler-bound signed component; exact signed installed acceptance remains separate. Human WebView2 sign-in stays separate. macOS/Linux retain their existing boundaries. | No browser host or native presenter is shipped | No native browser host is shipped; the user's browser remains separate |
 | Progressive Desktop thread history | Existing authenticated run discovery and bounded pages; full run reads retain their contract | Existing session browsers and history commands retain their workflows | Supported: older pages load while scrolling, thin summaries survive beyond the former 200-entry cutoff, and a virtual list bounds rendered rows; reopening an evicted native binding revalidates its source | Existing extension history workflow; no host change | Existing web history workflow; no host change |
 | Unsaved TUI conversations | Intentional difference: application runs use their own server-managed session lifecycle | Supported in embedded and authenticated worker hosts. Starting work saves a draft for History, resume, and export. The CLI can also explicitly save an empty session. | Supported in the bundled Managed Local TUI. Native conversations follow the Desktop composer workflow. Packaged TUI acceptance pending. | Intentional difference: the extension owns its composer and conversation lifecycle | Intentional difference: the web composer uses application runs and their server-managed session lifecycle |
@@ -99,6 +100,16 @@ Their pending native checks remain separate from implementation and historical t
 | Compose deployment with Chat by default | Existing Control Plane API exercised for bootstrap, authentication and retained Chat; public runtime SDK contracts unchanged | Intentional difference: one-time PowerShell initialization followed by ordinary Compose commands; native CLI/TUI runtimes remain separate Fleet enrollments; no new Hosted Chat client command | Intentional difference: separately installed client; no embedded Compose installer or new Hosted Chat transport; existing Fleet GUI acceptance unverified | Intentional difference: separately installed extension; no embedded Compose installer or new Hosted Chat transport; existing Fleet GUI acceptance unverified | Supported: default Hosted Chat with Echo, verified HTTPS and SSE through the existing web app; API smoke tested, full rendered Chat acceptance unverified |
 
 Evidence and owned follow-ups:
+
+- **GitHub pull request checks.** `colossus-integrations` owns the read operation
+  and its evidence bounds. The authorized connection and runtime policy govern
+  access. The CLI fixture in
+  `crates/colossus-cli/tests/native_integrations_smoke/github_pull_request.rs`
+  exercises exact-head, stale, and incomplete evidence. The PTY fixture in
+  `crates/colossus-cli/tests/integrations_tui.rs` exercises both TUI hosts.
+  `desktop_owner` and `test_owner` own acceptance in the packaged Managed Local
+  TUI. `maintenance_coordinator` owns triage of a dedicated human API and the
+  applicable Desktop, VS Code, and web workflows.
 
 - **Unsaved TUI conversations:** The [Sessions guide](../use/sessions.md#start-a-clean-conversation)
   describes when the TUI saves a draft. The [Terminal UI guide](../use/terminal-ui.md#write-and-review-a-turn)

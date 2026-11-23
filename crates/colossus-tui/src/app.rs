@@ -1801,7 +1801,7 @@ pub(super) fn handle_local_command(
 pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
     if matches!(
         &event,
-        HostEvent::Prompt(_) | HostEvent::SessionBrowser(_) | HostEvent::ThemePicker(_)
+        HostEvent::SessionBrowser(_) | HostEvent::ThemePicker(_)
     ) && matches!(state.overlay, Some(Overlay::ToolDetails(_)))
     {
         state.overlay = None;
@@ -1865,20 +1865,12 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 temporary: false,
             });
         }
-        HostEvent::Prompt(request) => {
-            // Read-only inspection must never postpone an authority decision.
-            if matches!(state.overlay, Some(Overlay::ToolDetails(_))) {
-                state.overlay = None;
-                state.text_selection.clear();
-            }
-            if state.overlay.is_some() {
-                if state.pending_prompts.len() < MAX_QUEUED_TURNS {
-                    state.pending_prompts.push_back(request);
-                } else {
-                    let _ = request.response.send(PromptResponse::Cancelled);
-                }
+        HostEvent::Prompt(request) => receive_prompt(state, request),
+        HostEvent::ControlledPrompt { request, control } => {
+            if control.is_cancelled() {
+                let _ = request.response.send(PromptResponse::Cancelled);
             } else {
-                show_prompt(state, request);
+                receive_prompt(state, request);
             }
         }
         HostEvent::SessionBrowser(request) => {
@@ -2157,6 +2149,21 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 }
             }
         }
+    }
+}
+
+fn receive_prompt(state: &mut TuiState, request: InteractivePrompt) {
+    // Read-only inspection must never postpone an authority decision.
+    if matches!(state.overlay, Some(Overlay::ToolDetails(_))) {
+        state.overlay = None;
+        state.text_selection.clear();
+    }
+    if state.overlay.is_none() {
+        show_prompt(state, request);
+    } else if state.pending_prompts.len() < MAX_QUEUED_TURNS {
+        state.pending_prompts.push_back(request);
+    } else {
+        let _ = request.response.send(PromptResponse::Cancelled);
     }
 }
 

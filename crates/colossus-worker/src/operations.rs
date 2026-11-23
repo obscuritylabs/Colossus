@@ -150,6 +150,12 @@ pub enum InteractiveWorkerRequest {
         /// Exact operator request; no renderer field supplies approval evidence.
         request: colossus_contracts::PluginManagementRequest,
     },
+    /// Read one pull request through the configured native GitHub connector.
+    #[serde(rename = "github_pull_request")]
+    GitHubPullRequest {
+        /// Arguments validated against the connector's read operation schema.
+        arguments: Value,
+    },
     /// Prompt for and issue one client-scoped direct-execution acknowledgement.
     SandboxBoundaryAcknowledge {
         /// Exact durable session displayed by the attached client.
