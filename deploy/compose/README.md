@@ -4,15 +4,15 @@ Run the web app, documentation and persistent Hosted Chat on one Linux Docker
 engine. Use Docker Desktop's Linux engine on Windows or macOS. Setup needs
 PowerShell 7.2+; normal operation needs Docker Compose 2.24+ only.
 
-From this directory, initialize once and start:
+From this directory in a release server bundle, initialize once and start:
 
 ```powershell
-pwsh ./init.ps1 -ReleaseTag v0.11.11-preview.5
+pwsh ./init.ps1
 docker compose up -d --wait
 ```
 
-From a release server bundle, omit `-ReleaseTag` to select its matching version.
-Source checkouts should explicitly select an already published image release.
+In a source checkout, pass `-ReleaseTag` to `init.ps1` with a published release
+tag from [Colossus Releases](https://github.com/obscuritylabs/Colossus/releases).
 `.env.example` lists the non-secret image, project and port settings.
 
 Open `https://localhost:9443`, trust the public certificate
@@ -43,10 +43,10 @@ firewall rules and explicitly change `COLOSSUS_BIND_ADDRESS` in `.env` if needed
 Browser HTTPS and connector mTLS use separate private authorities. Leaves expire
 after one year; renewal is a deliberate operator task.
 
-The checkpoint service has its own database, secrets and private network but
-shares the Docker host's administrator. This does not establish independent
-production checkpoint custody. Use Helm/Kubernetes for that boundary and high
-availability. Agents receive no Docker socket or native host execution.
+The checkpoint service shares the Docker host's administrator. For independent
+checkpoint custody and high availability, see the
+[Cloud deployment guides](https://obscuritylabs.github.io/Colossus/cloud/deployment/).
+Agents receive no Docker socket or native host execution.
 
 The GitHub **Compose smoke tests** workflow only tests a temporary CI stack; it
 does not deploy your installation. Developers can run `node smoke.cjs` with Node

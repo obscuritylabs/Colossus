@@ -13,11 +13,11 @@
 /TERMINAL_UX.html	/use/terminal-ui/
 /CONTEXT.html	/use/sessions-context/
 /TOOLS.html	/reference/tools-actions/
-/SEARCH.html	/use/web-search/	configuration=prerequisites,search-contract=4-read-the-normalized-response,local-searxng=prerequisites,serpapi=prerequisites,security-and-failure-semantics=failure-path,compatibility=next-step,future-http-or-grpc-gateway=search-routing,troubleshooting=failure-path
+/SEARCH.html	/use/web-search/	configuration=/reference/configuration/search/,search-contract=read-the-result,local-searxng=/admin/providers-routing/#configure-search-routing,serpapi=/admin/providers-routing/#configure-search-routing,security-and-failure-semantics=how-search-reaches-a-provider,compatibility=/get-started/upgrade-compatibility/,future-http-or-grpc-gateway=how-search-reaches-a-provider,troubleshooting=if-search-is-unavailable
 /WORKFLOWS.html	/extend/workflows/authoring/
 /INTEGRATIONS.html	/extend/integrations/
-/SKILLS.html	/extend/skills/
-/PACKS.html	/extend/packs/
+/SKILLS.html	/extend/plugin-authoring/
+/PACKS.html	/extend/plugin-distribution/
 /OFFLINE_AIRGAP.html	/admin/offline-airgap/
 /BUNDLE_FORMAT.html	/reference/bundle-format/
 /CONTRIBUTING.html	/develop/contributing/
@@ -29,5 +29,9 @@
 /RUST_ACCEPTANCE_MATRIX.html	/develop/setup-testing/
 /RELEASE.html	/get-started/upgrade-compatibility/
 /SUMMARY.html	/
+/get-started/index.html	/	first-run-roadmap=from-first-run-to-real-work,pick-an-interface=choose-your-starting-point,move-from-proof-to-a-task=from-first-run-to-real-work,before-you-grant-more-access=/get-started/core-concepts/#access-policy-approval-and-sandbox
+/use/research-search/index.html	/use/web-search/	research-and-search=choose-the-right-search-path,goal=choose-the-right-search-path,prerequisites=run-a-direct-search,steps=choose-the-right-search-path,choose-the-right-path=choose-the-right-search-path,how-they-fit-together=choose-the-right-search-path,1-run-repository-only-research=/use/deep-research/#run-a-focused-investigation,2-inspect-evidence-and-claims=/use/deep-research/#follow-the-report-back-to-its-sources,4-run-research-with-selected-lanes=/use/deep-research/#choose-the-depth-and-evidence,3-diagnose-a-web-route-directly=run-a-direct-search,search-routing=how-search-reaches-a-provider,expected-result=/use/deep-research/#follow-the-report-back-to-its-sources,verification=/use/deep-research/#follow-the-report-back-to-its-sources,failure-path=/use/deep-research/#read-incomplete-results-carefully,next-step=choose-the-right-search-path,where-configuration-lives=/reference/configuration/search/
+/extend/skills/index.html	/extend/plugin-authoring/
+/extend/packs/index.html	/extend/plugin-distribution/
 /admin/cloud-control-plane/index.html	/cloud/	deploy-on-kubernetes=/cloud/deployment/kubernetes/,sign-in-and-project-administration=/cloud/administration/,enable-personal-hosted-chat=/cloud/work/#start-a-hosted-conversation,scale-hosted-chat-across-replicas=/cloud/deployment/hosted-chat/,configure-and-verify-the-shared-deployment=/cloud/deployment/hosted-chat/#enable-and-verify,configure-deployment-markings-and-monitor-policy=/cloud/administration/,initialize-cloud-storage=/cloud/deployment/configuration/#use-an-external-database,enroll-a-cli-daemon=/cloud/connect-runtimes/#enroll-a-cli-daemon,enroll-desktop=/cloud/connect-runtimes/#enroll-desktop,operate-hosts-threads-and-tasks=/cloud/work/#work-with-a-connected-agent,install-and-supervise-runtime-connections=/cloud/connect-runtimes/#run-unattended,use-an-explicit-headless-authority=/cloud/connect-runtimes/#run-unattended,back-up-and-restore-the-cloud-database=/cloud/deployment/operations/,verify-and-recover=/cloud/deployment/operations/#diagnose-an-interruption
 /admin/documentation-hosting/index.html	/cloud/deployment/documentation/	deploy-with-the-control-plane=choose-the-matching-release,browse-and-search=verify-navigation-and-search,verify-and-update=update-or-use-a-separate-origin

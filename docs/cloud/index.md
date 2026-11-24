@@ -42,7 +42,7 @@ enable hosted chat, connect existing runtimes, or offer both.
 
     ---
 
-    Install the Helm chart, choose sign-in and database settings, and operate it.
+    Install with Docker Compose or Helm, configure sign-in and storage, and maintain the deployment.
 
     [Open deployment guides :lucide-arrow-right:](deployment/index.md)
 

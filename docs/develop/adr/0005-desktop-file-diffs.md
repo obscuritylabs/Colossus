@@ -7,7 +7,7 @@ type: concept
 
 # ADR 0005: Desktop file search and diffs
 
-- Status: implemented; platform acceptance required before merge
+- Status: accepted
 - Date: 2026-09-28
 - Tracking: [Desktop file explorer and Git diff viewing #206](https://github.com/obscuritylabs/Colossus/issues/206)
 
@@ -96,8 +96,3 @@ exercise a 5,000-path fixture, keyboard reveal, both layouts, hunk navigation, r
 draft preservation, theme/accessibility checks, errors and selection changes during loading.
 Browser fixtures are presentation evidence; native tests establish filesystem behavior.
 macOS native acceptance and assistive-technology checks remain platform acceptance work.
-
-The Windows production build measured 3,882,091 bytes of renderer assets against the
-existing 4,000,000-byte gate at initial implementation. This is the whole renderer, not
-the incremental cost of this feature or a measured comparison against Monaco. Re-run
-`npm run build` for the current figure; no budget was increased.

@@ -95,7 +95,7 @@ worker key through inherited native bootstrap memory.
 
 ## Public application API
 
-On Unix, the installed worker can host the versioned application gRPC API alongside
+On Unix and Windows, the installed worker can host the versioned application gRPC API alongside
 private CLI/TUI IPC:
 
 ```bash
@@ -104,15 +104,15 @@ colossus --config .colossus/config.yaml worker \
 ```
 
 The argument is an absolute discovery directory, not a secret directory supplied by an
-application. Colossus creates the final component with mode `0700` when absent, then
-canonicalizes, owner-checks, locks, and rechecks it. Existing links, another owner,
-group/other permissions, or an active directory lease fail closed. The worker binds
-only `127.0.0.1:0` and atomically publishes:
+application. When the final component is absent, Colossus creates it with mode `0700`
+on Unix or an owner-private DACL on Windows. Colossus validates the directory and
+holds an exclusive lease in `.public-api.lock`. Unsafe permissions, links, or an
+active lease prevent startup. Other platforms fail closed. The worker binds only
+`127.0.0.1:0` and atomically writes each discovery file:
 
 - `endpoint.json`: API/schema version, stable instance ID, loopback HTTPS endpoint,
-  PID, and certificate SHA-256;
-- `certificate.pem`: the pinned public leaf certificate; and
-- `.public-api.lock`: non-secret same-directory ownership coordination.
+  PID, and certificate SHA-256.
+- `certificate.pem`: the pinned public leaf certificate.
 
 All are owner-only. No file contains a bearer, authentication root, TLS private key,
 or instance seed.
