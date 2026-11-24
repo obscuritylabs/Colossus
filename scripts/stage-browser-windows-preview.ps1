@@ -66,7 +66,7 @@ try {
                 Where-Object Extension -In @('.exe', '.dll'))
             if ($Images.Count -lt 6 -or $Images.Count -gt 64) { throw 'Unexpected native browser image inventory.' }
             foreach ($Image in $Images) {
-                & (Join-Path $PSScriptRoot 'ci/verify-authenticode.ps1') -Path $Image.FullName
+                & (Join-Path $PSScriptRoot 'ci/verify-authenticode.ps1') -Path $Image.FullName -RequireEmbeddedSignature
             }
         }
         Invoke-Checked python @('-B', 'native/browser/scripts/component.py', 'inventory',
