@@ -8,6 +8,92 @@ include breaking changes while the public API is still settling.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-23
+
+### Highlights
+
+- Undo and redo unsent TUI prompt edits with Ctrl-Z and Ctrl-Y, or F7 and F8
+  if your terminal intercepts them. Each open conversation keeps its own edit
+  history, including large pastes and accepted completions.
+- Starting the TUI or opening a new conversation gives you an unsaved draft.
+  Starting work saves it for History, resume, and export. Use
+  `colossus sessions new` to explicitly save an empty session.
+- Colossus now also retries confirmed provider HTTP 500 responses received before
+  model output begins. Desktop shows retry progress. Choose **Retry** after an
+  eligible Execute failure to continue in the same saved conversation with your
+  unsent draft and partial response intact.
+- Save a local JSON support report with `colossus support report --output PATH`
+  even when configuration or worker startup fails. From the TUI, use
+  `/support-report PATH` to include the last observed worker status when
+  available. Both commands save the report locally without uploading it.
+- Inspect a GitHub pull request, check runs, and commit statuses for its observed
+  head SHA with `colossus integrations call github.pull_request` or the TUI's
+  `/integration call github.pull_request`, supplying the base repository and
+  pull request number as JSON. The report identifies moved heads and incomplete
+  observations. GitHub repository rules determine which checks are required.
+- Network requests restricted to public destinations now reject additional
+  reserved IPv4 addresses, including their IPv4-mapped IPv6 forms.
+
+- The Windows Desktop release verifies the embedded signatures on its packaged
+  browser executables.
+
+### Upgrade notes
+
+- Update local worker clients and workers together and restart workers from the
+  updated build. This release uses private worker protocol 29.
+- When upgrading an API runtime separately, update older Rust SDK clients,
+  including Desktop v0.12.2. Those clients reject HTTP 500 retry events in live
+  and replayed watches. Managed Local Desktop bundles matching versions.
+- Before upgrading the runtime, make a verified state backup. Older API runtimes
+  reject run history that contains HTTP 500 retry events. For rollback, restore
+  the pre-upgrade backup with its matching key material and secure anchor when
+  protected storage is configured. Follow the
+  [upgrade and compatibility guide](https://obscuritylabs.github.io/Colossus/get-started/upgrade-compatibility/#2-preserve-the-current-authority-set).
+- If a configured GitHub connection does not expose `github.pull_request`,
+  reconnect with the same settings and start a fresh runtime. For private
+  repositories, use a repository-scoped credential with read access to pull
+  requests, checks, and commit statuses.
+
+<!-- colossus:release-notes base=v0.12.2 -->
+
+### Merged changes
+
+#### Added
+
+- **tui:** undo and redo unsent prompt edits ([0c2ab0c](https://github.com/obscuritylabs/Colossus/commit/0c2ab0ca674c94f8c4463c9ffc2a15dd23911431))
+- **cli:** save local terminal support reports ([ab462c0](https://github.com/obscuritylabs/Colossus/commit/ab462c0b77a94bcb8353c5da980d5aaa7aca13eb))
+- **integrations:** inspect GitHub pull request head checks ([603c4be](https://github.com/obscuritylabs/Colossus/commit/603c4bee31d5eba110f203be1fffc8fda1f0536d))
+
+#### Fixed
+
+- **network:** exclude reserved IPv4 from public authority ([0890497](https://github.com/obscuritylabs/Colossus/commit/0890497793b9294e185efa20bc133bd7420c2595))
+- **tui:** save new sessions on first work ([ac9ab63](https://github.com/obscuritylabs/Colossus/commit/ac9ab63fb5480b26f7a2aa62880fb316245acc97))
+- **desktop:** recover from provider HTTP 500 ([6f868ac](https://github.com/obscuritylabs/Colossus/commit/6f868aca2ccd3e3b1a5ab0f976f8a306186e4fa6))
+- **desktop:** preserve selected skills on provider retry ([05a463e](https://github.com/obscuritylabs/Colossus/commit/05a463e2d9ff19fe5d865fa5686dc7d21df7aa73))
+- **tui:** authorize settings on unsaved drafts ([1a02ebb](https://github.com/obscuritylabs/Colossus/commit/1a02ebb71b795c3d1c90bd6be485614839a93886))
+- **release:** verify embedded Windows browser signatures ([66c0d37](https://github.com/obscuritylabs/Colossus/commit/66c0d3769ccc21bddff67d81dafb120ed7500fbd))
+
+#### Security
+
+- **deps:** update url to 2.5.9 ([cba039a](https://github.com/obscuritylabs/Colossus/commit/cba039a8b0539ae9f4ff337049ec4d12308fcaec))
+- **deps:** update Desktop cookie and chacha20 ([b9bf463](https://github.com/obscuritylabs/Colossus/commit/b9bf463e80b1f58afd9f29a203f45ed85a4dda71))
+
+#### Documentation
+
+- **cli:** clarify local provider setup and diagnostics ([8d8dfd3](https://github.com/obscuritylabs/Colossus/commit/8d8dfd3eadc23d086427c1861605af57a7c9803d))
+
+#### Maintenance
+
+- build the Windows Desktop browser sidecar once ([f334dca](https://github.com/obscuritylabs/Colossus/commit/f334dca9735daf8f1a88d31f270e88830337b86f))
+- **policy:** diagnose live OPA startup failures ([7a1b33e](https://github.com/obscuritylabs/Colossus/commit/7a1b33e5553aa22d4e0582afc956e5935ca3bc04))
+- **release:** prepare v0.13.0 ([fd3c7ec](https://github.com/obscuritylabs/Colossus/commit/fd3c7ec157c55c50bd74e0ebba2fa3261feb4f15))
+
+**Source:** [66c0d37](https://github.com/obscuritylabs/Colossus/commit/66c0d3769ccc21bddff67d81dafb120ed7500fbd)
+
+**Full changelog:** [v0.12.2...v0.13.1](https://github.com/obscuritylabs/Colossus/compare/v0.12.2...v0.13.1)
+
+<!-- /colossus:release-notes -->
+
 ## [0.13.0] - 2026-11-23
 
 ### Highlights
