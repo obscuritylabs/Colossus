@@ -116,8 +116,41 @@ test("real workspace server survives later turns, reconnects in Active shells, a
     expect(collision.chunks.map((c) => c.stderr).join("")).toContain(
       "PORT_IN_USE",
     );
-    const command =
-      "$ErrorActionPreference='Stop'; $l=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0); $l.Start(); [Console]::Out.WriteLine(('READY_PORT='+$l.LocalEndpoint.Port)); while ($true) { $c=$l.AcceptTcpClient(); $s=$c.GetStream(); $b=[Text.Encoding]::ASCII.GetBytes(\"HTTP/1.1 200 OK`r`nContent-Length: 2`r`nConnection: close`r`n`r`nOK\"); $s.Write($b,0,$b.Length); $c.Close() }";
+    // Closing a Windows TCP socket with unread request bytes can reset the fetch.
+    const command = [
+      "$ErrorActionPreference='Stop'",
+      "$listener=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0)",
+      "$header=[byte[]]::new(8192)",
+      '$headerEnd="`r`n`r`n"',
+      '$response=[Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Length: 2`r`nConnection: close`r`n`r`nOK")',
+      "$listener.Start()",
+      "[Console]::Out.WriteLine(('READY_PORT='+$listener.LocalEndpoint.Port))",
+      "while ($true) {",
+      "  $client=$listener.AcceptTcpClient()",
+      "  try {",
+      "    $stream=$client.GetStream()",
+      "    $timer=[Diagnostics.Stopwatch]::StartNew()",
+      "    $used=0",
+      "    while ($used -lt $header.Length) {",
+      "      $remaining=2000-$timer.ElapsedMilliseconds",
+      "      if ($remaining -le 0) { break }",
+      "      $stream.ReadTimeout=$remaining",
+      "      $count=$stream.Read($header,$used,$header.Length-$used)",
+      "      if ($count -eq 0) { break }",
+      "      $used+=$count",
+      "      if ([Text.Encoding]::ASCII.GetString($header,0,$used).Contains($headerEnd)) {",
+      "        $stream.WriteTimeout=2000",
+      "        $stream.Write($response,0,$response.Length)",
+      "        break",
+      "      }",
+      "    }",
+      "  } catch [IO.IOException] {",
+      "    # Continue serving after a socket timeout or disconnect.",
+      "  } finally {",
+      "    $client.Dispose()",
+      "  }",
+      "}",
+    ].join("\n");
     const started = await host.run({
       command,
       max_output_bytes: 4096,
