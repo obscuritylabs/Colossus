@@ -1,9 +1,25 @@
 use super::*;
 
+pub(super) enum LocalWriterLease {
+    Redb(RedbWriterLease),
+    #[cfg(feature = "journal-startup-benchmark")]
+    JournalOwned,
+}
+
+impl LocalWriterLease {
+    pub(super) fn diagnostic(&self) -> Value {
+        match self {
+            Self::Redb(lease) => json!({"held": true, "path": lease.path()}),
+            #[cfg(feature = "journal-startup-benchmark")]
+            Self::JournalOwned => json!({"held": true, "reason": "journal-owned"}),
+        }
+    }
+}
+
 /// Canonical storage adapters and diagnostics constructed as one startup unit.
 pub(super) struct StorageComposition {
     pub(super) keys: Arc<dyn KeyProvider>,
-    pub(super) writer_lease: Option<RedbWriterLease>,
+    pub(super) writer_lease: Option<LocalWriterLease>,
     pub(super) journal: Arc<dyn EventJournal>,
     pub(super) projections: Arc<dyn ProjectionStore>,
     pub(super) recovery_reason: Option<String>,
@@ -143,7 +159,7 @@ pub(super) fn compose_storage(
             let startup_verification = redb.startup_verification_report()?;
             StorageComposition {
                 keys: Arc::clone(&keys),
-                writer_lease: Some(lease),
+                writer_lease: Some(LocalWriterLease::Redb(lease)),
                 journal: redb.clone(),
                 projections: redb,
                 recovery_reason,
@@ -183,5 +199,58 @@ pub(super) fn compose_storage(
                 diagnostic,
             }
         }
+        #[cfg(feature = "journal-startup-benchmark")]
+        StorageAdapter::BenchmarkSqlite | StorageAdapter::BenchmarkTurso => {
+            compose_benchmark_sql(config, storage_path, keys, signer)?
+        }
+    })
+}
+
+#[cfg(feature = "journal-startup-benchmark")]
+fn compose_benchmark_sql(
+    config: &RuntimeConfig,
+    storage_path: &Path,
+    keys: Arc<dyn KeyProvider>,
+    signer: Arc<dyn CheckpointSigner>,
+) -> Result<StorageComposition, RuntimeError> {
+    use colossus_journal_sql::{SqlEventJournal, SqlJournalBackend};
+
+    let parent = storage_path.parent().ok_or_else(|| {
+        RuntimeError::Config("benchmark SQL storage requires a private directory".into())
+    })?;
+    let directory = ConfinedRoot::bind(parent).map_err(|error| {
+        RuntimeError::Config(format!(
+            "benchmark SQL storage directory is unsafe: {error}"
+        ))
+    })?;
+    let (backend, label) = if config.storage.adapter == StorageAdapter::BenchmarkSqlite {
+        (SqlJournalBackend::Sqlite, "sqlite")
+    } else {
+        (SqlJournalBackend::Turso, "turso")
+    };
+    let journal = Arc::new(SqlEventJournal::open(
+        storage_path,
+        backend,
+        Arc::clone(&keys),
+        signer,
+        config.storage.startup_verification,
+    )?);
+    directory.revalidate().map_err(|error| {
+        RuntimeError::Config(format!("benchmark SQL storage directory changed: {error}"))
+    })?;
+    let recovery_reason = journal.recovery_reason()?;
+    let diagnostic = json!({
+        "adapter": label,
+        "path": storage_path,
+        "payload_protection": config.storage.keys.protection_label(),
+        "startup_verification": journal.startup_verification_report(),
+    });
+    Ok(StorageComposition {
+        keys,
+        writer_lease: Some(LocalWriterLease::JournalOwned),
+        journal: journal.clone(),
+        projections: journal,
+        recovery_reason,
+        diagnostic,
     })
 }

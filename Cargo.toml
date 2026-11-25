@@ -245,6 +245,7 @@ colossus-domain = { version = "=0.13.1", path = "crates/colossus-domain" }
 colossus-journal-redb = { version = "=0.13.1", path = "crates/colossus-journal-redb" }
 colossus-journal-postgres = { version = "=0.13.1", path = "crates/colossus-journal-postgres" }
 colossus-journal-format = { version = "=0.13.1", path = "crates/colossus-journal-format" }
+colossus-journal-sql = { version = "=0.13.1", path = "crates/colossus-journal-sql" }
 colossus-memory = { version = "=0.13.1", path = "crates/colossus-memory" }
 colossus-network = { version = "=0.13.1", path = "crates/colossus-network" }
 colossus-research = { version = "=0.13.1", path = "crates/colossus-research" }

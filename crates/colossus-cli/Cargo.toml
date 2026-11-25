@@ -10,8 +10,13 @@ license.workspace = true
 name = "colossus"
 path = "src/main.rs"
 
+[[example]]
+name = "journal_startup_benchmark"
+required-features = ["journal-startup-benchmark"]
+
 [features]
 dictation = ["dep:colossus-native-dictation"]
+journal-startup-benchmark = ["colossus-runtime/journal-startup-benchmark"]
 
 [dependencies]
 colossus-connector.workspace = true

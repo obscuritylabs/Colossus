@@ -2330,6 +2330,7 @@ dependencies = [
  "colossus-integrations",
  "colossus-journal-postgres",
  "colossus-journal-redb",
+ "colossus-journal-sql",
  "colossus-mcp",
  "colossus-media",
  "colossus-memory",

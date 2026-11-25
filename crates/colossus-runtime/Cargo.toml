@@ -7,6 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
+# Opt-in local adapters for the CLI startup benchmark.
+journal-startup-benchmark = ["dep:colossus-journal-sql"]
 # Source-only macOS composition seam for the separate-host acceptance harness. This
 # feature does not participate in installed-package discovery or release builds.
 macos-browser-host-acceptance = ["colossus-sandbox/macos-browser-tls-development"]
@@ -31,6 +33,7 @@ colossus-context.workspace = true
 colossus-home.workspace = true
 colossus-journal-redb.workspace = true
 colossus-journal-postgres.workspace = true
+colossus-journal-sql = { workspace = true, optional = true }
 colossus-memory.workspace = true
 colossus-media.workspace = true
 colossus-mcp.workspace = true

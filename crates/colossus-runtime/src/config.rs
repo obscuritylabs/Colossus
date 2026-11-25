@@ -837,6 +837,12 @@ pub enum StorageAdapter {
     /// Multi-process PostgreSQL journal and projections.
     #[serde(alias = "postgresql")]
     Postgres,
+    /// SQLite journal for the opt-in startup benchmark.
+    #[cfg(feature = "journal-startup-benchmark")]
+    BenchmarkSqlite,
+    /// Embedded Turso journal for the opt-in startup benchmark.
+    #[cfg(feature = "journal-startup-benchmark")]
+    BenchmarkTurso,
 }
 
 pub(super) fn validate_storage_config(storage: &StorageConfig) -> Result<(), RuntimeError> {
@@ -859,6 +865,17 @@ pub(super) fn validate_storage_config(storage: &StorageConfig) -> Result<(), Run
             return Err(RuntimeError::Config(
                 "storage.postgres is required when storage.adapter is postgres".into(),
             ));
+        }
+        #[cfg(feature = "journal-startup-benchmark")]
+        (StorageAdapter::BenchmarkSqlite | StorageAdapter::BenchmarkTurso, postgres) => {
+            if postgres.is_some()
+                || storage.location != StorageLocation::Workspace
+                || !matches!(storage.keys, KeyConfig::Environment { .. })
+            {
+                return Err(RuntimeError::Config(
+                    "benchmark SQL storage requires workspace-relative resolution and environment-protected keys".into(),
+                ));
+            }
         }
     }
     if storage.adapter == StorageAdapter::Ephemeral && !matches!(storage.keys, KeyConfig::None) {

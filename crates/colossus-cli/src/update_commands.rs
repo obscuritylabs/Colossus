@@ -177,6 +177,10 @@ impl UpdateNoticeProvider {
 #[async_trait]
 impl BackgroundNoticeProvider for UpdateNoticeProvider {
     async fn notice(&self) -> Option<PresentationDocument> {
+        #[cfg(feature = "journal-startup-benchmark")]
+        if std::env::var_os("COLOSSUS_JOURNAL_STARTUP_BENCHMARK").is_some() {
+            return None;
+        }
         let report = self.checker.check().await;
         (report.status == UpdateCheckStatus::UpdateAvailable)
             .then(|| update_available_document(&report))

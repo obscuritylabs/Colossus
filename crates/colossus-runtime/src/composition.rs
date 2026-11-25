@@ -100,7 +100,7 @@ pub struct Runtime {
     pub(super) colossus_home_root: Option<ConfinedRoot>,
     pub(super) automatic_agent_instructions: bool,
     pub(super) instruction_snapshots: Arc<InstructionSnapshotStore>,
-    pub(super) writer_lease: Option<RedbWriterLease>,
+    pub(super) writer_lease: Option<LocalWriterLease>,
     pub(super) storage_diagnostic: Value,
     pub(super) security_posture: SecurityPostureReport,
     pub(super) journal: Arc<dyn EventJournal>,
@@ -272,6 +272,10 @@ impl Runtime {
             StorageAdapter::Redb => "redb",
             StorageAdapter::Ephemeral => "ephemeral",
             StorageAdapter::Postgres => "postgresql",
+            #[cfg(feature = "journal-startup-benchmark")]
+            StorageAdapter::BenchmarkSqlite => "sqlite",
+            #[cfg(feature = "journal-startup-benchmark")]
+            StorageAdapter::BenchmarkTurso => "turso",
         };
         let startup_verification = match config.storage.startup_verification {
             StartupVerificationMode::Incremental => "incremental",

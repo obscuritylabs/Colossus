@@ -199,7 +199,7 @@ impl Runtime {
                 };
                 json!({"held": false, "reason": reason})
             },
-            |lease| json!({"held": true, "path": lease.path()}),
+            LocalWriterLease::diagnostic,
         );
         let projection_adapter = self
             .storage_diagnostic

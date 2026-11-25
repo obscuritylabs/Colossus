@@ -178,3 +178,28 @@ measurements for ingest, steady-state single appends, indexed tail reads, global
 projection replay, incremental reopen, full audit, and disk size. Each run creates
 and removes its own database under the scratch directory. Run engines sequentially
 in rotated order and keep the scratch volume and build profile fixed.
+
+### Time to the terminal prompt
+
+Build the CLI and benchmark example from the same source and release profile. Pass
+the path to the built CLI and an existing private scratch directory with several GB
+of free space. Add `.exe` to the CLI path on Windows.
+
+```bash
+cargo build --release --locked -p colossus-cli --features journal-startup-benchmark --bin colossus --example journal_startup_benchmark
+cargo run --release --locked -p colossus-cli --features journal-startup-benchmark --example journal_startup_benchmark -- measure target/release/colossus /path/to/scratch
+```
+
+The benchmark writes 900,000,000 canonical JSON bytes in 1,024 saved conversations
+per engine. It catches up the runtime projections, signs each journal's checkpoint,
+and verifies the stored corpus before timing. It starts a new embedded `colossus tui`
+process for each sample and times the interval from launch until the terminal renders
+the composer. The `--resume` sample also waits for the latest saved transcript. Each
+launch checks that the composer accepts a draft, then exits without submitting it.
+
+The JSON Lines output records one warm-up and nine measured trials per engine and
+launch mode by default. It includes a fresh prompt with the welcome animation, a
+fresh prompt with that animation disabled, and a prompt after `--resume`. The
+benchmark rotates engine order and leaves operating-system caches in place. Use
+`--bytes`, `--sessions`, and `--trials` for shorter runs. The opt-in feature makes
+the two SQL adapters available to this source benchmark on private scratch state.

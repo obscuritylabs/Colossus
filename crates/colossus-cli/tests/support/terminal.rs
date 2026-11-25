@@ -2,7 +2,7 @@
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::{
     io::{Read as _, Write as _},
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -14,7 +14,13 @@ pub(crate) struct Terminal {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     master: Box<dyn portable_pty::MasterPty + Send>,
     writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
-    screen: Arc<Mutex<vt100::Parser>>,
+    screen: Arc<Mutex<ScreenOutput>>,
+    changed: Arc<Condvar>,
+}
+
+struct ScreenOutput {
+    parser: vt100::Parser,
+    observed_at: Instant,
 }
 
 impl Drop for Terminal {
@@ -25,7 +31,11 @@ impl Drop for Terminal {
 }
 
 impl Terminal {
-    pub(crate) fn start(mut command: CommandBuilder) -> Self {
+    pub(crate) fn start(command: CommandBuilder) -> Self {
+        Self::start_timed(command).0
+    }
+
+    pub(crate) fn start_timed(mut command: CommandBuilder) -> (Self, Instant) {
         environment::configure(&mut command);
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -35,13 +45,19 @@ impl Terminal {
                 pixel_height: 0,
             })
             .expect("PTY");
+        let started = Instant::now();
         let child = pair.slave.spawn_command(command).expect("CLI TUI");
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().expect("reader");
         let writer = Arc::new(Mutex::new(pair.master.take_writer().expect("writer")));
-        let screen = Arc::new(Mutex::new(vt100::Parser::new(40, 100, 1000)));
+        let screen = Arc::new(Mutex::new(ScreenOutput {
+            parser: vt100::Parser::new(40, 100, 1000),
+            observed_at: started,
+        }));
+        let changed = Arc::new(Condvar::new());
         let output = Arc::clone(&screen);
         let response = Arc::clone(&writer);
+        let notify = Arc::clone(&changed);
         thread::spawn(move || {
             let mut bytes = [0; 8192];
             let mut query_tail = Vec::new();
@@ -49,7 +65,12 @@ impl Terminal {
                 if count == 0 {
                     break;
                 }
-                output.lock().expect("screen").process(&bytes[..count]);
+                {
+                    let mut output = output.lock().expect("screen");
+                    output.parser.process(&bytes[..count]);
+                    output.observed_at = Instant::now();
+                    notify.notify_all();
+                }
                 query_tail.extend_from_slice(&bytes[..count]);
                 if query_tail.windows(4).any(|window| window == b"\x1b[6n") {
                     let mut writer = response.lock().expect("response writer");
@@ -60,12 +81,16 @@ impl Terminal {
                 query_tail.drain(..start);
             }
         });
-        Self {
-            child,
-            master: pair.master,
-            writer,
-            screen,
-        }
+        (
+            Self {
+                child,
+                master: pair.master,
+                writer,
+                screen,
+                changed,
+            },
+            started,
+        )
     }
 
     pub(crate) fn send(&self, bytes: &[u8]) {
@@ -79,18 +104,49 @@ impl Terminal {
     }
 
     pub(crate) fn wait_until(&self, description: &str, ready: impl Fn(&str) -> bool) -> String {
-        let deadline = Instant::now() + Duration::from_secs(20);
+        self.wait_until_observed(description, Duration::from_secs(20), ready)
+            .0
+    }
+
+    pub(crate) fn wait_until_observed(
+        &self,
+        description: &str,
+        timeout: Duration,
+        ready: impl Fn(&str) -> bool,
+    ) -> (String, Instant) {
+        let deadline = Instant::now() + timeout;
+        let mut output = self.screen.lock().expect("screen");
         loop {
-            let screen = self.screen.lock().expect("screen").screen().contents();
+            let screen = output.parser.screen().contents();
             if ready(&screen) {
-                return screen;
+                return (screen, output.observed_at);
             }
             assert!(
                 Instant::now() < deadline,
                 "TUI never rendered {description:?}:\n{screen}"
             );
-            thread::sleep(Duration::from_millis(20));
+            output = self
+                .changed
+                .wait_timeout(output, deadline.saturating_duration_since(Instant::now()))
+                .expect("screen update")
+                .0;
         }
+    }
+
+    #[cfg(feature = "journal-startup-benchmark")]
+    pub(crate) fn wait_for_clean_exit(&mut self) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while Instant::now() < deadline {
+            if let Some(status) = self.child.try_wait().map_err(|error| error.to_string())? {
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!("CLI exited with {status}"))
+                };
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        Err("CLI teardown timed out".into())
     }
 
     pub(crate) fn wait_until_visual_rows(
@@ -102,7 +158,7 @@ impl Terminal {
         loop {
             let (contents, rows) = {
                 let parser = self.screen.lock().expect("screen");
-                let screen = parser.screen();
+                let screen = parser.parser.screen();
                 // ConPTY may soft-wrap adjacent visual rows. contents() joins
                 // those rows, so layout assertions need the physical row view.
                 let (_, columns) = screen.size();
@@ -174,7 +230,7 @@ impl Terminal {
     pub(crate) fn resize_frame(&self, rows: u16, cols: u16) {
         // Resize the emulator before the child can publish a new-width frame.
         let mut screen = self.screen.lock().expect("screen");
-        screen.screen_mut().set_size(rows, cols);
+        screen.parser.screen_mut().set_size(rows, cols);
         self.master
             .resize(PtySize {
                 rows,
