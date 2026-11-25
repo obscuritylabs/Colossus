@@ -8,9 +8,9 @@ license.workspace = true
 
 [dependencies]
 base64.workspace = true
-chacha20poly1305.workspace = true
 colossus-contracts.workspace = true
 colossus-credentials.workspace = true
+colossus-journal-format.workspace = true
 colossus-ports.workspace = true
 ed25519-dalek.workspace = true
 getrandom.workspace = true
@@ -19,13 +19,12 @@ hex.workspace = true
 redb.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 tempfile.workspace = true
-time.workspace = true
-uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+chacha20poly1305.workspace = true
+uuid.workspace = true
 colossus-memory.workspace = true
 colossus-projection.workspace = true
 colossus-session.workspace = true

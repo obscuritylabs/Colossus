@@ -33,6 +33,8 @@ members = [
     "crates/colossus-ports",
     "crates/colossus-journal-redb",
     "crates/colossus-journal-postgres",
+    "crates/colossus-journal-format",
+    "crates/colossus-journal-sql",
     "crates/colossus-projection",
     "crates/colossus-audit",
     "crates/colossus-sandbox",
@@ -242,6 +244,7 @@ colossus-work = { version = "=0.13.1", path = "crates/colossus-work" }
 colossus-domain = { version = "=0.13.1", path = "crates/colossus-domain" }
 colossus-journal-redb = { version = "=0.13.1", path = "crates/colossus-journal-redb" }
 colossus-journal-postgres = { version = "=0.13.1", path = "crates/colossus-journal-postgres" }
+colossus-journal-format = { version = "=0.13.1", path = "crates/colossus-journal-format" }
 colossus-memory = { version = "=0.13.1", path = "crates/colossus-memory" }
 colossus-network = { version = "=0.13.1", path = "crates/colossus-network" }
 colossus-research = { version = "=0.13.1", path = "crates/colossus-research" }

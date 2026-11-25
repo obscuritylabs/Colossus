@@ -146,7 +146,35 @@ safe default after an external effect may have escaped.
 
 ## Test expectation
 
-Port compatibility is executable. In-memory, redb, and PostgreSQL implementations run
-shared conformance suites for optimistic append, replay, reopening, outbox order, and
-projection behavior. Fault tests terminate operations around commit and acknowledgement
-boundaries to prove rollback, durable visibility, or explicit uncertainty.
+Port compatibility is executable. In-memory, redb, PostgreSQL, SQLite, and embedded
+Turso implementations run shared conformance suites for optimistic append, replay,
+outbox order, and projection behavior. File-backed tests reopen journals and interrupt
+operations around commit or acknowledgement to establish rollback, durable visibility,
+or explicit uncertainty.
+
+## Embedded SQL adapter evaluation
+
+`colossus-journal-sql` opens a file-backed journal and projection store with bundled
+SQLite or the local Turso engine. Both use one writer lease, WAL mode, and full
+synchronization. The caller supplies an owner-private directory and journal-specific
+keys and anchor custody. The engine and protection mode are fixed at initialization.
+
+For protected stores, the signed checkpoint commits in SQL before the independent
+anchor advances. If the process stops between these writes, startup verifies the
+earlier anchor, the intervening journal tail, and the durable checkpoint before
+advancing the anchor. A failure to confirm the anchor update after committing a
+checkpoint enters read-only recovery.
+
+From the repository root, run the example once per engine against an existing scratch
+directory with several GB free. Substitute `redb` or `turso` for `sqlite` to compare.
+
+```bash
+cargo run --release --locked -p colossus-journal-sql --example journal_benchmark -- sqlite /path/to/scratch
+```
+
+The default workload seeds 900,000,000 bytes of synthetic canonical JSON across
+1,024 streams with protected payloads and batches of 128 events. It reports separate
+measurements for ingest, steady-state single appends, indexed tail reads, global and
+projection replay, incremental reopen, full audit, and disk size. Each run creates
+and removes its own database under the scratch directory. Run engines sequentially
+in rotated order and keep the scratch volume and build profile fixed.

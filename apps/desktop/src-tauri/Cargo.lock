@@ -1145,13 +1145,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "colossus-journal-format"
+version = "0.13.1"
+dependencies = [
+ "chacha20poly1305",
+ "colossus-contracts",
+ "colossus-ports",
+ "getrandom 0.4.3",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "colossus-journal-redb"
 version = "0.13.1"
 dependencies = [
  "base64 0.22.1",
- "chacha20poly1305",
  "colossus-contracts",
  "colossus-credentials",
+ "colossus-journal-format",
  "colossus-ports",
  "ed25519-dalek",
  "fs4",
@@ -1160,10 +1176,7 @@ dependencies = [
  "redb",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
- "time",
- "uuid",
  "zeroize",
 ]
 

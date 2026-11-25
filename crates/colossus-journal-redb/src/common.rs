@@ -11,8 +11,6 @@ pub(super) const PROJECTION_POSITIONS: TableDefinition<&str, u64> =
     TableDefinition::new("projection_positions");
 pub(super) const PROJECTION_RECORDS: TableDefinition<&str, &[u8]> =
     TableDefinition::new("projection_records");
-pub(super) const ZERO_HASH: &str =
-    "0000000000000000000000000000000000000000000000000000000000000000";
 pub(super) const CHECKPOINT_INTERVAL: u64 = 100;
 pub(super) const CHECKPOINT_MAX_AGE: Duration = Duration::from_secs(60);
 pub(super) const STREAM_EVENTS_INDEX_KEY: &str = "stream_events_index_version";
@@ -37,16 +35,6 @@ pub(super) fn decode_journal_json<'de, T: Deserialize<'de>>(
             error.classify()
         ))
     })
-}
-
-pub(super) fn utc_now() -> Result<String, StoreError> {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .map_err(adapter_error)
-}
-
-pub(super) fn sha256_hex(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
 }
 
 pub(super) fn projection_record_key(projection: &str, key: &str) -> Result<String, StoreError> {

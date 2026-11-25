@@ -55,31 +55,14 @@ impl RedbEventJournal {
                 let stream_version = durable_version.checked_add(1).ok_or_else(|| {
                     StoreError::Verification("stream version is exhausted".into())
                 })?;
-                let mut envelope = EventEnvelope {
-                    schema_version: 1,
-                    event_version: event.event_version,
-                    event_id: Uuid::now_v7().to_string(),
-                    global_sequence: sequence,
-                    stream_id: event.stream_id,
+                let envelope = seal_event(
+                    event,
+                    sequence,
                     stream_version,
-                    classification: event.classification,
-                    event_type: event.event_type,
-                    actor: event.actor,
-                    context: event.context,
-                    occurred_at: utc_now()?,
-                    payload: EncryptedPayload {
-                        key_id: String::new(),
-                        algorithm: String::new(),
-                        nonce: String::new(),
-                        ciphertext: String::new(),
-                        plaintext_hash: String::new(),
-                    },
-                    previous_hash: previous_hash.clone(),
-                    record_hash: String::new(),
-                };
-                let plaintext = serde_json::to_vec(&event.payload).map_err(adapter_error)?;
-                envelope.payload = self.encrypt_payload(&envelope, &plaintext)?;
-                envelope.record_hash = record_hash(&envelope)?;
+                    &previous_hash,
+                    self.payload_protection,
+                    self.keys.as_ref(),
+                )?;
                 previous_hash.clone_from(&envelope.record_hash);
                 let encoded = serde_json::to_vec(&envelope).map_err(adapter_error)?;
                 event_table

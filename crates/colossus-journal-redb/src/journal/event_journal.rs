@@ -222,11 +222,7 @@ impl EventJournal for RedbEventJournal {
     }
 
     fn decrypt_payload(&self, event: &EventEnvelope) -> Result<Value, StoreError> {
-        let result = (|| {
-            let persisted = self.load_persisted(event)?;
-            self.verify_persisted_event(event, &persisted)
-        })();
-        self.quarantine_result(result)
+        self.quarantine_result(self.decrypt_stored_event(event))
     }
 
     fn verify(&self) -> Result<VerificationReport, StoreError> {

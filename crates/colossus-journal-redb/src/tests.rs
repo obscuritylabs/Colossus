@@ -4,8 +4,7 @@ use super::{
     DisabledCheckpointSigner, EVENTS, Ed25519CheckpointSigner, METADATA, OUTBOX,
     PAYLOAD_PROTECTION_KEY, PROJECTION_POSITIONS, PersistedEventEnvelope, PlaintextKeyProvider,
     RedbEventJournal, RedbWriterLease, STREAM_EVENTS, STREAM_EVENTS_INDEX_KEY, STREAM_VERSIONS,
-    StaticKeyProvider, adapter_error, cached_platform_secret, persisted_associated_data,
-    persisted_record_hash,
+    StaticKeyProvider, adapter_error, cached_platform_secret,
 };
 use chacha20poly1305::{
     KeyInit, XChaCha20Poly1305, XNonce,
@@ -1110,9 +1109,10 @@ fn persisted_legacy_context_shape_remains_verifiable_and_decryptable() {
         context.remove(field);
     }
 
+    let encoded = serde_json::to_vec(&value).expect("encode legacy envelope");
     let persisted: PersistedEventEnvelope =
-        serde_json::from_value(value.clone()).expect("legacy persisted envelope");
-    let aad = serde_json::to_vec(&persisted_associated_data(&persisted)).expect("aad");
+        serde_json::from_slice(&encoded).expect("legacy persisted envelope");
+    let aad = persisted.associated_data_bytes().expect("aad");
     let nonce = hex::decode(value["payload"]["nonce"].as_str().expect("nonce")).expect("hex");
     let nonce: [u8; 24] = nonce.try_into().expect("nonce length");
     let plaintext = serde_json::to_vec(&json!({"value": 1})).expect("plaintext");
@@ -1127,9 +1127,10 @@ fn persisted_legacy_context_shape_remains_verifiable_and_decryptable() {
         .expect("encrypt legacy payload");
     value["payload"]["ciphertext"] = json!(hex::encode(ciphertext));
 
+    let encoded = serde_json::to_vec(&value).expect("encode updated envelope");
     let persisted: PersistedEventEnvelope =
-        serde_json::from_value(value.clone()).expect("updated persisted envelope");
-    let record_hash = persisted_record_hash(&persisted).expect("legacy record hash");
+        serde_json::from_slice(&encoded).expect("updated persisted envelope");
+    let record_hash = persisted.compute_record_hash().expect("legacy record hash");
     value["record_hash"] = json!(record_hash);
     let bytes = serde_json::to_vec(&value).expect("encode legacy envelope");
     let hash_bytes = serde_json::to_vec(&record_hash).expect("encode head hash");

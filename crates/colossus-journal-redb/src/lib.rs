@@ -1,15 +1,14 @@
 //! Mode-locked, hash-chained redb event journal with plaintext and encrypted payloads.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use chacha20poly1305::{
-    KeyInit, XChaCha20Poly1305, XNonce,
-    aead::{Aead, Payload},
-};
 use colossus_contracts::{
-    ENCRYPTED_PAYLOAD_ALGORITHM, EncryptedPayload, EventEnvelope, NewEvent,
-    PLAINTEXT_PAYLOAD_ALGORITHM, ProjectionBatch, ProjectionMutation, ProjectionWorkItem,
-    SecureAnchor, SecureAnchorStatus, SignedCheckpoint, StartupVerificationMode,
-    StartupVerificationReport,
+    ENCRYPTED_PAYLOAD_ALGORITHM, EventEnvelope, NewEvent, PLAINTEXT_PAYLOAD_ALGORITHM,
+    ProjectionBatch, ProjectionMutation, ProjectionWorkItem, SecureAnchor, SecureAnchorStatus,
+    SignedCheckpoint, StartupVerificationMode, StartupVerificationReport,
+};
+use colossus_journal_format::{
+    GENESIS_HASH as ZERO_HASH, PersistedEnvelope as PersistedEventEnvelope, checkpoint_message,
+    seal_event, utc_now, verify_payload,
 };
 use colossus_ports::{
     CheckpointSigner, EventJournal, JournalPayloadProtection, KeyProvider, MAX_STREAM_LIST_BATCH,
@@ -21,9 +20,8 @@ use redb::{
     Database, ReadTransaction, ReadableDatabase, ReadableTable, ReadableTableMetadata,
     TableDefinition, TableError,
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json, value::RawValue};
-use sha2::{Digest, Sha256};
+use serde::Deserialize;
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
@@ -34,8 +32,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use uuid::Uuid;
 
 mod common;
 pub use common::RedbWriterLease;
@@ -50,7 +46,8 @@ pub use keys::{
 };
 
 mod crypto;
-use crypto::*;
+#[cfg(test)]
+use crypto::crash_at_test_fault;
 pub use crypto::{DisabledCheckpointSigner, Ed25519CheckpointSigner};
 
 mod journal;
