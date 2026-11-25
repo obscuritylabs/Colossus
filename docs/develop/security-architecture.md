@@ -880,14 +880,16 @@ HTML. No external filter, text converter, or arbitrary revision is accepted. The
 disposes cached documents on workspace changes. See
 [ADR 0005](adr/0005-desktop-file-diffs.md) for limits and acceptance coverage.
 
-The opt-in embedded browser mounts untrusted guest WebViews under the Desktop window.
+The human browser mounts untrusted guest WebViews under the Desktop window.
+Windows ships the WebView2 surface. macOS enables its human preview through a
+build feature.
 Main-app capabilities bind the exact local main WebView, not every child of that
 window. Browser commands also validate caller document, selected workspace, and tab
 ownership. Guests share neither app credentials nor app event broadcasts. Native
 protocol handlers retain their caller checks. The browser is a human network surface,
 independent of agent tool permissions; navigation checks do not constitute a general
-private-network firewall. It remains disabled in normal builds pending the platform
-permission, lifecycle, and cleanup gates in [ADR 0003](adr/0003-desktop-browser-boundary.md).
+private-network firewall. See [ADR 0003](adr/0003-desktop-browser-boundary.md) for the
+platform permission, lifecycle, and cleanup boundaries.
 
 Owned Chromium automation has a separate typed effect boundary described in
 [ADR 0008](adr/0008-owned-chromium-browser.md). Core derives the application,

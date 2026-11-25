@@ -98,10 +98,16 @@ work.
 
 ## From first run to real work
 
-The [first run roadmap](get-started/index.md) shows the path from an offline check
-to a connected model and a repository task. Read [core concepts](get-started/core-concepts.md)
-before widening access. When you are ready to explore beyond the first task, see
-[Use Colossus](use/index.md).
+1. Verify local startup with the [CLI quickstart](get-started/quickstart.md) or
+   [Desktop's offline self-test](get-started/desktop.md#check-startup-without-a-provider).
+2. Connect a model in the [CLI](get-started/connect-model.md) or in
+   [Desktop](get-started/desktop.md#connect-a-model).
+3. Explore a repository with your [first CLI task](get-started/first-repository-task.md)
+   or [first Desktop task](desktop/work.md#start-a-task).
+
+CLI and Desktop keep workspace state in [separate partitions](reference/colossus-home.md).
+Read [core concepts](get-started/core-concepts.md) before widening access. Find more
+workflows in [Use Colossus](use/index.md).
 
 Colossus is alpha software. Review
 [upgrade and compatibility guidance](get-started/upgrade-compatibility.md) before

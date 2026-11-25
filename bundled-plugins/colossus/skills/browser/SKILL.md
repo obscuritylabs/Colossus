@@ -51,8 +51,10 @@ Report a policy limitation accurately instead of repeatedly reloading the page.
 - Leave the final page selected when finished so the user can inspect the result.
   Use `browser.close` when the user requests closure or the task requires it;
   do not close a session as routine end-of-task housekeeping.
-- Sessions are temporary. Run completion and cancellation clean up the live
-  agent-owned browser. Supported Desktop builds retain its last displayed view
-  for inspection; Continue browsing opens that address in a fresh human session.
-  Do not promise retained login, forms, history, or reuse of the user's personal
-  browser. Capture a screenshot when the user needs a shareable visual record.
+- Sessions are temporary. Eligible successful conversation runs in the Windows
+  ordinary-user edition may suspend a page. A later `browser.open` can resume it
+  only with fresh authority for the same conversation and unchanged options.
+  Cancellation and unsupported completion close the context. Supported Desktop
+  builds retain the last displayed view for inspection. **Continue browsing**
+  opens that address in a fresh human session. Capture a screenshot when the
+  user needs a shareable visual record.

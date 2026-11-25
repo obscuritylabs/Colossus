@@ -2564,19 +2564,6 @@ h2:focus-visible {
   max-width: 100%;
   min-width: 0;
 }
-.chat-shared-credential {
-  width: 100%;
-  font-size: var(--font-size-caption);
-}
-.chat-shared-credential summary {
-  cursor: pointer;
-  color: var(--blue-strong);
-}
-.chat-shared-credential form {
-  display: grid;
-  gap: 8px;
-  padding-top: 8px;
-}
 .chat-personal-credential {
   display: grid;
   gap: 8px;
@@ -2586,10 +2573,6 @@ h2:focus-visible {
 .chat-personal-credential label {
   display: grid;
   gap: 4px;
-}
-.chat-shared-credential input {
-  min-width: 0;
-  width: 100%;
 }
 .chat-heading {
   flex-wrap: wrap;

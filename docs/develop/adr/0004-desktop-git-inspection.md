@@ -7,7 +7,7 @@ type: concept
 
 # ADR 0004: Desktop Git inspection
 
-- Status: implemented; platform acceptance required before merge
+- Status: accepted
 - Date: 2026-09-27
 - Tracking: [Desktop Git status and history #204](https://github.com/obscuritylabs/Colossus/issues/204)
 

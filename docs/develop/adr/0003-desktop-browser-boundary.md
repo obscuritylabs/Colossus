@@ -1,13 +1,13 @@
 ---
 title: "ADR 0003: Desktop browser boundary"
-description: Isolated native browser sessions and the boundary for future agent automation.
+description: Isolated platform WebView sessions for human browsing in Desktop.
 audience: developer
 type: concept
 ---
 
 # ADR 0003: Desktop browser boundary
 
-- Status: enabled on Windows; macOS remains an opt-in preview
+- Status: accepted
 - Date: 2026-09-26
 - Tracking: [Desktop integrated browser #205](https://github.com/obscuritylabs/Colossus/issues/205)
 
@@ -16,7 +16,7 @@ type: concept
 Desktop needs websites and local previews beside conversations. A remote document
 cannot share the privileged application's native capabilities or credential store.
 An iframe also cannot provide general website compatibility or native history.
-Future agent automation needs a separate, authorized effect boundary.
+Agent automation requires its own authorized effect boundary.
 
 ## Decision
 
@@ -126,21 +126,19 @@ or a general protocol command to the renderer.
 | Controller and engine failures | Controller navigation invalidates commands; heartbeat and crash state hide guests. Forced termination and recovery need native acceptance. |
 | Disk cleanup | Private sessions end when their last view closes. Engine-owned cache handles may outlive close; abnormal-termination cache cleanup remains a follow-up. |
 
-Windows and macOS pre-merge lanes lint the adapter and run the native harness. Also
-test the minimum supported macOS version before enabling it by default. Keep #205 open until these
-gates and its acceptance criteria are demonstrated. See [test strategy](../testing.md).
+Windows and macOS pre-merge lanes lint the adapter and run the native harness. Enabling
+the macOS preview by default requires acceptance on the minimum supported macOS version.
+See the [test strategy](../testing.md).
 
-## Future automation
+## Agent automation
 
-Keep human browsing separate from model and tool execution. Future browser tools must
-live behind a runtime port/adapter with scoped session and tab identity, policy decisions,
-audit records, cancellation, bounded results, and approvals for effects where required.
-They may reuse engine integration without receiving the human browser's cookies or
-authority implicitly. A deliberate session-sharing design is a separate feature.
+The platform WebView is a human browsing surface. [ADR 0008](0008-owned-chromium-browser.md)
+defines the separate Chromium effect boundary, including scoped ownership, policy,
+approval, audit records, cancellation and bounded release of browser observations.
 
 ## Consequences
 
-This avoids bundling another browser engine, but requires platform-specific acceptance
-and retains Tauri's unstable child-WebView API behind one adapter. Persistent profiles,
-session restoration, downloads, broad site permissions, and agent automation are
-separate work. Human browsing does not change runtime tool authority or the domain layer.
+The platform WebView adapter contains Tauri's unstable child-WebView API and requires
+platform-specific acceptance. It keeps human browsing within Desktop's native
+application boundary. See [Desktop browser settings](../../desktop/tools.md#browser)
+for current user-facing behavior.

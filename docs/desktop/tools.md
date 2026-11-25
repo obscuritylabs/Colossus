@@ -104,10 +104,11 @@ controls or screenshot, and verifies each mouse or keyboard action. Screenshots
 appear inline in the conversation and can be opened at full size. These actions
 can affect apps and data outside your workspace.
 
-A visible native card lets you pause or stop control. Moving the mouse or typing
-pauses automation; use the card to resume. Protected input and Windows elevation
-remain yours to handle. When the task ends, Colossus releases automation and leaves
-the app open for inspection.
+A visible native card lets you pause or stop control. Click, scroll, or type to
+pause automation and take over. Use the card to resume. Moving the pointer alone
+leaves control active. Protected input and Windows elevation remain yours to
+handle. When the task ends, Colossus releases automation and leaves the app open
+for inspection.
 
 Windows may require you to bring the selected app forward before input can begin.
 Colossus respects this foreground restriction and asks for help when focus is refused.
