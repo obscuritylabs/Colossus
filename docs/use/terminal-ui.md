@@ -93,7 +93,8 @@ Enter a slash command in the composer. These are useful starting points:
 | `/theme` | Theme previews and selection |
 
 Type `/` to complete commands. Type `@` at a skill token to choose an active plugin
-skill. Use Up/Down to browse suggestions and Tab to accept one. For every command
+skill. In a worker-backed terminal, skill suggestions load after the composer opens.
+Use Up/Down to browse suggestions and Tab to accept one. For every command
 and key, see [TUI commands and keys](../reference/tui.md).
 See [Context and snapshots](sessions-context.md) to read the budget and manage
 long-session history.

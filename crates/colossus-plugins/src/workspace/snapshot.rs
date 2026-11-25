@@ -11,20 +11,11 @@ pub(crate) const MAX_SNAPSHOT_MANIFEST_BYTES: u64 =
     MAX_FILES as u64 * (6 * MAX_SNAPSHOT_PATH_UNITS as u64 + 128) + 128;
 const SNAPSHOT_FORMAT: &str = "colossus.workspace-plugin.snapshot.v1";
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SnapshotFile {
-    pub path: String,
-    pub size: u64,
-    pub executable: bool,
-    pub sha256: String,
-}
-
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SnapshotManifest {
     format: String,
-    pub files: Vec<SnapshotFile>,
+    pub files: Vec<PluginTreeFile>,
 }
 
 impl SnapshotManifest {
@@ -69,14 +60,14 @@ impl SnapshotManifest {
 pub struct WorkspacePluginSnapshot {
     captured: tempfile::TempDir,
     pub(crate) manifest: Vec<u8>,
-    pub(crate) files: Vec<SnapshotFile>,
+    pub(crate) files: Vec<PluginTreeFile>,
     digest: String,
 }
 
 impl WorkspacePluginSnapshot {
     pub(super) fn new(
         captured: tempfile::TempDir,
-        mut files: Vec<SnapshotFile>,
+        mut files: Vec<PluginTreeFile>,
     ) -> Result<Self, StoreError> {
         files.sort_by(|left, right| left.path.cmp(&right.path));
         let manifest = serde_json::to_vec(&SnapshotManifest {

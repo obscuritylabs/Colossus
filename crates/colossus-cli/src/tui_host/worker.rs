@@ -432,6 +432,25 @@ impl WorkerInteractiveHost {
         outcome.map_err(|error| error.to_string())
     }
 
+    async fn live_skill_ids(&self) -> Result<Vec<String>, String> {
+        let skills = self.value(WorkerOperation::PluginsInventory).await?;
+        Ok(skills
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|plugin| plugin.get("available").and_then(Value::as_bool) == Some(true))
+            .flat_map(|plugin| {
+                plugin
+                    .get("skills")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(|skill| skill.get("id").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect())
+    }
+
     async fn call_worker_interactive<T: serde::de::DeserializeOwned>(
         &self,
         operation: WorkerOperation,
@@ -1291,22 +1310,11 @@ impl WorkerInteractiveHost {
                             )
                             .await
                             .map_err(|error| error.to_string())?;
-                        let inventory: Vec<PluginInventoryEntry> = serde_json::from_value(
-                            self.value(WorkerOperation::PluginsInventory).await?,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        let skills = inventory
-                            .iter()
-                            .filter(|plugin| plugin.available)
-                            .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
-                            .collect::<Vec<_>>();
-                        return Ok(HostCommandResult {
-                            completions: Some(terminal_completion_values(&skills, &self.themes)),
-                            ..HostCommandResult::document(document_from_json(
-                                &result,
-                                Some("Plugins"),
-                            ))
-                        });
+                        let _ = events.send(HostEvent::SkillCompletionsChanged).await;
+                        return Ok(HostCommandResult::document(document_from_json(
+                            &result,
+                            Some("Plugins"),
+                        )));
                     }
                     PluginsCommand::List => plugins_document(&plugins),
                     PluginsCommand::Show(name) => plugin_document(
@@ -1730,6 +1738,14 @@ impl WorkerInteractiveHost {
 
 #[async_trait]
 impl InteractiveHost for WorkerInteractiveHost {
+    fn refreshes_skill_completions(&self, _: SkillCompletionRefresh) -> bool {
+        true
+    }
+
+    async fn skill_completion_ids(&self) -> Result<Option<Vec<String>>, String> {
+        self.live_skill_ids().await.map(Some)
+    }
+
     async fn save_support_report(
         &self,
         output: PathBuf,
@@ -1936,22 +1952,6 @@ impl InteractiveHost for WorkerInteractiveHost {
             .await?,
         )
         .map_err(|error| error.to_string())?;
-        let skills = self.value(WorkerOperation::PluginsInventory).await?;
-        let skill_names = skills
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|plugin| plugin.get("available").and_then(Value::as_bool) == Some(true))
-            .flat_map(|plugin| {
-                plugin
-                    .get("skills")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-            })
-            .filter_map(|skill| skill.get("id").and_then(Value::as_str))
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
         let status = self.value(WorkerOperation::Ping).await?;
         if self.approval_mode()?.is_none() {
             match status.get("approval_mode") {
@@ -1994,7 +1994,7 @@ impl InteractiveHost for WorkerInteractiveHost {
             transcript,
             preferences,
             history,
-            completions: terminal_completion_values(&skill_names, &self.themes),
+            completions: terminal_completion_values(&[], &self.themes),
             security_posture,
             pending_sandbox_boundary_acknowledgement,
         })
@@ -2142,22 +2142,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         control: RunControl,
     ) -> Result<HostRunResult, String> {
         let _operation = self.operations.enter(false).await?;
-        let skills = self.value(WorkerOperation::PluginsInventory).await?;
-        let skill_names = skills
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|plugin| plugin.get("available").and_then(Value::as_bool) == Some(true))
-            .flat_map(|plugin| {
-                plugin
-                    .get("skills")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-            })
-            .filter_map(|skill| skill.get("id").and_then(Value::as_str))
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
+        let skill_names = self.live_skill_ids().await?;
         let (prompt, explicit_skills) =
             crate::resolve_skill_mentions(&request.prompt, &skill_names);
         if prompt.trim().is_empty() {

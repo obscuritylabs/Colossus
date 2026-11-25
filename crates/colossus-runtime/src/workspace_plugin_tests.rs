@@ -319,7 +319,7 @@ async fn concurrent_source_selection_uses_one_grant_snapshot_for_filtering_and_c
         .unwrap();
     let (old, _leases) = runtime
         .plugin_catalog
-        .snapshot_with_grants(&before_accept)
+        .snapshot_with_grants(&before_accept, None)
         .unwrap();
     let old = old
         .iter()
@@ -362,7 +362,7 @@ async fn concurrent_source_selection_uses_one_grant_snapshot_for_filtering_and_c
         .unwrap();
     let (revoked, _leases) = runtime
         .plugin_catalog
-        .snapshot_with_grants(&before_disable)
+        .snapshot_with_grants(&before_disable, None)
         .unwrap();
     assert!(
         revoked

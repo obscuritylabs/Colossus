@@ -1,5 +1,14 @@
 use super::*;
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PluginTreeFile {
+    pub path: String,
+    pub size: u64,
+    pub executable: bool,
+    pub sha256: String,
+}
+
 pub(crate) fn valid_component_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
@@ -62,6 +71,84 @@ pub(crate) fn hash_plugin_tree(root: &Path) -> Result<(usize, u64, String), Stor
         hash.update(Sha256::digest(&bytes));
     }
     Ok((files.len(), total, hex::encode(hash.finalize())))
+}
+
+/// Verify a sorted file inventory against one retained, no-follow directory.
+pub(crate) fn verify_plugin_files(
+    root: &Path,
+    expected_files: &[PluginTreeFile],
+    mismatch_message: &str,
+) -> Result<ReadRoot, StoreError> {
+    let mismatch = || StoreError::Verification(mismatch_message.into());
+    let reader = ReadRoot::bind(root)?;
+    let mut paths = Vec::new();
+    collect_bound_files(
+        &reader,
+        Path::new(""),
+        0,
+        &mut paths,
+        &mut 0,
+        MAX_FILE_BYTES,
+        &mut (MAX_FILES * 2),
+    )?;
+    if paths.len() != expected_files.len() {
+        return Err(mismatch());
+    }
+    let mut paths = paths
+        .into_iter()
+        .map(|path| posix_path(&path).map(|key| (key, path)))
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut buffer = [0_u8; 64 * 1024];
+    for ((key, path), expected) in paths.iter().zip(expected_files) {
+        if *key != expected.path {
+            return Err(mismatch());
+        }
+        let file = reader.open_file(path, expected.size)?;
+        let metadata = file.metadata().map_err(adapter)?;
+        if metadata.len() != expected.size {
+            return Err(mismatch());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = if expected.executable { 0o500 } else { 0o400 };
+            if metadata.permissions().mode() & 0o7777 != mode {
+                return Err(mismatch());
+            }
+        }
+        if hash_exact_file(file, expected.size, &mut buffer, mismatch_message)? != expected.sha256 {
+            return Err(mismatch());
+        }
+    }
+    reader.revalidate()?;
+    Ok(reader)
+}
+
+pub(crate) fn hash_exact_file(
+    mut reader: impl std::io::Read,
+    expected_size: u64,
+    buffer: &mut [u8],
+    mismatch_message: &str,
+) -> Result<String, StoreError> {
+    let mismatch = || StoreError::Verification(mismatch_message.into());
+    let mut digest = Sha256::new();
+    let mut size = 0_u64;
+    loop {
+        let read = reader.read(buffer).map_err(adapter)?;
+        if read == 0 {
+            break;
+        }
+        size = size
+            .checked_add(read as u64)
+            .filter(|size| *size <= expected_size)
+            .ok_or_else(mismatch)?;
+        digest.update(&buffer[..read]);
+    }
+    if size != expected_size {
+        return Err(mismatch());
+    }
+    Ok(hex::encode(digest.finalize()))
 }
 
 pub(crate) fn collect_regular_files(

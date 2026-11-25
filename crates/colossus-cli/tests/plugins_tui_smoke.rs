@@ -6,6 +6,8 @@ mod process_support;
 
 #[path = "support/terminal.rs"]
 mod terminal_support;
+use colossus_journal_redb::RedbWriterLease;
+use colossus_plugins::PluginStore;
 use portable_pty::CommandBuilder;
 use std::{
     fs,
@@ -16,7 +18,10 @@ use std::{
 };
 use terminal_support::Terminal;
 
+const ECHO_PROMPT: &str = "Plugin completion acceptance echo";
+
 struct WorkerGuard(Child);
+
 impl Drop for WorkerGuard {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -45,7 +50,7 @@ fn exercise(worker_host: bool) {
     });
     fs::copy(env!("CARGO_BIN_EXE_colossus"), &binary).expect("copy executable outside checkout");
     let configuration = include_str!("../../../release/smoke-config.yaml")
-        .replace("allow: [plugin.list]", "allow: [context.show, presentation.history.append, plugin.list, plugin.inspect, plugin.skill.read, plugin.resource.list, plugin.resource.read, plugin.enable, plugin.disable]");
+        .replace("allow: [plugin.list]", "allow: [context.show, presentation.history.append, plugin.list, plugin.inspect, plugin.skill.read, plugin.resource.list, plugin.resource.read, plugin.enable, plugin.disable, provider.echo]");
     let config = workspace.join("config.yaml");
     fs::write(&config, configuration).expect("isolated configuration");
     let mut command = CommandBuilder::new(&binary);
@@ -73,8 +78,28 @@ fn exercise(worker_host: bool) {
         command.env("TMP", home.temporary_directory());
     }
     let _worker = worker_host.then(|| start_worker(&binary, &workspace, &home));
+    let inventory_lease = worker_host.then(|| {
+        let store = PluginStore::new(home.colossus_home()).expect("worker plugin store");
+        RedbWriterLease::acquire(store.state_path()).expect("hold plugin inventory reader back")
+    });
     let terminal = Terminal::start(command);
     terminal.wait("Enter sends");
+    terminal.send(b"@colossus/cod");
+    if worker_host {
+        terminal.wait_for_composer("editable composer before plugin inventory", |draft| {
+            draft == "@colossus/cod"
+        });
+    }
+    drop(inventory_lease);
+    terminal.wait("Skills · 1");
+    terminal.send(b"\t");
+    terminal.wait_for_composer("verified skill completion", |draft| {
+        draft == "@colossus/coding"
+    });
+    terminal.send(b"\x03");
+    terminal.wait_for_composer("empty welcome composer after a skill", |draft| {
+        draft == "Implement {feature}"
+    });
     terminal.send(b"/plu\t");
     terminal.wait_for_composer("plugin completion", |draft| draft.starts_with("/plugins"));
     terminal.wait("┌ Commands");
@@ -94,6 +119,21 @@ fn exercise(worker_host: bool) {
     terminal.command("/plugin use colossus", "colossus/plugin-authoring");
     terminal.command("/plugin use colossus/coding", "Active plugin skills");
     terminal.wait("Skills: colossus/coding");
+    terminal.send(ECHO_PROMPT.as_bytes());
+    terminal.wait_for_composer("Echo prompt", |draft| draft == ECHO_PROMPT);
+    let submitted = Instant::now();
+    terminal.send(b"\r");
+    terminal.wait_until_visual_rows("Echo assistant response", |screen, rows| {
+        screen.contains("ok · approval")
+            && rows.windows(2).any(|pair| {
+                pair[0].starts_with("● Colossus") && pair[1].trim_start().starts_with(ECHO_PROMPT)
+            })
+    });
+    let host = if worker_host { "worker" } else { "embedded" };
+    eprintln!(
+        "{host} plugin-assisted Echo submit to completed terminal render: {:.2} ms",
+        submitted.elapsed().as_secs_f64() * 1_000.0
+    );
     terminal.command(
         "/plugin resources colossus/plugin-authoring",
         "oci-distribution.md",
@@ -104,6 +144,15 @@ fn exercise(worker_host: bool) {
     );
     terminal.command("/plugin remove colossus/coding", "Active plugin skills");
     terminal.command("/plugins disable colossus", "Active  no");
+    terminal.send(b"@colossus/cod");
+    terminal.wait_for_composer("disabled skill stays uncompleted", |draft| {
+        draft == "@colossus/cod"
+    });
+    terminal.wait_until("disabled skill is absent from completion", |screen| {
+        !screen.contains("┌ Skills")
+    });
+    terminal.send(b"\x03");
+    terminal.wait_for_composer("empty composer after disabled skill", str::is_empty);
     terminal.command("/plugins", "disabled");
     terminal.resize(32, 55);
     terminal.command("/plugins", "colossus");

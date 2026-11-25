@@ -59,6 +59,33 @@ impl PluginStore {
         installation: &PluginInstallation,
         icons: &mut crate::icons::IconBudget,
     ) -> Result<AgentPluginRecord, StoreError> {
+        let expected_root = self.installation_root(installation)?;
+        let hex = &installation.digest["sha256:".len()..];
+        let layout = self.root.join("layouts/sha256").join(hex);
+        if installation.origin == PluginOrigin::Bundled {
+            let artifact = verify_plugin_layout(&layout, Some(&installation.digest))?;
+            let (reader, config) = oci::verify_bundled_artifact_tree(&artifact, &expected_root)?;
+            if config.name != installation.manifest.name
+                || config.version != installation.manifest.version
+            {
+                return Err(StoreError::Verification(
+                    "bundled OCI config and journal identity differ".into(),
+                ));
+            }
+            cache_artifact_blobs(&self.root, &artifact)?;
+            return Self::read_bound_installation(&reader, installation, icons);
+        }
+        let local = installation.origin == PluginOrigin::Workspace
+            && self.verify_workspace_snapshot(&expected_root, &layout, &installation.digest)?;
+        if !local {
+            // Existing workspace OCI snapshots remain readable for pinned/recoverable runs.
+            let artifact = verify_plugin_layout(&layout, Some(&installation.digest))?;
+            self.publish_artifact(&artifact)?;
+        }
+        Self::read_installation(&expected_root, installation, icons)
+    }
+
+    fn installation_root(&self, installation: &PluginInstallation) -> Result<PathBuf, StoreError> {
         validate_lease_digest(&installation.digest)?;
         let hex = installation
             .digest
@@ -75,16 +102,26 @@ impl PluginStore {
                 "installed plugin content is missing; restore the exact digest before use".into(),
             ));
         }
-        let layout = self.root.join("layouts/sha256").join(hex);
-        let local = installation.origin == PluginOrigin::Workspace
-            && self.verify_workspace_snapshot(&expected_root, &layout, &installation.digest)?;
-        if !local {
-            // Existing workspace OCI snapshots remain readable for pinned/recoverable runs.
-            let artifact = verify_plugin_layout(&layout, Some(&installation.digest))?;
-            self.publish_artifact(&artifact)?;
-        }
-        let mut record =
-            load_plugin_metadata_with_digest(&expected_root, icons, &installation.digest)?;
+        Ok(expected_root)
+    }
+
+    fn read_bound_installation(
+        reader: &ReadRoot,
+        installation: &PluginInstallation,
+        icons: &mut crate::icons::IconBudget,
+    ) -> Result<AgentPluginRecord, StoreError> {
+        reader.revalidate()?;
+        let record = Self::read_installation(reader.path(), installation, icons)?;
+        reader.revalidate()?;
+        Ok(record)
+    }
+
+    fn read_installation(
+        root: &Path,
+        installation: &PluginInstallation,
+        icons: &mut crate::icons::IconBudget,
+    ) -> Result<AgentPluginRecord, StoreError> {
+        let mut record = load_plugin_metadata_with_digest(root, icons, &installation.digest)?;
         if record.installation.manifest != installation.manifest {
             return Err(StoreError::Verification(
                 "installed manifest differs from journal identity".into(),

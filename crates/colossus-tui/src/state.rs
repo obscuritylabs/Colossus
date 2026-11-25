@@ -799,6 +799,19 @@ impl TuiState {
         self.completions = with_local_completions(completions);
     }
 
+    pub(super) fn set_skill_completions(&mut self, skills: &[String]) {
+        self.completions
+            .retain(|candidate| !candidate.starts_with('@'));
+        self.completions
+            .extend(skills.iter().map(|skill| format!("@{skill}")));
+        if self
+            .structured_completion_context()
+            .is_some_and(|context| context.kind == CompletionKind::Skill)
+        {
+            self.composer.completion_index = None;
+        }
+    }
+
     pub(super) fn apply_plan_selection(
         &mut self,
         update: PlanSelectionUpdate,
