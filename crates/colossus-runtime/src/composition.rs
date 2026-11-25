@@ -107,6 +107,7 @@ pub struct Runtime {
     pub(super) run_input_media: Arc<JournalRunInputMediaResolver>,
     pub(super) recovery_reason: Option<String>,
     pub(super) projections: Arc<ProjectionWorker>,
+    pub(super) session_catalog: Arc<crate::session_catalog::RuntimeSessionCatalog>,
     pub(super) session_activity: Arc<ProjectedSessionActivityReader>,
     pub(super) audit_exports: Arc<AuditExportService>,
     pub(super) telemetry: Arc<TelemetryService>,
@@ -431,10 +432,12 @@ impl Runtime {
         let instruction_snapshots = Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal)));
         let work: Arc<dyn WorkRepository> =
             Arc::new(EventSourcedWorkRepository::new(Arc::clone(&journal)));
+        let mut projection_handlers = default_handlers();
+        projection_handlers.push(Arc::new(colossus_session::SessionCatalogProjection));
         let projections = Arc::new(ProjectionWorker::new(
             Arc::clone(&journal),
             Arc::clone(&projection_store),
-            default_handlers(),
+            projection_handlers,
         )?);
         let session_activity = Arc::new(ProjectedSessionActivityReader::new(Arc::clone(
             &projection_store,
@@ -512,8 +515,15 @@ impl Runtime {
         )?;
         let security_posture =
             security_posture::build_security_posture(config, &active_plugin_extensions.mcp);
-        let sessions: Arc<dyn SessionRepository> =
-            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+        let session_catalog = Arc::new(crate::session_catalog::RuntimeSessionCatalog::new(
+            Arc::clone(&journal),
+            Arc::clone(&projection_store),
+            Arc::clone(&projections),
+        ));
+        let sessions: Arc<dyn SessionRepository> = Arc::new(
+            EventSourcedSessionRepository::new(Arc::clone(&journal))
+                .with_catalog(session_catalog.clone()),
+        );
         let presentation: Arc<dyn PresentationRepository> = Arc::new(
             EventSourcedPresentationRepository::new(Arc::clone(&journal)),
         );
@@ -533,7 +543,11 @@ impl Runtime {
                 || -> Result<(), RuntimeError> {
                     recover_interrupted_subagents(work.as_ref(), work_service.as_ref())?;
                     communication.recover()?;
-                    let report = projections.drain(256, 16_384)?;
+                    let report = projections.drain_selected(
+                        256,
+                        16_384,
+                        crate::session_catalog::required_for_open_and_checkpoint,
+                    )?;
                     if report.projections.iter().any(|status| !status.ready) {
                         return Err(StoreError::Adapter(
                             "startup projections did not catch up within the configured bound"
@@ -1165,7 +1179,11 @@ impl Runtime {
                 "workflow_recovery",
                 || -> Result<(), RuntimeError> {
                     workflows.recover_interrupted()?;
-                    projections.drain(256, 16_384)?;
+                    projections.drain_selected(
+                        256,
+                        16_384,
+                        crate::session_catalog::required_for_open_and_checkpoint,
+                    )?;
                     Ok(())
                 },
             )?;
@@ -1185,6 +1203,7 @@ impl Runtime {
             run_input_media,
             recovery_reason,
             projections,
+            session_catalog,
             session_activity,
             audit_exports,
             telemetry,

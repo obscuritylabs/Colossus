@@ -50,6 +50,7 @@ mod workspace;
 const WINDOWS_CTRL_J: &[u8] = b"\x1b[74;36;10;1;8;1_\x1b[74;36;10;0;8;1_";
 
 const MULTILINE_DRAFT: &str = "# Heading\n\n  - **nested**\nunicode 👩‍💻 界 e\u{301}";
+const HISTORY_RELEASE_FILE: &str = "COLOSSUS_TUI_HISTORY_RELEASE_FILE";
 
 struct FixtureChildGuard(Box<dyn portable_pty::ChildKiller + Send + Sync>);
 impl Drop for FixtureChildGuard {
@@ -568,6 +569,14 @@ impl InteractiveHost for FixtureHost {
         before_sequence: u64,
     ) -> Result<SessionMessagePage, String> {
         assert_eq!(before_sequence, 2);
+        if let Some(path) = std::env::var_os(HISTORY_RELEASE_FILE) {
+            while !std::path::Path::new(&path)
+                .try_exists()
+                .map_err(|error| error.to_string())?
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
         Ok(SessionMessagePage {
             messages: vec![SessionMessage {
                 session_id: "019f-pty".into(),
@@ -1025,9 +1034,19 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
     command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
     command.env("COLOSSUS_TUI_MODE", "inline");
     command.env("COLOSSUS_TUI_STARTUP_SENTINEL", "1");
+    let release_file = std::env::temp_dir().join(format!(
+        "colossus-tui-history-release-{}-{}",
+        std::process::id(),
+        std::time::UNIX_EPOCH
+            .elapsed()
+            .expect("system time")
+            .as_nanos()
+    ));
+    command.env(HISTORY_RELEASE_FILE, &release_file);
     #[cfg(windows)]
     command.env("COLOSSUS_TUI_INLINE_DRAFT_FIXTURE", "1");
     let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    let _child_cleanup = FixtureChildGuard(child.clone_killer());
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().expect("PTY reader");
@@ -1051,8 +1070,22 @@ fn inline_mode_preserves_rows_and_restores_terminal_controls() {
         .write_all(b"\x1b[1;1R")
         .expect("answer cursor-position query");
     writer.flush().expect("flush cursor-position answer");
+    wait_for_screen(&output, 24, 80, "Message · Enter sends");
     wait_for_screen(&output, 24, 80, "durable-row-05");
     wait_for_screen(&output, 24, 80, "fixture@local");
+    assert!(!scrollback_contains(&output, 24, 80, "durable-row-01"));
+    std::fs::write(&release_file, []).expect("release older history");
+    wait_for_screen(&output, 24, 80, "durable-row-01");
+    std::fs::remove_file(release_file).expect("remove release signal");
+    let history = native_history_rows(&output, 24, 80, "Message · Enter sends");
+    let restored_rows = history
+        .iter()
+        .filter_map(|row| {
+            row.split_once("durable-row-")
+                .map(|(_, sequence)| sequence.trim_end())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(restored_rows, ["01", "02", "03", "04", "05"], "{history:?}");
     assert!(
         !screen_contents(&output, 24, 80).contains("prior-shell-row"),
         "inline startup should begin on a clean visible viewport"

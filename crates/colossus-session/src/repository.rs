@@ -3,15 +3,44 @@ use super::*;
 /// Journal-backed canonical session repository.
 pub struct EventSourcedSessionRepository {
     pub(super) journal: Arc<dyn EventJournal>,
+    pub(super) catalog: Option<Arc<dyn SessionCatalog>>,
 }
 
 impl EventSourcedSessionRepository {
     /// Bind the repository to the authoritative journal.
     pub fn new(journal: Arc<dyn EventJournal>) -> Self {
-        Self { journal }
+        Self {
+            journal,
+            catalog: None,
+        }
     }
 
-    fn stream(id: &str) -> String {
+    /// Use a rebuildable read model from the same canonical journal partition.
+    #[must_use]
+    pub fn with_catalog(mut self, catalog: Arc<dyn SessionCatalog>) -> Self {
+        self.catalog = Some(catalog);
+        self
+    }
+
+    pub(super) fn append_event(&self, event: NewEvent) -> Result<EventEnvelope, StoreError> {
+        let envelope = self.journal.append(event)?;
+        self.update_catalog();
+        Ok(envelope)
+    }
+
+    fn append_events(&self, events: Vec<NewEvent>) -> Result<Vec<EventEnvelope>, StoreError> {
+        let envelopes = self.journal.append_batch(events)?;
+        self.update_catalog();
+        Ok(envelopes)
+    }
+
+    fn update_catalog(&self) {
+        if let Some(catalog) = &self.catalog {
+            catalog.session_committed();
+        }
+    }
+
+    pub(super) fn stream(id: &str) -> String {
         format!("session:{id}")
     }
 }
@@ -30,7 +59,7 @@ impl SessionRepository for EventSourcedSessionRepository {
                 "session title exceeds {MAX_TITLE_BYTES} bytes"
             )));
         }
-        let envelope = self.journal.append(NewEvent {
+        let envelope = self.append_event(NewEvent {
             event_version: 1,
             stream_id: Self::stream(id),
             expected_stream_version: 0,
@@ -100,7 +129,7 @@ impl SessionRepository for EventSourcedSessionRepository {
             session_id: Some(id.into()),
             ..ExecutionContext::default()
         };
-        self.journal.append_batch(vec![
+        self.append_events(vec![
             NewEvent {
                 event_version: 1,
                 stream_id,
@@ -234,7 +263,7 @@ impl SessionRepository for EventSourcedSessionRepository {
             .collect::<Result<Vec<_>, StoreError>>()?;
         let expected_envelopes = messages.len() + additional_events.len();
         pending.extend(additional_events);
-        let envelopes = self.journal.append_batch(pending)?;
+        let envelopes = self.append_events(pending)?;
         if envelopes.len() != expected_envelopes {
             return Err(StoreError::Adapter(
                 "session batch append returned an unexpected event count".into(),
@@ -321,7 +350,7 @@ impl SessionRepository for EventSourcedSessionRepository {
                 .map_err(|error| StoreError::Adapter(error.to_string()))?,
         }];
         batch.extend(additional_events);
-        self.journal.append_batch(batch)?;
+        self.append_events(batch)?;
         Ok(())
     }
 
@@ -440,7 +469,7 @@ impl SessionRepository for EventSourcedSessionRepository {
         });
         let expected_envelopes = batch.len().saturating_add(additional_events.len());
         batch.extend(additional_events);
-        let envelopes = self.journal.append_batch(batch)?;
+        let envelopes = self.append_events(batch)?;
         let completion = envelopes.get(messages.len()).ok_or_else(|| {
             StoreError::Adapter("tool-turn append returned no completion marker".into())
         })?;
@@ -480,5 +509,15 @@ impl SessionRepository for EventSourcedSessionRepository {
             .filter(|event| event.event_type == MESSAGE_EVENT)
             .map(|event| message_from_event(self.journal.as_ref(), session_id, event))
             .collect()
+    }
+
+    fn list_messages_page(
+        &self,
+        session_id: &str,
+        before_sequence: Option<u64>,
+        limit: usize,
+        max_bytes: usize,
+    ) -> Result<colossus_contracts::SessionMessagePage, StoreError> {
+        self.read_message_page(session_id, before_sequence, limit, max_bytes)
     }
 }

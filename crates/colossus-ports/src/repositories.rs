@@ -9,6 +9,36 @@ pub trait AggregateRepository: Send + Sync {
     fn list(&self, limit: usize) -> Result<Vec<Value>, StoreError>;
 }
 
+/// Rebuildable read model for session discovery and locating canonical messages.
+pub trait SessionCatalog: Send + Sync {
+    /// List bounded session summaries in descending update time and ID order.
+    fn recent(&self, archived: bool, limit: usize) -> Result<Vec<SessionSummary>, StoreError>;
+
+    /// Locate at most `limit` messages below the exclusive message sequence, newest first.
+    /// Return `None` when a usable index is unavailable.
+    fn message_positions(
+        &self,
+        _id: &str,
+        _before_sequence: Option<u64>,
+        _limit: usize,
+    ) -> Result<Option<Vec<SessionMessagePosition>>, StoreError> {
+        Ok(None)
+    }
+
+    /// Advance the read model after a successful canonical write when possible.
+    fn session_committed(&self) {}
+}
+
+/// An indexed message coordinate in one canonical session stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionMessagePosition {
+    /// One-based message sequence, excluding non-message events.
+    pub sequence: u64,
+    /// One-based event version in the full session stream.
+    pub stream_version: u64,
+}
+
 /// Canonical event-sourced session and append-only message repository.
 pub trait SessionRepository: Send + Sync {
     /// Create an empty durable session with a caller-supplied stable id.

@@ -1,11 +1,13 @@
 //! Canonical event-sourced sessions and append-only conversation messages.
 
 use colossus_contracts::{
-    Actor, EventClassification, ExecutionContext, ModelMessage, ModelMessageRole, NewEvent,
-    PendingSessionToolTurn, SessionLifecycle, SessionMessage, SessionMessageAppend, SessionSummary,
-    validate_model_message_content, validate_model_transcript,
+    Actor, EventClassification, EventEnvelope, ExecutionContext, ModelMessage, ModelMessageRole,
+    NewEvent, PendingSessionToolTurn, SessionLifecycle, SessionMessage, SessionMessageAppend,
+    SessionSummary, validate_model_message_content, validate_model_transcript,
 };
-use colossus_ports::{EventJournal, SessionRepository, StoreError, collect_stream_ids};
+use colossus_ports::{
+    EventJournal, SessionCatalog, SessionRepository, StoreError, collect_stream_ids,
+};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -27,6 +29,9 @@ use reconstruction::*;
 mod lifecycle;
 mod ordering;
 
+mod catalog;
+pub use catalog::{IndexedSessionCatalog, SESSION_CATALOG_PROJECTION, SessionCatalogProjection};
+mod page;
 mod repository;
 pub use repository::*;
 mod transcript;

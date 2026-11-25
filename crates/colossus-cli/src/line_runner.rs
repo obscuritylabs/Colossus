@@ -27,9 +27,9 @@ pub(super) async fn line_runner(
         runtime.latest_session()?.id
     } else if let Some(session_id) = initial_session {
         runtime
-            .get_session(&session_id)?
-            .ok_or_else(|| cli_error(format!("session not found: {session_id}")))?
-            .id
+            .session_lifecycle(&session_id)?
+            .ok_or_else(|| cli_error(format!("session not found: {session_id}")))?;
+        session_id
     } else {
         runtime.create_session(None)?.id
     };

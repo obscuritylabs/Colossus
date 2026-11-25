@@ -59,6 +59,14 @@ pub(super) fn message_from_event(
     event: &colossus_contracts::EventEnvelope,
 ) -> Result<SessionMessage, StoreError> {
     let payload = journal.decrypt_payload(event)?;
+    message_from_payload(session_id, event, &payload)
+}
+
+pub(super) fn message_from_payload(
+    session_id: &str,
+    event: &EventEnvelope,
+    payload: &Value,
+) -> Result<SessionMessage, StoreError> {
     let run_id = payload
         .get("run_id")
         .and_then(Value::as_str)
@@ -67,10 +75,9 @@ pub(super) fn message_from_event(
         .get("sequence")
         .and_then(Value::as_u64)
         .ok_or_else(|| StoreError::Verification("session message has no sequence".into()))?;
-    let message: ModelMessage = serde_json::from_value(
+    let message = serde::Deserialize::deserialize(
         payload
             .get("message")
-            .cloned()
             .ok_or_else(|| StoreError::Verification("session message payload is absent".into()))?,
     )
     .map_err(|error| StoreError::Verification(error.to_string()))?;
@@ -202,6 +209,6 @@ pub(super) fn validate_pending_tool_turn(
     Ok(())
 }
 
-fn preview(text: &str) -> String {
+pub(super) fn preview(text: &str) -> String {
     text.chars().take(MAX_PREVIEW_CHARS).collect()
 }

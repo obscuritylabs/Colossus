@@ -205,6 +205,7 @@ pub(super) async fn seed(bytes: usize, sessions: usize) -> Result<()> {
         }
     }
     eprintln!("  Catching up projections and signing the checkpoint");
+    runtime.drain_projections()?;
     runtime.checkpoint()?;
     if runtime
         .projection_status()?

@@ -52,7 +52,10 @@ storage and local ownership contract.
 ## Derived state
 
 - Session discovery, work lists, and other projections are rebuildable read models.
-- Canonical session messages are reconstructed from their streams.
+- Session discovery reads ordered active and archived summaries from
+  `session-catalog-v1`. The same projection maps message sequences to positions in
+  canonical session streams. A transcript page reads a bounded range of positions
+  and decrypts the messages it needs, including one lookahead at the page boundary.
 - Tantivy stores disposable memory candidate projections, not lifecycle truth.
 - Audit exporters consume a durable outbox and expose ciphertext-free evidence.
 - Each external-work consumer has an independent optimistic position and retry state.
@@ -64,6 +67,15 @@ storage and local ownership contract.
 
 Rebuild replays canonical events. It never imports an unrelated store or turns a
 projection into authority.
+
+Existing journals build the catalog from their durable outbox during background
+maintenance or on the first catalog-dependent query. Opening and closing a known
+conversation can use small reverse stream reads while the catalog catches up.
+An older cursor may require reading past newer messages during this transition.
+Once the catalog is current, recent, archived, and latest queries read bounded
+summary rows, and older pages seek directly to their cursor. Catalog records carry
+session titles and the existing bounded scalar user previews. Multipart prompt
+text is available from the canonical transcript.
 
 ### Unfinished provider exchanges
 
@@ -184,16 +196,13 @@ in rotated order and keep the scratch volume and build profile fixed.
 The same acceptance workload exercises redb, SQLite, and embedded Turso against
 independent encrypted journals reopened with current projections. It checks recent
 ordering, archive filtering, and latest-session selection through the session
-repository. Each query must decrypt zero message payloads. The test reports full
-stream reads and message decryptions separately from the time-to-prompt benchmark.
+repository. All three queries must perform zero session stream reads and decrypt
+zero message payloads. Newest and older transcript pages must use bounded journal
+reads and decrypt at most one more message than the requested page size.
 
 ```bash
-cargo xtask quick test -p colossus-journal-sql -- --test session_catalog -- --ignored --nocapture --test-threads=3
+cargo xtask quick test -p colossus-journal-sql -- --test session_catalog -- --nocapture --test-threads=3
 ```
-
-This explicit acceptance gate currently exposes the event-sourced catalog scan on
-all three engines. The ordinary repository conformance suite checks their current
-session behavior, including reopen and latest-session selection.
 
 ### Time to the terminal prompt
 

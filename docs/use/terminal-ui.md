@@ -47,7 +47,9 @@ The top bar shows the workspace, session, and installed version when there is
 enough vertical space. The composer has a neutral background that separates your
 draft from the conversation. A single status row below it highlights the mode and
 security warnings, alongside readiness, approval handling, the model route, and
-context budget. Smaller widths shorten or omit runtime details to keep status
+context budget when available. When you open a saved conversation, use
+`/context status` or `/status` to fetch exact context or run usage. Smaller widths
+shorten or omit runtime details to keep status
 and warnings readable. Compact terminals omit the top bar.
 
 On wider terminals, a right sidebar shows subagents and workspace status,

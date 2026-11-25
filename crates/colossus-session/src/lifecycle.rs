@@ -8,6 +8,12 @@ impl EventSourcedSessionRepository {
         archived: bool,
         limit: usize,
     ) -> Result<Vec<SessionSummary>, StoreError> {
+        let limit = limit.clamp(1, LIST_LIMIT_MAX);
+        if let Some(catalog) = &self.catalog
+            && !self.journal.is_recovery_mode()
+        {
+            return catalog.recent(archived, limit);
+        }
         let mut sessions = Vec::new();
         for stream_id in collect_stream_ids(self.journal.as_ref(), "session:")? {
             let id = stream_id.strip_prefix("session:").ok_or_else(|| {
@@ -21,7 +27,7 @@ impl EventSourcedSessionRepository {
                 sessions.push(summary);
             }
         }
-        ordering::recent_sessions(sessions, limit.clamp(1, LIST_LIMIT_MAX))
+        ordering::recent_sessions(sessions, limit)
     }
 
     pub(super) fn read_lifecycle(&self, id: &str) -> Result<Option<SessionLifecycle>, StoreError> {
@@ -51,28 +57,7 @@ impl EventSourcedSessionRepository {
                 revision: 0,
             });
         };
-        let archived = match event.event_type.as_str() {
-            ARCHIVED_EVENT => true,
-            RESTORED_EVENT => false,
-            _ => {
-                return Err(StoreError::Verification(
-                    "unrecognized session lifecycle event".into(),
-                ));
-            }
-        };
-        let state: SessionLifecycle = serde_json::from_value(self.journal.decrypt_payload(event)?)
-            .map_err(|_| StoreError::Verification("invalid session lifecycle payload".into()))?;
-        if event.event_version != 1
-            || event.context.session_id.as_deref() != Some(id)
-            || state.session_id != id
-            || state.archived != archived
-            || state.revision != event.stream_version
-        {
-            return Err(StoreError::Verification(
-                "session lifecycle identity or revision mismatch".into(),
-            ));
-        }
-        Ok(state)
+        decode_lifecycle(id, event, &self.journal.decrypt_payload(event)?)
     }
 
     pub(super) fn write_lifecycle(
@@ -108,7 +93,7 @@ impl EventSourcedSessionRepository {
                 StoreError::Verification("session lifecycle revision overflow".into())
             })?,
         };
-        self.journal.append(NewEvent {
+        self.append_event(NewEvent {
             event_version: 1,
             stream_id,
             expected_stream_version: expected_revision,
@@ -130,4 +115,33 @@ impl EventSourcedSessionRepository {
         })?;
         Ok(state)
     }
+}
+
+pub(super) fn decode_lifecycle(
+    id: &str,
+    event: &EventEnvelope,
+    payload: &Value,
+) -> Result<SessionLifecycle, StoreError> {
+    let archived = match event.event_type.as_str() {
+        ARCHIVED_EVENT => true,
+        RESTORED_EVENT => false,
+        _ => {
+            return Err(StoreError::Verification(
+                "unrecognized session lifecycle event".into(),
+            ));
+        }
+    };
+    let state: SessionLifecycle = serde::Deserialize::deserialize(payload)
+        .map_err(|_| StoreError::Verification("invalid session lifecycle payload".into()))?;
+    if event.event_version != 1
+        || event.context.session_id.as_deref() != Some(id)
+        || state.session_id != id
+        || state.archived != archived
+        || state.revision != event.stream_version
+    {
+        return Err(StoreError::Verification(
+            "session lifecycle identity or revision mismatch".into(),
+        ));
+    }
+    Ok(state)
 }
