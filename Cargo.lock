@@ -1939,6 +1939,7 @@ dependencies = [
  "colossus-journal-redb",
  "colossus-ports",
  "colossus-projection",
+ "colossus-session",
  "colossus-testkit",
  "fs4",
  "futures-lite",

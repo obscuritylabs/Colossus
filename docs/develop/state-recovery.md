@@ -179,6 +179,22 @@ projection replay, incremental reopen, full audit, and disk size. Each run creat
 and removes its own database under the scratch directory. Run engines sequentially
 in rotated order and keep the scratch volume and build profile fixed.
 
+### Session catalog read budget
+
+The same acceptance workload exercises redb, SQLite, and embedded Turso against
+independent encrypted journals reopened with current projections. It checks recent
+ordering, archive filtering, and latest-session selection through the session
+repository. Each query must decrypt zero message payloads. The test reports full
+stream reads and message decryptions separately from the time-to-prompt benchmark.
+
+```bash
+cargo xtask quick test -p colossus-journal-sql -- --test session_catalog -- --ignored --nocapture --test-threads=3
+```
+
+This explicit acceptance gate currently exposes the event-sourced catalog scan on
+all three engines. The ordinary repository conformance suite checks their current
+session behavior, including reopen and latest-session selection.
+
 ### Time to the terminal prompt
 
 Build the CLI and benchmark example from the same source and release profile. Pass

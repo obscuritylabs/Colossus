@@ -19,9 +19,10 @@ use colossus_ports::{
     ProjectionStore, StoreError,
 };
 use colossus_projection::JournalExternalWorkQueue;
+use colossus_session::EventSourcedSessionRepository;
 use colossus_testkit::{
     assert_external_work_queue_conformance, assert_journal_conformance,
-    assert_projection_store_conformance,
+    assert_projection_store_conformance, assert_session_repository_conformance,
 };
 use serde_json::json;
 
@@ -83,6 +84,20 @@ fn protected(
         Arc::new(Ed25519CheckpointSigner::new("test", [5; 32])),
         mode,
     )
+}
+
+#[test]
+fn both_sql_engines_pass_session_repository_conformance_after_reopen() {
+    for backend in BACKENDS {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("session.db");
+        let keys = Arc::new(StaticKeyProvider::new("session-conformance", [11; 32]));
+        assert_session_repository_conformance(|| {
+            let journal = protected(&path, backend, keys.clone(), INCREMENTAL).unwrap();
+            assert!(!journal.is_recovery_mode(), "{backend:?}");
+            Box::new(EventSourcedSessionRepository::new(Arc::new(journal)))
+        });
+    }
 }
 
 #[test]
