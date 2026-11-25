@@ -3,10 +3,10 @@
 The Go SDK establishes an authenticated TLS connection to a literal loopback Colossus
 endpoint and provides durable run-watch cursor handling.
 
-Install the module version aligned with the Colossus core release:
+Replace `X.Y.Z` with the published stable SDK version matching your Colossus core release.
 
 ```console
-go get github.com/obscuritylabs/colossus/sdk/go@v0.11.8
+go get github.com/obscuritylabs/colossus/sdk/go@vX.Y.Z
 ```
 
 ```go

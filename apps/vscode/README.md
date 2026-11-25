@@ -20,7 +20,7 @@ selection follows VS Code, with a native high contrast bridge. The composer grow
 controls, and retains a draft while a run is active. Replies support bounded Markdown
 including scrollable tables; model HTML, links, and images remain inert. Drafts are sent only by the user.
 
-The composer uses the shared shadcn model bubble for workers advertising
+The composer has a model picker for workers advertising
 `agent_runs.model_selection`. Open it to search configured models and providers,
 then adjust the reasoning slider. Changing models restores its saved reasoning
 default; choosing the same model keeps an explicit level. Preferences stay with
@@ -177,8 +177,10 @@ on near-black surfaces. Palette choices are saved per host and do not change VS
 Code’s native editor colors. Light and high contrast keep their own colors.
 These preferences are stored in VS Code's user settings and update the chat immediately.
 **Workspace → Connections** connects, disconnects, forgets trust settings, and opens
-diagnostics. Runtime and Access explain the connected worker's ownership; they do not
-edit providers, credentials, MCP servers, policy, or sandbox settings.
+diagnostics. Runtime and Access summarize the connected runtime. Use
+**Configure Local Runtime** in Connections to change a Managed Local workspace's
+providers, credentials, model profiles, and access. Configure an External Worker
+through its runtime administration.
 
 Choose **Research** in the composer to expose **Research depth** (Quick, Standard, or
 Deep) and **Evidence sources** (This Workspace, Web, or **MCP connections**). Research
@@ -204,11 +206,6 @@ turns, eight lifecycle entries per call, and bounded detail previews.
 
 The chat history button focuses the left workspace view. **Colossus: Open Workspace**
 also reveals it from the Command Palette, including when disconnected.
-
-Version 0.1.7 corrects the left view container ID. VS Code rejects dots in container
-IDs; earlier 0.1.6 builds consequently placed Workspace inside Explorer without its
-Colossus activity-bar icon. Install the update and reload the window. Build and
-packaging checks now validate container IDs and view bindings before producing a VSIX.
 
 - Start with **Plan**, or choose **Execute** for runtime-authorized implementation.
 - Use **Add selection** or **Add file** to attach explicit editor snapshots. Excerpts
@@ -286,12 +283,6 @@ Starting a worker alone never creates a missing enrollment credential. If enroll
 reports `DestinationExists`, inspect the configured keychain/store and service/account
 before replacing or deleting an entry.
 
-Version 0.1.3 configures the pinned end-entity certificate as a direct TLS trust anchor
-for Electron's certificate verifier. If an older extension reaches `handshake` and
-fails while the worker is listening, install 0.1.3 or rebuild with the updated SDK.
-Certificate, hostname, instance, and TLS 1.3 validation remain enforced; this fix does
-not require deleting or re-enrolling credentials.
-
 To reset the extension's credential on macOS, stop the worker and revoke its credential
 using the `credential_id` printed by enrollment. Run administration with the same workspace,
 configuration, and discovery directory as that enrollment:
@@ -342,9 +333,6 @@ history reads. Browser tests check the sidebar and settings,
 keyboard/accessibility basics, narrow widths, draft retention, and literal rendering of
 model-authored content. They do not automate native credential access or VS Code's
 on-device dialogs. Validate those with an enrolled worker on the intended platform.
-
-Bundled runtime startup, shared Desktop conversation handoff, structured patch proposals,
-inline editing, model selection, and richer workflow/plugin panels are follow-up work.
 
 ## Review UI previews
 

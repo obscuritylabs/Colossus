@@ -1049,12 +1049,11 @@ Windows screen pixels are checked independently of authenticated frame submissio
 See [non-admin Windows automation acceptance](../../docs/develop/testing.md#non-admin-owned-windows-browser-automation)
 for prerequisites, evidence and the optional development app launch.
 
-This explicit Debug-only mode preserves Chromium's sandbox and the owned Job but
-does not allocate AppContainer/WFP policy or import CA/client identities. It is
-selected at compilation, reports `restrictive_egress: false`, and never serves as
-a fallback from contained startup. Standard install and normal app use require
-no Windows administration. Both publisher release modes and installed signed
-acceptance remain disabled until their independent requirements pass.
+The development launcher selects the ordinary-user Debug composition at build
+time. It keeps Chromium's sandbox and the owned Job and reports
+`restrictive_egress: false`. Windows x64 stable and Developer Preview installers
+select the separate functional edition through the [signed packaging path](../../docs/develop/releasing.md#developer-previews-and-desktop).
+The contained modes have separate publisher requirements.
 
 
 Build the standalone private Windows host from a native x64 MSVC developer
@@ -1154,8 +1153,8 @@ eligibility. This pinned sandboxed CEF check is separate from WebView2 Desktop
 acceptance. The mandatory lane aggregate includes its outcome. The
 `windows-owned-chromium-source-acceptance` artifact contains only a bounded log,
 component inventory and false-production diagnostic report; profiles, transferred
-bytes and keys are excluded. The job is wired but has not produced execution
-evidence yet. Its source inventory keeps both release modes false.
+bytes and keys are excluded. Its source inventory keeps both contained release
+modes false.
 
 Native acceptance may explicitly use the debug-only
 `install_for_acceptance` constructor with a false-mode source inventory. Ordinary
@@ -1200,14 +1199,16 @@ the retained host's irreversible human fence, confirms the native document and
 atomically grants Core ownership. The same GUI stream then acknowledges a fresh
 read-only viewport. Window teardown detaches that viewer; explicit user Close
 awaits full context cleanup. Caller loss retains independently owned cleanup.
-These connected interfaces keep unavailable Desktop modes closed: the current
-Linux package schema permits Headless only, and ordinary Windows/macOS
-Embedded discovery still requires publisher acceptance and native OS evidence.
+The Linux package schema permits Headless only. The Windows ordinary-user
+edition has a separate distribution path. Contained Embedded discovery requires
+its own publisher and native OS acceptance.
 
-Human-to-agent handoff does not implement same-page agent-to-human takeover.
-The native human input fence is irreversible for this host lifetime. Agent-viewer
-detach preserves the host, but terminal cancellation and run completion close the
-owned context. A new human page is a new session. Native human admission also
+The human-to-agent input fence lasts for the owned host's lifetime. Detaching a
+viewer leaves the agent context running. Eligible successful conversation runs
+can suspend their pages in the Windows ordinary-user edition. A later
+`browser.open` needs a new permit for the same conversation and unchanged
+allocation options. Cancellation and unsupported completion close the context.
+Opening a human page starts a fresh session. Native human admission also
 allows only the initial URL's exact origin, so multi-origin SSO requires additional
 trusted admission functionality before those redirects can work in an owned page.
 
@@ -1353,13 +1354,13 @@ the complete containment and authenticated host boundary pass acceptance.
 - Windows: the debug developer launcher uses the pinned bootstrap/client-DLL
   entry and its real sandbox context. Plain Tauri executables fail closed. The
   native Windows acceptance command above owns rendering, OS input, token/file
-  denial and shutdown evidence; signed installed acceptance remains required.
+  denial and shutdown evidence. See the [Windows release procedure](../../docs/develop/releasing.md#developer-previews-and-desktop)
+  for signed installer checks.
 - Linux: the fixture proves developer no-display operation, not a published CLI
   mode, release sandbox evidence, enterprise PKI, or complete egress enforcement.
 
-The Desktop preview remains explicitly gated. Both desktop platforms must render
-and automate the same actual native page in signed installed builds before the
-integrated system browser is replaced by default.
+The macOS Desktop previews remain opt-in. Windows installed-package acceptance
+and the contained modes have independent requirements.
 
 ## Windows interaction and annotation acceptance
 
@@ -1404,6 +1405,7 @@ Use a fresh evidence directory each time. The test executes actual CEF through
 Runtime's effect gateway, verifies page event receipts and authenticated native
 frames at 200% scaling, compares clean and annotated PNGs, checks inspection and
 protected-field denial, and verifies graceful Job, private I/O and browser-state
-cleanup. Its receipt and PNG are source evidence. Live Desktop agent acceptance
-and signed installed-package acceptance remain separate requirements; this runner
-keeps production availability, outer containment and certificate acceptance false.
+cleanup. Its receipt and PNG cover the source build. For an installer-specific
+regression, run the interactive check on the installed build as a standard user.
+This runner keeps production availability, outer containment and certificate
+acceptance false.

@@ -5,8 +5,8 @@ Rust. Desktop normally supervises a bundled Managed Local sidecar and can also c
 to an explicitly enrolled External worker.
 
 This README is for contributors. For installation and operator setup, see
-[Colossus Desktop](../../docs/get-started/desktop.md) and the
-[Windows Desktop Developer Preview](../../docs/get-started/windows-desktop.md).
+[Desktop on macOS](../../docs/get-started/desktop.md) or
+[Desktop on Windows](../../docs/get-started/windows-desktop.md).
 
 ## Run the app
 
@@ -65,32 +65,16 @@ logic belongs in the Rust application and runtime crates.
 
 ## UI foundations
 
-Desktop appearance is owned by `src/theme/`:
+The [shared UI package](../ui/README.md) owns the design tokens and controls.
+Desktop's `src/theme/appearance.ts` persists preferences, and
+`src/theme/AppearanceProvider.tsx` applies color mode and text sizing. Use one
+`.managed-settings-body` per settings tab so the shared settings geometry stays
+consistent. Source and artifact previews use the shared `--code-*` tokens and
+pass the resolved appearance theme to syntax highlighting.
 
-- `theme.css` defines color, typography, spacing, radius, control, and settings-layout
-  tokens. Dark and light palettes override semantic tokens rather than component rules.
-- `appearance.ts` owns the versioned device-local preference contract and safe parsing.
-- `AppearanceProvider.tsx` resolves System, Dark, and Light color modes, applies Compact,
-  Comfortable, or Large text sizing, and reacts to operating-system theme changes.
-
-New components should use semantic tokens such as `--surface-panel`, `--text-strong`,
-`--font-size-body`, and `--control-height`; do not add palette-specific hex values or
-one-off font sizes. New settings tabs should render one `.managed-settings-body` and let
-the shared `--settings-content-max` contract own width and centering. Pane-specific
-maximum widths make tabs jump as users navigate and are not supported.
-
-Use the state tokens for interactive surfaces instead of inventing component colors:
-`--surface-hover`, `--surface-selected`, `--focus-ring`, and the semantic success,
-warning, and danger families. Source and artifact previews use the shared `--code-*`
-tokens. Syntax highlighting must request the resolved appearance theme so Shiki token
-colors change with the surrounding code canvas. Visible supporting copy must be at least
-the `--font-size-caption` size; denser metadata should change layout before shrinking
-below that floor.
-
-Appearance changes require browser coverage in both color themes, all three text sizes,
-responsive overflow checks, and hover/focus coverage for interactive rows. Include an
-Axe scan when adding visible states. The Desktop contract suite rejects fixed component
-background colors and typography smaller than the caption token.
+Follow the [front-end guide](../../docs/develop/frontend.md) for token usage and
+rendered verification. Keep supporting copy at or above `--font-size-caption`,
+and include an Axe scan when adding visible states.
 
 ## Checks
 
@@ -140,7 +124,7 @@ or workspace handling are security-boundary changes. Read
 External worker enrollment, credential rotation, release validation, signing, and
 packaging are documented elsewhere:
 
-- [Add an External target](../../docs/get-started/desktop.md#6-add-an-external-target-when-needed)
+- [Add an External target](../../docs/desktop/external-targets.md#add-it-in-desktop)
 - [Connection and enrollment](../../docs/develop/application-sdk.md#connection-and-enrollment)
 - [Development and release setup](../../docs/develop/setup-testing.md)
 - [CI/CD and release gates](../../docs/develop/ci-cd.md)

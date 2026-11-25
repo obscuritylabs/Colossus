@@ -106,63 +106,63 @@
           ]
         },
         {
-          "package": "colossus-a2a-server@0.13.0|workspace:crates/colossus-a2a-server/Cargo.toml",
+          "package": "colossus-a2a-server@0.13.1|workspace:crates/colossus-a2a-server/Cargo.toml",
           "features": []
         },
         {
-          "package": "colossus-api-runtime@0.13.0|workspace:crates/colossus-api-runtime/Cargo.toml",
+          "package": "colossus-api-runtime@0.13.1|workspace:crates/colossus-api-runtime/Cargo.toml",
           "features": []
         },
         {
-          "package": "colossus-app-host@0.13.0|workspace:crates/colossus-app-host/Cargo.toml",
+          "package": "colossus-app-host@0.13.1|workspace:crates/colossus-app-host/Cargo.toml",
           "features": []
         },
         {
-          "package": "colossus-audit@0.13.0|workspace:crates/colossus-audit/Cargo.toml",
+          "package": "colossus-audit@0.13.1|workspace:crates/colossus-audit/Cargo.toml",
           "features": []
         },
         {
-          "package": "colossus-cli@0.13.0|workspace:crates/colossus-cli/Cargo.toml",
+          "package": "colossus-cli@0.13.1|workspace:crates/colossus-cli/Cargo.toml",
           "features": [
             "dictation"
           ]
         },
         {
-          "package": "colossus-cloud-chat@0.13.0|workspace:crates/colossus-cloud-chat/Cargo.toml",
+          "package": "colossus-cloud-chat@0.13.1|workspace:crates/colossus-cloud-chat/Cargo.toml",
           "features": []
         },
         {
-          "package": "colossus-cloud-executor@0.13.0|workspace:crates/colossus-cloud-executor/Cargo.toml",
+          "package": "colossus-cloud-executor@0.13.1|workspace:crates/colossus-cloud-executor/Cargo.toml",
           "features": []
         },
         {
-          "package": "colossus-cloud-postgres@0.13.0|workspace:crates/colossus-cloud-postgres/Cargo.toml",
+          "package": "colossus-cloud-postgres@0.13.1|workspace:crates/colossus-cloud-postgres/Cargo.toml",
           "features": []
         },
         {
-          "package": "colossus-cloud-protocol@0.13.0|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "package": "colossus-cloud-protocol@0.13.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
           "features": []
         },
         {
-          "package": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "package": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
           "features": []
         },
         {
-          "package": "colossus-cloud@0.13.0|workspace:crates/colossus-cloud/Cargo.toml",
+          "package": "colossus-cloud@0.13.1|workspace:crates/colossus-cloud/Cargo.toml",
           "features": []
         },
         {
-          "package": "colossus-connector@0.13.0|workspace:crates/colossus-connector/Cargo.toml",
+          "package": "colossus-connector@0.13.1|workspace:crates/colossus-connector/Cargo.toml",
           "features": []
         },
         {
-          "package": "colossus-mcp@0.13.0|workspace:crates/colossus-mcp/Cargo.toml",
+          "package": "colossus-mcp@0.13.1|workspace:crates/colossus-mcp/Cargo.toml",
           "features": [
             "live-splunk"
           ]
         },
         {
-          "package": "colossus-runtime@0.13.0|workspace:crates/colossus-runtime/Cargo.toml",
+          "package": "colossus-runtime@0.13.1|workspace:crates/colossus-runtime/Cargo.toml",
           "features": [
             "macos-browser-host-acceptance",
             "windows-browser-development",
@@ -170,14 +170,14 @@
           ]
         },
         {
-          "package": "colossus-sandbox@0.13.0|workspace:crates/colossus-sandbox/Cargo.toml",
+          "package": "colossus-sandbox@0.13.1|workspace:crates/colossus-sandbox/Cargo.toml",
           "features": [
             "macos-browser-tls-development",
             "windows-browser-functional-preview"
           ]
         },
         {
-          "package": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
+          "package": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
           "features": [
             "daemon",
             "default",
@@ -188,7 +188,7 @@
           ]
         },
         {
-          "package": "colossus-sidecar@0.13.0|workspace:crates/colossus-sidecar/Cargo.toml",
+          "package": "colossus-sidecar@0.13.1|workspace:crates/colossus-sidecar/Cargo.toml",
           "features": [
             "macos-browser-host-acceptance",
             "windows-browser-development",
@@ -196,7 +196,7 @@
           ]
         },
         {
-          "package": "colossus-worker@0.13.0|workspace:crates/colossus-worker/Cargo.toml",
+          "package": "colossus-worker@0.13.1|workspace:crates/colossus-worker/Cargo.toml",
           "features": []
         },
         {
@@ -250,7 +250,7 @@
           ]
         },
         {
-          "parent": "colossus-cli@0.13.0|workspace:crates/colossus-cli/Cargo.toml",
+          "parent": "colossus-cli@0.13.1|workspace:crates/colossus-cli/Cargo.toml",
           "dependency": "agent-client-protocol@2.2.0|registry+https://github.com/rust-lang/crates.io-index",
           "name": "agent_client_protocol",
           "kinds": [
@@ -276,7 +276,7 @@
           ]
         },
         {
-          "parent": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "parent": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
           "dependency": "chrono@0.4.45|registry+https://github.com/rust-lang/crates.io-index",
           "name": "chrono",
           "kinds": [
@@ -320,8 +320,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
-          "dependency": "colossus-api-runtime@0.13.0|workspace:crates/colossus-api-runtime/Cargo.toml",
+          "parent": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-api-runtime@0.13.1|workspace:crates/colossus-api-runtime/Cargo.toml",
           "name": "colossus_api_runtime",
           "kinds": [
             {
@@ -331,8 +331,8 @@
           ]
         },
         {
-          "parent": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
-          "dependency": "colossus-api-runtime@0.13.0|workspace:crates/colossus-api-runtime/Cargo.toml",
+          "parent": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "dependency": "colossus-api-runtime@0.13.1|workspace:crates/colossus-api-runtime/Cargo.toml",
           "name": "colossus_api_runtime",
           "kinds": [
             {
@@ -342,8 +342,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-chat@0.13.0|workspace:crates/colossus-cloud-chat/Cargo.toml",
-          "dependency": "colossus-api-runtime@0.13.0|workspace:crates/colossus-api-runtime/Cargo.toml",
+          "parent": "colossus-cloud-chat@0.13.1|workspace:crates/colossus-cloud-chat/Cargo.toml",
+          "dependency": "colossus-api-runtime@0.13.1|workspace:crates/colossus-api-runtime/Cargo.toml",
           "name": "colossus_api_runtime",
           "kinds": [
             {
@@ -353,8 +353,8 @@
           ]
         },
         {
-          "parent": "colossus-worker@0.13.0|workspace:crates/colossus-worker/Cargo.toml",
-          "dependency": "colossus-api-runtime@0.13.0|workspace:crates/colossus-api-runtime/Cargo.toml",
+          "parent": "colossus-worker@0.13.1|workspace:crates/colossus-worker/Cargo.toml",
+          "dependency": "colossus-api-runtime@0.13.1|workspace:crates/colossus-api-runtime/Cargo.toml",
           "name": "colossus_api_runtime",
           "kinds": [
             {
@@ -364,8 +364,8 @@
           ]
         },
         {
-          "parent": "colossus-runtime@0.13.0|workspace:crates/colossus-runtime/Cargo.toml",
-          "dependency": "colossus-audit@0.13.0|workspace:crates/colossus-audit/Cargo.toml",
+          "parent": "colossus-runtime@0.13.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "dependency": "colossus-audit@0.13.1|workspace:crates/colossus-audit/Cargo.toml",
           "name": "colossus_audit",
           "kinds": [
             {
@@ -375,8 +375,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
-          "dependency": "colossus-cloud-chat@0.13.0|workspace:crates/colossus-cloud-chat/Cargo.toml",
+          "parent": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-cloud-chat@0.13.1|workspace:crates/colossus-cloud-chat/Cargo.toml",
           "name": "colossus_cloud_chat",
           "kinds": [
             {
@@ -386,8 +386,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
-          "dependency": "colossus-cloud-executor@0.13.0|workspace:crates/colossus-cloud-executor/Cargo.toml",
+          "parent": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-cloud-executor@0.13.1|workspace:crates/colossus-cloud-executor/Cargo.toml",
           "name": "colossus_cloud_executor",
           "kinds": [
             {
@@ -397,8 +397,8 @@
           ]
         },
         {
-          "parent": "colossus-connector@0.13.0|workspace:crates/colossus-connector/Cargo.toml",
-          "dependency": "colossus-cloud-executor@0.13.0|workspace:crates/colossus-cloud-executor/Cargo.toml",
+          "parent": "colossus-connector@0.13.1|workspace:crates/colossus-connector/Cargo.toml",
+          "dependency": "colossus-cloud-executor@0.13.1|workspace:crates/colossus-cloud-executor/Cargo.toml",
           "name": "colossus_cloud_executor",
           "kinds": [
             {
@@ -408,8 +408,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
-          "dependency": "colossus-cloud-postgres@0.13.0|workspace:crates/colossus-cloud-postgres/Cargo.toml",
+          "parent": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-cloud-postgres@0.13.1|workspace:crates/colossus-cloud-postgres/Cargo.toml",
           "name": "colossus_cloud_postgres",
           "kinds": [
             {
@@ -419,8 +419,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-postgres@0.13.0|workspace:crates/colossus-cloud-postgres/Cargo.toml",
-          "dependency": "colossus-cloud-protocol@0.13.0|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "parent": "colossus-cloud-postgres@0.13.1|workspace:crates/colossus-cloud-postgres/Cargo.toml",
+          "dependency": "colossus-cloud-protocol@0.13.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
           "name": "colossus_cloud_protocol",
           "kinds": [
             {
@@ -434,8 +434,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-executor@0.13.0|workspace:crates/colossus-cloud-executor/Cargo.toml",
-          "dependency": "colossus-cloud-protocol@0.13.0|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "parent": "colossus-cloud-executor@0.13.1|workspace:crates/colossus-cloud-executor/Cargo.toml",
+          "dependency": "colossus-cloud-protocol@0.13.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
           "name": "colossus_cloud_protocol",
           "kinds": [
             {
@@ -445,8 +445,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
-          "dependency": "colossus-cloud-protocol@0.13.0|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "parent": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-cloud-protocol@0.13.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
           "name": "colossus_cloud_protocol",
           "kinds": [
             {
@@ -456,8 +456,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud@0.13.0|workspace:crates/colossus-cloud/Cargo.toml",
-          "dependency": "colossus-cloud-protocol@0.13.0|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "parent": "colossus-cloud@0.13.1|workspace:crates/colossus-cloud/Cargo.toml",
+          "dependency": "colossus-cloud-protocol@0.13.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
           "name": "colossus_cloud_protocol",
           "kinds": [
             {
@@ -467,8 +467,8 @@
           ]
         },
         {
-          "parent": "colossus-connector@0.13.0|workspace:crates/colossus-connector/Cargo.toml",
-          "dependency": "colossus-cloud-protocol@0.13.0|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "parent": "colossus-connector@0.13.1|workspace:crates/colossus-connector/Cargo.toml",
+          "dependency": "colossus-cloud-protocol@0.13.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
           "name": "colossus_cloud_protocol",
           "kinds": [
             {
@@ -478,8 +478,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-postgres@0.13.0|workspace:crates/colossus-cloud-postgres/Cargo.toml",
-          "dependency": "colossus-cloud@0.13.0|workspace:crates/colossus-cloud/Cargo.toml",
+          "parent": "colossus-cloud-postgres@0.13.1|workspace:crates/colossus-cloud-postgres/Cargo.toml",
+          "dependency": "colossus-cloud@0.13.1|workspace:crates/colossus-cloud/Cargo.toml",
           "name": "colossus_cloud",
           "kinds": [
             {
@@ -489,8 +489,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
-          "dependency": "colossus-cloud@0.13.0|workspace:crates/colossus-cloud/Cargo.toml",
+          "parent": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-cloud@0.13.1|workspace:crates/colossus-cloud/Cargo.toml",
           "name": "colossus_cloud",
           "kinds": [
             {
@@ -500,8 +500,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
-          "dependency": "colossus-connector@0.13.0|workspace:crates/colossus-connector/Cargo.toml",
+          "parent": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-connector@0.13.1|workspace:crates/colossus-connector/Cargo.toml",
           "name": "colossus_connector",
           "kinds": [
             {
@@ -511,8 +511,8 @@
           ]
         },
         {
-          "parent": "colossus-cli@0.13.0|workspace:crates/colossus-cli/Cargo.toml",
-          "dependency": "colossus-connector@0.13.0|workspace:crates/colossus-connector/Cargo.toml",
+          "parent": "colossus-cli@0.13.1|workspace:crates/colossus-cli/Cargo.toml",
+          "dependency": "colossus-connector@0.13.1|workspace:crates/colossus-connector/Cargo.toml",
           "name": "colossus_connector",
           "kinds": [
             {
@@ -522,8 +522,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
-          "dependency": "colossus-mcp@0.13.0|workspace:crates/colossus-mcp/Cargo.toml",
+          "parent": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-mcp@0.13.1|workspace:crates/colossus-mcp/Cargo.toml",
           "name": "colossus_mcp",
           "kinds": [
             {
@@ -533,8 +533,8 @@
           ]
         },
         {
-          "parent": "colossus-runtime@0.13.0|workspace:crates/colossus-runtime/Cargo.toml",
-          "dependency": "colossus-mcp@0.13.0|workspace:crates/colossus-mcp/Cargo.toml",
+          "parent": "colossus-runtime@0.13.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "dependency": "colossus-mcp@0.13.1|workspace:crates/colossus-mcp/Cargo.toml",
           "name": "colossus_mcp",
           "kinds": [
             {
@@ -544,8 +544,8 @@
           ]
         },
         {
-          "parent": "colossus-sidecar@0.13.0|workspace:crates/colossus-sidecar/Cargo.toml",
-          "dependency": "colossus-mcp@0.13.0|workspace:crates/colossus-mcp/Cargo.toml",
+          "parent": "colossus-sidecar@0.13.1|workspace:crates/colossus-sidecar/Cargo.toml",
+          "dependency": "colossus-mcp@0.13.1|workspace:crates/colossus-mcp/Cargo.toml",
           "name": "colossus_mcp",
           "kinds": [
             {
@@ -555,8 +555,8 @@
           ]
         },
         {
-          "parent": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
-          "dependency": "colossus-runtime@0.13.0|workspace:crates/colossus-runtime/Cargo.toml",
+          "parent": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
+          "dependency": "colossus-runtime@0.13.1|workspace:crates/colossus-runtime/Cargo.toml",
           "name": "colossus_runtime",
           "kinds": [
             {
@@ -566,8 +566,8 @@
           ]
         },
         {
-          "parent": "colossus-api-runtime@0.13.0|workspace:crates/colossus-api-runtime/Cargo.toml",
-          "dependency": "colossus-runtime@0.13.0|workspace:crates/colossus-runtime/Cargo.toml",
+          "parent": "colossus-api-runtime@0.13.1|workspace:crates/colossus-api-runtime/Cargo.toml",
+          "dependency": "colossus-runtime@0.13.1|workspace:crates/colossus-runtime/Cargo.toml",
           "name": "colossus_runtime",
           "kinds": [
             {
@@ -577,8 +577,8 @@
           ]
         },
         {
-          "parent": "colossus-cli@0.13.0|workspace:crates/colossus-cli/Cargo.toml",
-          "dependency": "colossus-runtime@0.13.0|workspace:crates/colossus-runtime/Cargo.toml",
+          "parent": "colossus-cli@0.13.1|workspace:crates/colossus-cli/Cargo.toml",
+          "dependency": "colossus-runtime@0.13.1|workspace:crates/colossus-runtime/Cargo.toml",
           "name": "colossus_runtime",
           "kinds": [
             {
@@ -588,8 +588,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-chat@0.13.0|workspace:crates/colossus-cloud-chat/Cargo.toml",
-          "dependency": "colossus-runtime@0.13.0|workspace:crates/colossus-runtime/Cargo.toml",
+          "parent": "colossus-cloud-chat@0.13.1|workspace:crates/colossus-cloud-chat/Cargo.toml",
+          "dependency": "colossus-runtime@0.13.1|workspace:crates/colossus-runtime/Cargo.toml",
           "name": "colossus_runtime",
           "kinds": [
             {
@@ -599,8 +599,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
-          "dependency": "colossus-runtime@0.13.0|workspace:crates/colossus-runtime/Cargo.toml",
+          "parent": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-runtime@0.13.1|workspace:crates/colossus-runtime/Cargo.toml",
           "name": "colossus_runtime",
           "kinds": [
             {
@@ -610,8 +610,8 @@
           ]
         },
         {
-          "parent": "colossus-sidecar@0.13.0|workspace:crates/colossus-sidecar/Cargo.toml",
-          "dependency": "colossus-runtime@0.13.0|workspace:crates/colossus-runtime/Cargo.toml",
+          "parent": "colossus-sidecar@0.13.1|workspace:crates/colossus-sidecar/Cargo.toml",
+          "dependency": "colossus-runtime@0.13.1|workspace:crates/colossus-runtime/Cargo.toml",
           "name": "colossus_runtime",
           "kinds": [
             {
@@ -621,8 +621,8 @@
           ]
         },
         {
-          "parent": "colossus-worker@0.13.0|workspace:crates/colossus-worker/Cargo.toml",
-          "dependency": "colossus-runtime@0.13.0|workspace:crates/colossus-runtime/Cargo.toml",
+          "parent": "colossus-worker@0.13.1|workspace:crates/colossus-worker/Cargo.toml",
+          "dependency": "colossus-runtime@0.13.1|workspace:crates/colossus-runtime/Cargo.toml",
           "name": "colossus_runtime",
           "kinds": [
             {
@@ -632,8 +632,8 @@
           ]
         },
         {
-          "parent": "colossus-audit@0.13.0|workspace:crates/colossus-audit/Cargo.toml",
-          "dependency": "colossus-sandbox@0.13.0|workspace:crates/colossus-sandbox/Cargo.toml",
+          "parent": "colossus-audit@0.13.1|workspace:crates/colossus-audit/Cargo.toml",
+          "dependency": "colossus-sandbox@0.13.1|workspace:crates/colossus-sandbox/Cargo.toml",
           "name": "colossus_sandbox",
           "kinds": [
             {
@@ -643,8 +643,8 @@
           ]
         },
         {
-          "parent": "colossus-cli@0.13.0|workspace:crates/colossus-cli/Cargo.toml",
-          "dependency": "colossus-sandbox@0.13.0|workspace:crates/colossus-sandbox/Cargo.toml",
+          "parent": "colossus-cli@0.13.1|workspace:crates/colossus-cli/Cargo.toml",
+          "dependency": "colossus-sandbox@0.13.1|workspace:crates/colossus-sandbox/Cargo.toml",
           "name": "colossus_sandbox",
           "kinds": [
             {
@@ -654,8 +654,8 @@
           ]
         },
         {
-          "parent": "colossus-mcp@0.13.0|workspace:crates/colossus-mcp/Cargo.toml",
-          "dependency": "colossus-sandbox@0.13.0|workspace:crates/colossus-sandbox/Cargo.toml",
+          "parent": "colossus-mcp@0.13.1|workspace:crates/colossus-mcp/Cargo.toml",
+          "dependency": "colossus-sandbox@0.13.1|workspace:crates/colossus-sandbox/Cargo.toml",
           "name": "colossus_sandbox",
           "kinds": [
             {
@@ -665,8 +665,8 @@
           ]
         },
         {
-          "parent": "colossus-runtime@0.13.0|workspace:crates/colossus-runtime/Cargo.toml",
-          "dependency": "colossus-sandbox@0.13.0|workspace:crates/colossus-sandbox/Cargo.toml",
+          "parent": "colossus-runtime@0.13.1|workspace:crates/colossus-runtime/Cargo.toml",
+          "dependency": "colossus-sandbox@0.13.1|workspace:crates/colossus-sandbox/Cargo.toml",
           "name": "colossus_sandbox",
           "kinds": [
             {
@@ -676,8 +676,8 @@
           ]
         },
         {
-          "parent": "colossus-sidecar@0.13.0|workspace:crates/colossus-sidecar/Cargo.toml",
-          "dependency": "colossus-sandbox@0.13.0|workspace:crates/colossus-sandbox/Cargo.toml",
+          "parent": "colossus-sidecar@0.13.1|workspace:crates/colossus-sidecar/Cargo.toml",
+          "dependency": "colossus-sandbox@0.13.1|workspace:crates/colossus-sandbox/Cargo.toml",
           "name": "colossus_sandbox",
           "kinds": [
             {
@@ -687,8 +687,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
-          "dependency": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
+          "parent": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "dependency": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
           "name": "colossus_sdk",
           "kinds": [
             {
@@ -702,8 +702,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-postgres@0.13.0|workspace:crates/colossus-cloud-postgres/Cargo.toml",
-          "dependency": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
+          "parent": "colossus-cloud-postgres@0.13.1|workspace:crates/colossus-cloud-postgres/Cargo.toml",
+          "dependency": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
           "name": "colossus_sdk",
           "kinds": [
             {
@@ -713,8 +713,8 @@
           ]
         },
         {
-          "parent": "colossus-sidecar@0.13.0|workspace:crates/colossus-sidecar/Cargo.toml",
-          "dependency": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
+          "parent": "colossus-sidecar@0.13.1|workspace:crates/colossus-sidecar/Cargo.toml",
+          "dependency": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
           "name": "colossus_sdk",
           "kinds": [
             {
@@ -724,8 +724,8 @@
           ]
         },
         {
-          "parent": "colossus-a2a-server@0.13.0|workspace:crates/colossus-a2a-server/Cargo.toml",
-          "dependency": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
+          "parent": "colossus-a2a-server@0.13.1|workspace:crates/colossus-a2a-server/Cargo.toml",
+          "dependency": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
           "name": "colossus_sdk",
           "kinds": [
             {
@@ -735,8 +735,8 @@
           ]
         },
         {
-          "parent": "colossus-app-host@0.13.0|workspace:crates/colossus-app-host/Cargo.toml",
-          "dependency": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
+          "parent": "colossus-app-host@0.13.1|workspace:crates/colossus-app-host/Cargo.toml",
+          "dependency": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
           "name": "colossus_sdk",
           "kinds": [
             {
@@ -746,8 +746,8 @@
           ]
         },
         {
-          "parent": "colossus-cli@0.13.0|workspace:crates/colossus-cli/Cargo.toml",
-          "dependency": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
+          "parent": "colossus-cli@0.13.1|workspace:crates/colossus-cli/Cargo.toml",
+          "dependency": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
           "name": "colossus_sdk",
           "kinds": [
             {
@@ -757,8 +757,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-chat@0.13.0|workspace:crates/colossus-cloud-chat/Cargo.toml",
-          "dependency": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
+          "parent": "colossus-cloud-chat@0.13.1|workspace:crates/colossus-cloud-chat/Cargo.toml",
+          "dependency": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
           "name": "colossus_sdk",
           "kinds": [
             {
@@ -768,8 +768,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-executor@0.13.0|workspace:crates/colossus-cloud-executor/Cargo.toml",
-          "dependency": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
+          "parent": "colossus-cloud-executor@0.13.1|workspace:crates/colossus-cloud-executor/Cargo.toml",
+          "dependency": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
           "name": "colossus_sdk",
           "kinds": [
             {
@@ -779,8 +779,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud-protocol@0.13.0|workspace:crates/colossus-cloud-protocol/Cargo.toml",
-          "dependency": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
+          "parent": "colossus-cloud-protocol@0.13.1|workspace:crates/colossus-cloud-protocol/Cargo.toml",
+          "dependency": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
           "name": "colossus_sdk",
           "kinds": [
             {
@@ -790,8 +790,8 @@
           ]
         },
         {
-          "parent": "colossus-cloud@0.13.0|workspace:crates/colossus-cloud/Cargo.toml",
-          "dependency": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
+          "parent": "colossus-cloud@0.13.1|workspace:crates/colossus-cloud/Cargo.toml",
+          "dependency": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
           "name": "colossus_sdk",
           "kinds": [
             {
@@ -801,8 +801,8 @@
           ]
         },
         {
-          "parent": "colossus-connector@0.13.0|workspace:crates/colossus-connector/Cargo.toml",
-          "dependency": "colossus-sdk@0.13.0|workspace:crates/colossus-sdk/Cargo.toml",
+          "parent": "colossus-connector@0.13.1|workspace:crates/colossus-connector/Cargo.toml",
+          "dependency": "colossus-sdk@0.13.1|workspace:crates/colossus-sdk/Cargo.toml",
           "name": "colossus_sdk",
           "kinds": [
             {
@@ -812,8 +812,8 @@
           ]
         },
         {
-          "parent": "colossus-cli@0.13.0|workspace:crates/colossus-cli/Cargo.toml",
-          "dependency": "colossus-worker@0.13.0|workspace:crates/colossus-worker/Cargo.toml",
+          "parent": "colossus-cli@0.13.1|workspace:crates/colossus-cli/Cargo.toml",
+          "dependency": "colossus-worker@0.13.1|workspace:crates/colossus-worker/Cargo.toml",
           "name": "colossus_worker",
           "kinds": [
             {
@@ -823,8 +823,8 @@
           ]
         },
         {
-          "parent": "colossus-sidecar@0.13.0|workspace:crates/colossus-sidecar/Cargo.toml",
-          "dependency": "colossus-worker@0.13.0|workspace:crates/colossus-worker/Cargo.toml",
+          "parent": "colossus-sidecar@0.13.1|workspace:crates/colossus-sidecar/Cargo.toml",
+          "dependency": "colossus-worker@0.13.1|workspace:crates/colossus-worker/Cargo.toml",
           "name": "colossus_worker",
           "kinds": [
             {
@@ -856,7 +856,7 @@
           ]
         },
         {
-          "parent": "colossus-cloud-server@0.13.0|workspace:crates/colossus-cloud-server/Cargo.toml",
+          "parent": "colossus-cloud-server@0.13.1|workspace:crates/colossus-cloud-server/Cargo.toml",
           "dependency": "openidconnect@4.1.0|registry+https://github.com/rust-lang/crates.io-index",
           "name": "openidconnect",
           "kinds": [
@@ -867,7 +867,7 @@
           ]
         },
         {
-          "parent": "colossus-mcp@0.13.0|workspace:crates/colossus-mcp/Cargo.toml",
+          "parent": "colossus-mcp@0.13.1|workspace:crates/colossus-mcp/Cargo.toml",
           "dependency": "rmcp@3.9.0|registry+https://github.com/rust-lang/crates.io-index",
           "name": "rmcp",
           "kinds": [
@@ -878,7 +878,7 @@
           ]
         },
         {
-          "parent": "colossus-sandbox@0.13.0|workspace:crates/colossus-sandbox/Cargo.toml",
+          "parent": "colossus-sandbox@0.13.1|workspace:crates/colossus-sandbox/Cargo.toml",
           "dependency": "rmcp@3.9.0|registry+https://github.com/rust-lang/crates.io-index",
           "name": "rmcp",
           "kinds": [

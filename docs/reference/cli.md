@@ -292,7 +292,8 @@ confirmed after replacement activation, the CLI preserves the active new credent
 at the destination rather than risk restoring an already-revoked token. The sanitized
 error includes both non-secret credential IDs and instructs the administrator to
 reconcile and explicitly revoke the prior credential, never either bearer.
-Native public API directory enforcement currently fails closed on non-Unix platforms.
+Native public API directory enforcement supports Unix and Windows. Other platforms
+reject this configuration.
 
 `run --role` accepts any configured model role, not only `primary`. `--session` and
 `--resume` conflict. Plan creation and execution also conflict:

@@ -206,7 +206,7 @@ configuration, `AGENTS.md`, required workspace partitions, secure anchors, and t
 matching operating-system credential or environment-key material as one authority set.
 Replaceable indexes and `desktop/self-test/` output can be rebuilt.
 
-Desktop 0.11.1 uses `desktop/self-test/runtime-v3` for installation checks and model
+Desktop uses `desktop/self-test/runtime-v3` for installation checks and model
 discovery. Its key identity includes the runtime directory's filesystem identity, so
 recreating a deleted home at the same pathname cannot inherit an old secure anchor.
 The old diagnostic journal is retained; workspace journals never use this migration.
@@ -219,7 +219,7 @@ Uninstalling the executable or Desktop application preserves `$COLOSSUS_HOME` by
 default. Remove that directory only when you explicitly intend to delete all user
 configuration, instructions, Desktop settings and trust, and every workspace's CLI and
 Desktop state. The direct installer receipt and update cache remain separate platform
-data and cache records described in [Install Colossus](../get-started/install.md).
+data and cache records described in [Installation ownership and state](../get-started/cli-installation-lifecycle.md#installation-ownership-and-state).
 Windows Desktop also offers an explicitly confirmed, optional
 [default-home cleanup](../get-started/windows-desktop.md#6-remove-cleanly). This does
 not remove custom homes, shared CLI state, or project folders.

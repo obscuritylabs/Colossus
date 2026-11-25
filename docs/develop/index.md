@@ -8,7 +8,7 @@ type: concept
 # Develop Colossus
 
 This lane is for contributors changing Colossus itself. Product installation and normal
-operation stay in [Get started](../get-started/index.md) and
+operation stay in [Get started](../index.md) and
 [Administer and secure](../admin/index.md).
 
 - [Contributing](contributing.md) explains repository conventions and change ownership.

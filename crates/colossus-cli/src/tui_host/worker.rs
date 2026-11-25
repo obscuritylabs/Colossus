@@ -2449,12 +2449,3 @@ impl InteractiveHost for WorkerInteractiveHost {
         .map_err(|error| error.to_string())
     }
 }
-
-#[allow(dead_code)]
-pub(super) fn _bounded_path(value: &str) -> Result<PathBuf, String> {
-    if value.trim().is_empty() {
-        Err("path is required".into())
-    } else {
-        Ok(PathBuf::from(value.trim()))
-    }
-}

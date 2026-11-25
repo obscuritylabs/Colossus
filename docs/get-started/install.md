@@ -9,7 +9,7 @@ icon: lucide/download
 # Install the Colossus CLI
 
 Install the standalone CLI on a [supported system](install-options.md#supported-targets).
-For the app, see [Desktop setup](desktop.md); it includes the CLI.
+The [Desktop app](../desktop/index.md) includes the CLI.
 
 ## 1. Install the CLI
 

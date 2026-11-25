@@ -67,7 +67,7 @@ configuration load order, state layout, and repository instruction boundary.
 
 Continue with the [five-minute quickstart](docs/get-started/quickstart.md),
 [connect a model](docs/get-started/connect-model.md), or choose the
-[Desktop setup](docs/get-started/desktop.md).
+[Desktop setup](docs/desktop/index.md).
 
 Direct installations can check for or apply a stable update with:
 
@@ -98,14 +98,14 @@ colossus update
 | --- | --- |
 | Run one task or produce machine-readable output | [Agent runs](docs/use/agent-runs.md) |
 | Work interactively in a terminal | [Terminal UI](docs/use/terminal-ui.md) |
-| Use a folder-first native app | [Desktop](docs/get-started/desktop.md) |
+| Use a folder-first native app | [Desktop](docs/desktop/index.md) |
 | Build durable automation | [Workflows](docs/extend/workflows/first-workflow.md) |
 | Integrate another application | [Application SDK](docs/develop/application-sdk.md) |
 | Understand the trust boundaries | [Security architecture](docs/develop/security-architecture.md) |
 
 ## Documentation
 
-- [Get started](docs/get-started/index.md): installation, first run, and model setup
+- [Get started](docs/index.md): installation, first run, and model setup
 - [Use Colossus](docs/use/index.md): sessions, plans, goals, memory, and research
 - [Extend Colossus](docs/extend/index.md): workflows, Agent Plugins, integrations,
   MCP, editor setup, and terminal themes

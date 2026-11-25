@@ -479,6 +479,29 @@ assert.equal(commandBody(warmProbe), commandBody(probe),
   'The Windows cache producer and Desktop consumer must use the same verified compiler');
 NODE
 
+# The browser image publisher must verify embedded signatures before sealing
+# and after install. Other installer and CLI checks keep their existing policy.
+"${NODE:-node}" --input-type=module - "$script_dir/../../.github/workflows/release.yml" "$script_dir/../stage-browser-windows-preview.ps1" <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const [releasePath, stagePath] = process.argv.slice(2);
+const release = readFileSync(releasePath, 'utf8').replaceAll('\r\n', '\n');
+const stage = readFileSync(stagePath, 'utf8').replaceAll('\r\n', '\n');
+const stageCheck = /verify-authenticode\.ps1'\) -Path \$Image\.FullName -RequireEmbeddedSignature/u;
+const installedCheck = /verify-authenticode\.ps1 -Path \$image\.FullName -RequireEmbeddedSignature/u;
+assert.match(stage, stageCheck);
+assert.ok(stage.search(stageCheck) < stage.indexOf("'inventory'"),
+  'Seal only after checking every signed browser image');
+assert.match(release, /stage-browser-windows-preview\.ps1 -Phase seal[^\n]*-RequireSignatures/u);
+assert.match(release, installedCheck);
+assert.equal((release.match(/-RequireEmbeddedSignature\b/gu) ?? []).length, 1,
+  'Only the installed browser image loop opts into the embedded verifier');
+const installedInventoryGuard = release.indexOf('installed signed browser inventory failed');
+assert.ok(installedInventoryGuard >= 0 && installedInventoryGuard < release.search(installedCheck),
+  'Verify the installed browser inventory before checking its signatures');
+NODE
+
 # The optional R2 backend must not replace the GitHub read-only fallback when
 # fork PRs have no secrets, and must never write with a read credential.
 r2_env_file=$(mktemp)

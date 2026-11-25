@@ -422,8 +422,7 @@ p {
   background: var(--amber);
 }
 
-.work-sidebar,
-.context-sidebar {
+.work-sidebar {
   position: relative;
   z-index: 4;
   display: flex;
@@ -1048,8 +1047,7 @@ p {
   padding: 0 4px 18px;
 }
 
-.work-sidebar-header p,
-.context-sidebar > header p {
+.work-sidebar-header p {
   margin-bottom: 5px;
   color: var(--muted);
   font-size: var(--font-size-body-sm);
@@ -1058,8 +1056,7 @@ p {
   text-transform: uppercase;
 }
 
-.work-sidebar-header h1,
-.context-sidebar > header h1 {
+.work-sidebar-header h1 {
   margin: 0;
   color: var(--text-strong);
   font-size: 1.42rem;
@@ -6456,102 +6453,6 @@ textarea {
   background: var(--surface-inset);
   color: var(--muted);
   font-size: var(--font-size-body-sm);
-}
-
-.context-sidebar {
-  padding: 25px 19px 18px;
-}
-
-.context-sidebar > header {
-  padding: 0 3px 21px;
-  border-bottom: 1px solid var(--border);
-}
-
-.context-sidebar > header > span {
-  display: block;
-  margin-top: 9px;
-  color: var(--muted);
-  font-size: 0.72rem;
-  line-height: 1.5;
-}
-
-.context-metrics {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin: 18px 0;
-}
-
-.context-metrics > div {
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-panel);
-}
-
-.context-metrics dt {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--muted);
-  font-size: var(--font-size-caption);
-}
-
-.context-metrics dd {
-  margin: 7px 0 0;
-  color: var(--text-strong);
-  font-size: 1.15rem;
-  font-weight: 680;
-}
-
-.context-runtime,
-.context-security {
-  padding: 13px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-inset);
-}
-
-.context-runtime p {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 7px;
-  color: var(--muted);
-  font-size: var(--font-size-body-sm);
-}
-
-.context-runtime strong,
-.context-security strong {
-  display: block;
-  color: var(--text);
-  font-size: 0.73rem;
-}
-
-.context-runtime span,
-.context-security span {
-  display: block;
-  margin-top: 5px;
-  color: var(--muted);
-  font-size: var(--font-size-body-sm);
-  line-height: 1.45;
-}
-
-.context-security {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  margin-top: 9px;
-  color: var(--green);
-}
-
-.context-updated {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin: auto 3px 0;
-  color: var(--faint);
-  font-size: var(--font-size-caption);
 }
 
 .overview-header {

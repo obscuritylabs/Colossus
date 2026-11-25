@@ -206,9 +206,9 @@ ordinary renderer/tool requests cannot select a certificate. The native key stay
 per-profile private-store custody. It does not promote production component modes or claim
 AppContainer/WFP containment. Missing, changed or untrusted installed bytes fail
 closed. An unavailable ordinary-user desktop prerequisite leaves the capability
-unavailable without selecting a contained or personal-browser fallback. Signed
-installed ordinary-user functional acceptance remains a distinct release gate;
-source or unsigned staging tests cannot establish that evidence.
+unavailable without selecting a contained or personal-browser fallback. The
+[Windows release procedure](../releasing.md#developer-previews-and-desktop)
+defines signed installer checks and optional interactive diagnostics.
 
 Temporary profiles remain the default. The Linux native store implements explicit
 opaque workspace/application profiles, one retained kernel writer lease, exact
@@ -318,7 +318,7 @@ and custody crash recovery remain unaccepted. Reproduction and evidence scope ar
 | PKI | Native exact-origin reviewed identity selection; Linux owned NSS provisioning and actual Core per-request fixtures. A signed Mac no-CEF fixture passed private Keychain import, server-observed native mTLS, socket drainage and durable exact-generation removal while default/search metadata stayed unchanged | Linux broker custody remains unaccepted. Mac Core enrollment, full-component key isolation and custody crash recovery require acceptance; Windows owned-store and broker acceptance remain incomplete. Existing OS-user stores are not isolated by a temporary browser profile |
 | Persistent profiles | Linux native store, exclusive lease, compatibility/dirty/reset behavior and independent tool filesystem denial; actual five-host cookie restart/reset/temporary-isolation proof | Encryption and disk quota, native management and Desktop controls. Production configuration remains disabled |
 | Multi-origin browsing | Runtime defaults request public HTTPS browsing; the effect gateway narrows this to the permit's network authority. The immutable native enrollment and proxy bind that grant, while private destinations still need exact admission | Native public-page acceptance on each supported platform; interactive expansion of restricted origin lists remains future work |
-| Shipping package | Shared verifier, compiler-bound publisher seal and offline Linux package builder; Windows x64 stable and preview installers explicitly select the ordinary-user functional edition | Exact signed installed Windows functional acceptance remains required for each release. Independently reviewed component/image receipts and accepted distribution remain necessary for production modes; Headless and Embedded modes stay disabled until their own acceptance passes |
+| Shipping package | Shared verifier, compiler-bound publisher seal and offline Linux package builder; Windows x64 stable and preview installers explicitly select the ordinary-user functional edition | [Signed installer checks](../releasing.md#developer-previews-and-desktop) apply to releases. Independently reviewed component/image receipts and accepted distribution remain necessary for production modes; Headless and Embedded modes stay disabled until their own acceptance passes |
 
 These include implementation work as well as platform tests. Enabling an inventory
 flag, running a preview, or passing a fixture cannot substitute for missing

@@ -24,54 +24,18 @@ Read the relevant guide before editing its area; follow its links for deeper det
 
 ## Product maintenance and client ownership
 
-Repo-scoped Codex roles live in `.codex/agents/`: `cli_owner` (CLI and TUI),
-`vscode_owner`, `desktop_owner`, `test_owner`, `docs_owner`, `refactor_owner`,
-`dependency_owner`, `ci_cd_owner`, `feature_researcher`, and
-`maintenance_coordinator`. Use the coordinator for daily product health and
-changes that cross interfaces; give workers explicit file
-ownership before editing shared code. Role definitions do not schedule daily runs.
+Use `maintenance_coordinator` for daily product health and cross-client work.
+The [maintenance guide](docs/develop/agent-maintenance.md) owns roles, work
+limits, shared reservations, independent review, research, and
+[PR delivery](docs/develop/agent-maintenance.md#deliver-validated-fixes-as-pull-requests).
+Validate scoped fixes, then deliver them as PRs in `obscuritylabs/Colossus`.
+Explicit hosted requests, merges, releases, and deployments require separate
+authorization and their normal prerequisites.
 
-Maintain meaningful system and failure-path test coverage, accurate canonical
-documentation, compatible dependencies, CI/CD health and justified code cleanup alongside
-client features. Review quiet subsystems as well as recently changed code.
-Prioritize evidence-backed risks and regressions; avoid test-count targets,
-speculative refactoring, dependency churn, or weakened checks. Include test and
-documentation impact in every maintenance change and run its required gates.
-
-CI/CD cleanup needs evidence of improved reliability, clarity or build efficiency
-with required coverage preserved. Keep trusted-base selection, final-head
-acceptance, cache authority and immutable release/publisher boundaries intact.
-The coordinator owns ready-work intake, bounded work in progress, independent
-security/architecture review for relevant changes, and exact-source integration
-receipts with the next owner/action. Local passes do not establish release readiness.
-
-Completed maintenance fixes must reach a GitHub pull request. After required local
-checks and independent review pass, the coordinator has standing authorization to
-commit the scoped changes, push the reviewed commit on a focused branch, and open
-or reuse its PR in `obscuritylabs/Colossus` without asking again. Deliver existing
-validated local fixes before starting new work, including when intake capacity is
-full. Record and verify the PR URL and exact head in the shared receipt/ledger;
-opening a PR does not mark the change integrated or free its pending-integration
-slot. If delivery fails or is uncertain, retain a `publication_pending` item with
-the saved source, blocker and next action, reconcile GitHub before retrying, and
-report the blocker. See [PR delivery](docs/develop/agent-maintenance.md#deliver-validated-fixes-as-pull-requests).
-Explicit hosted acceptance requests, merges, releases and deployments retain their
-separate authorization and repository prerequisites.
-
-Nightly competitive research follows `.codex/research/competitive-watchlist.toml`.
-Verify upstream evidence and current Colossus support, deduplicate open/closed
-issues and active/recent PRs, and independently review qualified proposals before
-creating issues within the configured limits. Keep research notes and posting
-receipts in ignored `.local/agent-maintenance/research/`. A feature proposal does
-not authorize major implementation or establish roadmap priority.
-
-For every capability addition, change, or removal, account for CLI, TUI, VS Code,
-Desktop, the public API/SDK, and web where applicable. Record supported behavior,
-gaps, intentional differences with reasons, and acceptance evidence in the
-[feature inventory](docs/develop/feature-inventory.md). A runtime agent tool alone
-does not establish a human-facing client workflow. Keep shared behavior in its
-canonical service and assign missing API work before client adapters. Include this
-coverage in the PR description; deferred gaps need a named owner and follow-up.
+Assign shared behavior to its canonical service before adapting clients. For
+capability changes, trace CLI, TUI, VS Code, Desktop, API/SDK, and applicable web
+workflows. Record evidence and a named owner and action for deferred gaps in the
+[feature inventory](docs/develop/feature-inventory.md) and PR.
 
 ## Front-end development
 

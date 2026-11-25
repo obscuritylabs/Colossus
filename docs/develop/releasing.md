@@ -337,10 +337,11 @@ custody and production component acceptance remain unavailable. Both published
 channels require signature verification before inventory sealing. Manual preview
 validation dispatches build its unsigned bytes without publisher authority; manual
 stable validation retains its existing omission of Windows Desktop packaging.
-Before publishing the signed draft, verify its installed inventory and signatures
-and retain ordinary-user native browser acceptance from those exact installed
-bytes, including input, screenshots, background/restore, completion and cleanup.
-Keep the draft unpublished if signed installed acceptance is incomplete.
+Before publishing, confirm that the exact-tag Windows Desktop signing job passed its
+installed signature, inventory, launch, and uninstall checks. The signed payload
+must match the release candidate's recorded hashes. Interactive browser testing
+on an ordinary-user Windows installation is optional diagnostic coverage for input,
+screenshots, background/restore, completion, and cleanup.
 
 ### Control Plane containers and VS Code packages
 
@@ -458,6 +459,11 @@ temporary PE uninstaller, and installer. Every installed binary must verify as
 with a timestamp before release upload. A passing GitHub signing smoke run is
 recorded in the release PR; ordinary branch and manual validation builds do not
 receive signing authority.
+
+The browser payload verifier checks the embedded signature of each browser
+executable and DLL during sealing and after installation using Windows
+Authenticode policy. It verifies the publisher and timestamp from that signature,
+regardless of the vendor catalog signatures available on the Windows runner.
 
 ### Release asset OCI images
 

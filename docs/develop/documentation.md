@@ -7,18 +7,10 @@ type: how-to
 
 # Documentation authoring
 
-## Goal
+Verify the owning implementation before editing. Use Docker for the pinned site build.
+Give each page one reader, one outcome, and one canonical source for its facts.
 
-Add or revise a page with one reader, one outcome, one canonical fact owner, and a clean
-Zensical route.
-
-## Prerequisites
-
-- A source checkout with Docker available for the pinned documentation toolchain.
-- The target audience and page type selected before writing.
-- The owning implementation or reference contract available for verification.
-
-## Steps
+## Write and validate a page
 
 1. Choose one audience:
 
@@ -85,28 +77,16 @@ Zensical route.
    ./scripts/docs-site serve
    ```
 
-## Expected result
-
-The page is discoverable in the intended audience lane, has valid metadata, builds in
-strict mode, has no broken internal links or anchors, and contains no duplicated
-canonical contract.
-
-## Verification
-
 Check the page at mobile and desktop widths in both color schemes. Verify keyboard focus,
 overflow, tables, code copy, search discovery, diagrams, missing assets, and browser
 console errors. The documentation gate builds the site in strict mode and runs published
 configuration and workflow examples through the Rust parsers.
-
-## Failure path
 
 If a page needs two audiences or two documentation types, split it. Record durable
 architecture choices as an [ADR](adr/index.md), keep current evidence discoverable in the
 [feature inventory](feature-inventory.md), and leave superseded reconstruction narratives
 in Git history. Do not maintain a detached internal specification. Do not add template
 overrides, custom JavaScript, analytics, external fonts, or CDN diagram loaders.
-
-## Next step
 
 Request review from the owner of the documented contract and from a reader in the
 declared audience.
