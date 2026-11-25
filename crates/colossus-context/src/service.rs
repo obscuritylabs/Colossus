@@ -195,6 +195,41 @@ impl ContextService {
         tools: &[ModelToolDefinition],
         context: ExecutionContext,
     ) -> Result<PreparedContext, ContextError> {
+        self.compact_for_role(session_id, role, instructions, tools, context, None)
+            .await
+    }
+
+    /// Force a snapshot for an explicit local operation that can stop before persistence.
+    pub async fn compact_for_role_with_context_controlled(
+        &self,
+        session_id: &str,
+        role: &str,
+        instructions: &str,
+        tools: &[ModelToolDefinition],
+        context: ExecutionContext,
+        control: &RunControl,
+    ) -> Result<PreparedContext, ContextError> {
+        self.compact_for_role(
+            session_id,
+            role,
+            instructions,
+            tools,
+            context,
+            Some(control),
+        )
+        .await
+    }
+
+    async fn compact_for_role(
+        &self,
+        session_id: &str,
+        role: &str,
+        instructions: &str,
+        tools: &[ModelToolDefinition],
+        context: ExecutionContext,
+        control: Option<&RunControl>,
+    ) -> Result<PreparedContext, ContextError> {
+        ensure_compaction_running(control)?;
         let budget = self
             .provider
             .route(role)
@@ -206,16 +241,20 @@ impl ContextService {
             )));
         }
         let messages = records.into_iter().map(|record| record.message).collect();
-        self.prepare(ContextPreparationRequest {
-            continuation: None,
-            session_id: session_id.into(),
-            instructions: instructions.into(),
-            messages,
-            tools: tools.to_vec(),
-            route: budget,
-            context,
-            force: true,
-        })
+        self.prepare_context(
+            ContextPreparationRequest {
+                continuation: None,
+                session_id: session_id.into(),
+                instructions: instructions.into(),
+                messages,
+                tools: tools.to_vec(),
+                route: budget,
+                context,
+                force: true,
+            },
+            false,
+            control,
+        )
         .await
     }
 
@@ -224,7 +263,9 @@ impl ContextService {
         mut snapshot: ContextSnapshot,
         source: &[ModelMessage],
         context: ExecutionContext,
+        control: Option<&RunControl>,
     ) -> Result<ContextSnapshot, ContextError> {
+        ensure_compaction_running(control)?;
         if source.is_empty() {
             return Err(ContextError::Configuration(
                 "cannot compact an empty message range".into(),
@@ -235,7 +276,7 @@ impl ContextService {
                 .provider
                 .route("context_summarizer")
                 .is_ok_and(|route| route.provider != "echo")
-            && let Some(summary) = self.model_summary(source, context).await
+            && let Some(summary) = self.model_summary(source, context, control).await?
         {
             snapshot.summary = truncate_bytes(&summary, MAX_SUMMARY_BYTES);
             snapshot.strategy = "hybrid_model".into();
@@ -310,19 +351,37 @@ impl ContextService {
         &self,
         source: &[ModelMessage],
         context: ExecutionContext,
-    ) -> Option<String> {
-        let route = self.provider.route("context_summarizer").ok()?;
-        let request = bounded_summary_request(source, route.limits.input_budget_tokens)?;
-        let turn = self
-            .provider
-            .turn("context_summarizer", request, context)
-            .await
-            .ok()?;
+        control: Option<&RunControl>,
+    ) -> Result<Option<String>, ContextError> {
+        let Ok(route) = self.provider.route("context_summarizer") else {
+            return Ok(None);
+        };
+        let Some(request) = bounded_summary_request(source, route.limits.input_budget_tokens)
+        else {
+            return Ok(None);
+        };
+        ensure_compaction_running(control)?;
+        let turn = match control {
+            Some(control) => {
+                self.provider
+                    .turn_controlled("context_summarizer", request, context, control)
+                    .await
+            }
+            None => {
+                self.provider
+                    .turn("context_summarizer", request, context)
+                    .await
+            }
+        };
+        ensure_compaction_running(control)?;
+        let Ok(turn) = turn else {
+            return Ok(None);
+        };
         let final_text = turn.events.iter().rev().find_map(|event| match event {
             ProviderEvent::FinalOutput { text } if !text.trim().is_empty() => Some(text.trim()),
             _ => None,
         });
-        final_text.map(str::to_owned).or_else(|| {
+        Ok(final_text.map(str::to_owned).or_else(|| {
             let text = turn
                 .events
                 .iter()
@@ -332,8 +391,15 @@ impl ContextService {
                 })
                 .collect::<String>();
             (!text.trim().is_empty()).then(|| text.trim().to_owned())
-        })
+        }))
     }
+}
+
+fn ensure_compaction_running(control: Option<&RunControl>) -> Result<(), ContextError> {
+    if control.is_some_and(RunControl::is_cancelled) {
+        return Err(ContextError::Cancelled);
+    }
+    Ok(())
 }
 
 fn bounded_summary_request(
@@ -486,7 +552,7 @@ impl ContextPreparer for ContextService {
                 "tool evidence recovery requires a fresh tool-free request".into(),
             ));
         }
-        match self.prepare_context(request.clone(), true).await {
+        match self.prepare_context(request.clone(), true, None).await {
             Err(ContextError::BudgetExceeded(error)) => {
                 self.prepare_bounded_tool_evidence(request, error)
             }
@@ -498,7 +564,7 @@ impl ContextPreparer for ContextService {
         &self,
         request: ContextPreparationRequest,
     ) -> Result<PreparedContext, ContextError> {
-        self.prepare_context(request, false).await
+        self.prepare_context(request, false, None).await
     }
 }
 
@@ -624,6 +690,7 @@ impl ContextService {
         &self,
         request: ContextPreparationRequest,
         tool_evidence: bool,
+        control: Option<&RunControl>,
     ) -> Result<PreparedContext, ContextError> {
         let ContextPreparationRequest {
             continuation,
@@ -661,8 +728,12 @@ impl ContextService {
             // Bind decisions without starting a journaled memory retrieval effect.
             self.decision_message()?.into_iter().collect()
         } else {
-            self.binding_messages(&session_id, &messages, context.clone())
-                .await?
+            ensure_compaction_running(control)?;
+            let bindings = self
+                .binding_messages(&session_id, &messages, context.clone())
+                .await;
+            ensure_compaction_running(control)?;
+            bindings?
         };
         let context_binding_hash = context_binding_hash(&bindings)?;
         // Apply snapshots to the original slots before changing the provider-facing roles.
@@ -940,7 +1011,7 @@ impl ContextService {
             // transient and use deterministic compaction without auxiliary inference.
             draft_snapshot
         } else {
-            self.draft_snapshot(draft_snapshot, &messages[..source_end], context)
+            self.draft_snapshot(draft_snapshot, &messages[..source_end], context, control)
                 .await?
         };
         let mut prepared = bind_request(bindings, with_snapshot(&snapshot));
@@ -972,6 +1043,8 @@ impl ContextService {
         let (snapshot_id, strategy) = if tool_evidence {
             (None, recovery_strategy)
         } else {
+            // Admit the atomic snapshot write here. Its result settles the operation.
+            ensure_compaction_running(control)?;
             let snapshot = self.snapshots.create(snapshot, actor)?;
             (Some(snapshot.id), Some(snapshot.strategy))
         };

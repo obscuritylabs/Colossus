@@ -1,6 +1,7 @@
 use super::*;
 use crate::support_report::{HostFacts, WorkerObservation};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use colossus_worker::ContextCompactionOutcome;
 use integrations::{pull_request_arguments, pull_request_document};
 use uuid::Uuid;
 
@@ -34,6 +35,30 @@ pub(super) fn worker_plan_execution_outcome(
             plan: selected.clone(),
         }),
         Err(error) => Err(error.to_string()),
+    }
+}
+
+pub(super) fn worker_context_compaction_outcome(
+    outcome: Result<ContextCompactionOutcome, WorkerError>,
+) -> Result<HostCommandResult, String> {
+    match outcome {
+        Ok(ContextCompactionOutcome::Completed { prepared }) => {
+            Ok(HostCommandResult::document(document_from_json(
+                &serde_json::to_value(prepared).map_err(|error| error.to_string())?,
+                Some("Context compaction"),
+            )))
+        }
+        Ok(ContextCompactionOutcome::Cancelled) | Err(WorkerError::Cancelled) => {
+            Ok(context_compaction_cancelled())
+        }
+        Err(
+            error @ (WorkerError::Remote(_)
+            | WorkerError::Busy(_)
+            | WorkerError::Unavailable(_)
+            | WorkerError::Incompatible(_)),
+        ) => Err(error.to_string()),
+        // Lost or invalid replies cannot establish whether the snapshot committed.
+        Ok(ContextCompactionOutcome::OutcomeUnknown) | Err(_) => Ok(context_compaction_unknown()),
     }
 }
 
@@ -1392,6 +1417,27 @@ impl WorkerInteractiveHost {
             "context" if self.drafts.contains(session_id)? => Ok(HostCommandResult::document(
                 PresentationDocument::from_block(PresentationBlock::Text("No saved context in this draft.".into())),
             )),
+            "context" if arguments.trim() == "compact" => {
+                let mut observer = WorkerChannelObserver { sender: events.clone() };
+                let prompts = TuiWorkerPromptHandler { sender: events.clone() };
+                worker_context_compaction_outcome(
+                    self.call_worker_interactive(
+                        WorkerOperation::RunInteractive {
+                            model_options: None,
+                            request: InteractiveWorkerRequest::ContextCompact {
+                                session_id: session_id.into(),
+                                role: "primary".into(),
+                            },
+                            approval_mode: None,
+                            sandbox_boundary_acknowledgement: None,
+                        },
+                        &mut observer,
+                        &prompts,
+                        control,
+                    )
+                    .await,
+                )
+            }
             "context" => {
                 if matches!(arguments.trim(), "" | "status") {
                     let status = serde_json::from_value::<ContextStatus>(
@@ -1409,10 +1455,6 @@ impl WorkerInteractiveHost {
                 let operation = match arguments.trim() {
                     "list" => WorkerOperation::ContextList {
                         session_id: session_id.into(),
-                    },
-                    "compact" => WorkerOperation::ContextCompact {
-                        session_id: session_id.into(),
-                        role: "primary".into(),
                     },
                     value if value.starts_with("restore ") => WorkerOperation::ContextRestore {
                         session_id: session_id.into(),

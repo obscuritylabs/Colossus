@@ -517,6 +517,48 @@ impl Runtime {
         .map_err(|error| RuntimeError::Config(error.to_string()))
     }
 
+    /// Compact one saved session with the attached terminal's operation control.
+    ///
+    /// None confirms cancellation before the snapshot append. Once admitted, the
+    /// atomic append settles normally and its result wins over a later stop.
+    pub async fn compact_context_for_role_controlled(
+        &self,
+        session_id: &str,
+        role: &str,
+        control: &RunControl,
+    ) -> Result<Option<PreparedContext>, RuntimeError> {
+        if control.is_cancelled() {
+            return Ok(None);
+        }
+        let executor = ControlledContextEffect {
+            executor: self.context_executor.as_ref(),
+            control,
+            cancelled: std::sync::atomic::AtomicBool::new(false),
+        };
+        let result = self
+            .execute_context_operation_using(
+                ContextOperation::Compact {
+                    session_id: session_id.into(),
+                    role: role.into(),
+                },
+                &executor,
+            )
+            .await;
+        match result {
+            Ok(value) => serde_json::from_value(value)
+                .map(Some)
+                .map_err(|error| RuntimeError::Config(error.to_string())),
+            Err(RuntimeError::Gateway(GatewayError::Execution(_)))
+                if executor
+                    .cancelled
+                    .load(std::sync::atomic::Ordering::Acquire) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Activate an existing snapshot for subsequent provider turns.
     pub async fn restore_context(
         &self,
@@ -537,10 +579,19 @@ impl Runtime {
         &self,
         operation: ContextOperation,
     ) -> Result<Value, RuntimeError> {
+        self.execute_context_operation_using(operation, self.context_executor.as_ref())
+            .await
+    }
+
+    async fn execute_context_operation_using(
+        &self,
+        operation: ContextOperation,
+        executor: &dyn EffectExecutor,
+    ) -> Result<Value, RuntimeError> {
         let session_id = operation.session_id().to_owned();
         let output = execute_context_effect(
             self.gateway.as_ref(),
-            self.context_executor.as_ref(),
+            executor,
             terminal_actor(),
             ExecutionContext {
                 correlation_id: Uuid::now_v7().to_string(),

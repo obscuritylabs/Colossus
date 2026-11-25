@@ -255,6 +255,34 @@ fn worker_setup_cancellation_returns_typed_pre_consumption_plan_outcome() {
 }
 
 #[test]
+fn worker_compaction_distinguishes_cancellation_from_unknown_and_denied_outcomes() {
+    use colossus_worker::ContextCompactionOutcome;
+
+    for outcome in [
+        Ok(ContextCompactionOutcome::Cancelled),
+        Err(WorkerError::Cancelled),
+    ] {
+        let result = worker::worker_context_compaction_outcome(outcome).expect("cancelled");
+        assert!(!result.continue_queue);
+        assert_eq!(result.document, context_compaction_cancelled().document);
+    }
+
+    for outcome in [
+        Ok(ContextCompactionOutcome::OutcomeUnknown),
+        Err(WorkerError::Io(std::io::ErrorKind::UnexpectedEof.into())),
+    ] {
+        let result = worker::worker_context_compaction_outcome(outcome).expect("unknown");
+        assert!(!result.continue_queue);
+        assert_eq!(result.document, context_compaction_unknown().document);
+    }
+
+    let denied =
+        worker::worker_context_compaction_outcome(Err(WorkerError::Remote("policy denied".into())))
+            .expect_err("denial remains an error");
+    assert!(denied.contains("policy denied"));
+}
+
+#[test]
 fn plan_execution_errors_reconcile_durable_consumption_or_fail_unknown() {
     let approved = plan("plan-1", "session-1", PlanStatus::Approved, 2);
     approved_plan_at_revision(Some(approved.clone()), "plan-1", "session-1", 2)

@@ -96,6 +96,9 @@ impl ContextBudgetExceeded {
 /// Context preparation or snapshot lifecycle failure.
 #[derive(Debug, Error)]
 pub enum ContextError {
+    /// The local manual operation stopped before admitting snapshot persistence.
+    #[error("context compaction was cancelled")]
+    Cancelled,
     /// Context configuration or request cannot satisfy the safety contract.
     #[error("context configuration failed: {0}")]
     Configuration(String),

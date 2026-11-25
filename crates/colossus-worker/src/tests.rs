@@ -329,6 +329,83 @@ fn interactive_github_read_has_a_fixed_operation_identity() {
 }
 
 #[test]
+fn interactive_context_compaction_binds_the_exact_session_and_role() {
+    let operation = WorkerOperation::RunInteractive {
+        model_options: None,
+        request: InteractiveWorkerRequest::ContextCompact {
+            session_id: "session-1".into(),
+            role: "primary".into(),
+        },
+        approval_mode: None,
+        sandbox_boundary_acknowledgement: None,
+    };
+    assert_eq!(
+        operation_name(&operation),
+        "run_interactive.context_compact"
+    );
+    let mut encoded = serde_json::to_value(operation).expect("encode compaction request");
+    assert_eq!(
+        encoded["request"],
+        json!({"kind": "context_compact", "session_id": "session-1", "role": "primary"})
+    );
+    assert!(matches!(
+        serde_json::from_value::<WorkerOperation>(encoded.clone()).expect("decode request"),
+        WorkerOperation::RunInteractive {
+            request: InteractiveWorkerRequest::ContextCompact { session_id, role },
+            ..
+        } if session_id == "session-1" && role == "primary"
+    ));
+    encoded["request"]["cancel_session_id"] = json!("other-session");
+    assert!(serde_json::from_value::<WorkerOperation>(encoded).is_err());
+}
+
+#[test]
+fn interactive_context_compaction_rejects_signed_authority_and_model_overrides() {
+    let key = [31_u8; 32];
+    let nonce = "compaction-connection";
+    let replay = Mutex::new(ReplayGuard::default());
+    let acknowledgement = SandboxBoundaryAcknowledgement::new("a".repeat(64)).expect("capability");
+    let cases = [
+        (None, None, None),
+        (Some(WorkerApprovalMode::FullAccess), None, None),
+        (None, Some(acknowledgement), None),
+        (
+            None,
+            None,
+            Some(colossus_contracts::WorkflowAgentOptions::default()),
+        ),
+    ];
+    for (approval_mode, sandbox_boundary_acknowledgement, model_options) in cases {
+        let has_overrides = approval_mode.is_some()
+            || sandbox_boundary_acknowledgement.is_some()
+            || model_options.is_some();
+        let request = signed_request(
+            &key,
+            WorkerOperation::RunInteractive {
+                request: InteractiveWorkerRequest::ContextCompact {
+                    session_id: "session-1".into(),
+                    role: "primary".into(),
+                },
+                approval_mode,
+                sandbox_boundary_acknowledgement,
+                model_options,
+            },
+            nonce,
+        )
+        .expect("sign request");
+        let result = validate_request(&key, &request, &replay, nonce);
+        if has_overrides {
+            assert!(matches!(
+                result,
+                Err(WorkerError::Protocol(message)) if message.contains("does not accept")
+            ));
+        } else {
+            result.expect("same worker authority as unary compaction");
+        }
+    }
+}
+
+#[test]
 fn interactive_presentation_requests_bind_the_acknowledged_session() {
     let history = WorkerOperation::RunInteractive {
         model_options: None,
@@ -1591,6 +1668,15 @@ fn socket_test_notice() -> ApprovalReviewNotice {
 const SOCKET_TEST_REQUEST_ID: &str = "interactive-request";
 const SOCKET_TEST_CONNECTION_NONCE: &str = "interactive-connection";
 
+fn socket_test_client_connection(key: &[u8; 32]) -> client::InteractiveClientConnection<'_> {
+    client::InteractiveClientConnection {
+        key,
+        request_id: SOCKET_TEST_REQUEST_ID,
+        connection_nonce: SOCKET_TEST_CONNECTION_NONCE,
+        retain_reply_on_cancel_write_failure: false,
+    }
+}
+
 #[tokio::test]
 async fn interactive_socket_preserves_event_notice_prompt_order() {
     let key = [21_u8; 32];
@@ -1644,9 +1730,7 @@ async fn interactive_socket_preserves_event_notice_prompt_order() {
     };
     let result = client::drive_interactive_client::<_, Value>(
         client_stream,
-        &key,
-        SOCKET_TEST_REQUEST_ID,
-        SOCKET_TEST_CONNECTION_NONCE,
+        socket_test_client_connection(&key),
         &mut observer,
         &prompts,
         &RunControl::default(),
@@ -1719,9 +1803,7 @@ async fn interactive_socket_cancel_releases_waiter_and_rejects_late_prompt() {
         let mut observer = SilentSocketObserver;
         client::drive_interactive_client::<_, Value>(
             client_stream,
-            &key,
-            SOCKET_TEST_REQUEST_ID,
-            SOCKET_TEST_CONNECTION_NONCE,
+            socket_test_client_connection(&key),
             &mut observer,
             &prompts,
             &client_control,
@@ -1793,9 +1875,7 @@ async fn interactive_socket_interrupts_open_prompt_on_terminal_frame_or_disconne
             Duration::from_secs(2),
             client::drive_interactive_client::<_, Value>(
                 client_stream,
-                &key,
-                SOCKET_TEST_REQUEST_ID,
-                SOCKET_TEST_CONNECTION_NONCE,
+                socket_test_client_connection(&key),
                 &mut observer,
                 &prompts,
                 &RunControl::default(),
@@ -1848,9 +1928,7 @@ async fn interactive_socket_disconnect_cancels_server_and_clears_waiters() {
     let mut observer = SilentSocketObserver;
     let result = client::drive_interactive_client::<_, Value>(
         client_stream,
-        &key,
-        SOCKET_TEST_REQUEST_ID,
-        SOCKET_TEST_CONNECTION_NONCE,
+        socket_test_client_connection(&key),
         &mut observer,
         &FailingSocketPromptHandler,
         &RunControl::default(),
@@ -1910,6 +1988,84 @@ async fn interactive_socket_disconnect_settles_bounded_operation() {
         .expect("server task");
     assert!(server_result.is_err());
     settled_rx.await.expect("active operation settled");
+}
+
+#[tokio::test]
+async fn interactive_compaction_retains_committed_reply_after_failed_cancel_write() {
+    use std::{
+        io,
+        pin::Pin,
+        task::{Context, Poll},
+    };
+
+    struct CancelWriteFailure(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl AsyncWrite for CancelWriteFailure {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+            _buffer: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.0
+                .take()
+                .expect("one cancel write")
+                .send(())
+                .expect("fixture awaiting cancel write");
+            Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    let key = [27_u8; 32];
+    let snapshot = json!({ "snapshot_id": "committed-snapshot" });
+    let (client_stream, mut server_stream) = tokio::io::duplex(1024);
+    let (cancel_attempted, wait_for_cancel) = tokio::sync::oneshot::channel();
+    let server = async {
+        wait_for_cancel.await.expect("client wrote cancel");
+        write_signed_frame(
+            &mut server_stream,
+            &key,
+            SOCKET_TEST_REQUEST_ID,
+            1,
+            WorkerFrameContent::Complete {
+                result: snapshot.clone(),
+            },
+        )
+        .await
+        .expect("write committed result");
+    };
+    let control = RunControl::default();
+    control.cancel();
+    let mut observer = SilentSocketObserver;
+    let prompts = FailingSocketPromptHandler;
+    let (_, result) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(
+            server,
+            client::drive_interactive_client::<_, Option<Value>>(
+                tokio::io::join(client_stream, CancelWriteFailure(Some(cancel_attempted))),
+                client::InteractiveClientConnection {
+                    retain_reply_on_cancel_write_failure: true,
+                    ..socket_test_client_connection(&key)
+                },
+                &mut observer,
+                &prompts,
+                &control,
+            )
+        )
+    })
+    .await
+    .expect("compaction settled after cancel write failure");
+    assert_eq!(
+        Some(snapshot),
+        result.expect("authenticated settled result")
+    );
 }
 
 #[tokio::test]
@@ -2181,7 +2337,7 @@ async fn interactive_worker_drops_approval_review_notice_when_queue_is_full() {
 
 #[tokio::test]
 async fn protocol_version_mismatch_has_restart_guidance() {
-    assert_eq!(PROTOCOL_VERSION, 29);
+    assert_eq!(PROTOCOL_VERSION, 30);
     let key = [13_u8; 32];
     for incompatible_version in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
         let mut frame =

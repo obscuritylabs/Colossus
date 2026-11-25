@@ -14,6 +14,39 @@ pub(super) struct GatewayModelProvider {
     pub(super) pending: StdMutex<BTreeMap<(String, Option<String>), String>>,
 }
 
+struct ControlledModelExecutor<'a> {
+    provider: &'a dyn EffectExecutor,
+    control: &'a RunControl,
+}
+
+#[async_trait]
+impl EffectExecutor for ControlledModelExecutor<'_> {
+    async fn execute(
+        &self,
+        request: &EffectRequest,
+        permit: ExecutionPermit,
+    ) -> Result<QuarantinedEffectResult, ExecutionError> {
+        if self.control.is_cancelled() {
+            return Err(ExecutionError::Failed(
+                "summary cancelled before starting the provider".into(),
+            ));
+        }
+        // Leave the gateway running so the admitted provider effect gets an
+        // audited terminal outcome. A remote request may already be in flight.
+        tokio::select! {
+            biased;
+            () = async {
+                while !self.control.is_cancelled() {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            } => Err(ExecutionError::OutcomeUnknown(
+                "stopped waiting for the summary provider; its external outcome is unknown".into(),
+            )),
+            result = self.provider.execute(request, permit) => result,
+        }
+    }
+}
+
 pub(super) struct GatewaySearchProvider {
     pub(super) gateway: Arc<EffectGateway>,
     pub(super) searches: Arc<SearchRegistry>,
@@ -431,14 +464,17 @@ impl GatewayModelProvider {
         request: ModelRequest,
         context: ExecutionContext,
         options: ProviderTurnOptions,
+        control: Option<&RunControl>,
     ) -> Result<ProviderTurn, ModelProviderError> {
         let resolved = self.resolve_workflow_model(role, &options.agent_options)?;
         let route = self.route_with_options(role, &options.agent_options)?;
-        self.remember_candidate(
-            context.session_id.as_deref(),
-            context.run_id.as_deref(),
-            None,
-        )?;
+        if control.is_none() {
+            self.remember_candidate(
+                context.session_id.as_deref(),
+                context.run_id.as_deref(),
+                None,
+            )?;
+        }
         let mut continuation_plan = options.continuation.clone();
         if let Some(plan) = &mut continuation_plan {
             plan.snapshot_epoch = self
@@ -488,11 +524,18 @@ impl GatewayModelProvider {
         effect.capabilities = vec!["provider.call".into()];
         effect.context = context;
         effect.credential_references = provider.credential_reference().into_iter().collect();
-        let released = self
-            .gateway
-            .execute(effect, provider.as_ref())
-            .await
-            .map_err(model_gateway_error)?;
+        let released = if let Some(control) = control {
+            let executor = ControlledModelExecutor {
+                provider: provider.as_ref(),
+                control,
+            };
+            self.gateway
+                .execute_controlled(effect, &executor, control)
+                .await
+        } else {
+            self.gateway.execute(effect, provider.as_ref()).await
+        }
+        .map_err(model_gateway_error)?;
         if options.include_response_diagnostics
             && let Ok(diagnostic) =
                 serde_json::from_slice::<ProviderResponseDiagnostic>(&released.bytes)
@@ -520,14 +563,16 @@ impl GatewayModelProvider {
             false,
             output.continuation_id.is_some(),
         );
-        self.remember_released_candidate(
-            session_id.as_deref(),
-            run_id.as_deref(),
-            output.continuation_id,
-            &request_evidence,
-            &resolved,
-            route.reasoning_effort,
-        )?;
+        if control.is_none() {
+            self.remember_released_candidate(
+                session_id.as_deref(),
+                run_id.as_deref(),
+                output.continuation_id,
+                &request_evidence,
+                &resolved,
+                route.reasoning_effort,
+            )?;
+        }
         Ok(output.turn)
     }
 }
@@ -659,8 +704,27 @@ impl ModelProvider for GatewayModelProvider {
         request: colossus_contracts::ModelRequest,
         context: ExecutionContext,
     ) -> Result<ProviderTurn, ModelProviderError> {
-        self.turn_with_options(role, request, context, ProviderTurnOptions::default())
+        self.turn_with_options(role, request, context, ProviderTurnOptions::default(), None)
             .await
+    }
+
+    async fn turn_controlled(
+        &self,
+        role: &str,
+        request: ModelRequest,
+        context: ExecutionContext,
+        control: &RunControl,
+    ) -> Result<ProviderTurn, ModelProviderError> {
+        // An auxiliary summary uses a fresh request, with no adoption of
+        // private continuation state from the active conversation.
+        self.turn_with_options(
+            role,
+            request,
+            context,
+            ProviderTurnOptions::default(),
+            Some(control),
+        )
+        .await
     }
 
     async fn turn_stream(

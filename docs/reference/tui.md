@@ -39,6 +39,7 @@ interface. The default view fills the alternate screen. Add the global
 | `End` | Return to live output in the full-screen view. |
 | Mouse drag, then `Ctrl-C` / `Ctrl-Insert` | Copy the selected rendered text. Esc clears the selection. |
 | `F6` | Freeze the conversation view and enable terminal-native text selection. Drag to highlight text, then use your terminal's Copy shortcut. Press F6 or Esc to return. |
+| `Esc` | From the composer, [request cancellation of active `/context compact`](../use/sessions-context.md#inspect-or-restore-snapshots) and keep your draft. |
 | `Ctrl-C` | Copy an active rendered-text selection or discard a draft. With an empty draft, request cancellation during a run or exit when idle. |
 | `Ctrl-D` | Exit from an empty, idle composer. |
 

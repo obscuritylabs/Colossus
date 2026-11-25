@@ -2,6 +2,31 @@ use super::*;
 
 pub(super) const SAVE_TERMINAL_SETTINGS: &str = "Save terminal settings";
 
+pub(super) fn context_compaction_cancelled() -> HostCommandResult {
+    context_compaction_stopped(
+        "Context compaction cancelled",
+        "The prior context remains active.",
+    )
+}
+
+pub(super) fn context_compaction_unknown() -> HostCommandResult {
+    context_compaction_stopped(
+        "Context compaction outcome unknown",
+        "Inspect /context status or /context list before retrying.",
+    )
+}
+
+fn context_compaction_stopped(title: &str, detail: &str) -> HostCommandResult {
+    HostCommandResult {
+        continue_queue: false,
+        ..HostCommandResult::document(PresentationDocument::from_block(PresentationBlock::Card {
+            title: title.into(),
+            tone: PresentationTone::Warning,
+            body: vec![PresentationBlock::Text(detail.into())],
+        }))
+    }
+}
+
 pub(super) fn draft_preferences_prompt(
     response: oneshot::Sender<PromptResponse>,
 ) -> InteractivePrompt {

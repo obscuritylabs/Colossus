@@ -541,7 +541,7 @@ impl EmbeddedInteractiveHost {
                     "No saved context in this draft.".into(),
                 )),
             )),
-            "context" => self.context_command(arguments, session_id).await,
+            "context" => self.context_command(arguments, session_id, control).await,
             "workflow" => self.workflow_command(arguments).await,
             "audit" if arguments == "verify" => self.result(
                 &self
@@ -941,6 +941,7 @@ impl EmbeddedInteractiveHost {
         &self,
         arguments: &str,
         session_id: &str,
+        control: &RunControl,
     ) -> Result<HostCommandResult, String> {
         match arguments.trim() {
             "" | "status" => Ok(HostCommandResult::document(context_status_document(
@@ -958,14 +959,18 @@ impl EmbeddedInteractiveHost {
                     .map_err(|error| error.to_string())?,
                 Some("Context snapshots"),
             ),
-            "compact" => self.result(
-                &self
+            "compact" => {
+                match self
                     .runtime
-                    .compact_context(session_id)
+                    .compact_context_for_role_controlled(session_id, "primary", control)
                     .await
-                    .map_err(|error| error.to_string())?,
-                Some("Context compaction"),
-            ),
+                {
+                    Ok(Some(prepared)) => self.result(&prepared, Some("Context compaction")),
+                    Ok(None) => Ok(context_compaction_cancelled()),
+                    Err(error) if error.outcome_unknown() => Ok(context_compaction_unknown()),
+                    Err(error) => Err(error.to_string()),
+                }
+            }
             arguments if arguments.starts_with("restore ") => self.result(
                 &self
                     .runtime

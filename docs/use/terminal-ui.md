@@ -187,6 +187,9 @@ You can continue typing while a run is active. Colossus queues up to eight futur
 turns. Queued work stays in this terminal's prompt history until the host starts
 it. After a failure or cancellation, Colossus pauses the queue for your decision.
 
+While the activity line shows **Compacting context · Esc stops**, press **Esc**
+to request cancellation and keep your draft. See [context and snapshots](sessions-context.md#inspect-or-restore-snapshots).
+
 After a known provider failure, an inline **Retry** and **Dismiss** notice appears
 above the composer. Tab selects an action and Enter activates it; ordinary slash
 completion keeps priority. Retry sends **Continue** in the same session and keeps

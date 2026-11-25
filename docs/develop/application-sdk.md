@@ -968,9 +968,10 @@ fields 1 and 7 remain reserved. The configuration schema version is 3.
 The server revalidates responses against the private request and applies current scope
 checks to cancellation and response operations.
 
-Private worker protocol 29 adds the authenticated TUI request that saves an unsaved
-conversation as a session. Use matching client and worker builds, and restart older
-workers after updating.
+Private worker protocol 29 introduced the authenticated TUI request that saves an
+unsaved conversation as a session. Protocol 30 adds an authenticated interactive
+request for manual context compaction with cancellation bound to that operation.
+Use matching client and worker builds, and restart older workers after updating.
 
 Loopback limits bound resource consumption but cannot guarantee availability against a
 hostile local process, including one running as another OS user: loopback TCP does not
