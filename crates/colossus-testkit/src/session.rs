@@ -9,6 +9,12 @@ where
     let repository = factory();
     assert!(
         repository
+            .latest_session()
+            .expect("empty session list")
+            .is_none()
+    );
+    assert!(
+        repository
             .get_session("session-conformance")
             .expect("missing session")
             .is_none()
@@ -46,6 +52,7 @@ where
             )
             .expect("append message");
     }
+    drop(repository);
     let reopened = factory();
     let messages = reopened
         .list_messages("session-conformance")
@@ -66,6 +73,10 @@ where
     assert_eq!(
         reopened.list_sessions(10).expect("session list")[0].id,
         "session-conformance"
+    );
+    assert_eq!(
+        reopened.latest_session().expect("latest session"),
+        Some(summary)
     );
     assert!(
         reopened

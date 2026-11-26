@@ -121,15 +121,15 @@ impl EmbeddedInteractiveHost {
     }
 
     async fn footer(&self, session_id: &str, status: &str) -> Result<FooterState, String> {
-        self.footer_with_usage(session_id, status, FooterUsageSelection::Latest)
+        self.footer_with_metrics(session_id, status, FooterMetrics::Latest)
             .await
     }
 
-    async fn footer_with_usage(
+    async fn footer_with_metrics(
         &self,
         session_id: &str,
         status: &str,
-        usage_selection: FooterUsageSelection<'_>,
+        metrics: FooterMetrics<'_>,
     ) -> Result<FooterState, String> {
         let route = self
             .runtime
@@ -140,22 +140,24 @@ impl EmbeddedInteractiveHost {
             &self.configured_models().await?,
             &self.model_selections.get(session_id)?,
         )?;
-        let (context, usage, message_count) = if self.drafts.contains(session_id)? {
-            (None, None, 0)
-        } else {
-            let summary = self
-                .runtime
-                .get_session(session_id)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| format!("session not found: {session_id}"))?;
-            let usage = usage_selection
-                .run_id(summary.last_run_id.as_deref())
-                .and_then(|run_id| self.runtime.run_token_usage(session_id, run_id).ok());
-            (
-                self.runtime.context_status(session_id).await.ok(),
-                usage,
-                summary.message_count,
-            )
+        let (context, usage, message_count) = match metrics {
+            FooterMetrics::Opened { message_count } => (None, None, message_count),
+            _ if self.drafts.contains(session_id)? => (None, None, 0),
+            _ => {
+                let summary = self
+                    .runtime
+                    .get_session(session_id)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("session not found: {session_id}"))?;
+                let usage = metrics
+                    .run_id(summary.last_run_id.as_deref())
+                    .and_then(|run_id| self.runtime.run_token_usage(session_id, run_id).ok());
+                (
+                    self.runtime.context_status(session_id).await.ok(),
+                    usage,
+                    summary.message_count,
+                )
+            }
         };
         let approval = self.approvals.mode_snapshot()?;
         Ok(FooterState {
@@ -490,7 +492,7 @@ impl EmbeddedInteractiveHost {
                     GoalRunOutcome::Failed { .. } => "failed",
                 };
                 let footer = self
-                    .footer_with_usage(
+                    .footer_with_metrics(
                         session_id,
                         status,
                         goal_outcome_usage_selection(&outcome, session_id),
@@ -510,7 +512,7 @@ impl EmbeddedInteractiveHost {
                     .map_err(|error| error.to_string())?;
                 // Optional display metadata cannot replace a known Goal result.
                 let footer = self
-                    .footer_with_usage(
+                    .footer_with_metrics(
                         session_id,
                         "ok",
                         goal_result_usage_selection(&outcome, session_id),
@@ -677,11 +679,23 @@ impl EmbeddedInteractiveHost {
         collector.finish()
     }
 
-    async fn switch_session(&self, session_id: String) -> Result<HostCommandResult, String> {
-        self.runtime
-            .get_session(&session_id)
+    fn ensure_active_session(&self, session_id: &str) -> Result<(), String> {
+        let lifecycle = self
+            .runtime
+            .session_lifecycle(session_id)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| format!("session not found: {session_id}"))?;
+        if lifecycle.archived {
+            return Err(
+                "This session is archived. Restore it from Sessions > Archived before opening it."
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    async fn switch_session(&self, session_id: String) -> Result<HostCommandResult, String> {
+        self.ensure_active_session(&session_id)?;
         let page = self
             .runtime
             .session_messages_page(&session_id, None, 100)
@@ -690,6 +704,9 @@ impl EmbeddedInteractiveHost {
             .runtime
             .pending_sandbox_boundary_acknowledgement(&session_id)
             .map_err(|error| error.to_string())?;
+        let footer = self
+            .footer_with_metrics(&session_id, "ready", FooterMetrics::opened(&page))
+            .await?;
         Ok(HostCommandResult {
             document: PresentationDocument::new(),
             session: Some((
@@ -700,7 +717,7 @@ impl EmbeddedInteractiveHost {
             preferences: None,
             completions: None,
             sticky_skills: None,
-            footer: Some(self.footer(&session_id, "ready").await?),
+            footer: Some(footer),
             plan_selection: PlanSelectionUpdate::Clear,
             continue_queue: true,
             clear_transcript: false,
@@ -1421,12 +1438,11 @@ impl InteractiveHost for EmbeddedInteractiveHost {
     }
 
     async fn session_catalog(&self, archived: bool) -> Result<Vec<SessionSummary>, String> {
-        let sessions = if archived {
-            self.runtime.list_archived_sessions(100)
-        } else {
-            self.runtime.list_sessions(100)
-        }
-        .map_err(|error| error.to_string())?;
+        let sessions = self
+            .runtime
+            .terminal_session_catalog(archived, 100)
+            .await
+            .map_err(|error| error.to_string())?;
         Ok(root_session_catalogue(
             sessions,
             self.runtime
@@ -1440,7 +1456,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         session_id: &str,
     ) -> Result<Vec<InteractiveSessionBrowserMessage>, String> {
         self.runtime
-            .get_session(session_id)
+            .session_lifecycle(session_id)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "The selected session was not found.".to_owned())?;
         let mut collector = SessionPreviewCollector::new();
@@ -1473,19 +1489,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
         let fresh_session = request.session_id.is_none() && !request.resume_latest;
         let session_id = if let Some(session_id) = request.session_id {
-            let lifecycle = self
-                .runtime
-                .session_lifecycle(&session_id)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| format!("session not found: {session_id}"))?;
-            if lifecycle.archived {
-                return Err("This session is archived. Restore it from Sessions > Archived before opening it.".into());
-            }
-            self.runtime
-                .get_session(&session_id)
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| format!("session not found: {session_id}"))?
-                .id
+            session_id
         } else if request.resume_latest {
             self.runtime
                 .latest_session()
@@ -1497,6 +1501,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         let (transcript, pending_sandbox_boundary_acknowledgement) = if fresh_session {
             (empty_transcript(), None)
         } else {
+            self.ensure_active_session(&session_id)?;
             (
                 self.runtime
                     .session_messages_page(&session_id, None, 100)
@@ -1522,7 +1527,9 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
             .collect::<Vec<_>>();
         Ok(InteractiveSnapshot {
-            footer: self.footer(&session_id, "ready").await?,
+            footer: self
+                .footer_with_metrics(&session_id, "ready", FooterMetrics::opened(&transcript))
+                .await?,
             session_id,
             session_saved: !fresh_session,
             fresh_session,
@@ -1712,11 +1719,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             AgentRunOutcome::Cancelled { result } => result.run_id.as_str(),
         };
         let footer = self
-            .footer_with_usage(
-                &request.session_id,
-                status,
-                FooterUsageSelection::Exact(run_id),
-            )
+            .footer_with_metrics(&request.session_id, status, FooterMetrics::Exact(run_id))
             .await?;
         Ok(HostRunResult {
             outcome,
@@ -1743,11 +1746,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             request.revision,
         )?;
         let mut fallback_footer = self
-            .footer_with_usage(
-                &request.session_id,
-                "executing",
-                FooterUsageSelection::Unavailable,
-            )
+            .footer_with_metrics(&request.session_id, "executing", FooterMetrics::Unavailable)
             .await?;
         let mut observer = ChannelRunObserver {
             sender: events.clone(),
@@ -1782,11 +1781,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
                     .get_plan(&selected.id)
                     .map_err(|read_error| read_error.to_string());
                 let (footer, footer_warning) = match self
-                    .footer_with_usage(
-                        &request.session_id,
-                        "failed",
-                        FooterUsageSelection::Unavailable,
-                    )
+                    .footer_with_metrics(&request.session_id, "failed", FooterMetrics::Unavailable)
                     .await
                 {
                     Ok(footer) => (footer, None),
@@ -1827,7 +1822,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             } => "failed",
         };
         let (footer, footer_warning) = match self
-            .footer_with_usage(&request.session_id, status, plan_usage_selection(&outcome))
+            .footer_with_metrics(&request.session_id, status, plan_usage_selection(&outcome))
             .await
         {
             Ok(footer) => (footer, None),

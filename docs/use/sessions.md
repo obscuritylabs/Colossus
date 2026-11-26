@@ -25,6 +25,9 @@ selected workspace. `/resume` opens **History** in the same browser. Tab and
 Shift-Tab move between Open, History, and Archived; `/` searches the current list.
 
 The left pane shows session titles, status, update times, and message counts.
+While an existing journal builds its session index after an upgrade, unnamed
+History rows can show **Untitled session** and preview text may be unavailable
+in search. The transcript preview is available when you highlight a row.
 Highlight a row with Up/Down or a mouse click to preview recent messages and work
 on the right. PageUp/PageDown scrolls the preview. Enter opens the selected
 unarchived conversation. Press `n` to open a new draft, `r` to refresh, or

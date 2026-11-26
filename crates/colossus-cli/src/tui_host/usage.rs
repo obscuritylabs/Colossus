@@ -1,35 +1,42 @@
 use super::*;
 
-/// The host chooses an exact execution identity separately from idle restoration.
-pub(super) enum FooterUsageSelection<'a> {
+/// Selects transcript estimates and provider usage for a footer refresh.
+pub(super) enum FooterMetrics<'a> {
+    Opened { message_count: u64 },
     Latest,
     Exact(&'a str),
     Unavailable,
 }
 
-impl<'a> FooterUsageSelection<'a> {
+impl<'a> FooterMetrics<'a> {
+    /// A newest page ends at the exact append-only session sequence.
+    pub(super) fn opened(page: &SessionMessagePage) -> Self {
+        Self::Opened {
+            message_count: page.messages.last().map_or(0, |message| message.sequence),
+        }
+    }
+
     pub(super) fn run_id<'b>(&'b self, latest: Option<&'b str>) -> Option<&'b str> {
         match self {
             Self::Latest => latest,
             Self::Exact(run_id) => Some(*run_id),
-            Self::Unavailable => None,
+            Self::Opened { .. } | Self::Unavailable => None,
         }
     }
 }
 
-fn exact_usage_selection(run_id: Option<&str>) -> FooterUsageSelection<'_> {
-    run_id.filter(|run_id| !run_id.is_empty()).map_or(
-        FooterUsageSelection::Unavailable,
-        FooterUsageSelection::Exact,
-    )
+fn exact_usage_selection(run_id: Option<&str>) -> FooterMetrics<'_> {
+    run_id
+        .filter(|run_id| !run_id.is_empty())
+        .map_or(FooterMetrics::Unavailable, FooterMetrics::Exact)
 }
 
 pub(super) fn goal_result_usage_selection<'a>(
     result: &'a colossus_contracts::GoalRunResult,
     session_id: &str,
-) -> FooterUsageSelection<'a> {
+) -> FooterMetrics<'a> {
     if result.goal.session_id != session_id {
-        return FooterUsageSelection::Unavailable;
+        return FooterMetrics::Unavailable;
     }
     exact_usage_selection(result.iterations.last().map(|run| run.run_id.as_str()))
 }
@@ -37,7 +44,7 @@ pub(super) fn goal_result_usage_selection<'a>(
 pub(super) fn goal_outcome_usage_selection<'a>(
     outcome: &'a GoalRunOutcome,
     session_id: &str,
-) -> FooterUsageSelection<'a> {
+) -> FooterMetrics<'a> {
     match outcome {
         GoalRunOutcome::Completed { result } => goal_result_usage_selection(result, session_id),
         GoalRunOutcome::Cancelled {
@@ -45,19 +52,19 @@ pub(super) fn goal_outcome_usage_selection<'a>(
             cancellation,
         } => {
             if result.goal.session_id != session_id {
-                return FooterUsageSelection::Unavailable;
+                return FooterMetrics::Unavailable;
             }
             match cancellation.as_deref() {
                 Some(run) if run.session_id == session_id => {
                     exact_usage_selection(Some(run.run_id.as_str()))
                 }
-                Some(_) => FooterUsageSelection::Unavailable,
+                Some(_) => FooterMetrics::Unavailable,
                 None => goal_result_usage_selection(result, session_id),
             }
         }
         GoalRunOutcome::Failed { result, run_id, .. } => {
             if result.goal.session_id != session_id {
-                return FooterUsageSelection::Unavailable;
+                return FooterMetrics::Unavailable;
             }
             match run_id.as_deref() {
                 Some(run_id) => exact_usage_selection(Some(run_id)),
@@ -67,9 +74,9 @@ pub(super) fn goal_outcome_usage_selection<'a>(
     }
 }
 
-pub(super) fn plan_usage_selection(outcome: &PlanExecutionOutcome) -> FooterUsageSelection<'_> {
+pub(super) fn plan_usage_selection(outcome: &PlanExecutionOutcome) -> FooterMetrics<'_> {
     match outcome {
-        PlanExecutionOutcome::CancelledBeforeStart { .. } => FooterUsageSelection::Unavailable,
+        PlanExecutionOutcome::CancelledBeforeStart { .. } => FooterMetrics::Unavailable,
         PlanExecutionOutcome::Direct { terminal, .. } => {
             exact_usage_selection(Some(match terminal {
                 ControlledAgentTerminal::Completed { result } => result.run_id.as_str(),
@@ -143,17 +150,11 @@ mod tests {
     #[test]
     fn execution_selection_never_substitutes_the_sessions_latest_run() {
         assert_eq!(
-            FooterUsageSelection::Exact("execution").run_id(Some("unrelated")),
+            FooterMetrics::Exact("execution").run_id(Some("unrelated")),
             Some("execution")
         );
-        assert_eq!(
-            FooterUsageSelection::Unavailable.run_id(Some("unrelated")),
-            None
-        );
-        assert_eq!(
-            FooterUsageSelection::Latest.run_id(Some("latest")),
-            Some("latest")
-        );
+        assert_eq!(FooterMetrics::Unavailable.run_id(Some("unrelated")), None);
+        assert_eq!(FooterMetrics::Latest.run_id(Some("latest")), Some("latest"));
     }
 
     fn goal_result(runs: &[&str]) -> colossus_contracts::GoalRunResult {

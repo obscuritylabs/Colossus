@@ -52,7 +52,10 @@ storage and local ownership contract.
 ## Derived state
 
 - Session discovery, work lists, and other projections are rebuildable read models.
-- Canonical session messages are reconstructed from their streams.
+- Session discovery reads ordered active and archived summaries from
+  `session-catalog-v1`. The same projection maps message sequences to positions in
+  canonical session streams. A transcript page reads a bounded range of positions
+  and decrypts the messages it needs, including one lookahead at the page boundary.
 - Tantivy stores disposable memory candidate projections, not lifecycle truth.
 - Audit exporters consume a durable outbox and expose ciphertext-free evidence.
 - Each external-work consumer has an independent optimistic position and retry state.
@@ -64,6 +67,22 @@ storage and local ownership contract.
 
 Rebuild replays canonical events. It never imports an unrelated store or turns a
 projection into authority.
+
+Existing journals build the catalog from their durable outbox during background
+maintenance. Until it is current, discovery reads the existing session summaries
+in pages and checks canonical lifecycle records for archive membership. It keeps
+one page of summaries and the requested results in memory. A human preview is
+available once the ordered catalog has processed every message for that session.
+Reads can advance events committed since open. Writes also make bounded progress
+on small pending tails in a populated catalog. Background maintenance handles the
+older backlog. Opening a known conversation can use small reverse stream reads
+while the catalog catches up. An older cursor may read past newer messages during
+this transition.
+
+Once the catalog is current, recent, archived, and latest queries seek directly
+to bounded summary rows, and older pages seek to their cursors. Catalog rows
+carry session titles and bounded scalar human-message previews. Multipart prompt
+text is available from the canonical transcript.
 
 ### Unfinished provider exchanges
 

@@ -366,6 +366,111 @@ async fn idle_tui_launches_stay_out_of_history_in_both_hosts() {
     fixture.stop().await;
 }
 
+async fn assert_session_open_defers_metrics(host: &dyn InteractiveHost) {
+    const PROMPT: &str = "Calculate the context only when requested";
+    let first = host.bootstrap(BootstrapRequest::default()).await.unwrap();
+    fixture_turn(host, &first.session_id, PROMPT).await.unwrap();
+    let current = host.bootstrap(BootstrapRequest::default()).await.unwrap();
+    let request = BootstrapRequest {
+        session_id: Some(first.session_id.clone()),
+        resume_latest: false,
+    };
+    let opened = host.bootstrap(request.clone()).await.unwrap();
+    let latest = host
+        .bootstrap(BootstrapRequest {
+            session_id: None,
+            resume_latest: true,
+        })
+        .await
+        .unwrap();
+    let switched = command(host, &current.session_id, "resume", &first.session_id).await;
+    let (selected, page, _) = switched.session.expect("selected session");
+    let switched_footer = switched.footer.expect("selected session footer");
+    assert_eq!(selected, first.session_id);
+    let count = page.messages.last().expect("saved messages").sequence;
+    for footer in [&opened.footer, &latest.footer, &switched_footer] {
+        assert_eq!(footer.message_count, count);
+        assert!(footer.context.is_none());
+        assert!(footer.usage.is_none());
+    }
+    assert_eq!(latest.session_id, first.session_id);
+    assert_eq!(opened.transcript, page);
+
+    let status = command(host, &first.session_id, "context", "status").await;
+    let [PresentationBlock::Card { title, body, .. }] = status.document.blocks.as_slice() else {
+        panic!("expected the context status card");
+    };
+    assert_eq!(title, "Context");
+    let [PresentationBlock::KeyValue(fields)] = body.as_slice() else {
+        panic!("expected context status fields");
+    };
+    assert!(fields.iter().any(|(key, value)| {
+        key == "Tokens"
+            && value
+                .split_once(" / ")
+                .is_some_and(|(used, _)| used.parse::<u64>().is_ok_and(|used| used > 0))
+    }));
+
+    host.set_session_archived(&first.session_id, true)
+        .await
+        .unwrap();
+    assert!(
+        host.bootstrap(request.clone())
+            .await
+            .unwrap_err()
+            .contains("archived")
+    );
+    let (events, _receiver) = mpsc::channel(8);
+    let Err(error) = host
+        .execute_command(
+            RuntimeCommand::Known {
+                name: "resume".into(),
+                arguments: first.session_id.clone(),
+            },
+            &current.session_id,
+            &[],
+            None,
+            events,
+            RunControl::default(),
+        )
+        .await
+    else {
+        panic!("archived session cannot be opened");
+    };
+    assert!(error.contains("archived"));
+    let preview = host.preview_session(&first.session_id).await.unwrap();
+    assert!(preview.iter().any(|message| message.content == PROMPT));
+
+    host.set_session_archived(&first.session_id, false)
+        .await
+        .unwrap();
+    let restored = host.bootstrap(request).await.unwrap();
+    assert_eq!(restored.footer, opened.footer);
+    assert_eq!(restored.transcript, opened.transcript);
+
+    assert!(
+        host.bootstrap(BootstrapRequest {
+            session_id: Some("missing-session".into()),
+            resume_latest: false,
+        })
+        .await
+        .unwrap_err()
+        .contains("not found")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn opening_a_saved_tui_session_defers_metrics_in_both_hosts() {
+    let embedded = tempfile::tempdir().expect("embedded fixture directory");
+    let (host, _) = embedded_host(embedded.path());
+    assert_session_open_defers_metrics(host.as_ref()).await;
+
+    let worker = tempfile::tempdir().expect("worker fixture directory");
+    let fixture = WorkerFixture::open(worker.path()).await;
+    assert_session_open_defers_metrics(fixture.host.as_ref()).await;
+    fixture.stop().await;
+}
+
 fn unacknowledged_full_access_fixture(root: &Path) -> RuntimeConfig {
     let mut config = fixture_config(root);
     config.sandbox.backend = "danger_full_access".into();

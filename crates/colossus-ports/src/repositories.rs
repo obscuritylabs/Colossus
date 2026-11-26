@@ -9,6 +9,36 @@ pub trait AggregateRepository: Send + Sync {
     fn list(&self, limit: usize) -> Result<Vec<Value>, StoreError>;
 }
 
+/// Rebuildable read model for session discovery and locating canonical messages.
+pub trait SessionCatalog: Send + Sync {
+    /// List bounded session summaries in descending update time and ID order.
+    fn recent(&self, archived: bool, limit: usize) -> Result<Vec<SessionSummary>, StoreError>;
+
+    /// Locate at most `limit` messages below the exclusive message sequence, newest first.
+    /// Return `None` when a usable index is unavailable.
+    fn message_positions(
+        &self,
+        _id: &str,
+        _before_sequence: Option<u64>,
+        _limit: usize,
+    ) -> Result<Option<Vec<SessionMessagePosition>>, StoreError> {
+        Ok(None)
+    }
+
+    /// Advance the read model after a successful canonical write when possible.
+    fn session_committed(&self) {}
+}
+
+/// An indexed message coordinate in one canonical session stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionMessagePosition {
+    /// One-based message sequence, excluding non-message events.
+    pub sequence: u64,
+    /// One-based event version in the full session stream.
+    pub stream_version: u64,
+}
+
 /// Canonical event-sourced session and append-only message repository.
 pub trait SessionRepository: Send + Sync {
     /// Create an empty durable session with a caller-supplied stable id.
@@ -22,11 +52,16 @@ pub trait SessionRepository: Send + Sync {
     /// Set the current session title with an audited canonical event.
     fn set_title(&self, id: &str, title: &str, actor: Actor) -> Result<SessionSummary, StoreError>;
 
-    /// Reconstruct one session summary from canonical events.
+    /// Read the current summary for one exact session.
     fn get_session(&self, id: &str) -> Result<Option<SessionSummary>, StoreError>;
 
-    /// List recent unarchived reconstructed sessions, newest first.
+    /// List recent unarchived sessions, newest first.
     fn list_sessions(&self, limit: usize) -> Result<Vec<SessionSummary>, StoreError>;
+
+    /// Read the latest unarchived session using the same ordering as the recent list.
+    fn latest_session(&self) -> Result<Option<SessionSummary>, StoreError> {
+        Ok(self.list_sessions(1)?.into_iter().next())
+    }
 
     /// List archived native sessions without altering their conversation history.
     fn list_archived_sessions(&self, _limit: usize) -> Result<Vec<SessionSummary>, StoreError> {

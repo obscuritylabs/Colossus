@@ -309,9 +309,7 @@ impl Runtime {
     /// Resolve the most recently updated session.
     pub fn latest_session(&self) -> Result<SessionSummary, RuntimeError> {
         self.sessions
-            .list_sessions(1)?
-            .into_iter()
-            .next()
+            .latest_session()?
             .ok_or_else(|| RuntimeError::Store(StoreError::NotFound("no sessions exist".into())))
     }
 

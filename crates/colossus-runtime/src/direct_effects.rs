@@ -300,7 +300,11 @@ impl Runtime {
         let _entered = span.enter();
         let outcome: Result<(), RuntimeError> = (|| {
             let projection_started = Instant::now();
-            let projections = self.drain_projections()?;
+            let projections = self.projections.drain_selected(
+                256,
+                16_384,
+                crate::session_catalog::required_for_open_and_checkpoint,
+            )?;
             span.record(
                 "colossus.checkpoint.projection_applied",
                 projections.applied,

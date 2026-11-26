@@ -38,12 +38,15 @@ fn merge_event(
     Ok(Value::Object(current))
 }
 
+/// Stable projection of existing session summaries.
+pub const SESSION_SUMMARY_PROJECTION: &str = "sessions-v1";
+
 /// Session aggregate reducer.
 pub struct SessionProjection;
 
 impl ProjectionHandler for SessionProjection {
     fn name(&self) -> &'static str {
-        "sessions-v1"
+        SESSION_SUMMARY_PROJECTION
     }
 
     fn applies_to(&self, event: &EventEnvelope) -> bool {

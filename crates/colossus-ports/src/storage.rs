@@ -1,4 +1,5 @@
 use super::*;
+use colossus_contracts::ProjectionMutation;
 
 /// Trusted distributed ownership boundary for one effect-capable runtime.
 ///
@@ -60,6 +61,35 @@ pub trait CheckpointSigner: Send + Sync {
 
     /// Verify a checkpoint signature.
     fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), StoreError>;
+}
+
+/// Pure event-to-projection reducer.
+pub trait ProjectionHandler: Send + Sync {
+    /// Stable name containing a schema version.
+    fn name(&self) -> &'static str;
+
+    /// Return whether this event can change the projection.
+    fn applies_to(&self, _event: &EventEnvelope) -> bool {
+        true
+    }
+
+    /// Return whether projection logic needs the decrypted event payload.
+    fn requires_payload(&self) -> bool {
+        true
+    }
+
+    /// Return whether this particular event needs a decrypted payload.
+    fn requires_event_payload(&self, _event: &EventEnvelope) -> bool {
+        self.requires_payload()
+    }
+
+    /// Produce mutations using a read-only view that includes earlier events in the batch.
+    fn project(
+        &self,
+        store: &dyn ProjectionStore,
+        event: &EventEnvelope,
+        payload: &Value,
+    ) -> Result<Vec<ProjectionMutation>, StoreError>;
 }
 
 /// Disposable projection state.

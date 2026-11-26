@@ -14,13 +14,13 @@ impl ProjectedSessionRepository {
 
 impl AggregateRepository for ProjectedSessionRepository {
     fn get(&self, id: &str) -> Result<Option<Value>, StoreError> {
-        self.store.get("sessions-v1", id)
+        self.store.get(SESSION_SUMMARY_PROJECTION, id)
     }
 
     fn list(&self, limit: usize) -> Result<Vec<Value>, StoreError> {
         Ok(self
             .store
-            .list("sessions-v1", "", limit)?
+            .list(SESSION_SUMMARY_PROJECTION, "", limit)?
             .into_iter()
             .map(|(_, value)| value)
             .collect())

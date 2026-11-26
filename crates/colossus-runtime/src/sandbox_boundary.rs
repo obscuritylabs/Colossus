@@ -6,7 +6,7 @@ impl Runtime {
         &self,
         session_id: &str,
     ) -> Result<Option<SandboxBoundaryMode>, RuntimeError> {
-        if self.get_session(session_id)?.is_none() {
+        if self.session_lifecycle(session_id)?.is_none() {
             return Err(RuntimeError::Store(StoreError::NotFound(format!(
                 "session {session_id} was not found"
             ))));

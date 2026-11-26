@@ -36,9 +36,6 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         "/dictate microphones".into(),
     ]);
     observe_lifecycle(&state, lifecycle.as_deref());
-    if screen_mode == ScreenMode::Inline {
-        preload_native_history(&mut state, Arc::clone(&host)).await;
-    }
     let picker = preview_picker(screen_mode);
     state.preview_cache.set_picker(picker);
     let (mut state, mut event_rx) = crate::workspace::Workspace::new(screen_mode, state);
@@ -378,49 +375,6 @@ fn continue_native_history_preload(
     }
     state.native_history_pages_loaded += 1;
     request_older_page(state, host, event_tx);
-}
-
-async fn preload_native_history(state: &mut TuiState, host: Arc<dyn InteractiveHost>) {
-    for _ in 0..MAX_NATIVE_HISTORY_PAGES {
-        if !state.has_more {
-            return;
-        }
-        let Some(before_sequence) = state.before_sequence else {
-            state.append_entry(error_entry(
-                "Older transcript history advertised no continuation cursor; native scrollback starts at the oldest safely loaded page.",
-            ));
-            state.has_more = false;
-            return;
-        };
-        let page = match host
-            .older_messages(&state.session_id, before_sequence)
-            .await
-        {
-            Ok(page) => page,
-            Err(error) => {
-                state.append_entry(error_entry(&format!(
-                    "Older transcript history could not be restored into native scrollback: {error}"
-                )));
-                state.has_more = false;
-                return;
-            }
-        };
-        if page.has_more
-            && (page.messages.is_empty() || page.before_sequence == Some(before_sequence))
-        {
-            state.append_entry(error_entry(
-                "Older transcript history did not advance its continuation cursor; loading stopped safely.",
-            ));
-            state.has_more = false;
-            return;
-        }
-        state.prepend_page(page);
-    }
-    if state.has_more {
-        state.append_entry(native_history_limit_entry());
-        state.has_more = false;
-        state.before_sequence = None;
-    }
 }
 
 fn native_history_limit_entry() -> TranscriptEntry {
@@ -1137,7 +1091,22 @@ pub(super) fn request_older_page(
     state.loading_older = true;
     let session_id = state.session_id.clone();
     tokio::spawn(async move {
-        let result = host.older_messages(&session_id, before_sequence).await;
+        let result = host
+            .older_messages(&session_id, before_sequence)
+            .await
+            .and_then(|page| {
+                if page.has_more
+                    && (page.messages.is_empty()
+                        || page
+                            .before_sequence
+                            .is_none_or(|cursor| cursor >= before_sequence))
+                {
+                    return Err(
+                        "Older transcript history did not advance its continuation cursor.".into(),
+                    );
+                }
+                Ok(page)
+            });
         let _ = event_tx.send(HostEvent::OlderPage(result)).await;
     });
 }
@@ -1905,6 +1874,9 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
             state.append_entry(error_entry(&format!("History was not persisted: {error}")))
         }
         HostEvent::OlderPage(result) => {
+            if !state.loading_older {
+                return;
+            }
             if matches!(state.overlay, Some(Overlay::ToolDetails(_))) {
                 state.overlay = None;
             }

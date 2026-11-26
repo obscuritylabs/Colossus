@@ -96,6 +96,36 @@ fn open_snapshot(workspace: &mut Workspace, id: &str) {
     workspace.receive(WorkspaceEvent::Opened(Box::new(Ok(source(id)))), host());
 }
 
+#[tokio::test]
+async fn clearing_inline_view_discards_an_in_flight_history_page() {
+    let (mut workspace, _) =
+        Workspace::new(ScreenMode::Inline, TuiState::from_snapshot(source("alpha")));
+    workspace.before_sequence = Some(101);
+    workspace.has_more = true;
+    workspace.loading_older = true;
+    let mut clear = HostCommandResult::document(PresentationDocument::new());
+    clear.clear_transcript = true;
+    workspace.receive(
+        WorkspaceEvent::Session {
+            id: "alpha".into(),
+            event: Box::new(HostEvent::OperationFinished(Box::new(Ok(
+                OperationResult::Command(clear),
+            )))),
+        },
+        host(),
+    );
+    workspace.receive(
+        WorkspaceEvent::Session {
+            id: "alpha".into(),
+            event: Box::new(HostEvent::OlderPage(Err("late page".into()))),
+        },
+        host(),
+    );
+    assert_eq!(workspace.before_sequence, None);
+    assert!(!workspace.has_more && !workspace.loading_older);
+    assert!(!text(&workspace).contains("late page"));
+}
+
 fn delta(id: &str, text: &str) -> HostEvent {
     HostEvent::Run(RunEventEnvelope {
         schema_version: 1,

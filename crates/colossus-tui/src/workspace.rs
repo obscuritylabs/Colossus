@@ -246,6 +246,13 @@ impl Workspace {
                     let selection = match &mut event {
                         HostEvent::OperationFinished(result) => match result.as_mut() {
                             Ok(OperationResult::Command(result)) => {
+                                if self.screen_mode == ScreenMode::Inline && result.clear_transcript
+                                {
+                                    // An older page may still be in flight when the user clears the view.
+                                    state.has_more = false;
+                                    state.before_sequence = None;
+                                    state.loading_older = false;
+                                }
                                 let selection = result.session.take().map(|session| session.0);
                                 if selection
                                     .as_ref()
