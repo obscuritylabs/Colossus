@@ -18,9 +18,10 @@ use colossus_journal_sql::{SqlEventJournal, SqlJournalBackend};
 use colossus_ports::{
     EventJournal, KeyProvider, ProjectionStore, SessionRepository, StoreError, VerificationReport,
 };
-use colossus_projection::{ProjectionWorker, default_handlers};
+use colossus_projection::{ProjectionWorker, SESSION_SUMMARY_PROJECTION, default_handlers};
 use colossus_session::{
-    EventSourcedSessionRepository, IndexedSessionCatalog, SessionCatalogProjection,
+    EventSourcedSessionRepository, IndexedSessionCatalog, SESSION_CATALOG_PROJECTION,
+    SessionCatalogProjection,
 };
 use serde_json::Value;
 
@@ -97,10 +98,9 @@ fn assert_read_budgets(backend: Backend) {
     assert!(!reopened.is_recovery_mode(), "{backend:?}");
     let journal = Arc::new(ObservedReads::new(reopened.clone()));
     let legacy = EventSourcedSessionRepository::new(journal.clone());
-    let repository: Box<dyn SessionRepository> = Box::new(
-        EventSourcedSessionRepository::new(journal.clone())
-            .with_catalog(Arc::new(IndexedSessionCatalog::new(reopened))),
-    );
+    let index = Arc::new(IndexedSessionCatalog::new(reopened.clone()));
+    let repository: Box<dyn SessionRepository> =
+        Box::new(EventSourcedSessionRepository::new(journal.clone()).with_catalog(index.clone()));
 
     // Exercise each query separately so one implementation cannot hide the other's work.
     let (recent, list_cost) = journal.measure(|| repository.list_sessions(2).unwrap());
@@ -124,6 +124,50 @@ fn assert_read_budgets(backend: Backend) {
         Some(MULTIPART_TEXT)
     );
     assert_eq!(archived, canonical_archive);
+
+    // Exercise the same metadata fallback used on upgrade with a durable legacy
+    // summary projection and a missing ordered catalog.
+    reopened.reset(SESSION_CATALOG_PROJECTION).unwrap();
+    for (include_archived, limit, mut expected) in [
+        (false, 2, recent.clone()),
+        (false, 1, vec![latest.clone().unwrap()]),
+        (true, 1, archived.clone()),
+    ] {
+        for summary in &mut expected {
+            summary.last_user_preview = None;
+        }
+        let (fallback, cost) = journal.measure(|| {
+            index
+                .recent_from_projected_summaries(
+                    journal.as_ref(),
+                    SESSION_SUMMARY_PROJECTION,
+                    include_archived,
+                    limit,
+                    None,
+                )
+                .unwrap()
+        });
+        assert_eq!(fallback, expected, "{backend:?}");
+        assert_eq!(cost.complete_stream_reads, 0, "{backend:?}: {cost:?}");
+        assert_eq!(cost.global_reads, 0, "{backend:?}: {cost:?}");
+        assert_eq!(cost.outbox_reads, 0, "{backend:?}: {cost:?}");
+        assert_eq!(cost.message_decryptions, 0, "{backend:?}: {cost:?}");
+        assert_eq!(cost.stream_enumerations, 1, "{backend:?}: {cost:?}");
+        assert!(cost.largest_range <= 1, "{backend:?}: {cost:?}");
+    }
+    assert_eq!(reopened.position(SESSION_CATALOG_PROJECTION).unwrap(), 0);
+    let mut handlers = default_handlers();
+    handlers.push(Arc::new(SessionCatalogProjection));
+    assert!(
+        ProjectionWorker::new(reopened.clone(), reopened, handlers)
+            .unwrap()
+            .drain(32, 32)
+            .unwrap()
+            .projections
+            .iter()
+            .all(|status| status.ready)
+    );
+
     let archived_page = repository
         .list_messages_page("saved-archive", None, 1, PAGE_BYTES)
         .unwrap();
@@ -255,6 +299,8 @@ fn seed(journal: Arc<dyn EventJournal>) {
 struct QueryCost {
     complete_stream_reads: usize,
     stream_enumerations: usize,
+    global_reads: usize,
+    outbox_reads: usize,
     ranged_envelopes: usize,
     largest_range: usize,
     message_decryptions: usize,
@@ -264,6 +310,8 @@ struct ObservedReads {
     journal: Arc<dyn EventJournal>,
     complete_stream_reads: AtomicUsize,
     stream_enumerations: AtomicUsize,
+    global_reads: AtomicUsize,
+    outbox_reads: AtomicUsize,
     ranged_envelopes: AtomicUsize,
     largest_range: AtomicUsize,
     message_decryptions: AtomicUsize,
@@ -275,6 +323,8 @@ impl ObservedReads {
             journal,
             complete_stream_reads: AtomicUsize::new(0),
             stream_enumerations: AtomicUsize::new(0),
+            global_reads: AtomicUsize::new(0),
+            outbox_reads: AtomicUsize::new(0),
             ranged_envelopes: AtomicUsize::new(0),
             largest_range: AtomicUsize::new(0),
             message_decryptions: AtomicUsize::new(0),
@@ -291,6 +341,8 @@ impl ObservedReads {
         QueryCost {
             complete_stream_reads: self.complete_stream_reads.swap(0, Ordering::Relaxed),
             stream_enumerations: self.stream_enumerations.swap(0, Ordering::Relaxed),
+            global_reads: self.global_reads.swap(0, Ordering::Relaxed),
+            outbox_reads: self.outbox_reads.swap(0, Ordering::Relaxed),
             ranged_envelopes: self.ranged_envelopes.swap(0, Ordering::Relaxed),
             largest_range: self.largest_range.swap(0, Ordering::Relaxed),
             message_decryptions: self.message_decryptions.swap(0, Ordering::Relaxed),
@@ -350,6 +402,7 @@ impl EventJournal for ObservedReads {
     }
 
     fn read_global(&self, from: u64, limit: usize) -> Result<Vec<EventEnvelope>, StoreError> {
+        self.global_reads.fetch_add(1, Ordering::Relaxed);
         let events = self.journal.read_global(from, limit)?;
         self.observe_range(events.len());
         Ok(events)
@@ -360,6 +413,7 @@ impl EventJournal for ObservedReads {
         from: u64,
         limit: usize,
     ) -> Result<Vec<ProjectionWorkItem>, StoreError> {
+        self.outbox_reads.fetch_add(1, Ordering::Relaxed);
         self.journal.read_projection_work(from, limit)
     }
 

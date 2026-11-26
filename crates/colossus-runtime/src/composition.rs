@@ -528,7 +528,7 @@ impl Runtime {
             Arc::clone(&journal),
             Arc::clone(&projection_store),
             Arc::clone(&projections),
-        ));
+        )?);
         let sessions: Arc<dyn SessionRepository> = Arc::new(
             EventSourcedSessionRepository::new(Arc::clone(&journal))
                 .with_catalog(session_catalog.clone()),
