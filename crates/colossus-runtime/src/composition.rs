@@ -115,6 +115,7 @@ pub struct Runtime {
     pub(super) plugin_store: Option<Arc<PluginStore>>,
     pub(super) plugin_configuration: Arc<PluginsConfig>,
     pub(super) plugin_catalog: Arc<PluginCatalogSource>,
+    pub(super) startup_plugin_skill_ids: Vec<String>,
     pub(super) plugin_credentials: Arc<dyn CredentialResolver>,
     pub(super) tls_roots: AdditionalRootCertificates,
     pub(super) plugin_executor: Arc<dyn EffectExecutor>,
@@ -464,18 +465,22 @@ impl Runtime {
             .transpose()?
             .map(Arc::new);
         let mut plugin_configuration = config.plugins.clone();
-        if let Some(store) = &plugin_store
-            && let Err(error) = store
-                .bootstrap_bundled(colossus_bundled_plugins::core_artifact()?, terminal_actor())
-        {
-            // Preserve an already recorded, corrupt core as an unavailable installation.
-            // Never replace its leased tree or fall back to an older bundled version.
-            if matches!(error, StoreError::Verification(_)) && store.bundled_digest()?.is_some() {
-                plugin_configuration.exclude.push("colossus".into());
-            } else {
-                return Err(error.into());
+        let startup_bundled = if let Some(store) = &plugin_store {
+            match store.bootstrap_bundled_for_startup(
+                colossus_bundled_plugins::core_artifact()?,
+                terminal_actor(),
+            ) {
+                Ok(bundled) => Some(bundled),
+                // Preserve an already recorded core as unavailable until verified again.
+                Err(StoreError::Verification(_)) if store.bundled_digest()?.is_some() => {
+                    plugin_configuration.exclude.push("colossus".into());
+                    None
+                }
+                Err(error) => return Err(error.into()),
             }
-        }
+        } else {
+            None
+        };
         let workspace_plugins = Arc::new(crate::workspace_plugins::WorkspacePlugins::new(
             &workspace,
             colossus_home.as_deref(),
@@ -499,7 +504,11 @@ impl Runtime {
             workspace: workspace.clone(),
             mcp_template: std::sync::OnceLock::new(),
         });
-        let (active_plugins, _startup_plugin_leases) = plugin_catalog.snapshot()?;
+        let (active_plugins, _startup_plugin_leases) = plugin_catalog.snapshot(startup_bundled)?;
+        let startup_plugin_skill_ids = active_plugins
+            .iter()
+            .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
+            .collect();
         let plugins = Arc::new(active_plugins);
         let active_plugin_extensions = compile_active_plugin_extensions(
             &plugins,
@@ -1207,6 +1216,7 @@ impl Runtime {
             plugin_store,
             plugin_configuration: Arc::new(plugin_configuration),
             plugin_catalog,
+            startup_plugin_skill_ids,
             plugin_credentials: provider_credentials,
             tls_roots,
             plugin_executor,

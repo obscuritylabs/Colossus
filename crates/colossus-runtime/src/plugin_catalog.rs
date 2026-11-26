@@ -1,7 +1,7 @@
 //! Immutable per-run plugin catalogs, distinct from live lifecycle management.
 
 use super::*;
-use colossus_plugins::WorkspacePluginGrant;
+use colossus_plugins::{StartupBundledPlugin, WorkspacePluginGrant};
 use std::future::Future;
 
 pub(super) fn narrow_plugin_inventory(
@@ -285,16 +285,18 @@ impl PluginCatalogSource {
 
     pub(super) fn snapshot(
         &self,
+        bundled: Option<StartupBundledPlugin>,
     ) -> Result<(Vec<AgentPluginRecord>, Vec<PluginSnapshotLease>), RuntimeError> {
         if !self.configuration.enabled {
             return Ok((Vec::new(), Vec::new()));
         }
-        self.snapshot_with_grants(&self.workspace_grants()?)
+        self.snapshot_with_grants(&self.workspace_grants()?, bundled)
     }
 
     pub(super) fn snapshot_with_grants(
         &self,
         grants: &BTreeMap<String, WorkspacePluginGrant>,
+        bundled: Option<StartupBundledPlugin>,
     ) -> Result<(Vec<AgentPluginRecord>, Vec<PluginSnapshotLease>), RuntimeError> {
         if !self.configuration.enabled {
             return Ok((Vec::new(), Vec::new()));
@@ -302,11 +304,14 @@ impl PluginCatalogSource {
         let mut leases = Vec::new();
         let mut icons = colossus_plugins::PluginIconBudget::default();
         let mut records = if let Some(store) = &self.store {
-            let (records, lease) = store.available_snapshot_with_icon_budget(
-                &self.configuration.include,
-                &self.configuration.exclude,
-                &mut icons,
-            )?;
+            let include = &self.configuration.include;
+            let exclude = &self.configuration.exclude;
+            let (records, lease) = match bundled {
+                Some(bundled) => {
+                    store.available_startup_snapshot(include, exclude, &mut icons, bundled)
+                }
+                None => store.available_snapshot_with_icon_budget(include, exclude, &mut icons),
+            }?;
             leases.push(lease);
             records
         } else {
@@ -327,7 +332,7 @@ impl PluginCatalogSource {
         if let Some(catalog) = active_plugin_catalog() {
             return Ok(catalog);
         }
-        let (records, leases) = self.snapshot()?;
+        let (records, leases) = self.snapshot(None)?;
         self.compile(records, leases)
     }
 

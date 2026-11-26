@@ -11,8 +11,8 @@ pub use discovery::{
 };
 mod snapshot;
 pub use snapshot::WorkspacePluginSnapshot;
+use snapshot::set_snapshot_mode;
 pub(crate) use snapshot::{MAX_SNAPSHOT_MANIFEST_BYTES, SNAPSHOT_MANIFEST, SnapshotManifest};
-use snapshot::{SnapshotFile, set_snapshot_mode};
 
 #[cfg(test)]
 mod tests;
@@ -211,7 +211,7 @@ fn capture_with_budget(
         candidate_remaining = candidate_remaining
             .checked_sub(size)
             .ok_or_else(|| adapter("workspace plugin discovery exceeds 256 MiB"))?;
-        captured_files.push(SnapshotFile {
+        captured_files.push(PluginTreeFile {
             path: posix_path(&relative)?,
             size,
             executable,

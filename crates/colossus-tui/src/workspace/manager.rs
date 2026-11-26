@@ -352,6 +352,7 @@ impl Workspace {
         id: &str,
         archived: bool,
         result: Result<Option<InteractiveSnapshot>, String>,
+        host: Arc<dyn InteractiveHost>,
     ) {
         self.archive_target = None;
         if id == self.active.session_id {
@@ -403,6 +404,7 @@ impl Workspace {
                     );
                     let mut next = TuiState::from_snapshot(snapshot);
                     self.inherit_preferences(&mut next);
+                    self.inherit_skill_completions(&mut next);
                     next.footer.approval_mode.clone_from(&self.approval_mode);
                     next.footer.approval_mode_revision = self.approval_mode_revision;
                     next.dictation.port = self.active.dictation.port.clone();
@@ -412,6 +414,9 @@ impl Workspace {
                     self.order.push(next_id.clone());
                     self.background.insert(next_id.clone(), next);
                     self.switch(&next_id);
+                    if host.refreshes_skill_completions(SkillCompletionRefresh::PaneOpened) {
+                        self.refresh_skill_completions(host);
+                    }
                 } else {
                     self.active.append_entry(error_entry(
                         "Archived session retained until a replacement can be opened.",

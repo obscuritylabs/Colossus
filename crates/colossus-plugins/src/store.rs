@@ -11,6 +11,7 @@ mod bundled;
 mod bundled_tests;
 mod inventory;
 mod workspace;
+pub use bundled::StartupBundledPlugin;
 pub use workspace::WorkspacePluginGrant;
 
 fn acquire_plugin_writer(path: PathBuf) -> Result<RedbWriterLease, StoreError> {
@@ -748,6 +749,7 @@ impl PluginStore {
             exclude,
             false,
             &mut crate::PluginIconBudget::default(),
+            None,
         )
     }
 
@@ -757,6 +759,7 @@ impl PluginStore {
         exclude: &[String],
         omit_unavailable: bool,
         icons: &mut crate::PluginIconBudget,
+        startup_bundled: Option<&StartupBundledPlugin>,
     ) -> Result<Vec<AgentPluginRecord>, StoreError> {
         let include = include.iter().map(String::as_str).collect::<BTreeSet<_>>();
         let exclude = exclude.iter().map(String::as_str).collect::<BTreeSet<_>>();
@@ -771,9 +774,13 @@ impl PluginStore {
             {
                 continue;
             }
-            match self
-                .load_verified_installation(&installation, icons.for_origin(installation.origin))
+            let budget = icons.for_origin(installation.origin);
+            let record = match startup_bundled.and_then(|bundled| bundled.record_for(&installation))
             {
+                Some(record) => record,
+                None => self.load_verified_installation(&installation, budget),
+            };
+            match record {
                 Ok(record) => records.push(record),
                 Err(_) if omit_unavailable => {} // Live inventory retains the component diagnostic.
                 Err(error) => return Err(error),
@@ -794,6 +801,7 @@ impl PluginStore {
             exclude,
             false,
             &mut crate::PluginIconBudget::default(),
+            None,
         )?;
         let lease = self.lease_records(&records)?;
         Ok((records, lease))
@@ -820,8 +828,29 @@ impl PluginStore {
         exclude: &[String],
         icons: &mut crate::PluginIconBudget,
     ) -> Result<(Vec<AgentPluginRecord>, PluginSnapshotLease), StoreError> {
+        self.available_snapshot_inner(include, exclude, icons, None)
+    }
+
+    /// Assemble the initial active catalog using bundled content verified during this startup.
+    pub fn available_startup_snapshot(
+        &self,
+        include: &[String],
+        exclude: &[String],
+        icons: &mut crate::PluginIconBudget,
+        bundled: StartupBundledPlugin,
+    ) -> Result<(Vec<AgentPluginRecord>, PluginSnapshotLease), StoreError> {
+        self.available_snapshot_inner(include, exclude, icons, Some(&bundled))
+    }
+
+    fn available_snapshot_inner(
+        &self,
+        include: &[String],
+        exclude: &[String],
+        icons: &mut crate::PluginIconBudget,
+        bundled: Option<&StartupBundledPlugin>,
+    ) -> Result<(Vec<AgentPluginRecord>, PluginSnapshotLease), StoreError> {
         let _writer = acquire_plugin_writer(self.state_path())?;
-        let records = self.snapshot_locked(include, exclude, true, icons)?;
+        let records = self.snapshot_locked(include, exclude, true, icons, bundled)?;
         let lease = self.lease_records(&records)?;
         Ok((records, lease))
     }

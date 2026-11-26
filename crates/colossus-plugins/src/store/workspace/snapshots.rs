@@ -99,56 +99,10 @@ impl PluginStore {
 }
 
 fn verify_snapshot_content(root: &Path, manifest: &SnapshotManifest) -> Result<(), StoreError> {
-    let mismatch = || {
-        StoreError::Verification(
-            "cached local plugin content is corrupt; restore the exact snapshot before use".into(),
-        )
-    };
-    let reader = ReadRoot::bind(root)?;
-    let mut paths = Vec::new();
-    collect_regular_files(root, root, 0, &mut paths)?;
-    let mut paths = paths
-        .into_iter()
-        .map(|path| posix_path(&path).map(|key| (key, path)))
-        .collect::<Result<Vec<_>, _>>()?;
-    paths.sort_by(|left, right| left.0.cmp(&right.0));
-    if paths.len() != manifest.files.len() {
-        return Err(mismatch());
-    }
-    let mut buffer = [0_u8; 64 * 1024];
-    for ((key, path), expected) in paths.iter().zip(&manifest.files) {
-        if *key != expected.path {
-            return Err(mismatch());
-        }
-        let mut file = reader.open_file(path, expected.size)?;
-        let metadata = file.metadata().map_err(adapter)?;
-        if metadata.len() != expected.size {
-            return Err(mismatch());
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mode = if expected.executable { 0o500 } else { 0o400 };
-            if metadata.permissions().mode() & 0o7777 != mode {
-                return Err(mismatch());
-            }
-        }
-        let mut hash = Sha256::new();
-        let mut size = 0_u64;
-        loop {
-            let read = file.read(&mut buffer).map_err(adapter)?;
-            if read == 0 {
-                break;
-            }
-            size = size
-                .checked_add(read as u64)
-                .filter(|size| *size <= expected.size)
-                .ok_or_else(mismatch)?;
-            hash.update(&buffer[..read]);
-        }
-        if size != expected.size || hex::encode(hash.finalize()) != expected.sha256 {
-            return Err(mismatch());
-        }
-    }
-    reader.revalidate()
+    verify_plugin_files(
+        root,
+        &manifest.files,
+        "cached local plugin content is corrupt; restore the exact snapshot before use",
+    )
+    .map(|_| ())
 }

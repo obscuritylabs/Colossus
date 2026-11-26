@@ -25,7 +25,7 @@ the owning crates and tests.
 | Search and source-backed research | `colossus-search`, `colossus-research`, `colossus-runtime` | [Web search](../use/web-search.md), [Deep research](../use/deep-research.md) | Search adapter, evidence/citation, and CLI research tests |
 | Workflows and triggers | `colossus-workflow`, `colossus-runtime` | [Workflow authoring](../extend/workflows/authoring.md), [Triggers and recovery](../extend/workflows/triggers-recovery.md) | Parser, control-flow, idempotency, compensation, and restart tests |
 | Always On Agent | Runtime standing-chat journal, local authenticated worker, managed Desktop host | [Desktop schedules](../desktop/schedules.md), [CLI reference](../reference/cli.md) | Owner and revision checks, durable wake reconciliation, authenticated CLI worker smoke, and Desktop request mapping |
-| Agent Plugins, integrations, standalone MCP, and release bundles | extension crates and runtime adapters | [Extend Colossus](../extend/index.md) | Upstream schema, confinement, OCI, Sigstore, registry, lifecycle, and live-adapter tests |
+| Agent Plugins, integrations, standalone MCP, and release bundles | extension crates and runtime adapters | [Extend Colossus](../extend/index.md) | Upstream schema, confinement, OCI, Sigstore, registry, lifecycle, and live-adapter tests. Bundled startup verification and authenticated CLI/TUI plugin lifecycle have dedicated regressions. |
 | Conditional documentation guidance | runtime configuration and instruction snapshots, bundled unabridged documentation reference | [Skills and plugins](../use/skills-plugins.md), [Plugin configuration](../reference/configuration/extensions.md) | Offline source-fidelity/completeness verification, documentation policy, instruction precedence, bounded multipart resource reads, and sidecar configuration tests |
 | Public API, worker, SDKs, and Desktop | API, gRPC, worker, SDK crates and `apps/desktop` | [Public API and SDKs](application-sdk.md), [Colossus Desktop](../desktop/index.md) | Protocol, enrollment, parity, sidecar, SDK, and Desktop tests |
 | Draft prompt suggestions | Runtime/API prediction service, worker/SDK/gRPC and Cloud adapters, `colossus-presentation`, `colossus-tui`, `apps/ui` | [Terminal UI](../use/terminal-ui.md), [Desktop work](../desktop/work.md), [Public API and SDKs](application-sdk.md) | Audited auxiliary inference, single-attempt settlement and usage isolation tests; capability and transport parity; editable-draft keyboard and lifecycle tests |
@@ -104,6 +104,14 @@ Their pending native checks remain separate from implementation and historical t
 | Compose deployment with Chat by default | Existing Control Plane API exercised for bootstrap, authentication and retained Chat; public runtime SDK contracts unchanged | Intentional difference: one-time PowerShell initialization followed by ordinary Compose commands; native CLI/TUI runtimes remain separate Fleet enrollments; no new Hosted Chat client command | Intentional difference: separately installed client; no embedded Compose installer or new Hosted Chat transport; existing Fleet GUI acceptance unverified | Intentional difference: separately installed extension; no embedded Compose installer or new Hosted Chat transport; existing Fleet GUI acceptance unverified | Supported: default Hosted Chat with Echo, verified HTTPS and SSE through the existing web app; API smoke tested, full rendered Chat acceptance unverified |
 
 Evidence and owned follow-ups:
+
+- **Plugin startup and skill completion.** The embedded TUI uses the startup
+  catalog for its first frame. The worker TUI fetches completions after the
+  first draw and uses the same authenticated inventory as explicit selection.
+  `crates/colossus-cli/tests/plugins_tui_smoke.rs` covers both hosts. Desktop's
+  Managed Local Terminal uses the worker host, and `desktop_owner` owns
+  packaged acceptance. Desktop's plugin GUI and the public API/SDK use live
+  inventory. VS Code and web have no shared terminal completion surface.
 
 - **GitHub pull request checks.** `colossus-integrations` owns the read operation
   and its evidence bounds. The authorized connection and runtime policy govern

@@ -29,8 +29,8 @@ use colossus_tui::{
     InteractivePrompt, InteractivePromptKind, InteractiveRunRequest, InteractiveSessionBrowser,
     InteractiveSessionBrowserEntry, InteractiveSessionBrowserMessage, InteractiveSnapshot,
     InteractiveThemePicker, InteractiveThemePickerEntry, PlanHostCommand, PlanSelectionUpdate,
-    PromptResponse, RuntimeCommand, sandbox_boundary_acknowledgement_choice,
-    sandbox_boundary_prompt,
+    PromptResponse, RuntimeCommand, SkillCompletionRefresh,
+    sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt,
 };
 use colossus_worker::{
     InteractiveWorkerRequest, SandboxBoundaryAcknowledgement, WorkerApprovalMode, WorkerClient,

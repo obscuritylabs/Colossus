@@ -53,6 +53,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     let mut terminal = OwnedTerminal::new(screen_mode, allow_native_clipboard)?;
     let mut agent_refresh = crate::agents::AgentRefresh::default();
     let mut last_terminal_size = crossterm::terminal::size().ok();
+    let mut refresh_startup_skills = true;
 
     loop {
         state.process_action(Arc::clone(&host));
@@ -65,6 +66,11 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         state.sync_rows();
         let (active, companion) = state.draw_parts();
         terminal.draw(active, companion)?;
+        if std::mem::take(&mut refresh_startup_skills)
+            && host.refreshes_skill_completions(SkillCompletionRefresh::Startup)
+        {
+            state.refresh_skill_completions(Arc::clone(&host));
+        }
         agent_refresh.schedule(&state, Arc::clone(&host), event_tx.clone());
         crate::next_prompt::schedule_next_prompt(&mut state, Arc::clone(&host), event_tx.clone());
         crate::dictation::tick(&mut state, event_tx.clone());
@@ -1870,6 +1876,7 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 state.overlay = Some(Overlay::ThemePicker(picker));
             }
         }
+        HostEvent::SkillCompletionsChanged => {}
         HostEvent::HistoryWarning(error) => {
             state.append_entry(error_entry(&format!("History was not persisted: {error}")))
         }
