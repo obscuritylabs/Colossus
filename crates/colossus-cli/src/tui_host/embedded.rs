@@ -536,7 +536,7 @@ impl EmbeddedInteractiveHost {
             "memory" => self.memory_command(arguments, session_id).await,
             "research" => self.research_command(arguments, session_id).await,
             "telemetry" => self.telemetry_command(arguments, session_id),
-            "plugins" => self.plugins_command(arguments).await,
+            "plugins" => self.plugins_command(arguments, events).await,
             "plugin" => self.plugin_command(arguments, sticky_skills).await,
             "context" if self.drafts.contains(session_id)? => Ok(HostCommandResult::document(
                 PresentationDocument::from_block(PresentationBlock::Text(
@@ -832,7 +832,21 @@ impl EmbeddedInteractiveHost {
         }
     }
 
-    async fn plugins_command(&self, arguments: &str) -> Result<HostCommandResult, String> {
+    fn live_skill_ids(&self) -> Result<Vec<String>, String> {
+        Ok(self
+            .runtime
+            .list_plugins()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .flat_map(|plugin| plugin.skills.into_iter().map(|skill| skill.id))
+            .collect())
+    }
+
+    async fn plugins_command(
+        &self,
+        arguments: &str,
+        events: &mpsc::Sender<HostEvent>,
+    ) -> Result<HostCommandResult, String> {
         let plugins = self
             .runtime
             .plugin_inventory()
@@ -844,17 +858,8 @@ impl EmbeddedInteractiveHost {
                     .manage_plugin(request)
                     .await
                     .map_err(|error| error.to_string())?;
-                let skills = self
-                    .runtime
-                    .list_plugins()
-                    .map_err(|error| error.to_string())?
-                    .iter()
-                    .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
-                    .collect::<Vec<_>>();
-                return Ok(HostCommandResult {
-                    completions: Some(terminal_completion_values(&skills, &self.themes)),
-                    ..self.result(&result, Some("Plugins"))?
-                });
+                let _ = events.send(HostEvent::SkillCompletionsChanged).await;
+                return self.result(&result, Some("Plugins"));
             }
             PluginsCommand::List => plugins_document(&plugins),
             PluginsCommand::Show(name) => plugin_document(
@@ -1343,6 +1348,14 @@ impl EmbeddedInteractiveHost {
 
 #[async_trait]
 impl InteractiveHost for EmbeddedInteractiveHost {
+    fn refreshes_skill_completions(&self, refresh: SkillCompletionRefresh) -> bool {
+        refresh == SkillCompletionRefresh::PaneOpened
+    }
+
+    async fn skill_completion_ids(&self) -> Result<Option<Vec<String>>, String> {
+        self.live_skill_ids().map(Some)
+    }
+
     async fn save_support_report(
         &self,
         output: PathBuf,
@@ -1519,13 +1532,6 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             .runtime
             .terminal_history(TERMINAL_HISTORY_CAPACITY)
             .map_err(|error| error.to_string())?;
-        let skill_names = self
-            .runtime
-            .list_plugins()
-            .map_err(|error| error.to_string())?
-            .iter()
-            .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
-            .collect::<Vec<_>>();
         Ok(InteractiveSnapshot {
             footer: self
                 .footer_with_metrics(&session_id, "ready", FooterMetrics::opened(&transcript))
@@ -1538,7 +1544,10 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             transcript,
             preferences,
             history,
-            completions: terminal_completion_values(&skill_names, &self.themes),
+            completions: terminal_completion_values(
+                self.runtime.startup_plugin_skill_ids(),
+                &self.themes,
+            ),
             security_posture: self.runtime.security_posture().clone(),
             pending_sandbox_boundary_acknowledgement,
         })
@@ -1649,13 +1658,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         control: RunControl,
     ) -> Result<HostRunResult, String> {
         let _operation = self.operations.enter(false).await?;
-        let skill_names = self
-            .runtime
-            .list_plugins()
-            .map_err(|error| error.to_string())?
-            .iter()
-            .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
-            .collect::<Vec<_>>();
+        let skill_names = self.live_skill_ids()?;
         let (prompt, explicit_skills) =
             crate::resolve_skill_mentions(&request.prompt, &skill_names);
         if prompt.trim().is_empty() {

@@ -400,87 +400,42 @@ fn extract_plugin_artifact_with_durability(
     fs::create_dir(destination).map_err(adapter)?;
     let mut cleanup = ExtractionGuard::new(destination);
     let config: AgentPluginOciConfig = serde_json::from_slice(&artifact.config).map_err(adapter)?;
-    // Include bounded tar headers/padding as well as declared file sizes. This also
-    // limits extended-header decompression before tar exposes an entry to us.
-    let decoder =
-        GzDecoder::new(artifact.layer.as_slice()).take(MAX_TOTAL_BYTES + (MAX_FILES as u64 * 2048));
-    let mut archive = Archive::new(decoder);
-    let mut seen = BTreeSet::new();
-    let mut total = 0_u64;
-    let mut count = 0_usize;
-    for entry in archive.entries().map_err(adapter)? {
-        let mut entry = entry.map_err(adapter)?;
-        let header = entry.header().clone();
-        let entry_type = header.entry_type();
-        if !matches!(entry_type, EntryType::Regular | EntryType::Directory) {
-            return extraction_failure(
-                destination,
-                "OCI plugin layers reject links and special files",
-            );
-        }
-        let path = entry.path().map_err(adapter)?.into_owned();
-        validate_archive_path(&path, &config.name)?;
-        if !seen.insert(posix_path(&path)?) {
-            return extraction_failure(destination, "plugin archive contains duplicate paths");
-        }
-        let relative = path.strip_prefix(&config.name).map_err(adapter)?;
-        if relative.as_os_str().is_empty() {
-            if entry_type != EntryType::Directory {
-                return extraction_failure(destination, "plugin archive root must be a directory");
-            }
-            continue;
-        }
-        count = count.saturating_add(1);
-        if count > MAX_FILES {
-            return extraction_failure(destination, "plugin archive exceeds 10000 entries");
-        }
-        let size = header.size().map_err(adapter)?;
-        if size > MAX_FILE_BYTES {
-            return extraction_failure(destination, "plugin archive file exceeds 256 MiB");
-        }
-        total = total
-            .checked_add(size)
-            .ok_or_else(|| StoreError::Adapter("plugin archive size overflow".into()))?;
-        if total > MAX_TOTAL_BYTES {
-            return extraction_failure(destination, "plugin archive exceeds 2 GiB extracted");
-        }
-        let target = destination.join(relative);
-        if entry_type == EntryType::Directory {
-            fs::create_dir_all(&target).map_err(adapter)?;
-        } else {
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent).map_err(adapter)?;
-            }
-            let mut output = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&target)
-                .map_err(adapter)?;
-            std::io::copy(
-                &mut entry.by_ref().take(size.saturating_add(1)),
-                &mut output,
-            )
-            .map_err(adapter)?;
-            if output.metadata().map_err(adapter)?.len() != size {
-                return extraction_failure(destination, "plugin archive file size changed");
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                let mode = if header.mode().map_err(adapter)? & 0o111 != 0 {
-                    0o755
-                } else {
-                    0o644
-                };
-                output
-                    .set_permissions(fs::Permissions::from_mode(mode))
+    visit_plugin_layer(&artifact.layer, &config.name, |entry, bytes| {
+        let target = destination.join(entry.path);
+        match entry.kind {
+            ArchivePluginEntryKind::Directory => fs::create_dir_all(&target).map_err(adapter)?,
+            ArchivePluginEntryKind::Regular {
+                executable: _executable,
+            } => {
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent).map_err(adapter)?;
+                }
+                let mut output = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)
                     .map_err(adapter)?;
-            }
-            if matches!(durability, ExtractionDurability::Durable) {
-                output.sync_all().map_err(adapter)?;
+                let copied =
+                    std::io::copy(&mut bytes.take(entry.size.saturating_add(1)), &mut output)
+                        .map_err(adapter)?;
+                if copied != entry.size {
+                    return Err(adapter("plugin archive file size changed"));
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    let mode = if _executable { 0o755 } else { 0o644 };
+                    output
+                        .set_permissions(fs::Permissions::from_mode(mode))
+                        .map_err(adapter)?;
+                }
+                if matches!(durability, ExtractionDurability::Durable) {
+                    output.sync_all().map_err(adapter)?;
+                }
             }
         }
-    }
+        Ok(())
+    })?;
     // Extraction verifies component structure and identity; display normalization
     // belongs to discovery and must share its cumulative catalog budget.
     let record =
@@ -488,10 +443,133 @@ fn extract_plugin_artifact_with_durability(
     if record.installation.manifest.name != config.name
         || record.installation.manifest.version != config.version
     {
-        return extraction_failure(destination, "OCI config and plugin.json identity differ");
+        return Err(adapter("OCI config and plugin.json identity differ"));
     }
     cleanup.disarm();
     Ok(destination.to_owned())
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static BUNDLED_TREE_VERIFICATIONS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+pub(super) fn verify_bundled_artifact_tree(
+    artifact: &BuiltPluginArtifact,
+    destination: &Path,
+) -> Result<(ReadRoot, AgentPluginOciConfig), StoreError> {
+    validate_artifact_bytes(artifact)?;
+    let config: AgentPluginOciConfig = serde_json::from_slice(&artifact.config).map_err(adapter)?;
+    if config.name != "colossus" {
+        return Err(StoreError::Verification(
+            "bundled artifact requires the colossus plugin".into(),
+        ));
+    }
+    let mut files = Vec::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    visit_plugin_layer(&artifact.layer, &config.name, |entry, bytes| {
+        if let ArchivePluginEntryKind::Regular { executable } = entry.kind {
+            files.push(PluginTreeFile {
+                path: posix_path(entry.path)?,
+                size: entry.size,
+                executable,
+                sha256: hash_exact_file(
+                    bytes,
+                    entry.size,
+                    &mut buffer,
+                    "plugin archive file size changed",
+                )?,
+            });
+        }
+        Ok(())
+    })?;
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    #[cfg(test)]
+    BUNDLED_TREE_VERIFICATIONS.set(BUNDLED_TREE_VERIFICATIONS.get() + 1);
+    let reader = verify_plugin_files(
+        destination, &files,
+        "cached plugin content is corrupt; stop runs using this digest and restore the plugin content",
+    ).map_err(|error| match error {
+        StoreError::Verification(_) => error,
+        _ => StoreError::Verification(format!("cached bundled plugin content is corrupt or unavailable: {error}")),
+    })?;
+    Ok((reader, config))
+}
+
+struct ArchivePluginEntry<'a> {
+    path: &'a Path,
+    size: u64,
+    kind: ArchivePluginEntryKind,
+}
+
+enum ArchivePluginEntryKind {
+    Directory,
+    Regular { executable: bool },
+}
+
+fn visit_plugin_layer(
+    layer: &[u8],
+    name: &str,
+    mut visit: impl FnMut(ArchivePluginEntry<'_>, &mut dyn std::io::Read) -> Result<(), StoreError>,
+) -> Result<(), StoreError> {
+    // Include bounded tar headers/padding as well as declared file sizes. This also
+    // limits extended-header decompression before tar exposes an entry to us.
+    let decoder = GzDecoder::new(layer).take(MAX_TOTAL_BYTES + (MAX_FILES as u64 * 2048));
+    let mut archive = Archive::new(decoder);
+    let mut seen = BTreeSet::new();
+    let mut total = 0_u64;
+    let mut count = 0_usize;
+    for entry in archive.entries().map_err(adapter)? {
+        let mut entry = entry.map_err(adapter)?;
+        let header = entry.header();
+        let entry_type = header.entry_type();
+        if !matches!(entry_type, EntryType::Regular | EntryType::Directory) {
+            return Err(adapter("OCI plugin layers reject links and special files"));
+        }
+        let path = entry.path().map_err(adapter)?.into_owned();
+        validate_archive_path(&path, name)?;
+        if !seen.insert(posix_path(&path)?) {
+            return Err(adapter("plugin archive contains duplicate paths"));
+        }
+        let relative = path.strip_prefix(name).map_err(adapter)?;
+        if relative.as_os_str().is_empty() {
+            if entry_type != EntryType::Directory {
+                return Err(adapter("plugin archive root must be a directory"));
+            }
+            continue;
+        }
+        count = count.saturating_add(1);
+        if count > MAX_FILES {
+            return Err(adapter("plugin archive exceeds 10000 entries"));
+        }
+        let size = header.size().map_err(adapter)?;
+        if size > MAX_FILE_BYTES {
+            return Err(adapter("plugin archive file exceeds 256 MiB"));
+        }
+        total = total
+            .checked_add(size)
+            .ok_or_else(|| StoreError::Adapter("plugin archive size overflow".into()))?;
+        if total > MAX_TOTAL_BYTES {
+            return Err(adapter("plugin archive exceeds 2 GiB extracted"));
+        }
+        let kind = if entry_type == EntryType::Directory {
+            ArchivePluginEntryKind::Directory
+        } else {
+            ArchivePluginEntryKind::Regular {
+                executable: header.mode().map_err(adapter)? & 0o111 != 0,
+            }
+        };
+        visit(
+            ArchivePluginEntry {
+                path: relative,
+                size,
+                kind,
+            },
+            &mut entry,
+        )?;
+    }
+    Ok(())
 }
 
 fn validate_artifact_bytes(artifact: &BuiltPluginArtifact) -> Result<(), StoreError> {

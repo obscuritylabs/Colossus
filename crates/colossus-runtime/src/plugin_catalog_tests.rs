@@ -228,6 +228,15 @@ async fn core_catalog_is_home_scoped_metadata_only_and_stable_for_an_active_run(
     let catalog = runtime.plugin_catalog.capture().expect("snapshot");
     assert_eq!(catalog.records.len(), 1);
     assert_eq!(catalog.records[0].skills.len(), 5);
+    assert_eq!(
+        runtime.startup_plugin_skill_ids(),
+        catalog.records[0]
+            .skills
+            .iter()
+            .map(|skill| skill.id.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(isolated.startup_plugin_skill_ids().is_empty());
     let metadata = runtime
         .compose_plugin_skills("base", &[], &[])
         .expect("metadata");
@@ -325,6 +334,8 @@ fn workspace_exclusions_do_not_mutate_global_core_enablement() {
         &["colossus".into()],
     );
     assert_eq!(included.list_plugins().expect("included").len(), 1);
+    assert!(!included.startup_plugin_skill_ids().is_empty());
+    assert!(excluded.startup_plugin_skill_ids().is_empty());
     assert!(excluded.list_plugins().expect("excluded").is_empty());
     let inventory = excluded.plugin_inventory().expect("inventory");
     assert_eq!(
@@ -374,21 +385,35 @@ fn child_snapshot_identity_binds_catalog_and_exact_skill_selections() {
     assert_eq!(restored.plugin_digests(), original.plugin_digests());
 }
 
-#[cfg(unix)]
 #[test]
+#[cfg_attr(
+    not(unix),
+    allow(
+        clippy::permissions_set_readonly_false,
+        reason = "the non-Unix corruption fixture only clears the read-only flag"
+    )
+)]
 fn corrupt_core_is_diagnosed_without_stopping_unrelated_runtime_use_or_overwriting_content() {
-    use std::os::unix::fs::PermissionsExt as _;
     let temporary = private_tempdir();
     let root = temporary.path().canonicalize().expect("canonical root");
     let home = colossus_home::ColossusHome::ensure_at(root.join("home")).expect("home");
     let runtime = open(&root.join("first"), Some(home.root()), &[]);
     let catalog = runtime.plugin_catalog.capture().expect("leased snapshot");
     let path = Path::new(&catalog.records[0].installation.root).join("skills/coding/SKILL.md");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-        .expect("simulate disk corruption");
+    let original = fs::metadata(&path).expect("metadata").permissions();
+    let mut writable = original.clone();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        writable.set_mode(0o600);
+    }
+    #[cfg(not(unix))]
+    writable.set_readonly(false);
+    fs::set_permissions(&path, writable).expect("simulate disk corruption");
     fs::write(&path, b"corrupt content").expect("corrupt");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).expect("readonly");
+    fs::set_permissions(&path, original).expect("restore permissions");
     let reopened = open(&root.join("second"), Some(home.root()), &[]);
+    assert!(reopened.startup_plugin_skill_ids().is_empty());
     assert!(
         reopened
             .list_plugins()

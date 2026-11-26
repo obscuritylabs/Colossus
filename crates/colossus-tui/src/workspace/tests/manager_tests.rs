@@ -622,7 +622,7 @@ async fn archived_current_session_uses_prepared_replacement_and_releases_its_ope
     );
     workspace.catalog = vec![summary("alpha", "Archive Alpha")];
     workspace.workspace_archiving = true;
-    workspace.receive_archive("alpha", true, Ok(Some(source("replacement"))));
+    workspace.receive_archive("alpha", true, Ok(Some(source("replacement"))), host());
     assert_eq!(workspace.session_id, "replacement");
     assert!(!workspace.channels.contains_key("alpha"));
     assert!(!workspace.background.contains_key("alpha"));
@@ -635,7 +635,7 @@ async fn archived_current_session_uses_prepared_replacement_and_releases_its_ope
             .any(|entry| entry.id == "alpha")
     );
     workspace.open_manager(SessionTab::Archived);
-    workspace.receive_archive("alpha", false, Ok(None));
+    workspace.receive_archive("alpha", false, Ok(None), host());
     assert_eq!(workspace.workspace_manager.tab, SessionTab::History);
     assert_eq!(
         workspace.workspace_manager.selected.as_deref(),
@@ -686,7 +686,7 @@ async fn archiving_idle_background_state_does_not_cancel_another_sessions_microp
         .dictation
         .port = Some(microphone.clone());
     workspace.dictation.active = true;
-    workspace.receive_archive("alpha", true, Ok(None));
+    workspace.receive_archive("alpha", true, Ok(None), host());
     assert_eq!(workspace.session_id, "beta");
     assert!(workspace.dictation.active);
     assert_eq!(microphone.cancellations.load(Ordering::Relaxed), 0);

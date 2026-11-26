@@ -1144,6 +1144,12 @@ The owner-private `$COLOSSUS_HOME/plugins` store uses a dedicated redb writer le
 lifecycle changes and shared cross-process snapshot leases for immutable content. Disable,
 uninstall, and garbage collection cannot invalidate a running snapshot. Stable writable
 `PLUGIN_DATA` is separate from read-only content and is preserved unless purge is explicit.
+On warm startup, the bundled plugin store compares installed paths, sizes, and hashes
+against the executable's OCI layer using a retained no-follow reader. Unix verification
+also checks the exact read-only file mode. The initial catalog consumes the verified
+metadata under a digest lease. Live inventory, new run admission, and exact-digest
+restore verify the selected content again.
+
 Workspace discovery adds no ambient authority: fixed `.agents` locations and registered
 directories are metadata-only until request-bound source acceptance. The host records
 acceptance outside the repository, scoped to workspace identity, relative source path,

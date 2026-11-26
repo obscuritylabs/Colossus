@@ -174,6 +174,44 @@ fn concurrent_bootstrap_serializes_and_recovers_unjournaled_publication() {
 }
 
 #[test]
+fn warm_startup_reuses_one_verification_and_run_snapshots_verify_again() {
+    let home = tempfile::tempdir().expect("home");
+    let store = PluginStore::new(home.path()).expect("store");
+    let core = store
+        .bootstrap_bundled(artifact("1.0.0"), actor())
+        .expect("cold bootstrap");
+    // An existing cache must support warm discovery with no writable staging tree.
+    let staging = store.root.join("staging");
+    fs::remove_dir(&staging).expect("empty staging directory");
+    fs::write(&staging, b"staging sentinel").expect("block staging writes");
+    let before = oci::BUNDLED_TREE_VERIFICATIONS.get();
+    let startup = store
+        .bootstrap_bundled_for_startup(artifact("1.0.0"), actor())
+        .expect("warm bootstrap");
+    let (records, _lease) = store
+        .available_startup_snapshot(&[], &[], &mut crate::PluginIconBudget::default(), startup)
+        .expect("initial catalog");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].installation, core);
+    assert_eq!(records[0].skills[0].id, "colossus/test");
+    assert_eq!(oci::BUNDLED_TREE_VERIFICATIONS.get() - before, 1);
+
+    let (records, _lease) = store.snapshot_with_lease(&[], &[]).expect("run snapshot");
+    assert_eq!(records.len(), 1);
+    assert_eq!(oci::BUNDLED_TREE_VERIFICATIONS.get() - before, 2);
+    let exact = BTreeMap::from([("colossus".into(), core.digest)]);
+    let (records, _lease) = store
+        .snapshot_digests_with_lease(&exact)
+        .expect("exact restore");
+    assert_eq!(records.len(), 1);
+    assert_eq!(oci::BUNDLED_TREE_VERIFICATIONS.get() - before, 3);
+    assert_eq!(
+        fs::read(&staging).expect("staging sentinel"),
+        b"staging sentinel"
+    );
+}
+
+#[test]
 fn corrupt_content_is_never_reused_or_overwritten_even_when_leased() {
     let home = tempfile::tempdir().expect("home");
     let store = PluginStore::new(home.path()).expect("store");
@@ -199,7 +237,8 @@ fn corrupt_content_is_never_reused_or_overwritten_even_when_leased() {
         writable.set_readonly(false);
         fs::set_permissions(&path, writable).expect("simulate disk corruption");
     }
-    fs::write(&path, b"corrupted").expect("corrupt");
+    let corrupted = [0, 254, 0, 1];
+    fs::write(&path, corrupted).expect("same-size corruption");
     fs::set_permissions(&path, original).expect("restore permissions");
     assert!(
         store
@@ -209,7 +248,12 @@ fn corrupt_content_is_never_reused_or_overwritten_even_when_leased() {
             .contains("corrupt")
     );
     assert!(store.snapshot(&[], &[]).is_err());
-    assert_eq!(fs::read(&path).expect("not overwritten"), b"corrupted");
+    assert!(
+        store
+            .snapshot_digests_with_lease(&BTreeMap::from([("colossus".into(), core.digest)]))
+            .is_err()
+    );
+    assert_eq!(fs::read(&path).expect("installed file"), corrupted);
 }
 
 #[cfg(unix)]

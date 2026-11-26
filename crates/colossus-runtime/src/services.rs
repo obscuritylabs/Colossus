@@ -82,6 +82,13 @@ impl Runtime {
             .map_err(Into::into)
     }
 
+    /// Skill names from runtime startup for initial terminal completion display.
+    ///
+    /// Skill selection and execution use the current verified catalog.
+    pub fn startup_plugin_skill_ids(&self) -> &[String] {
+        &self.startup_plugin_skill_ids
+    }
+
     /// Discover the current workspace-filtered active set, or the scoped run snapshot.
     pub fn list_plugins(&self) -> Result<Vec<AgentPluginRecord>, RuntimeError> {
         Ok(self.plugin_catalog.capture()?.records.clone())
