@@ -24,20 +24,6 @@ pub(super) fn render_with_companion(
     screen_mode: ScreenMode,
     companion: Option<CompanionView<'_>>,
 ) {
-    let now = Instant::now();
-    let area = frame.area();
-    prepare_startup_animation(state, area, screen_mode, now);
-    if let Some(animation) = state.startup_animation.as_mut() {
-        // The entry screen owns the viewport; hidden workspace controls cannot
-        // receive clicks or create a selection until the normal UI is drawn.
-        state.agents.area = None;
-        state.workspace_hits.clear();
-        state.tool_hits.clear();
-        state.companion_area = None;
-        state.text_selection.regions.clear();
-        animation.render(frame.buffer_mut(), area, &state.preferences, now);
-        return;
-    }
     if let Some(recovery) = state.provider_recovery.as_mut() {
         recovery.clear_hit_areas();
     }
@@ -61,40 +47,6 @@ pub(super) fn render_with_companion(
     state.text_selection.regions.clear();
     render_content(frame, state, transcript_start, screen_mode, companion);
     state.text_selection.remember(frame.buffer_mut());
-}
-
-fn prepare_startup_animation(
-    state: &mut TuiState,
-    area: Rect,
-    screen_mode: ScreenMode,
-    now: Instant,
-) {
-    if state.startup_animation.is_none() {
-        return;
-    }
-    let eligible = screen_mode == ScreenMode::Alternate
-        && state.welcome_visible
-        && area.width >= crate::startup::MIN_SPLASH_WIDTH
-        && area.height >= crate::startup::MIN_SPLASH_HEIGHT
-        && state.transcript.is_empty()
-        && state.pending_sandbox_boundary_acknowledgement.is_none()
-        && !state.sandbox_boundary_acknowledgement_in_progress
-        && state.overlay.is_none()
-        && !state.workspace_center
-        && state.operation.is_none()
-        && state.provider_recovery.is_none()
-        && !state.selecting_text
-        && !state.text_selection.active()
-        && state.composer.draft.is_empty()
-        && state.scroll_from_bottom == 0;
-    if !eligible
-        || state
-            .startup_animation
-            .as_mut()
-            .is_some_and(|animation| !animation.prepare(now))
-    {
-        state.startup_animation = None;
-    }
 }
 
 fn render_content(

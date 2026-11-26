@@ -6,7 +6,6 @@ mod layout;
 mod model_picker;
 mod provider_recovery;
 mod shell;
-mod startup;
 mod tool_details;
 mod usage;
 mod workspace_prompts;

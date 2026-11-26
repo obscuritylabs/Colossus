@@ -118,7 +118,6 @@ mod session_browser;
 mod session_manager;
 mod settings_picker;
 mod sidebar;
-mod startup;
 mod state;
 mod support_report;
 mod terminal;

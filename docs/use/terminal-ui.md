@@ -18,9 +18,9 @@ leaving the terminal.
 colossus -w /absolute/path/to/repository
 ```
 
-`colossus tui` opens the same interface. A fresh conversation shows your workspace,
-model route, approval mode, and readiness state above the composer. Type a task and
-press Enter to start. For example:
+`colossus tui` opens the same interface. The first screen of a fresh conversation
+shows the composer along with your workspace, model route, approval mode, and
+readiness state. Type a task and press Enter to start. For example:
 
 > Explain how this repository handles configuration. Show me the relevant files.
 
@@ -29,15 +29,6 @@ A new conversation appears in History once you start work in it. See
 the TUI saves a draft. If your sandbox configuration requires a session
 acknowledgement, the TUI asks when you first submit work in a new conversation.
 See [Direct-execution acknowledgements](../reference/configuration/sandbox.md#direct-execution-acknowledgements).
-
-A fresh launch opens a centered entry screen: the Obscurity Labs crest spins,
-then settles above the assembling Colossus wordmark. The workspace appears after
-about 1.5 seconds. Typing or clicking skips the entry screen; typed input is kept
-in the composer. Background workspace initialization continues during the reveal.
-Startup warnings and decisions take priority and open the normal interface immediately.
-Resumed sessions, inline mode, the Mono theme, and `NO_COLOR` skip the animation.
-Set `COLOSSUS_TUI_ANIMATIONS=off` before launching to disable it. Terminals smaller
-than 40 columns or 24 rows also use the static layout.
 
 The transcript appears above the composer as work progresses. The TUI fills the
 alternate screen by default; use the mouse wheel or PageUp/PageDown to read older

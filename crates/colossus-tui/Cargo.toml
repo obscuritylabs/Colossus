@@ -16,7 +16,6 @@ crossterm.workspace = true
 image.workspace = true
 ratatui.workspace = true
 ratatui-image.workspace = true
-tachyonfx.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true

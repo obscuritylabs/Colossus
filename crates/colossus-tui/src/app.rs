@@ -18,16 +18,6 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     } = options;
     let snapshot = host.bootstrap(bootstrap).await.map_err(TuiError::Host)?;
     let mut state = TuiState::from_snapshot(snapshot);
-    if state.welcome_visible
-        && crate::startup::enabled(
-            screen_mode,
-            &state.preferences,
-            std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()),
-            std::env::var("COLOSSUS_TUI_ANIMATIONS").ok().as_deref(),
-        )
-    {
-        state.startup_animation = Some(crate::startup::StartupAnimation::new());
-    }
     state.dictation.port = dictation;
     state.completions.extend([
         "/dictate".into(),
@@ -55,7 +45,6 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     schedule_visible_previews(&mut state, Arc::clone(&host), event_tx.clone());
     let mut terminal = OwnedTerminal::new(screen_mode, allow_native_clipboard)?;
     let mut agent_refresh = crate::agents::AgentRefresh::default();
-    let mut last_terminal_size = crossterm::terminal::size().ok();
 
     loop {
         state.process_action(Arc::clone(&host));
@@ -88,11 +77,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         }
         observe_lifecycle(&state, lifecycle.as_deref());
         if event::poll(Duration::from_millis(33))? {
-            let input = event::read()?;
-            if crate::startup::interrupts(&input, &mut last_terminal_size) {
-                state.startup_animation = None;
-            }
-            match input {
+            match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     handle_key(
                         &mut state,
