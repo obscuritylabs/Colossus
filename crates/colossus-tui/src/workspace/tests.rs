@@ -2,6 +2,7 @@ use super::*;
 mod companion_tests;
 mod manager_tests;
 mod preferences_tests;
+mod roster_tests;
 mod usage_tests;
 
 struct NoWorkHost;

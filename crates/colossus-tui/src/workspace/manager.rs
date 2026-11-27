@@ -1,7 +1,7 @@
 //! Bounded inventory, lazy preview and canonical archival coordination.
 
 use super::*;
-use crate::session_manager::{ManagerEntry, SessionTab};
+use crate::session_manager::{ManagerEntry, SessionTab, roster::AgentGroup};
 
 pub(crate) struct PreviewData {
     pub(super) messages: Vec<InteractiveSessionBrowserMessage>,
@@ -40,7 +40,16 @@ impl Workspace {
             self.active
                 .workspace_manager
                 .select(Some(self.active.session_id.clone()));
+        } else if tab == SessionTab::Agents {
+            self.active
+                .workspace_manager
+                .agents
+                .select_parent(self.active.session_id.clone());
         }
+    }
+
+    pub(super) fn showing_agents(&self) -> bool {
+        self.active.workspace_center && self.active.workspace_manager.tab == SessionTab::Agents
     }
 
     pub(super) fn invalidate_catalog(&mut self) {
@@ -64,6 +73,9 @@ impl Workspace {
     }
 
     pub(super) fn update_manager(&mut self) {
+        if !self.showing_agents() {
+            self.active.workspace_manager.agents.clear_groups();
+        }
         if !self.active.workspace_center {
             return;
         }
@@ -92,6 +104,23 @@ impl Workspace {
                 .collect::<Vec<_>>(),
             SessionTab::History => self.catalog.clone(),
             SessionTab::Archived => self.archived_catalog.clone(),
+            SessionTab::Agents => {
+                let groups = self
+                    .active
+                    .workspace_sessions
+                    .iter()
+                    .filter_map(|row| {
+                        let state = self.retained(&row.id)?;
+                        (state.workspace == self.active.workspace
+                            && !state.workspace_archiving
+                            && !self.archived_catalog.iter().any(|entry| entry.id == row.id))
+                        .then(|| AgentGroup::new(row, state))
+                    })
+                    .collect();
+                self.active.workspace_manager.entries.clear();
+                self.active.workspace_manager.agents.update(groups);
+                return;
+            }
         };
         let entries = summaries
             .into_iter()
@@ -157,7 +186,7 @@ impl Workspace {
     }
 
     pub(super) fn refresh_preview(&mut self, host: Arc<dyn InteractiveHost>) {
-        if !self.active.workspace_center {
+        if !self.active.workspace_center || self.showing_agents() {
             if let Some(task) = self.preview_read.task.take() {
                 task.abort();
             }
@@ -229,6 +258,7 @@ impl Workspace {
         result: Result<PreviewData, String>,
     ) {
         if !self.active.workspace_center
+            || self.showing_agents()
             || self.active.workspace_manager.selected.as_deref() != Some(id)
             || self.active.workspace_manager.preview.generation != generation
             || self.active.workspace_manager.preview.id.as_deref() != Some(id)

@@ -49,6 +49,7 @@ pub(super) enum WorkspaceEvent {
 struct SessionChannel {
     sender: mpsc::Sender<HostEvent>,
     forwarder: tokio::task::JoinHandle<()>,
+    agent_refresh: crate::agents::AgentRefresh,
 }
 
 impl Drop for SessionChannel {
@@ -186,8 +187,14 @@ impl Workspace {
                 }
             }
         });
-        self.channels
-            .insert(id, SessionChannel { sender, forwarder });
+        self.channels.insert(
+            id,
+            SessionChannel {
+                sender,
+                forwarder,
+                agent_refresh: crate::agents::AgentRefresh::default(),
+            },
+        );
     }
 
     pub(super) fn sender(&self) -> mpsc::Sender<HostEvent> {
@@ -302,6 +309,7 @@ impl Workspace {
                     }
                     .map(|footer| (footer.approval_mode.clone(), footer.approval_mode_revision));
                     crate::app::handle_host_event(state, event);
+                    self.epoch = self.epoch.max(state.transcript_epoch);
                     if let Some((mode, revision)) = approval_mode {
                         self.observe_approval_mode(mode, revision);
                     }
@@ -335,6 +343,8 @@ impl Workspace {
                             }
                         } else if self.channels.len() < MAX_OPEN_SESSIONS {
                             let mut next = TuiState::from_snapshot(snapshot);
+                            self.epoch = self.epoch.wrapping_add(1);
+                            next.transcript_epoch = self.epoch;
                             self.inherit_preferences(&mut next);
                             self.inherit_skill_completions(&mut next);
                             next.footer.approval_mode.clone_from(&self.approval_mode);
@@ -441,6 +451,7 @@ impl Workspace {
             self.active.text_selection.clear();
             self.active.selecting_text = false;
             self.active.workspace_center = false;
+            self.active.workspace_manager.agents.clear_groups();
             self.active.workspace_hits.clear();
             // Terminal scrollback tracks a global presentation epoch, rather
             // than confusing two sessions whose local page counters are equal.
@@ -505,6 +516,7 @@ impl Workspace {
             return;
         };
         match action {
+            WorkspaceAction::Switch(id) if self.showing_agents() => self.switch(&id),
             WorkspaceAction::Switch(id) => self.open(Some(id), host),
             WorkspaceAction::New => self.open(None, host),
             WorkspaceAction::Browse => {
@@ -528,6 +540,9 @@ impl Workspace {
                 self.open_manager(crate::session_manager::SessionTab::History)
             }
             WorkspaceAction::Tab(tab) => self.open_manager(tab),
+            WorkspaceAction::Select(id) if self.showing_agents() => {
+                self.active.workspace_manager.agents.select_parent(id);
+            }
             WorkspaceAction::Select(id) => self.active.workspace_manager.select(Some(id)),
             WorkspaceAction::ToggleCompanion(id) => {
                 if self.companion_id.as_ref() == Some(&id) {
@@ -562,10 +577,11 @@ impl Workspace {
 
     pub(super) fn refresh_catalog(&mut self, host: Arc<dyn InteractiveHost>) {
         self.refresh_preview(Arc::clone(&host));
-        if self
-            .catalog_read
-            .as_ref()
-            .is_some_and(|task| !task.is_finished())
+        if self.showing_agents()
+            || self
+                .catalog_read
+                .as_ref()
+                .is_some_and(|task| !task.is_finished())
             || self
                 .last_catalog
                 .is_some_and(|last| last.elapsed() < Duration::from_secs(5))
@@ -601,6 +617,33 @@ impl Workspace {
                     .await;
             }
         }));
+    }
+
+    pub(super) fn refresh_agents(&mut self, host: Arc<dyn InteractiveHost>) {
+        let show_agents = self.showing_agents();
+        for (id, channel) in &mut self.channels {
+            let focused = id == &self.active.session_id;
+            let state = if focused {
+                Some(&self.active)
+            } else {
+                self.background.get(id).filter(|state| {
+                    show_agents
+                        && state.session_saved
+                        && !state.workspace_archiving
+                        && !self.archived_catalog.iter().any(|entry| entry.id == *id)
+                })
+            };
+            if let Some(state) = state {
+                channel.agent_refresh.schedule(
+                    state,
+                    focused,
+                    Arc::clone(&host),
+                    channel.sender.clone(),
+                );
+            } else {
+                channel.agent_refresh.pause();
+            }
+        }
     }
 
     pub(super) fn drain_queues(&mut self, host: Arc<dyn InteractiveHost>) {

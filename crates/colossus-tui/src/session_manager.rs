@@ -4,6 +4,7 @@ use super::*;
 use crate::workspace_view::{WorkspaceAction, WorkspaceSessionStatus};
 
 mod render;
+pub(super) mod roster;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum SessionTab {
@@ -11,22 +12,27 @@ pub(super) enum SessionTab {
     Open,
     History,
     Archived,
+    Agents,
 }
 
 impl SessionTab {
+    const ALL: [Self; 4] = [Self::Open, Self::History, Self::Archived, Self::Agents];
+
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Open => "Open",
             Self::History => "History",
             Self::Archived => "Archived",
+            Self::Agents => "Agents",
         }
     }
 
     fn next(self, reverse: bool) -> Self {
         match (self, reverse) {
             (Self::Open, false) | (Self::Archived, true) => Self::History,
-            (Self::History, false) | (Self::Open, true) => Self::Archived,
-            _ => Self::Open,
+            (Self::History, false) | (Self::Agents, true) => Self::Archived,
+            (Self::Open, true) | (Self::Archived, false) => Self::Agents,
+            (Self::History, true) | (Self::Agents, false) => Self::Open,
         }
     }
 }
@@ -63,6 +69,7 @@ pub(super) struct SessionManagerState {
     pub(super) preview: ManagerPreview,
     pub(super) preview_area: Option<Rect>,
     pub(super) companion_id: Option<String>,
+    pub(super) agents: roster::AgentsView,
 }
 
 impl SessionManagerState {
@@ -194,6 +201,11 @@ fn ensure_entries(state: &mut TuiState) {
 }
 
 pub(super) fn render(frame: &mut Frame<'_>, state: &mut TuiState, area: Rect) {
+    if state.workspace_manager.tab == SessionTab::Agents {
+        state.workspace_manager.preview_area = None;
+        roster::draw(frame, state, area);
+        return;
+    }
     ensure_entries(state);
     render::draw(frame, state, area);
 }
@@ -204,6 +216,16 @@ pub(super) fn handle_key(state: &mut TuiState, key: KeyEvent) -> bool {
     }
     ensure_entries(state);
     let manager = &mut state.workspace_manager;
+    if manager.tab == SessionTab::Agents {
+        state.workspace_action = match key.code {
+            KeyCode::Esc => Some(WorkspaceAction::CloseCenter),
+            KeyCode::Tab | KeyCode::BackTab => Some(WorkspaceAction::Tab(
+                manager.tab.next(key.code == KeyCode::BackTab),
+            )),
+            _ => manager.agents.handle_key(key),
+        };
+        return true;
+    }
     if manager.searching {
         match key.code {
             KeyCode::Esc => manager.searching = false,
@@ -307,7 +329,9 @@ pub(super) fn scroll(state: &mut TuiState, mouse: MouseEvent) {
     } else {
         MOUSE_SCROLL_LINES as isize
     };
-    if state
+    if state.workspace_manager.tab == SessionTab::Agents {
+        state.workspace_manager.agents.move_selection(delta);
+    } else if state
         .workspace_manager
         .preview_area
         .is_some_and(|area| area.contains(Position::new(mouse.column, mouse.row)))

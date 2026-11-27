@@ -98,7 +98,7 @@ selects a browser row for preview; Enter opens it. Compact terminals show the li
 
 | Key | Action in the Sessions browser |
 | --- | --- |
-| `Tab` / `Shift-Tab` | Cycle Open, History, and Archived. |
+| `Tab` / `Shift-Tab` | Cycle Open, History, Archived, and Agents. |
 | `/` | Search the current list. |
 | `Up` / `Down` | Highlight a session. |
 | `Home` / `End` | Select the first or last session. |
@@ -111,6 +111,19 @@ selects a browser row for preview; Enter opens it. Compact terminals show the li
 | `a` | Archive an idle session with no unsent draft or queued turns. |
 | `u` | Restore the highlighted session from Archived to History. |
 | `Esc` / `F2` | Return to the conversation. While editing a search, Esc first leaves search editing. |
+
+From **Open**, Shift-Tab goes directly to **Agents**. The Agents tab uses
+the following keys.
+
+| Key | Action in Agents |
+| --- | --- |
+| `Up` / `Down` | Move between parent sessions and visible child jobs. |
+| `Home` / `End` | Select the first or last visible row. |
+| `PageUp` / `PageDown` | Move five rows. |
+| `Space` | Expand or collapse the selected session's jobs. |
+| `Right` / `Left` | Expand a session, return from a job to its parent, or collapse the parent. |
+| `Enter` | Open the selected session or the selected job's parent. |
+| `Esc` / `F2` | Return to the conversation. |
 
 The pinned transcript follows recent output in the sidebar at widths of 100
 columns or more when there is enough vertical space. It occupies the usual right

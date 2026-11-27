@@ -336,7 +336,11 @@ pub(super) fn help_document(completions: &[String]) -> PresentationDocument {
                     "In full-screen mode, press F2, select another open session, then press p to pin or unpin its read-only live tail.".into(),
                 ),
                 (
-                    "Agents".into(),
+                    "Session agents".into(),
+                    "Press F2, then Shift+Tab for Agents. Use Up/Down to select, Space to expand or collapse, and Enter to open the parent conversation.".into(),
+                ),
+                (
+                    "Status sidebar".into(),
                     "The right sidebar shows current run usage, open tasks, goals, retained memory count, configured MCP servers and subagents. The footer keeps a compact token total when the sidebar cannot fit. A green MCP bubble means successful use in this session. Wheel over it or Alt+PageUp/PageDown to scroll; /tasks, /goals and /agents show full lists.".into(),
                 ),
                 (
