@@ -2,6 +2,8 @@
 
 use super::*;
 
+pub(super) const LIFECYCLE_STREAM_PREFIX: &str = "session-lifecycle:";
+
 impl EventSourcedSessionRepository {
     pub(super) fn list_catalog(
         &self,
@@ -22,7 +24,7 @@ impl EventSourcedSessionRepository {
                 ))
             })?;
             if let Some(summary) = self.get_session(id)?
-                && self.lifecycle_for_existing(id)?.archived == archived
+                && read_lifecycle_tail(self.journal.as_ref(), id)?.archived == archived
             {
                 sessions.push(summary);
             }
@@ -43,21 +45,7 @@ impl EventSourcedSessionRepository {
                 "session {id} has no creation event"
             )));
         }
-        self.lifecycle_for_existing(id).map(Some)
-    }
-
-    fn lifecycle_for_existing(&self, id: &str) -> Result<SessionLifecycle, StoreError> {
-        let events =
-            self.journal
-                .read_stream_backwards(&format!("session-lifecycle:{id}"), None, 1)?;
-        let Some(event) = events.first() else {
-            return Ok(SessionLifecycle {
-                session_id: id.into(),
-                archived: false,
-                revision: 0,
-            });
-        };
-        decode_lifecycle(id, event, &self.journal.decrypt_payload(event)?)
+        read_lifecycle_tail(self.journal.as_ref(), id).map(Some)
     }
 
     pub(super) fn write_lifecycle(
@@ -70,7 +58,7 @@ impl EventSourcedSessionRepository {
         let current = self
             .read_lifecycle(id)?
             .ok_or_else(|| StoreError::NotFound(format!("session {id}")))?;
-        let stream_id = format!("session-lifecycle:{id}");
+        let stream_id = format!("{LIFECYCLE_STREAM_PREFIX}{id}");
         if current.revision != expected_revision {
             return Err(StoreError::Conflict {
                 stream_id,
@@ -115,6 +103,22 @@ impl EventSourcedSessionRepository {
         })?;
         Ok(state)
     }
+}
+
+pub(super) fn read_lifecycle_tail(
+    journal: &dyn EventJournal,
+    id: &str,
+) -> Result<SessionLifecycle, StoreError> {
+    let events =
+        journal.read_stream_backwards(&format!("{LIFECYCLE_STREAM_PREFIX}{id}"), None, 1)?;
+    let Some(event) = events.first() else {
+        return Ok(SessionLifecycle {
+            session_id: id.into(),
+            archived: false,
+            revision: 0,
+        });
+    };
+    decode_lifecycle(id, event, &journal.decrypt_payload(event)?)
 }
 
 pub(super) fn decode_lifecycle(

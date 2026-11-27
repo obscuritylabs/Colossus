@@ -69,13 +69,21 @@ Rebuild replays canonical events. It never imports an unrelated store or turns a
 projection into authority.
 
 Existing journals build the catalog from their durable outbox during background
-maintenance or on the first catalog-dependent query. Opening and closing a known
-conversation can use small reverse stream reads while the catalog catches up.
-An older cursor may require reading past newer messages during this transition.
-Once the catalog is current, recent, archived, and latest queries read bounded
-summary rows, and older pages seek directly to their cursor. Catalog records carry
-session titles and the existing bounded scalar user previews. Multipart prompt
-text is available from the canonical transcript.
+maintenance. Until it is current, discovery reads pages of the existing session
+summary projection and checks canonical lifecycle tails for archive membership.
+It keeps only the requested newest summaries in memory. This compatibility path
+uses a human preview when the ordered catalog has processed every message for
+that session. Older summary rows lack the provenance needed to use their preview.
+Reads can advance the events committed since open. Writes also make bounded
+progress on small carried-over tails in a populated catalog. Background
+maintenance owns the older catalog backlog. Opening a known conversation can
+use small reverse stream reads while the catalog catches up. An older cursor
+may require reading past newer messages during this transition.
+
+Once the catalog is current, recent, archived, and latest queries seek directly
+to bounded summary rows, and older pages seek directly to their cursor. Catalog
+records carry session titles and bounded scalar human-message previews.
+Multipart prompt text is available from the canonical transcript.
 
 ### Unfinished provider exchanges
 

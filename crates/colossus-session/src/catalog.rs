@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+mod legacy;
+
 /// Versioned, rebuildable session summaries and message coordinates.
 pub const SESSION_CATALOG_PROJECTION: &str = "session-catalog-v1";
 
