@@ -218,11 +218,14 @@ toolchain changes can affect every consumer and need broad evidence.
 
 Linux's complete Rust/native sandbox suite runs on Ubuntu 24.04 with an exact-path
 AppArmor profile granting the temporary root-owned CLI Linux user-namespace authority.
+Control Plane server acceptance runs on Linux. The Linux Rust gate covers OIDC-to-runtime
+transport and cross-replica terminal recovery. The Linux Desktop gate exercises cloud
+connection and disconnect through a native Managed Local sidecar.
 Three macOS jobs run concurrently: native sandbox/sidecar acceptance, Desktop acceptance
 and Desktop packaging. The native job exercises real sidecar bootstrap, pinned gRPC,
-guardian lifecycle and sandboxing. Desktop acceptance lints/tests the standalone bridge
-and checks Chromium keyboard behavior, accessibility, high contrast, drawers, approvals
-and 880×640 layout. Packaging independently builds release sidecar/CLI/Tauri binaries
+guardian lifecycle, native terminals and sandboxing. Desktop acceptance lints/tests the
+standalone bridge and checks Chromium keyboard behavior, accessibility, high contrast,
+drawers, approvals and 880×640 layout. Packaging independently builds release sidecar/CLI/Tauri binaries
 and verifies bundle structure. The Desktop jobs have separate build trees and transfer
 no build artifacts to each other. Acceptance allows 90 minutes for cold builds and
 the later native command-approval compilation. Packaging retains its 75-minute budget.
@@ -240,10 +243,13 @@ and builds acceptance examples. GitHub-hosted Windows runners are
 [administrators](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges),
 so this lane cannot establish ordinary-user capture/input acceptance. Computer-control
 changes also need maintainer [interactive receipts from the final clean commit](testing.md#windows-computer-control-acceptance).
-The Windows 2025 Desktop job prepares binaries and exercises the bridge, credentials,
-WebView2, plugins and approvals. Desktop checks require staged binaries. Each job reports
-all independent failures; the aggregate waits for both. Linux Desktop, credential-vault,
-VS Code lifecycle, fuzzing, supply-chain and live-service lanes also remain mandatory.
+The Windows runtime job exercises native human terminals. The Windows 2025 Desktop job
+prepares binaries and exercises the bridge, credentials, WebView2, plugins and approvals.
+One Cargo build supplies the default Desktop library tests and the native credential
+persistence, setup/reset and uninstall groups. Desktop checks require staged binaries.
+Each job reports all independent failures and the aggregate waits for both. Linux Desktop,
+credential-vault, VS Code lifecycle, fuzzing, supply-chain and live-service lanes also
+remain mandatory.
 Portable formatting belongs to the PR tier and is not repeated on platform runners.
 
 The Windows Desktop job allows 120 minutes for cold compilation and the complete
