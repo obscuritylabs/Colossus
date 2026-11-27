@@ -66,6 +66,9 @@ the same browser. Its right pane previews recent messages and work. Switch
 sessions there while other conversations continue running, or use Archived to
 restore a conversation you previously archived.
 
+From Open, press Shift-Tab to see direct child jobs and pending decisions across
+this terminal's open conversations. [Inspect subagents across sessions](sessions.md#inspect-subagents-across-sessions)
+
 ## Find your way around
 
 Enter a slash command in the composer. These are useful starting points:

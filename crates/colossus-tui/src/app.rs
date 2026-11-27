@@ -41,7 +41,6 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     start_sandbox_boundary_acknowledgement(&mut state, Arc::clone(&host), event_tx.clone());
     schedule_visible_previews(&mut state, Arc::clone(&host), event_tx.clone());
     let mut terminal = OwnedTerminal::new(screen_mode, allow_native_clipboard)?;
-    let mut agent_refresh = crate::agents::AgentRefresh::default();
     let mut refresh_startup_skills = true;
 
     loop {
@@ -52,6 +51,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         state.support_report.poll();
         let event_tx = state.sender();
         state.refresh_catalog(Arc::clone(&host));
+        state.refresh_agents(Arc::clone(&host));
         state.sync_rows();
         let (active, companion) = state.draw_parts();
         terminal.draw(active, companion)?;
@@ -60,7 +60,6 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         {
             state.refresh_skill_completions(Arc::clone(&host));
         }
-        agent_refresh.schedule(&state, Arc::clone(&host), event_tx.clone());
         crate::next_prompt::schedule_next_prompt(&mut state, Arc::clone(&host), event_tx.clone());
         crate::dictation::tick(&mut state, event_tx.clone());
         if let Some(line) = crate::dictation::take_send(&mut state) {
@@ -2199,17 +2198,20 @@ fn offer_plan_execution_choice(state: &mut TuiState) {
 }
 
 pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope) {
+    if let RunEvent::SubagentUpdated { job } = &envelope.event {
+        if envelope.session_id != state.session_id
+            || job.session_id != state.session_id
+            || job.parent_run_id != envelope.run_id
+        {
+            return;
+        }
+        state.agents.update(job);
+    }
     if state.run_usage.observe(&envelope) {
         state.footer.usage = state.run_usage.current().cloned();
     }
     if envelope.session_id == state.session_id {
         state.sidebar.observe(&envelope.event);
-    }
-    if let RunEvent::SubagentUpdated { job } = &envelope.event {
-        if envelope.session_id != state.session_id || job.session_id != state.session_id {
-            return;
-        }
-        state.agents.update(job);
     }
     observe_provider_failure(state, &envelope);
     let event = envelope.event;

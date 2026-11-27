@@ -22,7 +22,8 @@ title; an unavailable or disabled title tool leaves the opening-request fallback
 
 Press F2 or enter `/sessions` to open the **Sessions** browser on **Open** for the
 selected workspace. `/resume` opens **History** in the same browser. Tab and
-Shift-Tab move between Open, History, and Archived; `/` searches the current list.
+Shift-Tab move between Open, History, Archived, and Agents. Press `/` to search
+the session list on Open, History, or Archived.
 
 The left pane shows session titles, status, update times, and message counts.
 While an existing journal builds its session index after an upgrade, unnamed
@@ -45,6 +46,21 @@ future-turn queue, Plan Mode selection, and model settings. Output stays with it
 conversation, and a decision indicator calls attention to a session needing input.
 In the Sessions browser, `s` stops the highlighted running or waiting session while the others
 continue.
+
+### Inspect subagents across sessions
+
+Press F2, then Shift-Tab from **Open** to inspect the **Agents** tab. Each row
+shows a session open in this terminal for the current workspace, its active job
+count, and any pending approval or input request. Use Up/Down to select a row and
+Space to expand its direct child jobs. Each child shows its status and the last
+recorded activity time, including recent completions. The view can show up to
+100 jobs per session.
+
+If a refresh fails, **Jobs stale** marks cached statuses and **Jobs unavailable**
+marks a session whose child status could not be read. The list refreshes while
+the tab is open. Press Enter on a session or child job to open the parent
+conversation and respond to any pending request there. Switching preserves
+each draft and lets each run continue.
 
 ### Follow another open session
 

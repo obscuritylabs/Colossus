@@ -1,5 +1,7 @@
 //! Concurrent workspace conversations through the real TUI, runtime and worker.
 
+#[path = "concurrent_sessions_tui/agents.rs"]
+mod agents;
 #[path = "support/process.rs"]
 #[allow(dead_code)]
 mod process_support;
@@ -220,76 +222,14 @@ fn exercise(worker_host: bool) {
     });
     fs::copy(env!("CARGO_BIN_EXE_colossus"), &binary).unwrap();
     let (origin, continue_alpha, requests) = overlapping_provider();
-    let mut config = RuntimeConfig::offline_template(workspace.join("state.redb"));
-    config.workflows.repository = workspace.join("workflows");
-    config.workflows.user = workspace.join("workflows");
-    fs::create_dir_all(&config.workflows.repository).unwrap();
-    config.providers = serde_json::from_value(json!({"profiles":{
-        "fixture":{"kind":"open_ai_compatible","baseUrl":format!("{origin}/v1"),"timeoutMs":30000}
-    }}))
-    .unwrap();
-    config.models = serde_json::from_value(json!({"profiles":{
-        "fixture":{"providerProfile":"fixture","model":"fixture","contextWindowTokens":32000,"maxOutputTokens":4000,"capabilities":{"toolCalls":true,"streaming":true}}
-    },"roles":{"primary":"fixture"}})).unwrap();
+    let mut config = provider_config(&workspace, &origin);
     config.access = serde_json::from_value(json!({"profile":"pinned","tools":{"include":[]},"actions":{"allow":["provider.openai.chat","presentation.history.append","context.show","plugin.list"]}})).unwrap();
-    config.sandbox.network_destinations = vec![origin];
     fs::write(
         workspace.join("config.json"),
         serde_json::to_vec_pretty(&config).unwrap(),
     )
     .unwrap();
-    let _worker = worker_host.then(|| {
-        let child = process(&binary, &workspace, &home)
-            .args(["--approval-mode", "deny", "worker"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap();
-        let worker = Worker(child);
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            let status = process(&binary, &workspace, &home)
-                .args(["worker", "--status"])
-                .output()
-                .unwrap();
-            if status.status.success() {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "worker readiness: {}",
-                String::from_utf8_lossy(&status.stderr)
-            );
-            thread::sleep(Duration::from_millis(50));
-        }
-        worker
-    });
-    let mut command = CommandBuilder::new(&binary);
-    command.cwd(&workspace);
-    command.args([
-        "--config",
-        "config.json",
-        "--alt-screen",
-        "--approval-mode",
-        "deny",
-    ]);
-    if worker_host {
-        command.arg("--worker-required");
-    }
-    command.arg("tui");
-    command.env("HOME", home.path());
-    command.env("COLOSSUS_HOME", home.colossus_home());
-    command.env("TERM", "xterm-256color");
-    command.env("NO_PROXY", "127.0.0.1");
-    #[cfg(windows)]
-    {
-        command.env("USERPROFILE", home.path());
-        command.env("LOCALAPPDATA", home.local_app_data());
-        command.env("TEMP", home.temporary_directory());
-        command.env("TMP", home.temporary_directory());
-    }
-    let terminal = Terminal::start(command);
-    terminal.wait("Enter sends");
+    let (_worker, terminal) = start_tui(&binary, &workspace, &home, worker_host);
     terminal.resize(40, 140);
     submit(&terminal, "ALPHA_REQUEST");
     terminal.wait("ALPHA_RUNNING");
@@ -400,4 +340,81 @@ fn exercise(worker_host: bool) {
             "embedded"
         }
     );
+}
+
+fn provider_config(workspace: &Path, origin: &str) -> RuntimeConfig {
+    let mut config = RuntimeConfig::offline_template(workspace.join("state.redb"));
+    config.workflows.repository = workspace.join("workflows");
+    config.workflows.user = workspace.join("workflows");
+    fs::create_dir_all(&config.workflows.repository).unwrap();
+    config.providers = serde_json::from_value(json!({"profiles":{
+        "fixture":{"kind":"open_ai_compatible","baseUrl":format!("{origin}/v1"),"timeoutMs":30000}
+    }}))
+    .unwrap();
+    config.models = serde_json::from_value(json!({"profiles":{
+        "fixture":{"providerProfile":"fixture","model":"fixture","contextWindowTokens":32000,"maxOutputTokens":4000,"capabilities":{"toolCalls":true,"streaming":true}}
+    },"roles":{"primary":"fixture"}})).unwrap();
+    config.sandbox.network_destinations = vec![origin.into()];
+    config
+}
+
+fn start_tui(
+    binary: &Path,
+    workspace: &Path,
+    home: &process_support::IsolatedUserHome,
+    worker_host: bool,
+) -> (Option<Worker>, Terminal) {
+    let worker = worker_host.then(|| {
+        let child = process(binary, workspace, home)
+            .args(["--approval-mode", "deny", "worker"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let worker = Worker(child);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let status = process(binary, workspace, home)
+                .args(["worker", "--status"])
+                .output()
+                .unwrap();
+            if status.status.success() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "worker readiness: {}",
+                String::from_utf8_lossy(&status.stderr)
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+        worker
+    });
+    let mut command = CommandBuilder::new(binary);
+    command.cwd(workspace);
+    command.args([
+        "--config",
+        "config.json",
+        "--alt-screen",
+        "--approval-mode",
+        "deny",
+    ]);
+    if worker_host {
+        command.arg("--worker-required");
+    }
+    command.arg("tui");
+    command.env("HOME", home.path());
+    command.env("COLOSSUS_HOME", home.colossus_home());
+    command.env("TERM", "xterm-256color");
+    command.env("NO_PROXY", "127.0.0.1");
+    #[cfg(windows)]
+    {
+        command.env("USERPROFILE", home.path());
+        command.env("LOCALAPPDATA", home.local_app_data());
+        command.env("TEMP", home.temporary_directory());
+        command.env("TMP", home.temporary_directory());
+    }
+    let terminal = Terminal::start(command);
+    terminal.wait("Enter sends");
+    (worker, terminal)
 }

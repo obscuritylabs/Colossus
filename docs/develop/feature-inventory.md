@@ -91,6 +91,7 @@ Their pending native checks remain separate from implementation and historical t
 | Standalone Goal creation | Supported; bounded iterations and caller tool ceiling | Supported; CLI and full-screen TUI `/goal` creation/completion acceptance in embedded and worker hosts | Supported; composer and native request validation evidence | Missing; composer exposes Plan, Execute, and Research | Supported on connected runtimes; capability and budget-bound composer |
 | Always On check-ins in an owned local conversation | Standing-chat controls use authenticated local worker IPC. Desktop's inventory reads status from owner-scoped running workers. Wake runs use the existing owned run API. | CLI enrollment, status, pause, and manual wake. TUI opens the same session using its ordinary session selector. | Supported for Managed Local: enrollment and wake controls, cross-Workspace inventory with unavailable status, and a single enrolled thread above Pinned. Fleet uses its existing remote runtime workflows. | Missing: no Always On controls. | Missing: no Always On controls. |
 | Read-only live tail of an open background conversation | Existing transcript and ordered run-feed contracts supply released messages and status. Pinning is local presentation state. | Full-screen TUI supports one same-workspace, same-runtime companion. Intentional difference for one-shot CLI and inline TUI: both keep a single transcript and use ordinary inspection or terminal scrollback. | Partial: live Asides support separate follow-up conversations. Pinning a peer conversation is missing. | Missing: the extension follows the selected conversation. | Partial: Side Chat shows a related conversation alongside its parent. Pinning an arbitrary open peer is missing. |
+| Inspect open sessions and their direct subagents | Existing per-session job reads and released lifecycle events supply stable identities and timestamps. The roster belongs to one TUI process in one workspace. | F2 **Agents** groups direct child jobs in the embedded and authenticated worker TUIs. Standalone `agents list` and `agents show` provide per-session inspection. | The bundled Managed Local terminal uses the worker TUI. Native conversations use their own timeline. | The extension follows the selected application conversation. | Fleet Chat follows the selected application conversation. |
 | Anthropic tool replay recovery | Ordinary Execute can continue a verified oversized replay using saved tool evidence. The keyless missing-checkpoint path also remains available. | Existing CLI resume and TUI continuation use the same runtime recovery. | Managed Local inherits protected replay overflow recovery. | Existing Execute conversations inherit the runtime behavior. | Connected runtimes inherit the ordinary Execute recovery. |
 | Transient provider HTTP recovery | The provider owns bounded retry. Run updates expose attempt, limit, and HTTP status through the existing SDK contract. | CLI uses runtime retry. TUI shows progress and offers explicit conversation continuation after eligible failures. | The active conversation shows progress and offers Retry for an eligible Execute failure in the saved session. Installed acceptance is unverified. | Shows the retry count. A dedicated Retry control is missing. | Connected runtimes use provider retry. Dedicated progress and Retry controls are missing. |
 | Revision-bound Plan workflow | Supported; source-run-bound Draft continuation | Supported; revision-bound refinement, approval, and execution | Supported; exact-revision Plan continuation | Partial; canonical Plan inspection exists, continuation controls missing | Supported; source-run and revision-bound continuation |
@@ -219,6 +220,16 @@ Evidence and owned follow-ups:
   `desktop_owner` and `vscode_owner` own assessing equivalent peer-conversation
   controls using the existing feed. `maintenance_coordinator` owns evaluating
   that workflow for Web Chat.
+- **TUI Agents tab** groups direct child jobs with status and activity time and
+  shows pending decisions on their parent. Workspace tests cover compact
+  navigation, draft and decision preservation, delayed and failed reads, and
+  retention boundaries. `crates/colossus-cli/tests/concurrent_sessions_tui/agents.rs`
+  exercises the compact PTY workflow through the embedded runtime and an
+  authenticated worker. `desktop_owner` and `test_owner` own key delivery
+  acceptance in a packaged Managed Local terminal. `maintenance_coordinator`
+  owns triage of inventory requests across clients or processes.
+  [Sessions](../use/sessions.md#inspect-subagents-across-sessions) ·
+  [TUI keys](../reference/tui.md#workspace-sessions)
 - **TUI copy:** Selection tests exercise mouse drag and both copy chords against
   a stub clipboard. The PTY selection fixture verifies exact OSC 52 delivery and
   the request status. The Windows native fixture checks Unicode readback and

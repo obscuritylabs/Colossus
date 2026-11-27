@@ -473,13 +473,20 @@ pub(super) fn relative_timestamp(value: &str) -> String {
     let Ok(timestamp) = OffsetDateTime::parse(value, &Rfc3339) else {
         return compact_timestamp(value);
     };
+    if (OffsetDateTime::now_utc() - timestamp).whole_seconds() < 0 {
+        compact_timestamp(value)
+    } else {
+        relative_activity(timestamp)
+    }
+}
+
+pub(super) fn relative_activity(timestamp: OffsetDateTime) -> String {
     let seconds = (OffsetDateTime::now_utc() - timestamp).whole_seconds();
     match seconds {
-        ..0 => compact_timestamp(value),
         0..=59 => "just now".into(),
         60..=3_599 => format!("{} min ago", seconds / 60),
         3_600..=86_399 => format!("{} hr ago", seconds / 3_600),
         86_400..=604_799 => format!("{} days ago", seconds / 86_400),
-        _ => value.get(..10).unwrap_or(value).to_owned(),
+        _ => timestamp.date().to_string(),
     }
 }

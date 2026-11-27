@@ -113,9 +113,14 @@ pub(super) fn draw(frame: &mut Frame<'_>, state: &mut TuiState, area: Rect) {
     );
 }
 
-fn draw_tabs(frame: &mut Frame<'_>, state: &mut TuiState, palette: &TerminalPalette, area: Rect) {
+pub(super) fn draw_tabs(
+    frame: &mut Frame<'_>,
+    state: &mut TuiState,
+    palette: &TerminalPalette,
+    area: Rect,
+) {
     let mut x = area.x;
-    for tab in [SessionTab::Open, SessionTab::History, SessionTab::Archived] {
+    for tab in SessionTab::ALL {
         let label = format!(" {} ", tab.label());
         let width = label.len() as u16;
         if x + width > area.right() {
