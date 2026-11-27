@@ -543,8 +543,6 @@ pub struct TuiState {
     pub(super) native_history_pages_loaded: usize,
     pub(super) transcript_epoch: u64,
     pub(super) welcome_visible: bool,
-    /// One-shot launch branding; later workspace sessions are never armed.
-    pub(super) startup_animation: Option<crate::startup::StartupAnimation>,
     pub(super) security_posture_entry: Option<usize>,
     pub(super) should_exit: bool,
 }
@@ -663,7 +661,6 @@ impl TuiState {
             native_history_pages_loaded: 0,
             transcript_epoch: 0,
             welcome_visible,
-            startup_animation: None,
             security_posture_entry,
             should_exit: false,
         }

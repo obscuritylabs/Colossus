@@ -618,6 +618,69 @@ fn fixture_command() -> CommandBuilder {
 }
 
 #[test]
+fn fresh_full_screen_launch_renders_the_composer_and_accepts_input() {
+    const ROWS: u16 = 32;
+    const COLS: u16 = 120;
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: ROWS,
+            cols: COLS,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("PTY");
+    let mut command = fixture_command();
+    command.args(["--exact", "fixture_process", "--nocapture"]);
+    command.env("COLOSSUS_TUI_PTY_FIXTURE", "1");
+    command.env("COLOSSUS_TUI_MODE", "alternate");
+    command.env("COLOSSUS_TUI_EMPTY", "1");
+    command.env("COLOSSUS_TUI_ANIMATIONS", "on");
+    command.env_remove("NO_COLOR");
+    let mut child = pair.slave.spawn_command(command).expect("spawn fixture");
+    let _child_cleanup = FixtureChildGuard(child.clone_killer());
+    drop(pair.slave);
+
+    let mut reader = pair.master.try_clone_reader().expect("PTY reader");
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&output);
+    let reader_thread = thread::spawn(move || {
+        let mut bytes = [0_u8; 8_192];
+        while let Ok(count) = reader.read(&mut bytes) {
+            if count == 0 {
+                break;
+            }
+            captured
+                .lock()
+                .expect("output")
+                .extend_from_slice(&bytes[..count]);
+        }
+    });
+    let mut writer = pair.master.take_writer().expect("PTY writer");
+    #[cfg(windows)]
+    answer_cursor_position_query(&output, &mut writer);
+    wait_for_screen(&output, ROWS, COLS, "Execute · Enter sends");
+    let splash = b"Press any key to continue";
+    assert!(
+        !output
+            .lock()
+            .expect("output")
+            .windows(splash.len())
+            .any(|bytes| bytes == splash),
+        "the terminal drew the startup splash before the composer"
+    );
+    writer.write_all(b"first frame draft").expect("type draft");
+    writer.flush().expect("flush draft");
+    wait_for_screen(&output, ROWS, COLS, "│first frame draft ");
+
+    writer.write_all(&[3, 3]).expect("clear draft and exit");
+    writer.flush().expect("flush exit");
+    assert!(child.wait().expect("fixture status").success());
+    drop(writer);
+    drop(pair.master);
+    reader_thread.join().expect("reader thread");
+}
+
+#[test]
 fn inline_empty_session_shows_launch_rail_and_recedes_after_the_first_turn() {
     let pty_system = native_pty_system();
     let pair = pty_system

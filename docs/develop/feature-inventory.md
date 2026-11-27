@@ -138,6 +138,8 @@ Evidence and owned follow-ups:
 - **Unsaved TUI conversations:** The [Sessions guide](../use/sessions.md#start-a-clean-conversation)
   describes when the TUI saves a draft. The [Terminal UI guide](../use/terminal-ui.md#write-and-review-a-turn)
   explains how sandbox acknowledgement affects settings saves and prompt history.
+  The `pty_history` terminal fixture verifies that a fresh full-screen TUI opens
+  directly to an editable composer.
   Regressions in `crates/colossus-cli/src/tui_host/preferences_concurrency_tests.rs`
   exercise both embedded and authenticated worker hosts, including idle launches,
   a scoped settings save, rejected empty input, history ordering around work
