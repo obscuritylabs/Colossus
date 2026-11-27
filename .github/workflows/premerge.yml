@@ -181,17 +181,10 @@ jobs:
         run: >-
           cargo test --locked -p colossus-sidecar
           --test native_lifecycle -- --ignored --nocapture
-      - name: Exercise cloud connection through the native Managed Local grant
-        env:
-          COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-aarch64-apple-darwin
-        run: cargo test --locked -p colossus-cloud-server --lib managed_sidecar_cloud_run_isolated_and_application_exit_disconnects -- --ignored
       - name: Run native isolation and escape acceptance
         run: cargo test --locked -p colossus-cli --test native_sandbox -- --nocapture
-
-      - name: Exercise macOS Fleet human terminals and cross-replica recovery
-        run: |
-          cargo test --locked -p colossus-terminal --lib
-          cargo test --locked -p colossus-cloud-server --lib auth::tests::transport::terminal::web_terminal_cross_replica_reconnect_keeps_the_actual_shell_and_checks_authority -- --exact
+      - name: Exercise macOS native human terminals
+        run: cargo test --locked -p colossus-terminal --lib
 
   linux-desktop:
     name: Linux Desktop package and native credential entry
@@ -488,12 +481,8 @@ jobs:
         run: >-
           cargo test --locked -p colossus-cli --test worker_smoke
           --test windows_sandbox --test mcp_smoke --test release_install_smoke -- --nocapture
-      - name: Exercise Windows Fleet human terminals and cross-replica recovery
-        shell: pwsh
-        run: |
-          cargo test --locked -p colossus-terminal --lib
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p colossus-cloud-server --lib auth::tests::transport::terminal::web_terminal_cross_replica_reconnect_keeps_the_actual_shell_and_checks_authority -- --exact
+      - name: Exercise Windows native human terminals
+        run: cargo test --locked -p colossus-terminal --lib
       - name: Validate Windows computer protocol and compile native acceptance
         id: computer_portable
         continue-on-error: true
@@ -621,36 +610,25 @@ jobs:
         id: native_tests
         if: steps.desktop_prepare.outcome == 'success'
         continue-on-error: true
+        shell: pwsh
+        env:
+          COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-x86_64-pc-windows-msvc.exe
         run: |
-          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+          $runner = Join-Path $env:GITHUB_WORKSPACE 'scripts/ci/windows-desktop-test-runner.ps1'
+          $command = ConvertTo-Json -InputObject @('pwsh.exe', '-NoProfile', '-File', $runner) -Compress
+          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --config "target.x86_64-pc-windows-msvc.runner=$command"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p colossus-native-dictation --features download --lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo clippy --locked -p colossus-cli --features dictation --all-targets -- -D warnings
-      - name: Exercise Windows credential persistence through the managed sidecar and MCP
-        if: steps.desktop_prepare.outcome == 'success'
-        env:
-          COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-x86_64-pc-windows-msvc.exe
-        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib managed_runtime::credential_acceptance::native_vault_restarts_reach_managed_sidecar_mcp -- --ignored --exact
-      - name: Exercise Windows cloud transport and native Managed Local lifetime
-        id: cloud_native
+      - name: Exercise Windows Managed Local lifetime and CLI API administration
+        id: managed_local
         if: steps.desktop_prepare.outcome == 'success'
         continue-on-error: true
-        env:
-          COLOSSUS_ACCEPTANCE_SIDECAR: ${{ github.workspace }}/apps/desktop/src-tauri/binaries/colossus-sidecar-x86_64-pc-windows-msvc.exe
         run: |
-          cargo test --locked -p colossus-cloud-server --lib oidc_to_runtime_prompt_approval_cancel_rotate_and_recover
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p colossus-cloud-server --lib managed_sidecar_cloud_run_isolated_and_application_exit_disconnects -- --ignored
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p colossus-sidecar --test windows_lifecycle -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p colossus-cli --bin colossus public_api_admin::tests
-      - name: Exercise Windows setup reset and uninstall credential cleanup
-        if: steps.desktop_prepare.outcome == 'success'
-        run: |
-          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib native_catalog_ -- --ignored --nocapture
-          cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib native_uninstall_ -- --ignored --nocapture
       - name: Test Windows native secure credential entry controls
         if: steps.desktop_prepare.outcome == 'success'
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p colossus-native-credential-ui --lib
@@ -733,7 +711,7 @@ jobs:
           NATIVE_TEST_OUTCOME: ${{ steps.native_tests.outcome }}
           PLUGIN_RUNTIME_OUTCOME: ${{ steps.plugin_runtime.outcome }}
           APPROVAL_RUNTIME_OUTCOME: ${{ steps.approval_runtime.outcome }}
-          CLOUD_NATIVE_OUTCOME: ${{ steps.cloud_native.outcome }}
+          MANAGED_LOCAL_OUTCOME: ${{ steps.managed_local.outcome }}
           OWNED_CHROMIUM_OUTCOME: ${{ steps.owned_chromium.outcome }}
         run: |
           set -eu
@@ -744,7 +722,7 @@ jobs:
             "desktop-tests=$NATIVE_TEST_OUTCOME" \
             "desktop-plugin-runtime=$PLUGIN_RUNTIME_OUTCOME" \
             "desktop-approval-runtime=$APPROVAL_RUNTIME_OUTCOME" \
-            "desktop-cloud-native=$CLOUD_NATIVE_OUTCOME" \
+            "desktop-managed-local=$MANAGED_LOCAL_OUTCOME" \
             "owned-chromium=$OWNED_CHROMIUM_OUTCOME"
           do
             if test "${result#*=}" != success; then

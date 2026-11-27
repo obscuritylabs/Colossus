@@ -9,6 +9,7 @@ use crate::workspace_view::{WorkspaceAction, WorkspaceSessionRow, WorkspaceSessi
 use std::ops::{Deref, DerefMut};
 mod manager;
 mod preferences;
+mod skill_completions;
 
 const MAX_OPEN_SESSIONS: usize = 8;
 const MAX_CATALOG_SESSIONS: usize = 100;
@@ -23,6 +24,10 @@ pub(super) enum WorkspaceEvent {
     Preferences {
         generation: u64,
         result: Box<Result<TerminalPreferences, String>>,
+    },
+    SkillCompletions {
+        generation: u64,
+        skills: Option<Vec<String>>,
     },
     Catalog {
         generation: u64,
@@ -76,6 +81,7 @@ pub(super) struct Workspace {
     approval_mode: String,
     approval_mode_revision: u64,
     shared_preferences: preferences::SharedPreferences,
+    shared_skill_completions: skill_completions::SharedSkillCompletions,
     epoch: u64,
 }
 
@@ -129,6 +135,7 @@ impl Workspace {
             approval_mode,
             approval_mode_revision,
             shared_preferences,
+            shared_skill_completions: skill_completions::SharedSkillCompletions::default(),
             epoch: 1,
         };
         workspace.add_channel(id);
@@ -191,6 +198,10 @@ impl Workspace {
     pub(super) fn receive(&mut self, event: WorkspaceEvent, host: Arc<dyn InteractiveHost>) {
         match event {
             WorkspaceEvent::Session { id, event } => {
+                if matches!(event.as_ref(), HostEvent::SkillCompletionsChanged) {
+                    self.refresh_skill_completions(host);
+                    return;
+                }
                 if matches!(event.as_ref(), HostEvent::Run(envelope) if envelope.session_id != id) {
                     return;
                 }
@@ -246,6 +257,13 @@ impl Workspace {
                     let selection = match &mut event {
                         HostEvent::OperationFinished(result) => match result.as_mut() {
                             Ok(OperationResult::Command(result)) => {
+                                if self.screen_mode == ScreenMode::Inline && result.clear_transcript
+                                {
+                                    // An older page may still be in flight when the user clears the view.
+                                    state.has_more = false;
+                                    state.before_sequence = None;
+                                    state.loading_older = false;
+                                }
                                 let selection = result.session.take().map(|session| session.0);
                                 if selection
                                     .as_ref()
@@ -318,6 +336,7 @@ impl Workspace {
                         } else if self.channels.len() < MAX_OPEN_SESSIONS {
                             let mut next = TuiState::from_snapshot(snapshot);
                             self.inherit_preferences(&mut next);
+                            self.inherit_skill_completions(&mut next);
                             next.footer.approval_mode.clone_from(&self.approval_mode);
                             next.footer.approval_mode_revision = self.approval_mode_revision;
                             next.dictation.port = self.active.dictation.port.clone();
@@ -327,6 +346,10 @@ impl Workspace {
                             self.background.insert(id.clone(), next);
                             if focus {
                                 self.switch(&id);
+                            }
+                            if host.refreshes_skill_completions(SkillCompletionRefresh::PaneOpened)
+                            {
+                                self.refresh_skill_completions(host);
                             }
                         }
                         self.last_catalog = None;
@@ -341,6 +364,9 @@ impl Workspace {
             }
             WorkspaceEvent::Preferences { generation, result } => {
                 self.receive_preferences(generation, *result, host);
+            }
+            WorkspaceEvent::SkillCompletions { generation, skills } => {
+                self.receive_skill_completions(generation, skills, host);
             }
             WorkspaceEvent::Catalog {
                 generation,
@@ -387,7 +413,7 @@ impl Workspace {
                 id,
                 archived,
                 result,
-            } => self.receive_archive(&id, archived, *result),
+            } => self.receive_archive(&id, archived, *result, host),
         }
         self.sync_rows();
     }

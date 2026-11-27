@@ -23,6 +23,15 @@ pub struct BootstrapRequest {
     pub resume_latest: bool,
 }
 
+/// Terminal lifecycle point at which a host may load live skill completions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SkillCompletionRefresh {
+    /// Fill optional skill completions after the first terminal frame.
+    Startup,
+    /// Refresh the live catalog when another session pane opens.
+    PaneOpened,
+}
+
 /// Cached stable footer data, refreshed only after relevant host mutations.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FooterState {
@@ -875,6 +884,8 @@ pub enum HostEvent {
     SessionBrowser(InteractiveSessionBrowser),
     /// The host prepared a searchable theme browser with exact live previews.
     ThemePicker(InteractiveThemePicker),
+    /// Plugin management updated the workspace's completion inventory.
+    SkillCompletionsChanged,
     /// The current operation reached a terminal result.
     OperationFinished(Box<Result<OperationResult, String>>),
     /// Non-fatal history persistence failed after the requested operation began.
@@ -951,6 +962,17 @@ pub trait InteractiveHost: Send + Sync {
 
     /// Resolve session, transcript, preferences, history, completions, and footer.
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String>;
+
+    /// Whether to refresh skill suggestions in the background at this open boundary.
+    fn refreshes_skill_completions(&self, _refresh: SkillCompletionRefresh) -> bool {
+        false
+    }
+
+    /// Read current, workspace-scoped skill IDs for completion only.
+    /// An absent result retains the current suggestions.
+    async fn skill_completion_ids(&self) -> Result<Option<Vec<String>>, String> {
+        Ok(None)
+    }
 
     /// Discover at most 100 durable conversations in this host's workspace.
     /// This read does not attach to a session or start any model work.

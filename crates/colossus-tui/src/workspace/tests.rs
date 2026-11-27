@@ -96,6 +96,36 @@ fn open_snapshot(workspace: &mut Workspace, id: &str) {
     workspace.receive(WorkspaceEvent::Opened(Box::new(Ok(source(id)))), host());
 }
 
+#[tokio::test]
+async fn clearing_inline_view_discards_an_in_flight_history_page() {
+    let (mut workspace, _) =
+        Workspace::new(ScreenMode::Inline, TuiState::from_snapshot(source("alpha")));
+    workspace.before_sequence = Some(101);
+    workspace.has_more = true;
+    workspace.loading_older = true;
+    let mut clear = HostCommandResult::document(PresentationDocument::new());
+    clear.clear_transcript = true;
+    workspace.receive(
+        WorkspaceEvent::Session {
+            id: "alpha".into(),
+            event: Box::new(HostEvent::OperationFinished(Box::new(Ok(
+                OperationResult::Command(clear),
+            )))),
+        },
+        host(),
+    );
+    workspace.receive(
+        WorkspaceEvent::Session {
+            id: "alpha".into(),
+            event: Box::new(HostEvent::OlderPage(Err("late page".into()))),
+        },
+        host(),
+    );
+    assert_eq!(workspace.before_sequence, None);
+    assert!(!workspace.has_more && !workspace.loading_older);
+    assert!(!text(&workspace).contains("late page"));
+}
+
 fn delta(id: &str, text: &str) -> HostEvent {
     HostEvent::Run(RunEventEnvelope {
         schema_version: 1,
@@ -632,4 +662,79 @@ async fn newer_bootstrap_revision_updates_all_retained_permission_displays() {
         workspace.background["alpha"].footer.approval_mode_revision,
         2
     );
+}
+
+#[tokio::test]
+async fn skill_completion_refresh_rejects_stale_inventory_across_sessions() {
+    async fn read_generation(events: &mut mpsc::Receiver<WorkspaceEvent>) -> u64 {
+        let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("skill completion read must send a response");
+        let Some(WorkspaceEvent::SkillCompletions { generation, .. }) = event else {
+            panic!("expected a skill completion response");
+        };
+        generation
+    }
+
+    let (mut workspace, mut events) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
+    workspace.sticky_skills = vec!["manual/fixed".into()];
+    workspace.refresh_skill_completions(host());
+    let startup_generation = read_generation(&mut events).await;
+    open_snapshot(&mut workspace, "beta");
+    assert_eq!(workspace.session_id, "beta");
+
+    // Management can finish in another pane while the startup response is queued.
+    workspace.receive(
+        WorkspaceEvent::Session {
+            id: "alpha".into(),
+            event: Box::new(HostEvent::SkillCompletionsChanged),
+        },
+        host(),
+    );
+    workspace.receive(
+        WorkspaceEvent::SkillCompletions {
+            generation: startup_generation,
+            skills: Some(vec!["removed/stale".into()]),
+        },
+        host(),
+    );
+    assert!(
+        !workspace
+            .completions
+            .iter()
+            .any(|item| item.starts_with('@'))
+    );
+
+    let current_generation = read_generation(&mut events).await;
+    assert_ne!(startup_generation, current_generation);
+    workspace.receive(
+        WorkspaceEvent::SkillCompletions {
+            generation: current_generation,
+            skills: Some(vec!["plugin/second".into(), "plugin/first".into()]),
+        },
+        host(),
+    );
+
+    let assert_completions = |state: &TuiState| {
+        assert!(state.completions.contains(&"/tools".into()));
+        assert_eq!(
+            state
+                .completions
+                .iter()
+                .filter(|candidate| candidate.starts_with('@'))
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["@plugin/second", "@plugin/first"]
+        );
+    };
+    assert_completions(&workspace);
+    workspace.switch("alpha");
+    assert_completions(&workspace);
+    assert_eq!(workspace.sticky_skills, ["manual/fixed"]);
+    open_snapshot(&mut workspace, "gamma");
+    assert_completions(&workspace);
+    assert!(workspace.sticky_skills.is_empty());
 }

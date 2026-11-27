@@ -129,7 +129,7 @@ impl Runtime {
 
     /// Replay bounded projection batches without requiring a moving journal head to
     /// become current. Long-running hosts use this to keep background maintenance
-    /// fair; explicit operator drains and shutdown checkpoints use [`Self::drain_projections`].
+    /// fair. Explicit operator drains use [`Self::drain_projections`].
     pub fn drain_projections_bounded(
         &self,
         batch_limit: usize,
@@ -144,8 +144,8 @@ impl Runtime {
     /// authoritative journal head.
     ///
     /// Projection maintenance is deliberately bounded and never cancels the host
-    /// operation. A maintenance failure disables further background attempts for that
-    /// operation; the mandatory final checkpoint remains responsible for surfacing it.
+    /// operation. A maintenance failure disables background attempts for that operation.
+    /// The final checkpoint retries required projections and catalog queries retry their own index.
     pub async fn run_with_background_projection_maintenance<F, T>(&self, operation: F) -> T
     where
         F: Future<Output = T>,
@@ -167,7 +167,7 @@ impl Runtime {
                         maintenance_available = false;
                         tracing::warn!(
                             error = %error,
-                            "background projection maintenance failed; final checkpoint will retry"
+                            "background projection maintenance failed"
                         );
                     }
                 }
@@ -225,6 +225,7 @@ impl Runtime {
             },
             "repository_adapters": {
                 "sessions": "event-journal:sessions-v1+messages-v1",
+                "session_catalog": "projection:session-catalog-v1",
                 "work": "event-journal:tasks-v1+decisions-v1",
                 "work_projection": "redb-projection:work-v1",
                 "memory": "event-journal:memory-v1",

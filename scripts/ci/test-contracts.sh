@@ -479,6 +479,38 @@ assert.equal(commandBody(warmProbe), commandBody(probe),
   'The Windows cache producer and Desktop consumer must use the same verified compiler');
 NODE
 
+# Cover the deployed Control Plane on Linux and keep native client boundaries
+# in their own platform jobs.
+"${NODE:-node}" --input-type=module - "$script_dir/../../.github/workflows/premerge.yml" "$script_dir/../test-desktop-linux-native" <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const workflow = readFileSync(process.argv[2], 'utf8').replaceAll('\r\n', '\n');
+function job(id) {
+  const heading = `\n  ${id}:\n`;
+  const start = workflow.indexOf(heading);
+  assert.ok(start >= 0, 'Missing pre-merge job ' + id);
+  return workflow.slice(start + heading.length).split(/\n  [\w-]+:\n/u, 1)[0];
+}
+
+const macos = job('macos-native');
+const windowsRuntime = job('windows-runtime');
+const windowsDesktop = job('windows-desktop');
+for (const native of [macos, windowsRuntime, windowsDesktop]) {
+  assert.doesNotMatch(native, /\bcolossus-cloud-server\b/u);
+}
+assert.match(macos, /--test native_lifecycle -- --ignored/u);
+for (const terminal of [macos, windowsRuntime]) {
+  assert.match(terminal, /cargo test --locked -p colossus-terminal --lib/u);
+}
+assert.match(windowsDesktop, /--test windows_lifecycle -- --ignored/u);
+assert.match(windowsDesktop, /scripts\/ci\/windows-desktop-test-runner\.ps1/u);
+assert.match(windowsDesktop, /cargo test --locked --manifest-path apps\/desktop\/src-tauri\/Cargo\.toml --lib --config "target\.x86_64-pc-windows-msvc\.runner=\$command"\n/u);
+assert.match(job('linux-rust-integration'), /run: cargo xtask check rust/u);
+assert.match(readFileSync(process.argv[3], 'utf8'),
+  /managed_sidecar_cloud_run_isolated_and_application_exit_disconnects -- --ignored/u);
+NODE
+
 # The browser image publisher must verify embedded signatures before sealing
 # and after install. Other installer and CLI checks keep their existing policy.
 "${NODE:-node}" --input-type=module - "$script_dir/../../.github/workflows/release.yml" "$script_dir/../stage-browser-windows-preview.ps1" <<'NODE'

@@ -1,35 +1,13 @@
 use super::*;
-use std::{collections::BTreeMap, sync::Mutex};
+use std::{
+    collections::BTreeMap,
+    sync::{Mutex, RwLock},
+};
 
 mod overlay;
 use overlay::ProjectionOverlay;
 
-/// Pure event-to-projection reducer.
-pub trait ProjectionHandler: Send + Sync {
-    /// Stable name containing a schema version.
-    fn name(&self) -> &'static str;
-
-    /// Return whether this event can change the projection.
-    fn applies_to(&self, _event: &EventEnvelope) -> bool {
-        true
-    }
-
-    /// Return whether projection logic needs the decrypted event payload.
-    fn requires_payload(&self) -> bool {
-        true
-    }
-
-    /// Produce record mutations for one journal event.
-    ///
-    /// The read-only store includes earlier mutations and checkpoint advances in
-    /// the current bounded round. The worker commits the round after reduction.
-    fn project(
-        &self,
-        store: &dyn ProjectionStore,
-        event: &EventEnvelope,
-        payload: &Value,
-    ) -> Result<Vec<ProjectionMutation>, StoreError>;
-}
+pub use colossus_ports::ProjectionHandler;
 
 /// Result of one bounded worker or drain operation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -47,6 +25,11 @@ pub struct ProjectionWorker {
     store: Arc<dyn ProjectionStore>,
     handlers: Vec<Arc<dyn ProjectionHandler>>,
     operation_gate: Mutex<()>,
+    reset_gate: RwLock<()>,
+}
+
+fn reset_lock_error<T>(_: std::sync::PoisonError<T>) -> StoreError {
+    StoreError::Adapter("projection worker reset lock was poisoned".into())
 }
 
 impl ProjectionWorker {
@@ -71,6 +54,7 @@ impl ProjectionWorker {
             store,
             handlers,
             operation_gate: Mutex::new(()),
+            reset_gate: RwLock::new(()),
         })
     }
 
@@ -79,17 +63,18 @@ impl ProjectionWorker {
         let _operation = self.operation_gate.lock().map_err(|_| {
             StoreError::Adapter("projection worker operation lock was poisoned".into())
         })?;
-        self.run_once_inner(limit_per_projection)
+        self.run_once_inner(limit_per_projection, &self.handlers)
     }
 
     fn run_once_inner(
         &self,
         limit_per_projection: usize,
+        handlers: &[Arc<dyn ProjectionHandler>],
     ) -> Result<ProjectionRunReport, StoreError> {
         let mut applied = 0_u64;
         let mut pending = ProjectionOverlay::new(self.store.as_ref());
         let mut pages = BTreeMap::new();
-        for handler in &self.handlers {
+        for handler in handlers {
             let position = self.store.position(handler.name())?;
             let Some(from_sequence) = position.checked_add(1) else {
                 continue;
@@ -112,7 +97,7 @@ impl ProjectionWorker {
             let through_sequence = last_event.global_sequence;
             for (_, event) in page.iter() {
                 let mutations = if handler.applies_to(event) {
-                    let payload = if handler.requires_payload() {
+                    let payload = if handler.requires_event_payload(event) {
                         self.journal.decrypt_payload(event)?
                     } else {
                         Value::Null
@@ -125,8 +110,7 @@ impl ProjectionWorker {
             }
             applied = applied.saturating_add(through_sequence.saturating_sub(position));
         }
-        let batches = self
-            .handlers
+        let batches = handlers
             .iter()
             .filter_map(|handler| pending.take_batch(handler.name()))
             .collect::<Vec<_>>();
@@ -135,7 +119,7 @@ impl ProjectionWorker {
         }
         Ok(ProjectionRunReport {
             applied,
-            projections: self.status()?,
+            projections: self.status_for(handlers)?,
         })
     }
 
@@ -186,16 +170,33 @@ impl ProjectionWorker {
         batch_limit: usize,
         max_rounds: usize,
     ) -> Result<ProjectionRunReport, StoreError> {
+        self.drain_selected(batch_limit, max_rounds, |_| true)
+    }
+
+    /// Replay the selected projections without waiting for other read models.
+    pub fn drain_selected(
+        &self,
+        batch_limit: usize,
+        max_rounds: usize,
+        select: impl Fn(&str) -> bool,
+    ) -> Result<ProjectionRunReport, StoreError> {
         let _operation = self.operation_gate.lock().map_err(|_| {
             StoreError::Adapter("projection worker operation lock was poisoned".into())
         })?;
-        self.drain_inner(batch_limit, max_rounds)
+        let handlers = self
+            .handlers
+            .iter()
+            .filter(|handler| select(handler.name()))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.drain_inner(batch_limit, max_rounds, &handlers)
     }
 
     fn drain_inner(
         &self,
         batch_limit: usize,
         max_rounds: usize,
+        handlers: &[Arc<dyn ProjectionHandler>],
     ) -> Result<ProjectionRunReport, StoreError> {
         if batch_limit == 0 || max_rounds == 0 {
             return Err(StoreError::Adapter(
@@ -204,7 +205,7 @@ impl ProjectionWorker {
         }
         let mut applied = 0_u64;
         for _ in 0..max_rounds {
-            let report = self.run_once_inner(batch_limit)?;
+            let report = self.run_once_inner(batch_limit, handlers)?;
             applied = applied.saturating_add(report.applied);
             if report.projections.iter().all(|status| status.ready) {
                 return Ok(ProjectionRunReport {
@@ -218,8 +219,26 @@ impl ProjectionWorker {
         }
         Ok(ProjectionRunReport {
             applied,
-            projections: self.status()?,
+            projections: self.status_for(handlers)?,
         })
+    }
+
+    /// Keep a projection's records and watermark from resetting during a read.
+    /// Ordinary forward replay may continue while the read is in progress.
+    pub fn read_without_reset<T>(
+        &self,
+        read: impl FnOnce() -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let _reset = self.reset_gate.read().map_err(reset_lock_error)?;
+        read()
+    }
+
+    fn reset<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Result<(), StoreError> {
+        let _reset = self.reset_gate.write().map_err(reset_lock_error)?;
+        for name in names {
+            self.store.reset(name)?;
+        }
+        Ok(())
     }
 
     /// Delete one named projection and rebuild it from sequence one.
@@ -230,8 +249,8 @@ impl ProjectionWorker {
         if !self.handlers.iter().any(|handler| handler.name() == name) {
             return Err(StoreError::NotFound(format!("projection {name}")));
         }
-        self.store.reset(name)?;
-        self.drain_inner(256, 16_384)
+        self.reset([name])?;
+        self.drain_inner(256, 16_384, &self.handlers)
     }
 
     /// Delete and rebuild every registered projection.
@@ -239,16 +258,21 @@ impl ProjectionWorker {
         let _operation = self.operation_gate.lock().map_err(|_| {
             StoreError::Adapter("projection worker operation lock was poisoned".into())
         })?;
-        for handler in &self.handlers {
-            self.store.reset(handler.name())?;
-        }
-        self.drain_inner(256, 16_384)
+        self.reset(self.handlers.iter().map(|handler| handler.name()))?;
+        self.drain_inner(256, 16_384, &self.handlers)
     }
 
     /// Report current journal head, position, lag, and readiness.
     pub fn status(&self) -> Result<Vec<ProjectionStatus>, StoreError> {
+        self.status_for(&self.handlers)
+    }
+
+    fn status_for(
+        &self,
+        handlers: &[Arc<dyn ProjectionHandler>],
+    ) -> Result<Vec<ProjectionStatus>, StoreError> {
         let (head, _) = self.journal.head()?;
-        self.handlers
+        handlers
             .iter()
             .map(|handler| {
                 let position = self.store.position(handler.name())?;

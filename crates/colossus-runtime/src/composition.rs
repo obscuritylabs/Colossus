@@ -107,6 +107,7 @@ pub struct Runtime {
     pub(super) run_input_media: Arc<JournalRunInputMediaResolver>,
     pub(super) recovery_reason: Option<String>,
     pub(super) projections: Arc<ProjectionWorker>,
+    pub(super) session_catalog: Arc<crate::session_catalog::RuntimeSessionCatalog>,
     pub(super) session_activity: Arc<ProjectedSessionActivityReader>,
     pub(super) audit_exports: Arc<AuditExportService>,
     pub(super) telemetry: Arc<TelemetryService>,
@@ -114,6 +115,7 @@ pub struct Runtime {
     pub(super) plugin_store: Option<Arc<PluginStore>>,
     pub(super) plugin_configuration: Arc<PluginsConfig>,
     pub(super) plugin_catalog: Arc<PluginCatalogSource>,
+    pub(super) startup_plugin_skill_ids: Vec<String>,
     pub(super) plugin_credentials: Arc<dyn CredentialResolver>,
     pub(super) tls_roots: AdditionalRootCertificates,
     pub(super) plugin_executor: Arc<dyn EffectExecutor>,
@@ -427,10 +429,12 @@ impl Runtime {
         let instruction_snapshots = Arc::new(InstructionSnapshotStore::new(Arc::clone(&journal)));
         let work: Arc<dyn WorkRepository> =
             Arc::new(EventSourcedWorkRepository::new(Arc::clone(&journal)));
+        let mut projection_handlers = default_handlers();
+        projection_handlers.push(Arc::new(colossus_session::SessionCatalogProjection));
         let projections = Arc::new(ProjectionWorker::new(
             Arc::clone(&journal),
             Arc::clone(&projection_store),
-            default_handlers(),
+            projection_handlers,
         )?);
         let session_activity = Arc::new(ProjectedSessionActivityReader::new(Arc::clone(
             &projection_store,
@@ -461,18 +465,22 @@ impl Runtime {
             .transpose()?
             .map(Arc::new);
         let mut plugin_configuration = config.plugins.clone();
-        if let Some(store) = &plugin_store
-            && let Err(error) = store
-                .bootstrap_bundled(colossus_bundled_plugins::core_artifact()?, terminal_actor())
-        {
-            // Preserve an already recorded, corrupt core as an unavailable installation.
-            // Never replace its leased tree or fall back to an older bundled version.
-            if matches!(error, StoreError::Verification(_)) && store.bundled_digest()?.is_some() {
-                plugin_configuration.exclude.push("colossus".into());
-            } else {
-                return Err(error.into());
+        let startup_bundled = if let Some(store) = &plugin_store {
+            match store.bootstrap_bundled_for_startup(
+                colossus_bundled_plugins::core_artifact()?,
+                terminal_actor(),
+            ) {
+                Ok(bundled) => Some(bundled),
+                // Preserve an already recorded core as unavailable until verified again.
+                Err(StoreError::Verification(_)) if store.bundled_digest()?.is_some() => {
+                    plugin_configuration.exclude.push("colossus".into());
+                    None
+                }
+                Err(error) => return Err(error.into()),
             }
-        }
+        } else {
+            None
+        };
         let workspace_plugins = Arc::new(crate::workspace_plugins::WorkspacePlugins::new(
             &workspace,
             colossus_home.as_deref(),
@@ -496,7 +504,11 @@ impl Runtime {
             workspace: workspace.clone(),
             mcp_template: std::sync::OnceLock::new(),
         });
-        let (active_plugins, _startup_plugin_leases) = plugin_catalog.snapshot()?;
+        let (active_plugins, _startup_plugin_leases) = plugin_catalog.snapshot(startup_bundled)?;
+        let startup_plugin_skill_ids = active_plugins
+            .iter()
+            .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
+            .collect();
         let plugins = Arc::new(active_plugins);
         let active_plugin_extensions = compile_active_plugin_extensions(
             &plugins,
@@ -508,8 +520,15 @@ impl Runtime {
         )?;
         let security_posture =
             security_posture::build_security_posture(config, &active_plugin_extensions.mcp);
-        let sessions: Arc<dyn SessionRepository> =
-            Arc::new(EventSourcedSessionRepository::new(Arc::clone(&journal)));
+        let session_catalog = Arc::new(crate::session_catalog::RuntimeSessionCatalog::new(
+            Arc::clone(&journal),
+            Arc::clone(&projection_store),
+            Arc::clone(&projections),
+        )?);
+        let sessions: Arc<dyn SessionRepository> = Arc::new(
+            EventSourcedSessionRepository::new(Arc::clone(&journal))
+                .with_catalog(session_catalog.clone()),
+        );
         let presentation: Arc<dyn PresentationRepository> = Arc::new(
             EventSourcedPresentationRepository::new(Arc::clone(&journal)),
         );
@@ -529,7 +548,11 @@ impl Runtime {
                 || -> Result<(), RuntimeError> {
                     recover_interrupted_subagents(work.as_ref(), work_service.as_ref())?;
                     communication.recover()?;
-                    let report = projections.drain(256, 16_384)?;
+                    let report = projections.drain_selected(
+                        256,
+                        16_384,
+                        crate::session_catalog::required_for_open_and_checkpoint,
+                    )?;
                     if report.projections.iter().any(|status| !status.ready) {
                         return Err(StoreError::Adapter(
                             "startup projections did not catch up within the configured bound"
@@ -1161,7 +1184,11 @@ impl Runtime {
                 "workflow_recovery",
                 || -> Result<(), RuntimeError> {
                     workflows.recover_interrupted()?;
-                    projections.drain(256, 16_384)?;
+                    projections.drain_selected(
+                        256,
+                        16_384,
+                        crate::session_catalog::required_for_open_and_checkpoint,
+                    )?;
                     Ok(())
                 },
             )?;
@@ -1181,6 +1208,7 @@ impl Runtime {
             run_input_media,
             recovery_reason,
             projections,
+            session_catalog,
             session_activity,
             audit_exports,
             telemetry,
@@ -1188,6 +1216,7 @@ impl Runtime {
             plugin_store,
             plugin_configuration: Arc::new(plugin_configuration),
             plugin_catalog,
+            startup_plugin_skill_ids,
             plugin_credentials: provider_credentials,
             tls_roots,
             plugin_executor,

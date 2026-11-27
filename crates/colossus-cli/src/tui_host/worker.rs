@@ -432,6 +432,25 @@ impl WorkerInteractiveHost {
         outcome.map_err(|error| error.to_string())
     }
 
+    async fn live_skill_ids(&self) -> Result<Vec<String>, String> {
+        let skills = self.value(WorkerOperation::PluginsInventory).await?;
+        Ok(skills
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|plugin| plugin.get("available").and_then(Value::as_bool) == Some(true))
+            .flat_map(|plugin| {
+                plugin
+                    .get("skills")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(|skill| skill.get("id").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect())
+    }
+
     async fn call_worker_interactive<T: serde::de::DeserializeOwned>(
         &self,
         operation: WorkerOperation,
@@ -541,15 +560,15 @@ impl WorkerInteractiveHost {
     }
 
     async fn footer(&self, session_id: &str, status: &str) -> Result<FooterState, String> {
-        self.footer_with_usage(session_id, status, FooterUsageSelection::Latest)
+        self.footer_with_metrics(session_id, status, FooterMetrics::Latest)
             .await
     }
 
-    async fn footer_with_usage(
+    async fn footer_with_metrics(
         &self,
         session_id: &str,
         status: &str,
-        usage_selection: FooterUsageSelection<'_>,
+        metrics: FooterMetrics<'_>,
     ) -> Result<FooterState, String> {
         let route: ProviderRoute = serde_json::from_value(
             self.value(WorkerOperation::ProviderRoute {
@@ -563,41 +582,43 @@ impl WorkerInteractiveHost {
             &self.configured_models().await?,
             &self.model_selections.get(session_id)?,
         )?;
-        let (context, usage, message_count) = if self.drafts.contains(session_id)? {
-            (None, None, 0)
-        } else {
-            // The optional context metric uses a separate, ordinary worker
-            // request with its own policy boundary. A denial here must not
-            // replace a completed interactive run with a footer error.
-            let context = self
-                .value(WorkerOperation::ContextStatus {
-                    session_id: session_id.into(),
-                    role: "primary".into(),
-                })
-                .await
-                .ok()
-                .and_then(|value| serde_json::from_value::<ContextStatus>(value).ok());
-            let session: SessionSummary = serde_json::from_value(
-                self.value(WorkerOperation::SessionGet {
-                    session_id: session_id.into(),
-                })
-                .await?,
-            )
-            .map_err(|error| error.to_string())?;
-            let usage_run_id = usage_selection.run_id(session.last_run_id.as_deref());
-            let usage = if let Some(run_id) = usage_run_id {
-                self.value(WorkerOperation::RunTokenUsage {
-                    session_id: session_id.into(),
-                    run_id: run_id.into(),
-                })
-                .await
-                .ok()
-                .and_then(|value| serde_json::from_value::<RunTokenUsage>(value).ok())
-                .filter(|usage| usage.session_id == session_id && usage.run_id == run_id)
-            } else {
-                None
-            };
-            (context, usage, session.message_count)
+        let (context, usage, message_count) = match metrics {
+            FooterMetrics::Opened { message_count } => (None, None, message_count),
+            _ if self.drafts.contains(session_id)? => (None, None, 0),
+            _ => {
+                // The optional context metric uses a separate, ordinary worker
+                // request with its own policy boundary. A denial here must not
+                // replace a completed interactive run with a footer error.
+                let context = self
+                    .value(WorkerOperation::ContextStatus {
+                        session_id: session_id.into(),
+                        role: "primary".into(),
+                    })
+                    .await
+                    .ok()
+                    .and_then(|value| serde_json::from_value::<ContextStatus>(value).ok());
+                let session: SessionSummary = serde_json::from_value(
+                    self.value(WorkerOperation::SessionGet {
+                        session_id: session_id.into(),
+                    })
+                    .await?,
+                )
+                .map_err(|error| error.to_string())?;
+                let usage_run_id = metrics.run_id(session.last_run_id.as_deref());
+                let usage = if let Some(run_id) = usage_run_id {
+                    self.value(WorkerOperation::RunTokenUsage {
+                        session_id: session_id.into(),
+                        run_id: run_id.into(),
+                    })
+                    .await
+                    .ok()
+                    .and_then(|value| serde_json::from_value::<RunTokenUsage>(value).ok())
+                    .filter(|usage| usage.session_id == session_id && usage.run_id == run_id)
+                } else {
+                    None
+                };
+                (context, usage, session.message_count)
+            }
         };
         let approval = self.approval_mode.snapshot()?;
         Ok(FooterState {
@@ -617,15 +638,42 @@ impl WorkerInteractiveHost {
         })
     }
 
-    async fn switch_session(&self, session_id: String) -> Result<HostCommandResult, String> {
-        let session = self
-            .value(WorkerOperation::SessionGet {
-                session_id: session_id.clone(),
+    async fn session_lifecycle(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<colossus_contracts::SessionLifecycle>, String> {
+        let lifecycle: Option<colossus_contracts::SessionLifecycle> = serde_json::from_value(
+            self.value(WorkerOperation::SessionLifecycle {
+                session_id: session_id.into(),
             })
-            .await?;
-        if session.is_null() {
-            return Err(format!("session not found: {session_id}"));
+            .await?,
+        )
+        .map_err(|error| error.to_string())?;
+        if lifecycle
+            .as_ref()
+            .is_some_and(|lifecycle| lifecycle.session_id != session_id)
+        {
+            return Err("The host returned another session's archive lifecycle.".into());
         }
+        Ok(lifecycle)
+    }
+
+    async fn ensure_active_session(&self, session_id: &str) -> Result<(), String> {
+        let lifecycle = self
+            .session_lifecycle(session_id)
+            .await?
+            .ok_or_else(|| format!("session not found: {session_id}"))?;
+        if lifecycle.archived {
+            return Err(
+                "This session is archived. Restore it from Sessions > Archived before opening it."
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    async fn switch_session(&self, session_id: String) -> Result<HostCommandResult, String> {
+        self.ensure_active_session(&session_id).await?;
         let page = serde_json::from_value::<SessionMessagePage>(
             self.value(WorkerOperation::SessionMessagesPage {
                 session_id: session_id.clone(),
@@ -638,6 +686,9 @@ impl WorkerInteractiveHost {
         let pending_sandbox_boundary_acknowledgement = self
             .pending_sandbox_boundary_acknowledgement(&session_id)
             .await?;
+        let footer = self
+            .footer_with_metrics(&session_id, "ready", FooterMetrics::opened(&page))
+            .await?;
         Ok(HostCommandResult {
             document: PresentationDocument::new(),
             session: Some((
@@ -648,7 +699,7 @@ impl WorkerInteractiveHost {
             preferences: None,
             completions: None,
             sticky_skills: None,
-            footer: Some(self.footer(&session_id, "ready").await?),
+            footer: Some(footer),
             plan_selection: PlanSelectionUpdate::Clear,
             continue_queue: true,
             clear_transcript: false,
@@ -1109,7 +1160,7 @@ impl WorkerInteractiveHost {
                     GoalRunOutcome::Failed { .. } => "failed",
                 };
                 let footer = self
-                    .footer_with_usage(
+                    .footer_with_metrics(
                         session_id,
                         status,
                         goal_outcome_usage_selection(&outcome, session_id),
@@ -1139,7 +1190,7 @@ impl WorkerInteractiveHost {
                 // Older workers can reject the optional usage query. Preserve
                 // the successful unary Goal result without retrying execution.
                 let footer = self
-                    .footer_with_usage(
+                    .footer_with_metrics(
                         session_id,
                         "ok",
                         goal_result_usage_selection(&outcome, session_id),
@@ -1259,22 +1310,11 @@ impl WorkerInteractiveHost {
                             )
                             .await
                             .map_err(|error| error.to_string())?;
-                        let inventory: Vec<PluginInventoryEntry> = serde_json::from_value(
-                            self.value(WorkerOperation::PluginsInventory).await?,
-                        )
-                        .map_err(|error| error.to_string())?;
-                        let skills = inventory
-                            .iter()
-                            .filter(|plugin| plugin.available)
-                            .flat_map(|plugin| plugin.skills.iter().map(|skill| skill.id.clone()))
-                            .collect::<Vec<_>>();
-                        return Ok(HostCommandResult {
-                            completions: Some(terminal_completion_values(&skills, &self.themes)),
-                            ..HostCommandResult::document(document_from_json(
-                                &result,
-                                Some("Plugins"),
-                            ))
-                        });
+                        let _ = events.send(HostEvent::SkillCompletionsChanged).await;
+                        return Ok(HostCommandResult::document(document_from_json(
+                            &result,
+                            Some("Plugins"),
+                        )));
                     }
                     PluginsCommand::List => plugins_document(&plugins),
                     PluginsCommand::Show(name) => plugin_document(
@@ -1698,6 +1738,14 @@ impl WorkerInteractiveHost {
 
 #[async_trait]
 impl InteractiveHost for WorkerInteractiveHost {
+    fn refreshes_skill_completions(&self, _: SkillCompletionRefresh) -> bool {
+        true
+    }
+
+    async fn skill_completion_ids(&self) -> Result<Option<Vec<String>>, String> {
+        self.live_skill_ids().await.map(Some)
+    }
+
     async fn save_support_report(
         &self,
         output: PathBuf,
@@ -1825,15 +1873,9 @@ impl InteractiveHost for WorkerInteractiveHost {
         &self,
         session_id: &str,
     ) -> Result<Vec<InteractiveSessionBrowserMessage>, String> {
-        let summary = self
-            .value(WorkerOperation::SessionGet {
-                session_id: session_id.into(),
-            })
-            .await?;
-        if summary.is_null() {
-            return Err("The selected session was not found.".into());
-        }
-        serde_json::from_value::<SessionSummary>(summary).map_err(|error| error.to_string())?;
+        self.session_lifecycle(session_id)
+            .await?
+            .ok_or_else(|| "The selected session was not found.".to_owned())?;
         let mut collector = SessionPreviewCollector::new();
         while collector.wants_older_page() {
             let page = self
@@ -1871,30 +1913,7 @@ impl InteractiveHost for WorkerInteractiveHost {
     async fn bootstrap(&self, request: BootstrapRequest) -> Result<InteractiveSnapshot, String> {
         let fresh_session = request.session_id.is_none() && !request.resume_latest;
         let session_id = if let Some(session_id) = request.session_id {
-            let lifecycle: Option<colossus_contracts::SessionLifecycle> = serde_json::from_value(
-                self.value(WorkerOperation::SessionLifecycle {
-                    session_id: session_id.clone(),
-                })
-                .await?,
-            )
-            .map_err(|error| error.to_string())?;
-            let lifecycle =
-                lifecycle.ok_or_else(|| "requested session was not found".to_owned())?;
-            if lifecycle.session_id != session_id {
-                return Err("The host returned another session's archive lifecycle.".into());
-            }
-            if lifecycle.archived {
-                return Err("This session is archived. Restore it from Sessions > Archived before opening it.".into());
-            }
-            let value = self
-                .value(WorkerOperation::SessionGet { session_id })
-                .await?;
-            if value.is_null() {
-                return Err("requested session was not found".into());
-            }
-            serde_json::from_value::<SessionSummary>(value)
-                .map_err(|error| error.to_string())?
-                .id
+            session_id
         } else if request.resume_latest {
             serde_json::from_value::<SessionSummary>(
                 self.value(WorkerOperation::SessionLatest).await?,
@@ -1907,6 +1926,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         let (transcript, pending_sandbox_boundary_acknowledgement) = if fresh_session {
             (empty_transcript(), None)
         } else {
+            self.ensure_active_session(&session_id).await?;
             (
                 serde_json::from_value(
                     self.value(WorkerOperation::SessionMessagesPage {
@@ -1932,22 +1952,6 @@ impl InteractiveHost for WorkerInteractiveHost {
             .await?,
         )
         .map_err(|error| error.to_string())?;
-        let skills = self.value(WorkerOperation::PluginsInventory).await?;
-        let skill_names = skills
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|plugin| plugin.get("available").and_then(Value::as_bool) == Some(true))
-            .flat_map(|plugin| {
-                plugin
-                    .get("skills")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-            })
-            .filter_map(|skill| skill.get("id").and_then(Value::as_str))
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
         let status = self.value(WorkerOperation::Ping).await?;
         if self.approval_mode()?.is_none() {
             match status.get("approval_mode") {
@@ -1979,7 +1983,9 @@ impl InteractiveHost for WorkerInteractiveHost {
             .unwrap_or("configured")
             .to_owned();
         Ok(InteractiveSnapshot {
-            footer: self.footer(&session_id, "ready").await?,
+            footer: self
+                .footer_with_metrics(&session_id, "ready", FooterMetrics::opened(&transcript))
+                .await?,
             session_id,
             session_saved: !fresh_session,
             fresh_session,
@@ -1988,7 +1994,7 @@ impl InteractiveHost for WorkerInteractiveHost {
             transcript,
             preferences,
             history,
-            completions: terminal_completion_values(&skill_names, &self.themes),
+            completions: terminal_completion_values(&[], &self.themes),
             security_posture,
             pending_sandbox_boundary_acknowledgement,
         })
@@ -2136,22 +2142,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         control: RunControl,
     ) -> Result<HostRunResult, String> {
         let _operation = self.operations.enter(false).await?;
-        let skills = self.value(WorkerOperation::PluginsInventory).await?;
-        let skill_names = skills
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|plugin| plugin.get("available").and_then(Value::as_bool) == Some(true))
-            .flat_map(|plugin| {
-                plugin
-                    .get("skills")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-            })
-            .filter_map(|skill| skill.get("id").and_then(Value::as_str))
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
+        let skill_names = self.live_skill_ids().await?;
         let (prompt, explicit_skills) =
             crate::resolve_skill_mentions(&request.prompt, &skill_names);
         if prompt.trim().is_empty() {
@@ -2213,11 +2204,7 @@ impl InteractiveHost for WorkerInteractiveHost {
             AgentRunOutcome::Cancelled { result } => result.run_id.as_str(),
         };
         let footer = self
-            .footer_with_usage(
-                &request.session_id,
-                status,
-                FooterUsageSelection::Exact(run_id),
-            )
+            .footer_with_metrics(&request.session_id, status, FooterMetrics::Exact(run_id))
             .await?;
         Ok(HostRunResult {
             outcome,
@@ -2248,11 +2235,7 @@ impl InteractiveHost for WorkerInteractiveHost {
             request.revision,
         )?;
         let mut fallback_footer = self
-            .footer_with_usage(
-                &request.session_id,
-                "executing",
-                FooterUsageSelection::Unavailable,
-            )
+            .footer_with_metrics(&request.session_id, "executing", FooterMetrics::Unavailable)
             .await?;
         let mut observer = WorkerChannelObserver {
             sender: events.clone(),
@@ -2295,11 +2278,7 @@ impl InteractiveHost for WorkerInteractiveHost {
                     Err(read_error) => Err(read_error),
                 };
                 let (footer, footer_warning) = match self
-                    .footer_with_usage(
-                        &request.session_id,
-                        "failed",
-                        FooterUsageSelection::Unavailable,
-                    )
+                    .footer_with_metrics(&request.session_id, "failed", FooterMetrics::Unavailable)
                     .await
                 {
                     Ok(footer) => (footer, None),
@@ -2340,7 +2319,7 @@ impl InteractiveHost for WorkerInteractiveHost {
             } => "failed",
         };
         let (footer, footer_warning) = match self
-            .footer_with_usage(&request.session_id, status, plan_usage_selection(&outcome))
+            .footer_with_metrics(&request.session_id, status, plan_usage_selection(&outcome))
             .await
         {
             Ok(footer) => (footer, None),

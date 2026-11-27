@@ -38,7 +38,9 @@ The top bar shows the workspace, session, and installed version when there is
 enough vertical space. The composer has a neutral background that separates your
 draft from the conversation. A single status row below it highlights the mode and
 security warnings, alongside readiness, approval handling, the model route, and
-context budget. Smaller widths shorten or omit runtime details to keep status
+context budget when available. When you open a saved conversation, use
+`/context status` or `/status` to fetch exact context or run usage. Smaller widths
+shorten or omit runtime details to keep status
 and warnings readable. Compact terminals omit the top bar.
 
 On wider terminals, a right sidebar shows subagents and workspace status,
@@ -82,7 +84,8 @@ Enter a slash command in the composer. These are useful starting points:
 | `/theme` | Theme previews and selection |
 
 Type `/` to complete commands. Type `@` at a skill token to choose an active plugin
-skill. Use Up/Down to browse suggestions and Tab to accept one. For every command
+skill. In a worker-backed terminal, the composer can open while skill suggestions load.
+Use Up/Down to browse suggestions and Tab to accept one. For every command
 and key, see [TUI commands and keys](../reference/tui.md).
 See [Context and snapshots](sessions-context.md) to read the budget and manage
 long-session history.

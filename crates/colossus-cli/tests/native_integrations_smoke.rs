@@ -37,6 +37,10 @@ fn run(binary: &Path, config: &Path, workspace: &Path, arguments: &[&str]) -> st
 }
 
 fn read_request(stream: &mut TcpStream) -> String {
+    // Windows accepts connections with the listener's nonblocking mode.
+    stream
+        .set_nonblocking(false)
+        .expect("blocking fixture read");
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .expect("timeout");

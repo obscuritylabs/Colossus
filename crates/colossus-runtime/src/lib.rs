@@ -95,6 +95,7 @@ mod sandbox_boundary;
 mod security_posture;
 mod services;
 mod session_activity;
+mod session_catalog;
 mod sessions_context;
 mod shared_storage;
 mod shared_storage_fence;

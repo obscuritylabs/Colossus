@@ -543,7 +543,6 @@ pub struct TuiState {
     pub(super) native_history_pages_loaded: usize,
     pub(super) transcript_epoch: u64,
     pub(super) welcome_visible: bool,
-    /// One-shot launch branding; later workspace sessions are never armed.
     pub(super) security_posture_entry: Option<usize>,
     pub(super) should_exit: bool,
 }
@@ -795,6 +794,19 @@ impl TuiState {
 
     pub(super) fn set_completions(&mut self, completions: Vec<String>) {
         self.completions = with_local_completions(completions);
+    }
+
+    pub(super) fn set_skill_completions(&mut self, skills: &[String]) {
+        self.completions
+            .retain(|candidate| !candidate.starts_with('@'));
+        self.completions
+            .extend(skills.iter().map(|skill| format!("@{skill}")));
+        if self
+            .structured_completion_context()
+            .is_some_and(|context| context.kind == CompletionKind::Skill)
+        {
+            self.composer.completion_index = None;
+        }
     }
 
     pub(super) fn apply_plan_selection(
