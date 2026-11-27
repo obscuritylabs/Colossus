@@ -2,6 +2,7 @@ use super::*;
 use crate::contract::DEFAULT_GOAL_ITERATIONS;
 
 const KEEP_PROCESS_EXECUTION_BLOCKED: &str = "Keep process execution blocked";
+pub(super) const TERMINAL_INPUTS_PER_FRAME: usize = 64;
 
 /// Launch the terminal UI and retain exclusive ownership of all terminal writes.
 pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Result<(), TuiError> {
@@ -42,6 +43,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     schedule_visible_previews(&mut state, Arc::clone(&host), event_tx.clone());
     let mut terminal = OwnedTerminal::new(screen_mode, allow_native_clipboard)?;
     let mut refresh_startup_skills = true;
+    let mut pending_input = None;
 
     loop {
         state.process_action(Arc::clone(&host));
@@ -78,46 +80,27 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
             break;
         }
         observe_lifecycle(&state, lifecycle.as_deref());
-        if event::poll(Duration::from_millis(33))? {
-            match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    handle_key(
-                        &mut state,
-                        key,
-                        Arc::clone(&host),
-                        event_tx.clone(),
-                        screen_mode,
-                    );
-                }
-                Event::Mouse(mouse) => {
-                    if let Some(action) = provider_recovery_mouse(&state, mouse) {
-                        apply_provider_recovery_action(
-                            &mut state,
-                            action,
-                            Arc::clone(&host),
-                            event_tx.clone(),
-                        );
-                    } else if handle_mouse(&mut state, mouse) {
-                        request_older_page(&mut state, Arc::clone(&host), event_tx.clone());
-                    }
-                }
-                Event::Paste(text)
-                    if !state.workspace_center
-                        && !state.workspace_archiving
-                        && (!state.dictation.active
-                            || (state.dictation.paused && !state.dictation.pending)) =>
-                {
-                    state.selecting_text = false;
-                    state.text_selection.clear();
-                    insert_active_text(&mut state, &text)
-                }
-                Event::Resize(_, _) => {
-                    state.selecting_text = false;
-                    state.text_selection.clear();
-                }
-                _ => {}
-            }
-            observe_lifecycle(&state, lifecycle.as_deref());
+        let input = match pending_input.take() {
+            Some(input) => Some(input),
+            None => read_terminal_input(Duration::from_millis(33))?,
+        };
+        if let Some(input) = input {
+            let composer_focused = state.overlay.is_none()
+                && !state.workspace_center
+                && !state.workspace_archiving
+                && !state.dictation.active
+                && !state.selecting_text
+                && !state.text_selection.active();
+            dispatch_terminal_batch(
+                input,
+                &mut pending_input,
+                composer_focused,
+                || read_terminal_input(Duration::ZERO),
+                |input| {
+                    apply_terminal_input(&mut state, input, &host, &event_tx, screen_mode);
+                    observe_lifecycle(&state, lifecycle.as_deref());
+                },
+            )?;
         }
     }
     state.cancel_all();
@@ -133,6 +116,80 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     }
     terminal.finish()?;
     Ok(())
+}
+
+fn read_terminal_input(timeout: Duration) -> io::Result<Option<Event>> {
+    if event::poll(timeout)? {
+        return event::read().map(Some);
+    }
+    Ok(None)
+}
+
+pub(super) fn dispatch_terminal_batch(
+    first: Event,
+    pending: &mut Option<Event>,
+    composer_focused: bool,
+    mut read_ready: impl FnMut() -> io::Result<Option<Event>>,
+    mut dispatch: impl FnMut(Event),
+) -> io::Result<()> {
+    let batchable = |input: &Event| match input {
+        // Crossterm on Windows delivers native pastes as individual key records.
+        Event::Key(key) if key.kind != KeyEventKind::Press => true,
+        Event::Key(key) if composer_focused => {
+            matches!(key.code, KeyCode::Char(_)) && KeyModifiers::SHIFT.contains(key.modifiers)
+        }
+        _ => false,
+    };
+    let batch = batchable(&first);
+    dispatch(first);
+    if batch {
+        for _ in 1..TERMINAL_INPUTS_PER_FRAME {
+            let Some(input) = read_ready()? else { break };
+            if !batchable(&input) {
+                // The next frame updates hit areas and focus before this input is handled.
+                *pending = Some(input);
+                break;
+            }
+            dispatch(input);
+        }
+    }
+    Ok(())
+}
+
+fn apply_terminal_input(
+    state: &mut TuiState,
+    input: Event,
+    host: &Arc<dyn InteractiveHost>,
+    event_tx: &mpsc::Sender<HostEvent>,
+    screen_mode: ScreenMode,
+) {
+    match input {
+        Event::Key(key) if key.kind == KeyEventKind::Press => {
+            handle_key(state, key, Arc::clone(host), event_tx.clone(), screen_mode);
+        }
+        Event::Mouse(mouse) => {
+            if let Some(action) = provider_recovery_mouse(state, mouse) {
+                apply_provider_recovery_action(state, action, Arc::clone(host), event_tx.clone());
+            } else if handle_mouse(state, mouse) {
+                request_older_page(state, Arc::clone(host), event_tx.clone());
+            }
+        }
+        Event::Paste(text)
+            if !state.workspace_center
+                && !state.workspace_archiving
+                && (!state.dictation.active
+                    || (state.dictation.paused && !state.dictation.pending)) =>
+        {
+            state.selecting_text = false;
+            state.text_selection.clear();
+            insert_active_text(state, &text);
+        }
+        Event::Resize(_, _) => {
+            state.selecting_text = false;
+            state.text_selection.clear();
+        }
+        _ => {}
+    }
 }
 
 pub(super) fn advance_session(
@@ -2350,7 +2407,7 @@ pub(super) fn handle_run_event(state: &mut TuiState, envelope: RunEventEnvelope)
 pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResult) -> bool {
     let continue_queue = result.continue_queue;
     if result.clear_transcript {
-        state.transcript.clear();
+        state.transcript_mut().clear();
         state.transcript_sources.clear();
         state.security_posture_entry = None;
         state.transcript_epoch = state.transcript_epoch.wrapping_add(1);
@@ -2384,7 +2441,7 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
         state.selected_plan = None;
         let (transcript, transcript_sources) =
             transcript_from_messages(page.messages, &state.preferences);
-        state.transcript = transcript;
+        *state.transcript_mut() = transcript;
         state.transcript_sources = transcript_sources;
         state.transcript_epoch = state.transcript_epoch.wrapping_add(1);
         state.native_history_pages_loaded = 0;
@@ -2431,6 +2488,7 @@ pub(super) fn update_streaming_assistant(state: &mut TuiState, delta: &str) {
         && let Some(PresentationBlock::Text(text)) = entry.document.blocks.first_mut()
     {
         text.push_str(delta);
+        state.transcript_layout = None;
         if state.scroll_from_bottom > 0 {
             state.preserve_scroll_after_line_change(old_line_count);
         }
@@ -2469,8 +2527,11 @@ fn finalize_intermediate_assistant_output(state: &mut TuiState) {
         entry.temporary = false;
         changed = true;
     }
-    if changed && state.scroll_from_bottom > 0 {
-        state.preserve_scroll_after_line_change(old_line_count);
+    if changed {
+        state.transcript_layout = None;
+        if state.scroll_from_bottom > 0 {
+            state.preserve_scroll_after_line_change(old_line_count);
+        }
     }
 }
 
@@ -2491,6 +2552,7 @@ pub(super) fn finalize_assistant(state: &mut TuiState, output: &str) {
                 PresentationDocument::from_block(PresentationBlock::Markdown(output.into()))
             };
         entry.temporary = false;
+        state.transcript_layout = None;
         if state.scroll_from_bottom > 0 {
             state.preserve_scroll_after_line_change(old_line_count);
         }

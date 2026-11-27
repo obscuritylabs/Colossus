@@ -36,6 +36,7 @@ pub(super) struct PreviewCache {
     assets: BTreeMap<String, PreviewAsset>,
     tick: u64,
     memory_bytes: u64,
+    layout_revision: u64,
 }
 
 struct PreviewAsset {
@@ -70,6 +71,7 @@ impl Default for PreviewCache {
             assets: BTreeMap::new(),
             tick: 0,
             memory_bytes: 0,
+            layout_revision: 0,
         }
     }
 }
@@ -80,6 +82,7 @@ impl PreviewCache {
         self.picker = picker;
         self.assets.clear();
         self.memory_bytes = 0;
+        self.layout_revision = self.layout_revision.wrapping_add(1);
     }
 
     pub(super) fn contains(&self, digest: &str) -> bool {
@@ -90,6 +93,10 @@ impl PreviewCache {
         self.native_graphics
     }
 
+    pub(super) fn layout_revision(&self) -> u64 {
+        self.layout_revision
+    }
+
     pub(super) fn insert(&mut self, digest: String, image: DynamicImage) {
         let decoded_bytes = u64::from(image.width())
             .saturating_mul(u64::from(image.height()))
@@ -97,6 +104,7 @@ impl PreviewCache {
         if decoded_bytes > PREVIEW_CACHE_BYTES {
             return;
         }
+        self.layout_revision = self.layout_revision.wrapping_add(1);
         if let Some(previous) = self.assets.remove(&digest) {
             self.memory_bytes = self.memory_bytes.saturating_sub(previous.memory_bytes());
         }
@@ -158,6 +166,7 @@ impl PreviewCache {
                     .is_some()
             {
                 self.memory_bytes = self.memory_bytes.saturating_sub(decoded_bytes);
+                self.layout_revision = self.layout_revision.wrapping_add(1);
             }
             if self.memory_bytes.saturating_add(decoded_bytes) > PREVIEW_CACHE_BYTES {
                 return;
@@ -218,6 +227,7 @@ impl PreviewCache {
             } else {
                 buffer_lines(&buffer)
             };
+            self.layout_revision = self.layout_revision.wrapping_add(1);
         }
     }
 
