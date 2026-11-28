@@ -435,6 +435,19 @@ async fn stop_one_session_preserves_other_controls_and_pending_approvals() {
 }
 
 #[tokio::test]
+async fn workspace_stop_cancels_an_in_progress_model_card_save() {
+    let (mut workspace, _) = Workspace::new(
+        ScreenMode::Alternate,
+        TuiState::from_snapshot(source("alpha")),
+    );
+    let control = RunControl::default();
+    workspace.model_catalog_control = Some(control.clone());
+    workspace.workspace_action = Some(WorkspaceAction::Stop("alpha".into()));
+    workspace.process_action(host());
+    assert!(control.is_cancelled());
+}
+
+#[tokio::test]
 async fn cancel_all_cancels_each_run_and_denies_each_unanswered_prompt() {
     let (mut workspace, _) = Workspace::new(
         ScreenMode::Alternate,

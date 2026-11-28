@@ -1,5 +1,8 @@
 use super::*;
-use colossus_contracts::{ModelRoute, ProviderModelInfo, TerminalModelProfile};
+use colossus_contracts::{
+    ModelRoute, ProviderModelInfo, SavedTerminalModelRef, TerminalModelCard,
+    TerminalModelCardUpdate, TerminalModelProfile, TerminalModelTarget,
+};
 
 /// TUI startup and terminal-ownership failure.
 #[derive(Debug, Error)]
@@ -962,6 +965,14 @@ pub trait InteractiveHost: Send + Sync {
         Err("Provider model catalogs are unavailable in this host.".into())
     }
 
+    /// Read one editable model card and its saved overrides without probing the provider.
+    async fn terminal_model_card(
+        &self,
+        _target: TerminalModelTarget,
+    ) -> Result<TerminalModelCard, String> {
+        Err("Model card editing is unavailable in this host.".into())
+    }
+
     /// Drain in-process catalog effects before their runtime shuts down.
     async fn finish_model_catalog_reads(&self) {}
 
@@ -970,6 +981,8 @@ pub trait InteractiveHost: Send + Sync {
         &self,
         _session_id: &str,
         _selection: ModelCatalogSelection,
+        _events: mpsc::Sender<HostEvent>,
+        _control: RunControl,
     ) -> Result<ModelCatalogApplied, String> {
         Err("Model selection is unavailable in this host.".into())
     }
@@ -1148,10 +1161,16 @@ pub struct InteractiveModelCatalog {
     pub configured: Vec<ModelRoute>,
     /// Configured provider profile names with a catalog endpoint.
     pub providers: Vec<String>,
+    /// Current-binding saved model cards, including offline discoveries.
+    pub saved: Vec<TerminalModelCard>,
+    /// Whether this host can read and save durable cards.
+    pub supports_model_cards: bool,
     /// Named configuration currently selected, if any.
     pub selected_profile: Option<String>,
     /// Discovered model settings applied for this conversation, if any.
     pub selected_terminal_model: Option<TerminalModelProfile>,
+    /// Saved card currently selected for this conversation, if any.
+    pub selected_saved_model: Option<SavedTerminalModelRef>,
 }
 
 /// Typed, explicit selection from the terminal catalog.
@@ -1162,6 +1181,10 @@ pub enum ModelCatalogSelection {
     Configured(String),
     /// Use one configured provider's discovered model with operator-edited limits.
     Discovered(TerminalModelProfile),
+    /// Use the current settings of a saved card.
+    Saved(SavedTerminalModelRef),
+    /// Persist the edited settings and select the validated route for the next turn.
+    SaveCard(TerminalModelCardUpdate),
 }
 
 /// Validated next-turn model metadata for updating the terminal footer.
@@ -1186,6 +1209,13 @@ pub enum ModelCatalogUpdate {
         profile: String,
         /// Released provider models or a provider-local failure.
         result: Result<Vec<ProviderModelInfo>, String>,
+    },
+    /// One model card finished loading for the current editor.
+    Card {
+        /// Browser-local attempt identity, advanced on each new editor read.
+        request: u64,
+        /// Binding-checked defaults and overrides, or a load error.
+        result: Result<Box<TerminalModelCard>, String>,
     },
     /// The host finished applying the explicit next-turn model choice.
     Applied(Result<ModelCatalogApplied, String>),

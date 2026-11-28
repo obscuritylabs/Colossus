@@ -566,6 +566,9 @@ impl Workspace {
                     if let Some(control) = &state.control {
                         control.cancel();
                     }
+                    if let Some(control) = &state.model_catalog_control {
+                        control.cancel();
+                    }
                     state.cancel_overlay();
                     state.cancel_pending_prompts();
                     state.activity = Some("cancelling after the current effect settles".into());
@@ -720,6 +723,9 @@ impl Workspace {
             state.queue.clear();
             state.queue_paused = true;
             if let Some(control) = &state.control {
+                control.cancel();
+            }
+            if let Some(control) = &state.model_catalog_control {
                 control.cancel();
             }
             state.cancel_overlay();

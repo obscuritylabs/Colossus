@@ -547,6 +547,112 @@ pub struct TerminalModelProfile {
     pub max_output_tokens: u64,
 }
 
+/// Stable terminal-owned choice of a configured profile or exact discovered model.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TerminalModelTarget {
+    /// One explicitly configured model profile.
+    Configured {
+        /// Configured model profile name.
+        profile: String,
+    },
+    /// One exact model offered by an existing provider connection.
+    Discovered {
+        /// Configured provider connection profile.
+        provider_profile: String,
+        /// Exact provider model identifier.
+        model: String,
+    },
+}
+
+/// Operator edits to a terminal model card. Absent fields inherit the defaults.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerminalModelOverrides {
+    /// Total context window before the output and safety reservations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window_tokens: Option<u64>,
+    /// Optional tighter input cap after output and safety reservations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_budget_tokens: Option<u64>,
+    /// Output token reservation for one provider turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
+    /// Structured tool requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<crate::ModelFeatureMode>,
+    /// Streaming provider responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub streaming: Option<crate::ModelFeatureMode>,
+    /// Image input eligibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_inputs: Option<crate::ModelFeatureMode>,
+    /// Responses server compaction preference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_compaction: Option<crate::ModelFeatureMode>,
+    /// Default route reasoning effort for this card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+/// A runtime-validated editable terminal model card and its effective route.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalModelCard {
+    /// Exact card identifier used for reads, updates, and terminal selection.
+    pub target: TerminalModelTarget,
+    /// Opaque identity of the model and its configured provider connection.
+    pub binding: String,
+    /// Effective route for an explicit terminal selection.
+    pub route: ModelRoute,
+    /// Baseline limits before operator edits.
+    pub default_limits: ModelLimits,
+    /// Baseline request preferences and provider declarations.
+    pub default_features: crate::ModelFeatureSettings,
+    /// Baseline reasoning preference before operator edits.
+    pub default_reasoning_effort: Option<ReasoningEffort>,
+    /// Most recently released model metadata available for this card.
+    pub advertised: Option<ProviderModelInfo>,
+    /// Saved operator intent.
+    pub overrides: TerminalModelOverrides,
+    /// Optimistic durable revision, or zero before the first save.
+    pub revision: u64,
+}
+
+/// One selected saved terminal model, bound to its observed provider connection.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedTerminalModelRef {
+    /// Exact configured or discovered target selected by the operator.
+    pub target: TerminalModelTarget,
+    /// Opaque binding returned by the runtime for that target.
+    pub binding: String,
+}
+
+impl TerminalModelCard {
+    /// Capture the selected model's identity while allowing edits to its settings.
+    pub fn saved_ref(&self) -> SavedTerminalModelRef {
+        SavedTerminalModelRef {
+            target: self.target.clone(),
+            binding: self.binding.clone(),
+        }
+    }
+}
+
+/// Replace one terminal model card's operator edits at its observed revision.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalModelCardUpdate {
+    /// Exact edited card.
+    pub target: TerminalModelTarget,
+    /// Model and provider connection identity shown when the editor opened.
+    pub expected_binding: String,
+    /// Revision shown when the editor opened.
+    pub expected_revision: u64,
+    /// Complete replacement, with omitted fields restored to their defaults.
+    pub overrides: TerminalModelOverrides,
+}
+
 /// Explicitly requested, bounded diagnostics for one non-success provider response.
 ///
 /// This contract is released only by explicitly requested local diagnostics after post-effect

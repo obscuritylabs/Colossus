@@ -6,7 +6,7 @@ pub(crate) struct EmbeddedInteractiveHost {
     runtime: Arc<Runtime>,
     themes: ThemeLibrary,
     model_selections: ModelSelections,
-    model_catalog_reads_closed: tokio::sync::RwLock<bool>,
+    model_catalog_closed: tokio::sync::RwLock<bool>,
     router: Arc<TuiPromptRouter>,
     approvals: Arc<TuiApprovalProvider>,
     operations: HostOperationGate,
@@ -24,7 +24,7 @@ impl EmbeddedInteractiveHost {
             runtime,
             themes,
             model_selections: ModelSelections::default(),
-            model_catalog_reads_closed: tokio::sync::RwLock::new(false),
+            model_catalog_closed: tokio::sync::RwLock::new(false),
             router,
             approvals,
             operations: HostOperationGate::default(),
@@ -120,30 +120,53 @@ impl EmbeddedInteractiveHost {
         &self,
         session_id: &str,
         options: &WorkflowAgentOptions,
-        terminal: Option<&TerminalModelProfile>,
+        terminal: Option<&TerminalSelection>,
         use_pinned: bool,
     ) -> Result<ProviderRoute, String> {
         match terminal {
-            Some(profile) if use_pinned => self.runtime.pinned_terminal_model_route(
+            Some(TerminalSelection::Discovered(profile)) if use_pinned => {
+                self.runtime.pinned_terminal_model_route(
+                    "primary",
+                    session_id,
+                    profile,
+                    options.reasoning_effort,
+                )
+            }
+            Some(TerminalSelection::Discovered(profile)) => self.runtime.terminal_model_route(
                 "primary",
                 session_id,
                 profile,
                 options.reasoning_effort,
             ),
-            Some(profile) => self.runtime.terminal_model_route(
-                "primary",
-                session_id,
-                profile,
-                options.reasoning_effort,
-            ),
+            Some(TerminalSelection::Saved(target)) => {
+                self.runtime
+                    .saved_terminal_model_route("primary", target, options.reasoning_effort)
+            }
             None => self.runtime.model_route_with_options("primary", options),
         }
         .map_err(|error| error.to_string())
     }
 
-    fn selected_model_route(&self, selection: &ModelSelection) -> Result<ProviderRoute, String> {
-        if let Some((_, route)) = &selection.terminal {
-            return Ok(route.clone());
+    fn selected_model_route(
+        &self,
+        session_id: &str,
+        selection: &mut ModelSelection,
+    ) -> Result<ProviderRoute, String> {
+        match &selection.terminal {
+            Some((TerminalSelection::Saved(target), fallback)) => {
+                let Ok(route) = self.runtime.saved_terminal_model_route(
+                    "primary",
+                    target,
+                    selection.options.reasoning_effort,
+                ) else {
+                    return Ok(fallback.clone());
+                };
+                self.model_selections
+                    .remember_saved_route(session_id, selection, &route);
+                return Ok(route);
+            }
+            Some((_, route)) => return Ok(route.clone()),
+            None => {}
         }
         if selection.options == WorkflowAgentOptions::default() {
             return self
@@ -166,12 +189,23 @@ impl EmbeddedInteractiveHost {
         F: std::future::Future<Output = Result<T, RuntimeError>>,
     {
         let result = match selection.terminal {
-            Some((profile, _)) => {
+            Some((TerminalSelection::Discovered(profile), _)) => {
                 self.runtime
                     .with_terminal_model_selection(
                         "primary",
                         session_id,
                         &profile,
+                        selection.options.reasoning_effort,
+                        future,
+                    )
+                    .map_err(|error| error.to_string())?
+                    .await
+            }
+            Some((TerminalSelection::Saved(target), _)) => {
+                self.runtime
+                    .with_saved_terminal_model(
+                        "primary",
+                        &target,
                         selection.options.reasoning_effort,
                         future,
                     )
@@ -198,8 +232,8 @@ impl EmbeddedInteractiveHost {
         status: &str,
         metrics: FooterMetrics<'_>,
     ) -> Result<FooterState, String> {
-        let selection = self.model_selections.get(session_id)?;
-        let route = self.selected_model_route(&selection)?;
+        let mut selection = self.model_selections.get(session_id)?;
+        let route = self.selected_model_route(session_id, &mut selection)?;
         let (context, usage, message_count) = match metrics {
             FooterMetrics::Opened { message_count } => (None, None, message_count),
             _ if self.drafts.contains(session_id)? => (None, None, 0),
@@ -222,7 +256,7 @@ impl EmbeddedInteractiveHost {
         let approval = self.approvals.mode_snapshot()?;
         Ok(FooterState {
             role: route.role.clone(),
-            route: route_label(&route, selection.terminal.is_some()),
+            route: route_label(&route, selection.terminal_choice()),
             model_revision: selection.revision,
             context: context
                 .as_ref()
@@ -401,13 +435,32 @@ impl EmbeddedInteractiveHost {
         if name == "model" || name == "effort" {
             let models = self.configured_models().await?;
             let current = self.model_selections.get(session_id)?;
-            if let Some((options, terminal)) =
+            if let Some(choice) =
                 select_model_options(name, arguments, &current, &models, events).await?
             {
-                let intent = self.model_selections.begin(session_id)?;
-                let route =
-                    self.resolve_model_choice(session_id, &options, terminal.as_ref(), true)?;
-                intent.commit(options, terminal, route)?;
+                match choice {
+                    ModelOptionSelection::Model(choice) => {
+                        self.select_catalog_model(
+                            session_id,
+                            choice,
+                            events.clone(),
+                            control.clone(),
+                        )
+                        .await?;
+                    }
+                    ModelOptionSelection::Effort(effort) => {
+                        let intent = self.model_selections.begin(session_id)?;
+                        let (options, terminal) =
+                            self.model_selections.get(session_id)?.effort_choice(effort);
+                        let route = self.resolve_model_choice(
+                            session_id,
+                            &options,
+                            terminal.as_ref(),
+                            true,
+                        )?;
+                        intent.commit(options, terminal, route, control)?;
+                    }
+                }
             }
             return Ok(HostCommandResult {
                 footer: Some(self.footer(session_id, "ready").await?),
@@ -430,10 +483,13 @@ impl EmbeddedInteractiveHost {
                 let footer = self.footer(session_id, "ready").await?;
                 Ok(HostCommandResult::document(footer_status_document(footer)))
             }
-            "agent" => self.result(
-                &self.selected_model_route(&self.model_selections.get(session_id)?)?,
-                Some("Active model route"),
-            ),
+            "agent" => {
+                let mut selection = self.model_selections.get(session_id)?;
+                self.result(
+                    &self.selected_model_route(session_id, &mut selection)?,
+                    Some("Active model route"),
+                )
+            }
             "models" => {
                 let profile = doctor_profile(arguments, "models")?;
                 let value = self
@@ -1423,7 +1479,20 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         Ok(self.model_selections.get(session_id)?.catalog(
             self.runtime.model_profiles(),
             self.runtime.provider_profiles(),
+            self.runtime
+                .terminal_model_cards()
+                .map_err(|error| error.to_string())?,
+            true,
         ))
+    }
+
+    async fn terminal_model_card(
+        &self,
+        target: TerminalModelTarget,
+    ) -> Result<TerminalModelCard, String> {
+        self.runtime
+            .terminal_model_card(&target)
+            .map_err(|error| error.to_string())
     }
 
     async fn provider_model_catalog(
@@ -1431,7 +1500,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         provider: &str,
         refresh: bool,
     ) -> Result<Vec<ProviderModelInfo>, String> {
-        let closed = self.model_catalog_reads_closed.read().await;
+        let closed = self.model_catalog_closed.read().await;
         if *closed {
             return Err("The terminal is closing.".into());
         }
@@ -1444,21 +1513,70 @@ impl InteractiveHost for EmbeddedInteractiveHost {
     async fn finish_model_catalog_reads(&self) {
         // The writer waits for in-process effects to reach their audited outcome.
         // Tokio's fair lock puts later readers behind the shutdown fence.
-        *self.model_catalog_reads_closed.write().await = true;
+        *self.model_catalog_closed.write().await = true;
     }
 
     async fn select_catalog_model(
         &self,
         session_id: &str,
         choice: ModelCatalogSelection,
+        events: mpsc::Sender<HostEvent>,
+        control: RunControl,
     ) -> Result<ModelCatalogApplied, String> {
         let intent = self.model_selections.begin(session_id)?;
+        let saving = matches!(&choice, ModelCatalogSelection::SaveCard(_));
+        let (choice, confirmed_route) = match choice {
+            ModelCatalogSelection::SaveCard(update) => {
+                let _operation = self.operations.enter(false).await?;
+                let closed = self.model_catalog_closed.read().await;
+                if *closed {
+                    return Err("The terminal is closing.".into());
+                }
+                let card = self
+                    .router
+                    .scope(
+                        events,
+                        with_prompt_control(
+                            &control,
+                            self.runtime
+                                .save_terminal_model_card(session_id, update, &control),
+                        ),
+                    )
+                    .await
+                    .map_err(|error| interactive_runtime_error(&error))?;
+                (
+                    ModelCatalogSelection::Saved(card.saved_ref()),
+                    Some(card.route),
+                )
+            }
+            ModelCatalogSelection::Configured(profile) => {
+                let target = TerminalModelTarget::Configured {
+                    profile: profile.clone(),
+                };
+                let card = self.terminal_model_card(target).await?;
+                if card.revision != 0 {
+                    (
+                        ModelCatalogSelection::Saved(card.saved_ref()),
+                        Some(card.route),
+                    )
+                } else {
+                    (ModelCatalogSelection::Configured(profile), None)
+                }
+            }
+            choice => (choice, None),
+        };
         let (options, terminal) = self
             .model_selections
             .get(session_id)?
-            .catalog_choice(choice);
-        let route = self.resolve_model_choice(session_id, &options, terminal.as_ref(), false)?;
-        intent.commit(options, terminal, route)
+            .catalog_choice(choice)?;
+        let route = match confirmed_route {
+            Some(route) if options.reasoning_effort.is_none() => route,
+            _ => self.resolve_model_choice(session_id, &options, terminal.as_ref(), false)?,
+        };
+        if saving && control.is_cancelled() {
+            return Err("Model settings were saved. Selection was cancelled.".into());
+        }
+        intent.commit(options, terminal, route, &control)
     }
 
     async fn save_support_report(
@@ -1780,7 +1898,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         self.resolve_model_choice(
             &request.session_id,
             &selection.options,
-            selection.terminal.as_ref().map(|(profile, _)| profile),
+            selection.terminal_choice(),
             true,
         )?;
         self.prepare_draft_for_work(&request.session_id, &events, &control)

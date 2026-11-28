@@ -2,9 +2,12 @@ use super::*;
 use crate::support_report::{HostFacts, WorkerObservation};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use integrations::{pull_request_arguments, pull_request_document};
+use std::sync::atomic::AtomicBool;
 use uuid::Uuid;
 
 const MODEL_PICKER_WORKER_DEADLINE: Duration = Duration::from_secs(5);
+const MODEL_CARDS_WORKER_UPDATE_REQUIRED: &str =
+    "This worker does not support saved model cards. Update and restart the worker to use them.";
 
 pub(super) fn worker_run_outcome(
     outcome: Result<AgentRunOutcome, WorkerError>,
@@ -265,6 +268,7 @@ impl WorkerPromptHandler for TuiWorkerPromptHandler {
 pub(crate) struct WorkerInteractiveHost {
     client: Arc<WorkerClient>,
     worker_observation: Mutex<WorkerObservation>,
+    supports_model_cards: AtomicBool,
     themes: ThemeLibrary,
     model_selections: ModelSelections,
     approval_mode: HostApprovalModes,
@@ -282,6 +286,7 @@ impl WorkerInteractiveHost {
         Self {
             client: Arc::new(client),
             worker_observation: Mutex::new(WorkerObservation::Unobserved),
+            supports_model_cards: AtomicBool::new(false),
             themes,
             model_selections: ModelSelections::default(),
             approval_mode: HostApprovalModes::new(approval_mode),
@@ -361,6 +366,7 @@ impl WorkerInteractiveHost {
                 WorkerOperation::RunInteractive {
                     model_options: None,
                     terminal_model: None,
+                    saved_terminal_model: None,
                     request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
                         session_id: session_id.into(),
                         mode,
@@ -433,6 +439,10 @@ impl WorkerInteractiveHost {
         let outcome = self.client.call(operation).await;
         self.record_worker_observation(&outcome);
         outcome.map_err(|error| error.to_string())
+    }
+
+    fn supports_model_cards(&self) -> bool {
+        self.supports_model_cards.load(Ordering::Relaxed)
     }
 
     async fn live_skill_ids(&self) -> Result<Vec<String>, String> {
@@ -510,6 +520,7 @@ impl WorkerInteractiveHost {
                         WorkerOperation::RunInteractive {
                             model_options: None,
                             terminal_model: None,
+                            saved_terminal_model: None,
                             request: InteractiveWorkerRequest::GitHubPullRequest { arguments },
                             approval_mode: self.interactive_approval_mode()?,
                             sandbox_boundary_acknowledgement: None,
@@ -567,20 +578,32 @@ impl WorkerInteractiveHost {
         &self,
         session_id: &str,
         options: &WorkflowAgentOptions,
-        terminal: Option<&TerminalModelProfile>,
+        terminal: Option<&TerminalSelection>,
         use_pinned: bool,
     ) -> Result<ProviderRoute, String> {
-        if let Some(profile) = terminal {
-            return serde_json::from_value(
-                self.value(WorkerOperation::TerminalModelRoute {
+        let operation = match terminal {
+            Some(TerminalSelection::Discovered(profile)) => {
+                Some(WorkerOperation::TerminalModelRoute {
                     session_id: session_id.into(),
                     profile: profile.clone(),
                     reasoning_effort: options.reasoning_effort,
                     use_pinned,
                 })
-                .await?,
-            )
-            .map_err(|error| error.to_string());
+            }
+            Some(TerminalSelection::Saved(model)) => {
+                if !self.supports_model_cards() {
+                    return Err(MODEL_CARDS_WORKER_UPDATE_REQUIRED.into());
+                }
+                Some(WorkerOperation::SavedTerminalModelRoute {
+                    model: model.clone(),
+                    reasoning_effort: options.reasoning_effort,
+                })
+            }
+            None => None,
+        };
+        if let Some(operation) = operation {
+            return serde_json::from_value(self.value(operation).await?)
+                .map_err(|error| error.to_string());
         }
         let default = self.default_model_route().await?;
         let configured = if options.model_profile.is_some() {
@@ -594,9 +617,22 @@ impl WorkerInteractiveHost {
     async fn selected_model_route(
         &self,
         session_id: &str,
-        selection: &ModelSelection,
+        selection: &mut ModelSelection,
     ) -> Result<ProviderRoute, String> {
         match &selection.terminal {
+            Some((choice @ TerminalSelection::Saved(_), fallback)) => {
+                let Ok(Ok(route)) = tokio::time::timeout(
+                    MODEL_PICKER_WORKER_DEADLINE,
+                    self.resolve_model_choice(session_id, &selection.options, Some(choice), false),
+                )
+                .await
+                else {
+                    return Ok(fallback.clone());
+                };
+                self.model_selections
+                    .remember_saved_route(session_id, selection, &route);
+                Ok(route)
+            }
             Some((_, route)) => Ok(route.clone()),
             None => {
                 self.resolve_model_choice(session_id, &selection.options, None, false)
@@ -616,8 +652,10 @@ impl WorkerInteractiveHost {
         status: &str,
         metrics: FooterMetrics<'_>,
     ) -> Result<FooterState, String> {
-        let selection = self.model_selections.get(session_id)?;
-        let route = self.selected_model_route(session_id, &selection).await?;
+        let mut selection = self.model_selections.get(session_id)?;
+        let route = self
+            .selected_model_route(session_id, &mut selection)
+            .await?;
         let (context, usage, message_count) = match metrics {
             FooterMetrics::Opened { message_count } => (None, None, message_count),
             _ if self.drafts.contains(session_id)? => (None, None, 0),
@@ -659,7 +697,7 @@ impl WorkerInteractiveHost {
         let approval = self.approval_mode.snapshot()?;
         Ok(FooterState {
             role: route.role.clone(),
-            route: route_label(&route, selection.terminal.is_some()),
+            route: route_label(&route, selection.terminal_choice()),
             model_revision: selection.revision,
             context: context
                 .map(|context| (context.token_estimate, route.limits.input_budget_tokens)),
@@ -914,6 +952,7 @@ impl WorkerInteractiveHost {
             WorkerOperation::RunInteractive {
                 model_options: None,
                 terminal_model: None,
+                saved_terminal_model: None,
                 request,
                 approval_mode: self.interactive_approval_mode()?,
                 sandbox_boundary_acknowledgement: acknowledgement,
@@ -945,6 +984,7 @@ impl WorkerInteractiveHost {
             WorkerOperation::RunInteractive {
                 model_options: None,
                 terminal_model: None,
+                saved_terminal_model: None,
                 request: InteractiveWorkerRequest::PresentationHistoryAppend {
                     session_id: session_id.into(),
                     entry,
@@ -980,14 +1020,21 @@ impl WorkerInteractiveHost {
         if name == "model" || name == "effort" {
             let models = self.configured_models().await?;
             let current = self.model_selections.get(session_id)?;
-            if let Some((options, terminal)) =
-                select_model_options(name, arguments, &current, &models, events).await?
-            {
-                let intent = self.model_selections.begin(session_id)?;
-                let route = self
-                    .resolve_model_choice(session_id, &options, terminal.as_ref(), true)
-                    .await?;
-                intent.commit(options, terminal, route)?;
+            match select_model_options(name, arguments, &current, &models, events).await? {
+                Some(ModelOptionSelection::Model(choice)) => {
+                    self.select_catalog_model(session_id, choice, events.clone(), control.clone())
+                        .await?;
+                }
+                Some(ModelOptionSelection::Effort(effort)) => {
+                    let intent = self.model_selections.begin(session_id)?;
+                    let (options, terminal) =
+                        self.model_selections.get(session_id)?.effort_choice(effort);
+                    let route = self
+                        .resolve_model_choice(session_id, &options, terminal.as_ref(), true)
+                        .await?;
+                    intent.commit(options, terminal, route, control)?;
+                }
+                None => {}
             }
             return Ok(HostCommandResult {
                 footer: Some(self.footer(session_id, "ready").await?),
@@ -1011,7 +1058,8 @@ impl WorkerInteractiveHost {
                 Ok(HostCommandResult::document(footer_status_document(footer)))
             }
             "agent" => {
-                let route = self.selected_model_route(session_id, &self.model_selections.get(session_id)?).await?;
+                let mut selection = self.model_selections.get(session_id)?;
+                let route = self.selected_model_route(session_id, &mut selection).await?;
                 Ok(HostCommandResult::document(document_from_json(
                     &serde_json::to_value(route).map_err(|error| error.to_string())?,
                     Some("Active model route"),
@@ -1177,7 +1225,8 @@ impl WorkerInteractiveHost {
                     .call_worker_interactive::<GoalRunOutcome>(
                         WorkerOperation::RunInteractive {
                             model_options: model.request_options(),
-                            terminal_model: model.terminal.map(|(profile, _)| profile),
+                            terminal_model: model.transient_model(),
+                            saved_terminal_model: model.saved_model().map(Box::new),
                             request: InteractiveWorkerRequest::GoalResume {
                                 role: "primary".into(),
                                 session_id: session_id.into(),
@@ -1339,6 +1388,7 @@ impl WorkerInteractiveHost {
                                 WorkerOperation::RunInteractive {
                                     model_options: None,
                                     terminal_model: None,
+                                    saved_terminal_model: None,
                                     request: InteractiveWorkerRequest::PluginManage { request },
                                     approval_mode: self.interactive_approval_mode()?,
                                     sandbox_boundary_acknowledgement: self
@@ -1725,6 +1775,7 @@ impl WorkerInteractiveHost {
                     request,
                     model_options: None,
                     terminal_model: None,
+                    saved_terminal_model: None,
                     approval_mode: self.interactive_approval_mode()?,
                     sandbox_boundary_acknowledgement: None,
                 },
@@ -1791,19 +1842,47 @@ impl InteractiveHost for WorkerInteractiveHost {
         &self,
         session_id: &str,
     ) -> Result<InteractiveModelCatalog, String> {
-        let (models, providers) = tokio::time::timeout(MODEL_PICKER_WORKER_DEADLINE, async {
-            tokio::try_join!(
-                self.configured_models(),
-                self.value(WorkerOperation::ProviderProfiles),
-            )
-        })
-        .await
-        .map_err(|_| "The worker did not return configured models.")??;
+        let supports_model_cards = self.supports_model_cards();
+        let saved_cards = async {
+            if !supports_model_cards {
+                return Ok(Vec::new());
+            }
+            serde_json::from_value(self.value(WorkerOperation::TerminalModelCards).await?)
+                .map_err(|error| error.to_string())
+        };
+        let (models, providers, saved) =
+            tokio::time::timeout(MODEL_PICKER_WORKER_DEADLINE, async {
+                tokio::try_join!(
+                    self.configured_models(),
+                    self.value(WorkerOperation::ProviderProfiles),
+                    saved_cards,
+                )
+            })
+            .await
+            .map_err(|_| "The worker did not return configured models.")??;
         let providers = serde_json::from_value(providers).map_err(|error| error.to_string())?;
-        Ok(self
-            .model_selections
-            .get(session_id)?
-            .catalog(models, providers))
+        Ok(self.model_selections.get(session_id)?.catalog(
+            models,
+            providers,
+            saved,
+            supports_model_cards,
+        ))
+    }
+
+    async fn terminal_model_card(
+        &self,
+        target: TerminalModelTarget,
+    ) -> Result<TerminalModelCard, String> {
+        if !self.supports_model_cards() {
+            return Err(MODEL_CARDS_WORKER_UPDATE_REQUIRED.into());
+        }
+        let value = tokio::time::timeout(
+            MODEL_PICKER_WORKER_DEADLINE,
+            self.value(WorkerOperation::TerminalModelCard { target }),
+        )
+        .await
+        .map_err(|_| "The worker did not return the model card. Try again.")??;
+        serde_json::from_value(value).map_err(|error| error.to_string())
     }
 
     async fn provider_model_catalog(
@@ -1825,19 +1904,89 @@ impl InteractiveHost for WorkerInteractiveHost {
         &self,
         session_id: &str,
         choice: ModelCatalogSelection,
+        events: mpsc::Sender<HostEvent>,
+        control: RunControl,
     ) -> Result<ModelCatalogApplied, String> {
+        let supports_model_cards = self.supports_model_cards();
+        let saving = matches!(&choice, ModelCatalogSelection::SaveCard(_));
+        if !supports_model_cards && (saving || matches!(&choice, ModelCatalogSelection::Saved(_))) {
+            return Err(MODEL_CARDS_WORKER_UPDATE_REQUIRED.into());
+        }
         let intent = self.model_selections.begin(session_id)?;
-        let (options, terminal) = self
-            .model_selections
-            .get(session_id)?
-            .catalog_choice(choice);
-        let route = tokio::time::timeout(
-            MODEL_PICKER_WORKER_DEADLINE,
-            self.resolve_model_choice(session_id, &options, terminal.as_ref(), false),
-        )
-        .await
-        .map_err(|_| "The worker did not confirm the model selection. Try again.")??;
-        intent.commit(options, terminal, route)
+        let (choice, confirmed_route) = match choice {
+            ModelCatalogSelection::SaveCard(update) => {
+                let _operation = self.operations.enter(false).await?;
+                let mut observer = WorkerChannelObserver {
+                    sender: events.clone(),
+                };
+                let prompts = TuiWorkerPromptHandler { sender: events };
+                let card: TerminalModelCard = with_prompt_control(
+                    &control,
+                    self.call_worker_interactive(
+                        WorkerOperation::RunInteractive {
+                            model_options: None,
+                            terminal_model: None,
+                            saved_terminal_model: None,
+                            request: InteractiveWorkerRequest::TerminalModelCardSave {
+                                session_id: session_id.into(),
+                                update,
+                            },
+                            approval_mode: self.interactive_approval_mode()?,
+                            sandbox_boundary_acknowledgement: self
+                                .sandbox_boundary_acknowledgement(session_id)?,
+                        },
+                        &mut observer,
+                        &prompts,
+                        &control,
+                    ),
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+                (
+                    ModelCatalogSelection::Saved(card.saved_ref()),
+                    Some(card.route),
+                )
+            }
+            choice => (choice, None),
+        };
+        let (options, terminal, route) =
+            tokio::time::timeout(MODEL_PICKER_WORKER_DEADLINE, async {
+                let (choice, confirmed_route) = match choice {
+                    ModelCatalogSelection::Configured(profile) if supports_model_cards => {
+                        let target = TerminalModelTarget::Configured {
+                            profile: profile.clone(),
+                        };
+                        let card = self.terminal_model_card(target).await?;
+                        if card.revision != 0 {
+                            (
+                                ModelCatalogSelection::Saved(card.saved_ref()),
+                                Some(card.route),
+                            )
+                        } else {
+                            (ModelCatalogSelection::Configured(profile), None)
+                        }
+                    }
+                    choice => (choice, confirmed_route),
+                };
+                let (options, terminal) = self
+                    .model_selections
+                    .get(session_id)?
+                    .catalog_choice(choice)?;
+                let route = match confirmed_route {
+                    Some(route) if options.reasoning_effort.is_none() => route,
+                    _ => {
+                        self.resolve_model_choice(session_id, &options, terminal.as_ref(), false)
+                            .await?
+                    }
+                };
+                Ok::<_, String>((options, terminal, route))
+            })
+            .await
+            .map_err(|_| "The worker did not confirm the model selection. Try again.")??;
+        if saving && control.is_cancelled() {
+            return Err("Model settings were saved. Selection was cancelled.".into());
+        }
+        intent.commit(options, terminal, route, &control)
     }
 
     async fn save_support_report(
@@ -2047,6 +2196,13 @@ impl InteractiveHost for WorkerInteractiveHost {
         )
         .map_err(|error| error.to_string())?;
         let status = self.value(WorkerOperation::Ping).await?;
+        let supports_model_cards = match status.get("terminal_model_cards") {
+            Some(Value::Bool(supports)) => *supports,
+            None => false,
+            Some(_) => return Err("worker returned an invalid model card capability".into()),
+        };
+        self.supports_model_cards
+            .store(supports_model_cards, Ordering::Relaxed);
         if self.approval_mode()?.is_none() {
             match status.get("approval_mode") {
                 Some(Value::String(value)) => {
@@ -2110,6 +2266,7 @@ impl InteractiveHost for WorkerInteractiveHost {
             WorkerOperation::RunInteractive {
                 model_options: None,
                 terminal_model: None,
+                saved_terminal_model: None,
                 request: InteractiveWorkerRequest::ImageAttach {
                     path: PathBuf::from(path),
                 },
@@ -2131,6 +2288,7 @@ impl InteractiveHost for WorkerInteractiveHost {
                 WorkerOperation::RunInteractive {
                     model_options: None,
                     terminal_model: None,
+                    saved_terminal_model: None,
                     request: InteractiveWorkerRequest::ImagePreview {
                         image: image.clone(),
                     },
@@ -2183,6 +2341,7 @@ impl InteractiveHost for WorkerInteractiveHost {
                         WorkerOperation::RunInteractive {
                             model_options: None,
                             terminal_model: None,
+                            saved_terminal_model: None,
                             request: InteractiveWorkerRequest::ShellRun {
                                 session_id: session_id.into(),
                                 command,
@@ -2266,7 +2425,8 @@ impl InteractiveHost for WorkerInteractiveHost {
             .call_worker_interactive::<AgentRunOutcome>(
                 WorkerOperation::RunInteractive {
                     model_options: model.request_options(),
-                    terminal_model: model.terminal.map(|(profile, _)| profile),
+                    terminal_model: model.transient_model(),
+                    saved_terminal_model: model.saved_model().map(Box::new),
                     request: InteractiveWorkerRequest::Run {
                         mode: request.mode,
                         role: "primary".into(),
@@ -2345,7 +2505,8 @@ impl InteractiveHost for WorkerInteractiveHost {
             .call_worker_interactive::<PlanExecutionOutcome>(
                 WorkerOperation::RunInteractive {
                     model_options: model.request_options(),
-                    terminal_model: model.terminal.map(|(profile, _)| profile),
+                    terminal_model: model.transient_model(),
+                    saved_terminal_model: model.saved_model().map(Box::new),
                     request: InteractiveWorkerRequest::PlanExecute {
                         role: "primary".into(),
                         session_id: request.session_id.clone(),

@@ -139,13 +139,22 @@ impl Runtime {
             reasoning_effort,
             TerminalSelectionSource::Issued,
         )?;
+        Ok(self.with_resolved_terminal_model(role, model, future))
+    }
+
+    pub(super) fn with_resolved_terminal_model<F: Future>(
+        &self,
+        role: &str,
+        model: ResolvedModel,
+        future: F,
+    ) -> impl Future<Output = F::Output> {
         // Only agent turns that explicitly inherit this task's selection may resolve
         // the transient route. Other workflow and delegated routes use their own
         // configured options, even when executed in the same task.
         let selection = format!("terminal-selection-{}", Uuid::now_v7());
         let options = WorkflowAgentOptions {
             model_profile: Some(selection.clone()),
-            reasoning_effort,
+            reasoning_effort: model.model_profile().reasoning_effort,
         };
         let scope = TerminalModelScope {
             registry: Arc::clone(&self.providers),
@@ -153,7 +162,7 @@ impl Runtime {
             selection,
             model,
         };
-        Ok(TERMINAL_MODEL.scope(scope, self.with_model_selection(options, future)))
+        TERMINAL_MODEL.scope(scope, self.with_model_selection(options, future))
     }
 
     fn resolve_terminal_model(

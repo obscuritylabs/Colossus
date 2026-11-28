@@ -58,6 +58,7 @@ async fn dispatch_general(
         WorkerOperation::Ping => Ok(json!({
             "ready": true,
             "protocol_version": PROTOCOL_VERSION,
+            "terminal_model_cards": true,
             "pid": std::process::id(),
             "workspace": runtime.workspace(),
             "sandbox_profile": runtime.sandbox_profile(),
@@ -166,6 +167,20 @@ async fn dispatch_general(
             };
             Ok(serde_json::to_value(route)?)
         }
+        WorkerOperation::TerminalModelCards => {
+            Ok(serde_json::to_value(runtime.terminal_model_cards()?)?)
+        }
+        WorkerOperation::TerminalModelCard { target } => {
+            Ok(serde_json::to_value(runtime.terminal_model_card(&target)?)?)
+        }
+        WorkerOperation::SavedTerminalModelRoute {
+            model,
+            reasoning_effort,
+        } => Ok(serde_json::to_value(runtime.saved_terminal_model_route(
+            "primary",
+            &model,
+            reasoning_effort,
+        )?)?),
         WorkerOperation::ModelProfiles => Ok(serde_json::to_value(runtime.model_profiles())?),
         WorkerOperation::ModelDoctor {
             profile,
