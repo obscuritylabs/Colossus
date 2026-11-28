@@ -474,6 +474,7 @@ pub struct TuiState {
     /// Retained visible transcript; system messages are never inserted.
     pub transcript: Vec<TranscriptEntry>,
     pub(super) transcript_sources: Vec<Option<TranscriptRenderSource>>,
+    pub(super) transcript_layout: Option<TranscriptViewportLayout>,
     pub(super) tool_hits: Vec<crate::tool_details::ToolHit>,
     pub(super) tool_click: Option<(crate::tool_details::ToolHit, Position)>,
     /// Whether an older canonical page remains available.
@@ -599,6 +600,7 @@ impl TuiState {
             sandbox_profile: snapshot.sandbox_profile,
             transcript,
             transcript_sources,
+            transcript_layout: None,
             tool_hits: Vec::new(),
             tool_click: None,
             has_more: snapshot.transcript.has_more,
@@ -692,7 +694,7 @@ impl TuiState {
     pub(super) fn dismiss_welcome(&mut self) {
         self.welcome_visible = false;
         if let Some(index) = self.security_posture_entry
-            && let Some(entry) = self.transcript.get_mut(index)
+            && let Some(entry) = self.transcript_mut().get_mut(index)
         {
             entry.temporary = false;
         }
@@ -860,7 +862,7 @@ impl TuiState {
         if let Some(index) = self.security_posture_entry.as_mut() {
             *index = index.saturating_add(older.len());
         }
-        older.append(&mut self.transcript);
+        older.append(self.transcript_mut());
         older_sources.append(&mut self.transcript_sources);
         self.transcript = older;
         self.transcript_sources = older_sources;
@@ -908,6 +910,11 @@ impl TuiState {
         self.append_entry_with_source(entry, None);
     }
 
+    pub(super) fn transcript_mut(&mut self) -> &mut Vec<TranscriptEntry> {
+        self.transcript_layout = None;
+        &mut self.transcript
+    }
+
     pub(super) fn append_entry_with_source(
         &mut self,
         entry: TranscriptEntry,
@@ -921,7 +928,7 @@ impl TuiState {
         if self.scroll_from_bottom > 0 {
             self.new_items = self.new_items.saturating_add(1);
         }
-        self.transcript.push(entry);
+        self.transcript_mut().push(entry);
         self.transcript_sources.push(source);
         if self.scroll_from_bottom > 0 {
             self.preserve_scroll_after_line_change(old_line_count);
@@ -1006,6 +1013,7 @@ impl TuiState {
         } else {
             0
         };
+        self.transcript_layout = None;
         debug_assert_eq!(self.transcript.len(), self.transcript_sources.len());
         for (entry, source) in self.transcript.iter_mut().zip(&self.transcript_sources) {
             if let Some(source) = source {

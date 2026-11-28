@@ -2,6 +2,9 @@ use super::*;
 use crate::companion::CompanionView;
 use crate::selection::CopyFeedback;
 
+#[cfg(test)]
+mod transcript_viewport_tests;
+
 const OBSCURITY_LABS_RED: Color = Color::Rgb(213, 16, 48);
 const OBSCURITY_LABS_SEGMENT: &str = "OL //  ";
 const WIDE_WELCOME_MIN_WIDTH: usize = 96;
@@ -270,6 +273,80 @@ fn prepare_image_previews(state: &mut TuiState, area: Rect) {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TranscriptViewport {
+    width: usize,
+    height: usize,
+    start: usize,
+    end: usize,
+    scroll_from_bottom: usize,
+    welcome_rows: usize,
+    preview_size: Size,
+    preview_revision: u64,
+}
+
+/// Wrapped rows and hit locations for one viewport. Scrolling does not retain
+/// a second copy of the off-screen transcript.
+pub(super) struct TranscriptViewportLayout {
+    viewport: TranscriptViewport,
+    preferences: TerminalPreferences,
+    top: usize,
+    rows: Vec<Line<'static>>,
+    tool_placements: Vec<(usize, usize)>,
+    image_placements: Vec<TranscriptImagePlacement>,
+}
+
+impl TranscriptViewportLayout {
+    fn new(state: &TuiState, viewport: TranscriptViewport) -> Self {
+        let (lines, images, tools) = transcript_lines_range_with_images(
+            state,
+            viewport.width,
+            viewport.start,
+            viewport.end,
+            viewport.welcome_rows > 0,
+            Some(viewport.preview_size),
+        );
+        let top = (viewport.welcome_rows + lines.len())
+            .saturating_sub(viewport.height)
+            .saturating_sub(viewport.scroll_from_bottom);
+        let bottom = top.saturating_add(viewport.height);
+        let start = top.saturating_sub(viewport.welcome_rows);
+        let end = bottom
+            .saturating_sub(viewport.welcome_rows)
+            .min(lines.len());
+        let tool_placements = tools
+            .iter()
+            .filter_map(|&(line, index)| {
+                let line = line + viewport.welcome_rows;
+                (top..bottom).contains(&line).then(|| (line - top, index))
+            })
+            .collect();
+        let image_placements = images
+            .iter()
+            .filter_map(|image| {
+                let line = image.line + viewport.welcome_rows;
+                let image_bottom = line.saturating_add(usize::from(viewport.preview_size.height));
+                if line < top || image_bottom > bottom {
+                    return None;
+                }
+                Some(TranscriptImagePlacement {
+                    line: line - top,
+                    indent: image.indent,
+                    digest: image.digest.clone(),
+                })
+            })
+            .collect();
+        Self {
+            viewport,
+            preferences: state.preferences.clone(),
+            top,
+            rows: lines[start..end].to_vec(),
+            tool_placements,
+            image_placements,
+        }
+    }
+}
+
 pub(super) fn render_transcript(
     frame: &mut Frame<'_>,
     state: &mut TuiState,
@@ -298,71 +375,65 @@ pub(super) fn render_transcript(
         );
     }
     let width = usize::from(transcript_area.width).max(20);
-    let mut lines = if state.welcome_visible {
+    let welcome = if state.welcome_visible {
         welcome_lines(state, width, viewport_height)
     } else {
         Vec::new()
     };
-    let (mut transcript, mut image_placements, tool_placements) =
-        transcript_lines_range_with_images(
-            state,
-            width,
-            transcript_start.min(state.transcript.len()),
-            state.transcript.len(),
-            !lines.is_empty(),
-            Some(state.preview_transcript_size),
-        );
     let visible = usize::from(transcript_area.height);
-
-    let welcome_line_count = lines.len();
-    for placement in &mut image_placements {
-        placement.line = placement.line.saturating_add(welcome_line_count);
+    let viewport = TranscriptViewport {
+        width,
+        height: visible,
+        start: transcript_start.min(state.transcript.len()),
+        end: state.transcript.len(),
+        scroll_from_bottom: state.scroll_from_bottom,
+        welcome_rows: welcome.len(),
+        preview_size: state.preview_transcript_size,
+        preview_revision: state.preview_cache.layout_revision(),
+    };
+    if !state.transcript_layout.as_ref().is_some_and(|layout| {
+        layout.viewport == viewport && layout.preferences == state.preferences
+    }) {
+        state.transcript_layout = Some(TranscriptViewportLayout::new(state, viewport));
     }
-    lines.append(&mut transcript);
-    let live_top = lines.len().saturating_sub(visible);
-    let top = live_top.saturating_sub(state.scroll_from_bottom);
+    let layout = state
+        .transcript_layout
+        .as_ref()
+        .expect("laid out transcript");
+
     // Slice before rendering: Paragraph's u16 scroll offset cannot address long histories.
     let paragraph = Paragraph::new(
-        lines
+        welcome
             .into_iter()
-            .skip(top)
+            .skip(layout.top)
+            .chain(layout.rows.iter().cloned())
             .take(visible)
             .collect::<Vec<_>>(),
     )
     .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, transcript_area);
-    for (line, index) in tool_placements {
-        let line = line.saturating_add(welcome_line_count);
-        if line >= top && line < top.saturating_add(visible) {
-            state.tool_hits.push(crate::tool_details::ToolHit::new(
-                Rect::new(
-                    transcript_area.x,
-                    transcript_area.y + (line - top) as u16,
-                    transcript_area.width,
-                    1,
-                ),
-                index,
-                state,
-            ));
-        }
+    for &(line, index) in &layout.tool_placements {
+        state.tool_hits.push(crate::tool_details::ToolHit::new(
+            Rect::new(
+                transcript_area.x,
+                transcript_area.y + line as u16,
+                transcript_area.width,
+                1,
+            ),
+            index,
+            state,
+        ));
     }
 
     if state.preview_cache.native_graphics() {
-        let bottom = top.saturating_add(visible);
-        for placement in image_placements {
-            let image_bottom = placement
-                .line
-                .saturating_add(usize::from(state.preview_transcript_size.height));
-            if placement.line < top || image_bottom > bottom {
-                continue;
-            }
+        for placement in &layout.image_placements {
             let area = Rect::new(
                 transcript_area
                     .x
                     .saturating_add(u16::try_from(placement.indent).unwrap_or(u16::MAX)),
-                transcript_area.y.saturating_add(
-                    u16::try_from(placement.line.saturating_sub(top)).unwrap_or(u16::MAX),
-                ),
+                transcript_area
+                    .y
+                    .saturating_add(u16::try_from(placement.line).unwrap_or(u16::MAX)),
                 state.preview_transcript_size.width,
                 state.preview_transcript_size.height,
             );
@@ -706,15 +777,15 @@ struct TranscriptImagePlacement {
     digest: String,
 }
 
-fn transcript_lines_range_with_images<'a>(
-    state: &'a TuiState,
+fn transcript_lines_range_with_images(
+    state: &TuiState,
     width: usize,
     start: usize,
     end: usize,
     leading_separator: bool,
     image_preview_size: Option<Size>,
 ) -> (
-    Vec<Line<'a>>,
+    Vec<Line<'static>>,
     Vec<TranscriptImagePlacement>,
     Vec<(usize, usize)>,
 ) {
