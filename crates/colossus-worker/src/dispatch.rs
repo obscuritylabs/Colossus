@@ -145,6 +145,27 @@ async fn dispatch_general(
         WorkerOperation::ProviderModels { profile } => Ok(serde_json::to_value(
             runtime.provider_models(profile.as_deref()).await?,
         )?),
+        WorkerOperation::TerminalModelCatalog { profile, refresh } => Ok(serde_json::to_value(
+            runtime.terminal_model_catalog(&profile, refresh).await?,
+        )?),
+        WorkerOperation::TerminalModelRoute {
+            session_id,
+            profile,
+            reasoning_effort,
+            use_pinned,
+        } => {
+            let route = if use_pinned {
+                runtime.pinned_terminal_model_route(
+                    "primary",
+                    &session_id,
+                    &profile,
+                    reasoning_effort,
+                )?
+            } else {
+                runtime.terminal_model_route("primary", &session_id, &profile, reasoning_effort)?
+            };
+            Ok(serde_json::to_value(route)?)
+        }
         WorkerOperation::ModelProfiles => Ok(serde_json::to_value(runtime.model_profiles())?),
         WorkerOperation::ModelDoctor {
             profile,

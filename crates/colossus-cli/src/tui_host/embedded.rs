@@ -6,6 +6,7 @@ pub(crate) struct EmbeddedInteractiveHost {
     runtime: Arc<Runtime>,
     themes: ThemeLibrary,
     model_selections: ModelSelections,
+    model_catalog_reads_closed: tokio::sync::RwLock<bool>,
     router: Arc<TuiPromptRouter>,
     approvals: Arc<TuiApprovalProvider>,
     operations: HostOperationGate,
@@ -23,6 +24,7 @@ impl EmbeddedInteractiveHost {
             runtime,
             themes,
             model_selections: ModelSelections::default(),
+            model_catalog_reads_closed: tokio::sync::RwLock::new(false),
             router,
             approvals,
             operations: HostOperationGate::default(),
@@ -114,10 +116,75 @@ impl EmbeddedInteractiveHost {
                 .map_err(|error| error.to_string())
         }
     }
-    async fn default_model_route(&self) -> Result<ProviderRoute, String> {
+    fn resolve_model_choice(
+        &self,
+        session_id: &str,
+        options: &WorkflowAgentOptions,
+        terminal: Option<&TerminalModelProfile>,
+        use_pinned: bool,
+    ) -> Result<ProviderRoute, String> {
+        match terminal {
+            Some(profile) if use_pinned => self.runtime.pinned_terminal_model_route(
+                "primary",
+                session_id,
+                profile,
+                options.reasoning_effort,
+            ),
+            Some(profile) => self.runtime.terminal_model_route(
+                "primary",
+                session_id,
+                profile,
+                options.reasoning_effort,
+            ),
+            None => self.runtime.model_route_with_options("primary", options),
+        }
+        .map_err(|error| error.to_string())
+    }
+
+    fn selected_model_route(&self, selection: &ModelSelection) -> Result<ProviderRoute, String> {
+        if let Some((_, route)) = &selection.terminal {
+            return Ok(route.clone());
+        }
+        if selection.options == WorkflowAgentOptions::default() {
+            return self
+                .runtime
+                .provider_route("primary")
+                .map_err(|error| error.to_string());
+        }
         self.runtime
-            .provider_route("primary")
+            .model_route_with_options("primary", &selection.options)
             .map_err(|error| error.to_string())
+    }
+
+    async fn with_selected_model<F, T>(
+        &self,
+        session_id: &str,
+        selection: ModelSelection,
+        future: F,
+    ) -> Result<T, String>
+    where
+        F: std::future::Future<Output = Result<T, RuntimeError>>,
+    {
+        let result = match selection.terminal {
+            Some((profile, _)) => {
+                self.runtime
+                    .with_terminal_model_selection(
+                        "primary",
+                        session_id,
+                        &profile,
+                        selection.options.reasoning_effort,
+                        future,
+                    )
+                    .map_err(|error| error.to_string())?
+                    .await
+            }
+            None => {
+                self.runtime
+                    .with_model_selection(selection.options, future)
+                    .await
+            }
+        };
+        result.map_err(|error| interactive_runtime_error(&error))
     }
 
     async fn footer(&self, session_id: &str, status: &str) -> Result<FooterState, String> {
@@ -131,15 +198,8 @@ impl EmbeddedInteractiveHost {
         status: &str,
         metrics: FooterMetrics<'_>,
     ) -> Result<FooterState, String> {
-        let route = self
-            .runtime
-            .provider_route("primary")
-            .map_err(|error| error.to_string())?;
-        let route = selected_route(
-            route,
-            &self.configured_models().await?,
-            &self.model_selections.get(session_id)?,
-        )?;
+        let selection = self.model_selections.get(session_id)?;
+        let route = self.selected_model_route(&selection)?;
         let (context, usage, message_count) = match metrics {
             FooterMetrics::Opened { message_count } => (None, None, message_count),
             _ if self.drafts.contains(session_id)? => (None, None, 0),
@@ -162,7 +222,8 @@ impl EmbeddedInteractiveHost {
         let approval = self.approvals.mode_snapshot()?;
         Ok(FooterState {
             role: route.role.clone(),
-            route: route_label(&route),
+            route: route_label(&route, selection.terminal.is_some()),
+            model_revision: selection.revision,
             context: context
                 .as_ref()
                 .map(|context| (context.token_estimate, route.limits.input_budget_tokens)),
@@ -340,12 +401,13 @@ impl EmbeddedInteractiveHost {
         if name == "model" || name == "effort" {
             let models = self.configured_models().await?;
             let current = self.model_selections.get(session_id)?;
-            if let Some(next) =
-                select_model_options(name, arguments, current, &models, events).await?
+            if let Some((options, terminal)) =
+                select_model_options(name, arguments, &current, &models, events).await?
             {
-                let default = self.default_model_route().await?;
-                selected_route(default, &models, &next)?;
-                self.model_selections.set(session_id, next)?;
+                let intent = self.model_selections.begin(session_id)?;
+                let route =
+                    self.resolve_model_choice(session_id, &options, terminal.as_ref(), true)?;
+                intent.commit(options, terminal, route)?;
             }
             return Ok(HostCommandResult {
                 footer: Some(self.footer(session_id, "ready").await?),
@@ -369,11 +431,7 @@ impl EmbeddedInteractiveHost {
                 Ok(HostCommandResult::document(footer_status_document(footer)))
             }
             "agent" => self.result(
-                &selected_route(
-                    self.default_model_route().await?,
-                    &self.configured_models().await?,
-                    &self.model_selections.get(session_id)?,
-                )?,
+                &self.selected_model_route(&self.model_selections.get(session_id)?)?,
                 Some("Active model route"),
             ),
             "models" => {
@@ -476,16 +534,18 @@ impl EmbeddedInteractiveHost {
                     sender: events.clone(),
                 };
                 let outcome = self
-                    .runtime
-                    .resume_goal_stream_controlled(
-                        "primary",
+                    .with_selected_model(
                         session_id,
-                        goal_id,
-                        &mut observer,
-                        control,
+                        self.model_selections.get(session_id)?,
+                        self.runtime.resume_goal_stream_controlled(
+                            "primary",
+                            session_id,
+                            goal_id,
+                            &mut observer,
+                            control,
+                        ),
                     )
-                    .await
-                    .map_err(|error| interactive_runtime_error(&error))?;
+                    .await?;
                 let status = match &outcome {
                     GoalRunOutcome::Completed { .. } => "ok",
                     GoalRunOutcome::Cancelled { .. } => "cancelled",
@@ -1356,6 +1416,51 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         self.live_skill_ids().map(Some)
     }
 
+    async fn model_catalog_overview(
+        &self,
+        session_id: &str,
+    ) -> Result<InteractiveModelCatalog, String> {
+        Ok(self.model_selections.get(session_id)?.catalog(
+            self.runtime.model_profiles(),
+            self.runtime.provider_profiles(),
+        ))
+    }
+
+    async fn provider_model_catalog(
+        &self,
+        provider: &str,
+        refresh: bool,
+    ) -> Result<Vec<ProviderModelInfo>, String> {
+        let closed = self.model_catalog_reads_closed.read().await;
+        if *closed {
+            return Err("The terminal is closing.".into());
+        }
+        self.runtime
+            .terminal_model_catalog(provider, refresh)
+            .await
+            .map_err(|error| interactive_runtime_error(&error))
+    }
+
+    async fn finish_model_catalog_reads(&self) {
+        // The writer waits for in-process effects to reach their audited outcome.
+        // Tokio's fair lock puts later readers behind the shutdown fence.
+        *self.model_catalog_reads_closed.write().await = true;
+    }
+
+    async fn select_catalog_model(
+        &self,
+        session_id: &str,
+        choice: ModelCatalogSelection,
+    ) -> Result<ModelCatalogApplied, String> {
+        let intent = self.model_selections.begin(session_id)?;
+        let (options, terminal) = self
+            .model_selections
+            .get(session_id)?
+            .catalog_choice(choice);
+        let route = self.resolve_model_choice(session_id, &options, terminal.as_ref(), false)?;
+        intent.commit(options, terminal, route)
+    }
+
     async fn save_support_report(
         &self,
         output: PathBuf,
@@ -1617,7 +1722,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
                     RuntimeCommand::Known { name, arguments } => {
                         self.runtime
                             .with_model_selection(
-                                self.model_selections.get(session_id)?,
+                                self.model_selections.get(session_id)?.options,
                                 self.execute_known(
                                     &name,
                                     &arguments,
@@ -1671,10 +1776,13 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         let mut observer = ChannelRunObserver {
             sender: events.clone(),
         };
-        let options = self.model_selections.get(&request.session_id)?;
-        self.runtime
-            .model_route_with_options("primary", &options)
-            .map_err(|error| error.to_string())?;
+        let selection = self.model_selections.get(&request.session_id)?;
+        self.resolve_model_choice(
+            &request.session_id,
+            &selection.options,
+            selection.terminal.as_ref().map(|(profile, _)| profile),
+            true,
+        )?;
         self.prepare_draft_for_work(&request.session_id, &events, &control)
             .await?;
         persist_submitted_input(request.submitted_input.take(), &events, |input| {
@@ -1688,8 +1796,9 @@ impl InteractiveHost for EmbeddedInteractiveHost {
             .router
             .scope(
                 events,
-                self.runtime.with_model_selection(
-                    options,
+                self.with_selected_model(
+                    &request.session_id,
+                    selection,
                     self.runtime
                         .run_with_mode_with_skills_stream_controlled_content(
                             request.mode,
@@ -1706,9 +1815,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
                         ),
                 ),
             )
-            .await
-            .map_err(|error| interactive_runtime_error(&error));
-        let outcome = outcome?;
+            .await?;
         let status = match &outcome {
             AgentRunOutcome::Completed { .. } => "ok",
             AgentRunOutcome::Cancelled { .. } => "cancelled",
@@ -1754,13 +1861,14 @@ impl InteractiveHost for EmbeddedInteractiveHost {
         let mut observer = ChannelRunObserver {
             sender: events.clone(),
         };
-        let options = self.model_selections.get(&request.session_id)?;
+        let selection = self.model_selections.get(&request.session_id)?;
         let outcome = self
             .router
             .scope(
                 events,
-                self.runtime.with_model_selection(
-                    options,
+                self.with_selected_model(
+                    &request.session_id,
+                    selection,
                     self.runtime.execute_plan_stream_controlled(
                         "primary",
                         &request.session_id,
@@ -1773,8 +1881,7 @@ impl InteractiveHost for EmbeddedInteractiveHost {
                     ),
                 ),
             )
-            .await
-            .map_err(|error| interactive_runtime_error(&error));
+            .await;
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(error) => {

@@ -441,6 +441,7 @@ pub(super) enum Overlay {
         document_scroll: usize,
     },
     ToolDetails(crate::tool_details::ToolDetailsState),
+    ModelCatalog(Box<crate::model_catalog::ModelCatalogState>),
     SessionBrowser(SessionBrowserState),
     ThemePicker(ThemePickerState),
     HistorySearch(HistorySearchState),
@@ -543,6 +544,8 @@ pub struct TuiState {
     pub(super) older_page_failed: bool,
     pub(super) native_history_pages_loaded: usize,
     pub(super) transcript_epoch: u64,
+    pub(super) model_catalog_generation: u64,
+    pub(super) model_catalog_applying: bool,
     pub(super) welcome_visible: bool,
     pub(super) security_posture_entry: Option<usize>,
     pub(super) should_exit: bool,
@@ -662,6 +665,8 @@ impl TuiState {
             older_page_failed: false,
             native_history_pages_loaded: 0,
             transcript_epoch: 0,
+            model_catalog_generation: 0,
+            model_catalog_applying: false,
             welcome_visible,
             security_posture_entry,
             should_exit: false,
@@ -737,6 +742,7 @@ impl TuiState {
                 Some(
                     Overlay::ToolDetails(_)
                         | Overlay::SessionBrowser(_)
+                        | Overlay::ModelCatalog(_)
                         | Overlay::ThemePicker(_)
                         | Overlay::HistorySearch(_)
                         | Overlay::SettingsPicker(_)
@@ -847,7 +853,9 @@ impl TuiState {
 
     /// Whether a serialized command or run is active.
     pub const fn is_busy(&self) -> bool {
-        self.operation.is_some() || self.sandbox_boundary_acknowledgement_in_progress
+        self.operation.is_some()
+            || self.sandbox_boundary_acknowledgement_in_progress
+            || self.model_catalog_applying
     }
 
     /// Append an older page without duplicating or exposing system messages.

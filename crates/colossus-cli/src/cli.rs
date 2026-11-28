@@ -196,6 +196,7 @@ pub(super) const TERMINAL_COMPLETIONS: &[&str] = &[
     "/workflow subscription tick",
     "/audit verify",
     "/projection status",
+    "/models",
     "/models doctor",
     "/provider doctor",
     "/tools",

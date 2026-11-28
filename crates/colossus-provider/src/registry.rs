@@ -115,9 +115,27 @@ impl ProviderRegistry {
     }
 
     fn resolve_model(&self, model_name: &str, role: &str) -> Result<ResolvedModel, ProviderError> {
-        let mut model = self.models.get(model_name).cloned().ok_or_else(|| {
+        let model = self.models.get(model_name).cloned().ok_or_else(|| {
             ProviderError::Configuration(format!("model profile {model_name} is absent"))
         })?;
+        self.resolve_profile(role, model)
+    }
+
+    /// Resolve a validated terminal choice using an existing provider and role policy.
+    pub fn resolve_terminal_model(
+        &self,
+        role: &str,
+        model: ModelProfile,
+    ) -> Result<ResolvedModel, ProviderError> {
+        self.require_role_available(role)?;
+        self.resolve_profile(role, model)
+    }
+
+    fn resolve_profile(
+        &self,
+        role: &str,
+        mut model: ModelProfile,
+    ) -> Result<ResolvedModel, ProviderError> {
         let provider = self
             .profiles
             .get(&model.provider_profile)

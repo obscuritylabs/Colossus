@@ -133,6 +133,7 @@ pub(super) fn command_description(command: &str) -> Option<&'static str> {
         "/workflow subscription tick" => "Run a subscription tick",
         "/audit verify" => "Verify the audit journal",
         "/projection status" => "Show projection health",
+        "/models" => "Browse provider model catalogs",
         "/models doctor" => "Diagnose model configuration",
         "/provider doctor" => "Diagnose provider configuration",
         "/tools" => "List available tools",

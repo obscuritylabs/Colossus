@@ -107,6 +107,7 @@ pub use dictation::{DictationAction, DictationUpdate, LocalDictation};
 mod footer;
 mod header;
 mod history_search;
+mod model_catalog;
 mod model_picker;
 mod next_prompt;
 mod plan_execution;
@@ -133,10 +134,11 @@ pub use contract::{
     AttachmentDetach, BackgroundNoticeProvider, BootstrapRequest, FooterState, HostCommandResult,
     HostEvent, HostPlanExecutionOutcome, HostPlanExecutionResult, HostRunResult,
     InteractiveApprovalMode, InteractiveCommand, InteractiveHost, InteractiveLifecycleObserver,
-    InteractiveMode, InteractivePlanExecutionRequest, InteractivePrompt, InteractivePromptKind,
-    InteractiveRunRequest, InteractiveSessionBrowser, InteractiveSessionBrowserEntry,
-    InteractiveSessionBrowserMessage, InteractiveSnapshot, InteractiveThemePicker,
-    InteractiveThemePickerEntry, LocalCommand, OperationResult, PlanCommand, PlanHostCommand,
+    InteractiveMode, InteractiveModelCatalog, InteractivePlanExecutionRequest, InteractivePrompt,
+    InteractivePromptKind, InteractiveRunRequest, InteractiveSessionBrowser,
+    InteractiveSessionBrowserEntry, InteractiveSessionBrowserMessage, InteractiveSnapshot,
+    InteractiveThemePicker, InteractiveThemePickerEntry, LocalCommand, ModelCatalogApplied,
+    ModelCatalogSelection, ModelCatalogUpdate, OperationResult, PlanCommand, PlanHostCommand,
     PlanSelectionUpdate, PromptResponse, ResearchCommand, RuntimeCommand, ScreenMode,
     SidebarSnapshot, SkillCompletionRefresh, TranscriptEntry, TranscriptKind, TuiError, TuiOptions,
     parse_interactive_command,

@@ -339,7 +339,7 @@ fn terminal_help_document(preferences: &TerminalPreferences) -> PresentationDocu
         ],
         [
             "Provider diagnostics",
-            "/models doctor [PROFILE] · /provider doctor [PROFILE]",
+            "/models · /models doctor [PROFILE] · /provider doctor [PROFILE]",
             "Run a bounded probe and show released provider error details",
         ],
         [
