@@ -78,6 +78,18 @@ impl Terminal {
         self.wait_until(text, |screen| screen.contains(text))
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn wait_for_exit(&mut self) -> portable_pty::ExitStatus {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(status) = self.child.try_wait().expect("TUI exit status") {
+                return status;
+            }
+            assert!(Instant::now() < deadline, "TUI did not exit");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     pub(crate) fn wait_until(&self, description: &str, ready: impl Fn(&str) -> bool) -> String {
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {

@@ -905,6 +905,11 @@ async fn save_terminal_draft_preferences(
     )?)
 }
 
+struct InteractiveModelSelection {
+    configured: Option<colossus_contracts::WorkflowAgentOptions>,
+    terminal: Option<colossus_contracts::TerminalModelProfile>,
+}
+
 async fn handle_interactive_connection<S>(
     stream: S,
     runtime: &Runtime,
@@ -912,7 +917,7 @@ async fn handle_interactive_connection<S>(
     request: InteractiveWorkerRequest,
     approval_mode: Option<WorkerApprovalMode>,
     sandbox_boundary_acknowledgement: Option<SandboxBoundaryAcknowledgement>,
-    model_options: Option<colossus_contracts::WorkflowAgentOptions>,
+    model_selection: InteractiveModelSelection,
 ) -> Result<bool, WorkerError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -930,13 +935,44 @@ where
                 .as_ref()
                 .map(|acknowledgement| acknowledgement.expose().to_owned()),
             Box::pin(async {
-                let options = model_options.unwrap_or_default();
-                let role = match &request {
-                    InteractiveWorkerRequest::Run { role, .. }
-                    | InteractiveWorkerRequest::PlanExecute { role, .. }
-                    | InteractiveWorkerRequest::GoalResume { role, .. } => role.as_str(),
-                    _ => "primary",
+                let options = model_selection.configured.unwrap_or_default();
+                let run_target = match &request {
+                    InteractiveWorkerRequest::Run {
+                        role, session_id, ..
+                    }
+                    | InteractiveWorkerRequest::PlanExecute {
+                        role, session_id, ..
+                    }
+                    | InteractiveWorkerRequest::GoalResume {
+                        role, session_id, ..
+                    } => Some((role.as_str(), session_id.as_str())),
+                    _ => None,
                 };
+                if let Some(profile) = model_selection.terminal {
+                    let (role, session_id) = run_target.ok_or_else(|| {
+                        WorkerError::Protocol(
+                            "A discovered model can only be selected for a terminal agent run."
+                                .into(),
+                        )
+                    })?;
+                    let (role, session_id) = (role.to_owned(), session_id.to_owned());
+                    if options.model_profile.is_some() {
+                        return Err(WorkerError::Protocol(
+                            "Choose either a saved model or a discovered model for this run."
+                                .into(),
+                        ));
+                    }
+                    return runtime
+                        .with_terminal_model_selection(
+                            &role,
+                            &session_id,
+                            &profile,
+                            options.reasoning_effort,
+                            dispatch_interactive(runtime, request, &mut observer, &control),
+                        )?
+                        .await;
+                }
+                let role = run_target.map_or("primary", |(role, _)| role);
                 if options.model_profile.is_some() || options.reasoning_effort.is_some() {
                     runtime.model_route_with_options(role, &options)?;
                 }
@@ -1176,6 +1212,7 @@ where
         WorkerOperation::RunInteractive {
             request,
             model_options,
+            terminal_model,
             approval_mode,
             sandbox_boundary_acknowledgement,
         } => {
@@ -1194,7 +1231,10 @@ where
                 request,
                 approval_mode,
                 sandbox_boundary_acknowledgement,
-                model_options,
+                InteractiveModelSelection {
+                    configured: model_options,
+                    terminal: terminal_model,
+                },
             )
             .await
         }

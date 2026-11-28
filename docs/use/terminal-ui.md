@@ -78,6 +78,7 @@ Enter a slash command in the composer. These are useful starting points:
 | `/help` | The command list for your running version |
 | `/session show` | The current session |
 | `/resume` | Searchable past sessions |
+| `/models` | Browse configured models and provider catalogs |
 | `/model` | Choose a configured model for the next turn |
 | `/effort` | Choose the next turn's reasoning effort |
 | `/context status` | Current context budget and snapshot |
@@ -137,6 +138,18 @@ summary; [JSON output](../reference/cli.md#json-output-contracts) keeps its docu
 format.
 
 ## Write and review a turn
+
+Open `/models` to switch models in the current conversation. Configured profiles
+appear first. Move to a provider and press Enter to load its catalog. Type to
+filter by model name or ID. Provider requests run while you browse, and reopening
+a provider uses its latest successful catalog in this runtime when it is cached.
+Press Ctrl-R on a provider or one of its models to refresh that catalog.
+
+Enter applies a configured profile. For a discovered model, Enter opens the
+context window and max output fields. Tab moves between fields, Delete clears the
+current field, and Enter applies the edited limits to the next turn. You can
+reopen the **Current** row to edit them again. The choice stays with that
+conversation until you switch models or exit the TUI.
 
 Use `/model` and `/effort` to change the next turn without leaving the current
 conversation. Up/Down selects a choice, Enter applies it, and Esc keeps the current

@@ -4,6 +4,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use integrations::{pull_request_arguments, pull_request_document};
 use uuid::Uuid;
 
+const MODEL_PICKER_WORKER_DEADLINE: Duration = Duration::from_secs(5);
+
 pub(super) fn worker_run_outcome(
     outcome: Result<AgentRunOutcome, WorkerError>,
     session_id: &str,
@@ -358,6 +360,7 @@ impl WorkerInteractiveHost {
             .call_worker_interactive::<AcknowledgementResult>(
                 WorkerOperation::RunInteractive {
                     model_options: None,
+                    terminal_model: None,
                     request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
                         session_id: session_id.into(),
                         mode,
@@ -506,6 +509,7 @@ impl WorkerInteractiveHost {
                     self.call_worker_interactive(
                         WorkerOperation::RunInteractive {
                             model_options: None,
+                            terminal_model: None,
                             request: InteractiveWorkerRequest::GitHubPullRequest { arguments },
                             approval_mode: self.interactive_approval_mode()?,
                             sandbox_boundary_acknowledgement: None,
@@ -559,6 +563,48 @@ impl WorkerInteractiveHost {
         .map_err(|error| error.to_string())
     }
 
+    async fn resolve_model_choice(
+        &self,
+        session_id: &str,
+        options: &WorkflowAgentOptions,
+        terminal: Option<&TerminalModelProfile>,
+        use_pinned: bool,
+    ) -> Result<ProviderRoute, String> {
+        if let Some(profile) = terminal {
+            return serde_json::from_value(
+                self.value(WorkerOperation::TerminalModelRoute {
+                    session_id: session_id.into(),
+                    profile: profile.clone(),
+                    reasoning_effort: options.reasoning_effort,
+                    use_pinned,
+                })
+                .await?,
+            )
+            .map_err(|error| error.to_string());
+        }
+        let default = self.default_model_route().await?;
+        let configured = if options.model_profile.is_some() {
+            self.configured_models().await?
+        } else {
+            Vec::new()
+        };
+        selected_route(default, &configured, options)
+    }
+
+    async fn selected_model_route(
+        &self,
+        session_id: &str,
+        selection: &ModelSelection,
+    ) -> Result<ProviderRoute, String> {
+        match &selection.terminal {
+            Some((_, route)) => Ok(route.clone()),
+            None => {
+                self.resolve_model_choice(session_id, &selection.options, None, false)
+                    .await
+            }
+        }
+    }
+
     async fn footer(&self, session_id: &str, status: &str) -> Result<FooterState, String> {
         self.footer_with_metrics(session_id, status, FooterMetrics::Latest)
             .await
@@ -570,18 +616,8 @@ impl WorkerInteractiveHost {
         status: &str,
         metrics: FooterMetrics<'_>,
     ) -> Result<FooterState, String> {
-        let route: ProviderRoute = serde_json::from_value(
-            self.value(WorkerOperation::ProviderRoute {
-                role: "primary".into(),
-            })
-            .await?,
-        )
-        .map_err(|error| error.to_string())?;
-        let route = selected_route(
-            route,
-            &self.configured_models().await?,
-            &self.model_selections.get(session_id)?,
-        )?;
+        let selection = self.model_selections.get(session_id)?;
+        let route = self.selected_model_route(session_id, &selection).await?;
         let (context, usage, message_count) = match metrics {
             FooterMetrics::Opened { message_count } => (None, None, message_count),
             _ if self.drafts.contains(session_id)? => (None, None, 0),
@@ -623,7 +659,8 @@ impl WorkerInteractiveHost {
         let approval = self.approval_mode.snapshot()?;
         Ok(FooterState {
             role: route.role.clone(),
-            route: route_label(&route),
+            route: route_label(&route, selection.terminal.is_some()),
+            model_revision: selection.revision,
             context: context
                 .map(|context| (context.token_estimate, route.limits.input_budget_tokens)),
             usage,
@@ -876,6 +913,7 @@ impl WorkerInteractiveHost {
         self.call_worker_interactive(
             WorkerOperation::RunInteractive {
                 model_options: None,
+                terminal_model: None,
                 request,
                 approval_mode: self.interactive_approval_mode()?,
                 sandbox_boundary_acknowledgement: acknowledgement,
@@ -906,6 +944,7 @@ impl WorkerInteractiveHost {
         self.call_worker_interactive::<String>(
             WorkerOperation::RunInteractive {
                 model_options: None,
+                terminal_model: None,
                 request: InteractiveWorkerRequest::PresentationHistoryAppend {
                     session_id: session_id.into(),
                     entry,
@@ -941,12 +980,14 @@ impl WorkerInteractiveHost {
         if name == "model" || name == "effort" {
             let models = self.configured_models().await?;
             let current = self.model_selections.get(session_id)?;
-            if let Some(next) =
-                select_model_options(name, arguments, current, &models, events).await?
+            if let Some((options, terminal)) =
+                select_model_options(name, arguments, &current, &models, events).await?
             {
-                let default = self.default_model_route().await?;
-                selected_route(default, &models, &next)?;
-                self.model_selections.set(session_id, next)?;
+                let intent = self.model_selections.begin(session_id)?;
+                let route = self
+                    .resolve_model_choice(session_id, &options, terminal.as_ref(), true)
+                    .await?;
+                intent.commit(options, terminal, route)?;
             }
             return Ok(HostCommandResult {
                 footer: Some(self.footer(session_id, "ready").await?),
@@ -970,11 +1011,7 @@ impl WorkerInteractiveHost {
                 Ok(HostCommandResult::document(footer_status_document(footer)))
             }
             "agent" => {
-                let route = selected_route(
-                    self.default_model_route().await?,
-                    &self.configured_models().await?,
-                    &self.model_selections.get(session_id)?,
-                )?;
+                let route = self.selected_model_route(session_id, &self.model_selections.get(session_id)?).await?;
                 Ok(HostCommandResult::document(document_from_json(
                     &serde_json::to_value(route).map_err(|error| error.to_string())?,
                     Some("Active model route"),
@@ -1135,10 +1172,12 @@ impl WorkerInteractiveHost {
                 let prompts = TuiWorkerPromptHandler {
                     sender: events.clone(),
                 };
+                let model = self.model_selections.get(session_id)?;
                 let outcome = self
                     .call_worker_interactive::<GoalRunOutcome>(
                         WorkerOperation::RunInteractive {
-                            model_options: self.model_selections.for_request(session_id)?,
+                            model_options: model.request_options(),
+                            terminal_model: model.terminal.map(|(profile, _)| profile),
                             request: InteractiveWorkerRequest::GoalResume {
                                 role: "primary".into(),
                                 session_id: session_id.into(),
@@ -1299,6 +1338,7 @@ impl WorkerInteractiveHost {
                             .call_worker_interactive::<Value>(
                                 WorkerOperation::RunInteractive {
                                     model_options: None,
+                                    terminal_model: None,
                                     request: InteractiveWorkerRequest::PluginManage { request },
                                     approval_mode: self.interactive_approval_mode()?,
                                     sandbox_boundary_acknowledgement: self
@@ -1684,6 +1724,7 @@ impl WorkerInteractiveHost {
                 WorkerOperation::RunInteractive {
                     request,
                     model_options: None,
+                    terminal_model: None,
                     approval_mode: self.interactive_approval_mode()?,
                     sandbox_boundary_acknowledgement: None,
                 },
@@ -1744,6 +1785,59 @@ impl InteractiveHost for WorkerInteractiveHost {
 
     async fn skill_completion_ids(&self) -> Result<Option<Vec<String>>, String> {
         self.live_skill_ids().await.map(Some)
+    }
+
+    async fn model_catalog_overview(
+        &self,
+        session_id: &str,
+    ) -> Result<InteractiveModelCatalog, String> {
+        let (models, providers) = tokio::time::timeout(MODEL_PICKER_WORKER_DEADLINE, async {
+            tokio::try_join!(
+                self.configured_models(),
+                self.value(WorkerOperation::ProviderProfiles),
+            )
+        })
+        .await
+        .map_err(|_| "The worker did not return configured models.")??;
+        let providers = serde_json::from_value(providers).map_err(|error| error.to_string())?;
+        Ok(self
+            .model_selections
+            .get(session_id)?
+            .catalog(models, providers))
+    }
+
+    async fn provider_model_catalog(
+        &self,
+        provider: &str,
+        refresh: bool,
+    ) -> Result<Vec<ProviderModelInfo>, String> {
+        serde_json::from_value(
+            self.value(WorkerOperation::TerminalModelCatalog {
+                profile: provider.into(),
+                refresh,
+            })
+            .await?,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    async fn select_catalog_model(
+        &self,
+        session_id: &str,
+        choice: ModelCatalogSelection,
+    ) -> Result<ModelCatalogApplied, String> {
+        let intent = self.model_selections.begin(session_id)?;
+        let (options, terminal) = self
+            .model_selections
+            .get(session_id)?
+            .catalog_choice(choice);
+        let route = tokio::time::timeout(
+            MODEL_PICKER_WORKER_DEADLINE,
+            self.resolve_model_choice(session_id, &options, terminal.as_ref(), false),
+        )
+        .await
+        .map_err(|_| "The worker did not confirm the model selection. Try again.")??;
+        intent.commit(options, terminal, route)
     }
 
     async fn save_support_report(
@@ -2015,6 +2109,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         self.call_worker_interactive::<ModelImageReference>(
             WorkerOperation::RunInteractive {
                 model_options: None,
+                terminal_model: None,
                 request: InteractiveWorkerRequest::ImageAttach {
                     path: PathBuf::from(path),
                 },
@@ -2035,6 +2130,7 @@ impl InteractiveHost for WorkerInteractiveHost {
             .call_worker_interactive::<String>(
                 WorkerOperation::RunInteractive {
                     model_options: None,
+                    terminal_model: None,
                     request: InteractiveWorkerRequest::ImagePreview {
                         image: image.clone(),
                     },
@@ -2086,6 +2182,7 @@ impl InteractiveHost for WorkerInteractiveHost {
                     .call_worker_interactive(
                         WorkerOperation::RunInteractive {
                             model_options: None,
+                            terminal_model: None,
                             request: InteractiveWorkerRequest::ShellRun {
                                 session_id: session_id.into(),
                                 command,
@@ -2142,6 +2239,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         control: RunControl,
     ) -> Result<HostRunResult, String> {
         let _operation = self.operations.enter(false).await?;
+        let model = self.model_selections.get(&request.session_id)?;
         let skill_names = self.live_skill_ids().await?;
         let (prompt, explicit_skills) =
             crate::resolve_skill_mentions(&request.prompt, &skill_names);
@@ -2167,7 +2265,8 @@ impl InteractiveHost for WorkerInteractiveHost {
         let outcome = self
             .call_worker_interactive::<AgentRunOutcome>(
                 WorkerOperation::RunInteractive {
-                    model_options: self.model_selections.for_request(&request.session_id)?,
+                    model_options: model.request_options(),
+                    terminal_model: model.terminal.map(|(profile, _)| profile),
                     request: InteractiveWorkerRequest::Run {
                         mode: request.mode,
                         role: "primary".into(),
@@ -2222,6 +2321,7 @@ impl InteractiveHost for WorkerInteractiveHost {
         control: RunControl,
     ) -> Result<HostPlanExecutionResult, String> {
         let _operation = self.operations.enter(false).await?;
+        let model = self.model_selections.get(&request.session_id)?;
         let selected = approved_plan_at_revision(
             serde_json::from_value::<Option<PlanRecord>>(
                 self.value(WorkerOperation::PlanGet {
@@ -2244,7 +2344,8 @@ impl InteractiveHost for WorkerInteractiveHost {
         let outcome = self
             .call_worker_interactive::<PlanExecutionOutcome>(
                 WorkerOperation::RunInteractive {
-                    model_options: self.model_selections.for_request(&request.session_id)?,
+                    model_options: model.request_options(),
+                    terminal_model: model.terminal.map(|(profile, _)| profile),
                     request: InteractiveWorkerRequest::PlanExecute {
                         role: "primary".into(),
                         session_id: request.session_id.clone(),

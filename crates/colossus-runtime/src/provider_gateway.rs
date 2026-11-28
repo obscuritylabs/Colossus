@@ -413,6 +413,11 @@ impl GatewayModelProvider {
             .map_err(|error| ModelProviderError::Configuration(error.to_string()))?;
         match &options.model_profile {
             Some(profile) if !profile.is_empty() && profile.len() <= 128 => {
+                if let Some(model) =
+                    crate::model_selection::scoped_terminal_model(&self.providers, role, profile)
+                {
+                    return Ok(model);
+                }
                 self.providers.model(profile)
             }
             Some(_) => {

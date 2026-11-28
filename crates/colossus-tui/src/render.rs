@@ -105,6 +105,10 @@ fn render_content(
             render_session_browser(frame, state, browser, area);
             return;
         }
+        Some(Overlay::ModelCatalog(_)) => {
+            crate::model_catalog::render(frame, state, area);
+            return;
+        }
         Some(Overlay::ThemePicker(picker)) => {
             render_theme_picker(frame, state, picker, area);
             return;
@@ -1265,7 +1269,7 @@ fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
         Some(Overlay::QueuePaused) => (
             "Queued turns paused".into(),
             vec![
-                Line::from("The prior run failed or was cancelled."),
+                Line::from("The previous operation failed or was cancelled."),
                 Line::from(format!("{} queued turn(s) remain.", state.queue.len())),
                 Line::default(),
                 Line::from("Enter/R: resume queue · C: clear queue · Esc: keep paused"),
@@ -1274,6 +1278,7 @@ fn render_overlay(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
         Some(
             Overlay::ToolDetails(_)
             | Overlay::SessionBrowser(_)
+            | Overlay::ModelCatalog(_)
             | Overlay::ThemePicker(_)
             | Overlay::HistorySearch(_)
             | Overlay::SettingsPicker(_)

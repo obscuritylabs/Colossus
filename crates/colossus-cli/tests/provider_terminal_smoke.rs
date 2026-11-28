@@ -10,6 +10,9 @@ mod plugin_provider;
 #[allow(dead_code)]
 mod terminal_support;
 
+#[path = "provider_terminal_smoke/model_catalog.rs"]
+mod model_catalog;
+
 use process_support::tempdir;
 use serde_json::{Value, json};
 use std::{

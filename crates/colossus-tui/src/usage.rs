@@ -165,6 +165,15 @@ impl TuiState {
     }
 
     pub(super) fn replace_footer(&mut self, mut footer: FooterState) {
+        if footer.model_revision < self.footer.model_revision {
+            footer.model_revision = self.footer.model_revision;
+            footer.role.clone_from(&self.footer.role);
+            footer.route.clone_from(&self.footer.route);
+            footer.context = footer
+                .context
+                .zip(self.footer.context)
+                .map(|((used, _), (_, budget))| (used, budget));
+        }
         self.run_usage
             .replace_canonical(&self.session_id, footer.usage.take());
         footer.usage = self.run_usage.current().cloned();

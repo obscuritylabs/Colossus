@@ -7,10 +7,11 @@ use colossus_contracts::{
     AutomaticApprovalNotice, ContextStatus, ControlledAgentTerminal, EffectRequest, GoalRunOutcome,
     MemoryStatus, ModelContent, ModelContentPart, ModelImageReference, ModelMessageRole,
     PlanExecutionOutcome, PlanRecord, PlanStatus, PluginInventoryEntry, PolicyDecision,
-    ProviderReadinessCheck, ProviderRoute, ReasoningEffort, ResearchDepth, ResearchSourceKind,
-    RiskReviewFallbackNotice, RunEventEnvelope, RunTokenUsage, SandboxBoundaryMode,
-    SessionMessagePage, SessionSummary, TerminalPreferences, UserPromptRequest, UserPromptResponse,
-    WorkStateSnapshot,
+    ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ReasoningEffort,
+    ResearchDepth, ResearchSourceKind, RiskReviewFallbackNotice, RunEventEnvelope, RunTokenUsage,
+    SandboxBoundaryMode, SessionMessagePage, SessionSummary, TerminalModelProfile,
+    TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
+    WorkflowAgentOptions,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{
@@ -25,11 +26,12 @@ use colossus_presentation::{
 use colossus_runtime::{Runtime, RuntimeError, format_provider_response_diagnostic};
 use colossus_tui::{
     BootstrapRequest, FooterState, HostCommandResult, HostEvent, HostPlanExecutionOutcome,
-    HostPlanExecutionResult, HostRunResult, InteractiveHost, InteractivePlanExecutionRequest,
-    InteractivePrompt, InteractivePromptKind, InteractiveRunRequest, InteractiveSessionBrowser,
-    InteractiveSessionBrowserEntry, InteractiveSessionBrowserMessage, InteractiveSnapshot,
-    InteractiveThemePicker, InteractiveThemePickerEntry, PlanHostCommand, PlanSelectionUpdate,
-    PromptResponse, RuntimeCommand, SkillCompletionRefresh,
+    HostPlanExecutionResult, HostRunResult, InteractiveHost, InteractiveModelCatalog,
+    InteractivePlanExecutionRequest, InteractivePrompt, InteractivePromptKind,
+    InteractiveRunRequest, InteractiveSessionBrowser, InteractiveSessionBrowserEntry,
+    InteractiveSessionBrowserMessage, InteractiveSnapshot, InteractiveThemePicker,
+    InteractiveThemePickerEntry, ModelCatalogApplied, ModelCatalogSelection, PlanHostCommand,
+    PlanSelectionUpdate, PromptResponse, RuntimeCommand, SkillCompletionRefresh,
     sandbox_boundary_acknowledgement_choice, sandbox_boundary_prompt,
 };
 use colossus_worker::{

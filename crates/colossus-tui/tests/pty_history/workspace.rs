@@ -165,6 +165,7 @@ impl InteractiveHost for WorkspaceHost {
                 route: "fixture@local".into(),
                 status: "ready".into(),
                 approval_mode: "ask".into(),
+                model_revision: 0,
                 approval_mode_revision: 0,
                 ..Default::default()
             },

@@ -181,7 +181,7 @@ Use `/help` for arguments and commands available in your installed version.
 | Sessions | `/sessions`, `/session show`, `/session new`, `/session resume [SESSION_ID]`, `/resume [SESSION_ID]` |
 | Conversation export | `/session export PATH [--format FORMAT]`, `/export PATH [--format FORMAT]` export the current saved session to a new file. Quote paths containing spaces. |
 | Permissions | `/permissions` opens a chooser; `/permissions deny\|ask\|risk-auto\|full-access` sets a mode directly |
-| Model selection | `/model` and `/effort` open searchable pickers; `/model PROFILE` and `/effort high` set a value directly. Use `default` to restore the configured setting. |
+| Model selection | `/models` opens configured profiles and provider catalogs. `/model` and `/effort` open focused pickers. `/model PROFILE` and `/effort high` set a value directly. Use `default` to restore the configured setting. |
 | Tools and work | `/tools`, `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/goal resume GOAL_ID`, `/agents`, `/agents drain` |
 | Planning | `/plan`, `/plan on`, `/plan off`, `/plan status`, `/plan new`, `/plan list`, `/plan use PLAN_ID`, `/plan show [PLAN_ID]`, `/plan approve`, `/plan discard`, `/plan execute [direct\|goal [ITERATIONS]]` |
 | Context | `/context status`, `/context list`, `/context compact`, `/context restore` |
@@ -220,6 +220,20 @@ available only through the CLI. See [export formats, scope, and recovery](../use
 
 `/context status` shows the current session's model input budget and active
 snapshot. See [Context and snapshots](../use/sessions-context.md) to interpret it.
+
+### Browse provider models
+
+Use Up/Down to browse, Enter to expand a provider or choose a model, and Esc to
+return. Search includes configured profiles and models in expanded provider
+catalogs. Provider discovery starts on expansion and follows the runtime's
+provider policy. The last successful response is cached in the running runtime.
+Ctrl-R requests a fresh catalog for the selected provider.
+
+Discovered models use the provider's advertised token limits when available.
+The editor starts with a 32,768-token context window or a 4,096-token output
+budget when the corresponding limit is unknown and reduces the initial output
+budget to fit the context window. The selected limits apply to this TUI
+conversation for the current process.
 
 ### Save a support report
 

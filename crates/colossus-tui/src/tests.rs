@@ -126,6 +126,7 @@ pub(super) fn snapshot() -> InteractiveSnapshot {
             message_count: 1,
             status: "ready".into(),
             approval_mode: "ask".into(),
+            model_revision: 0,
             approval_mode_revision: 0,
         },
         security_posture: Default::default(),

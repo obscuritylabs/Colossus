@@ -352,6 +352,27 @@ pub enum WorkerOperation {
         /// Optional exact profile.
         profile: Option<String>,
     },
+    /// List the local terminal's cached provider catalog.
+    TerminalModelCatalog {
+        /// Exact configured provider profile.
+        profile: String,
+        /// Refresh the catalog with an audited provider request.
+        #[serde(default, skip_serializing_if = "is_false")]
+        refresh: bool,
+    },
+    /// Validate a discovered model and its session-local limits for Compose.
+    TerminalModelRoute {
+        /// Exact durable or unmaterialized terminal session.
+        session_id: String,
+        /// Edited discovered model and existing provider profile.
+        profile: colossus_contracts::TerminalModelProfile,
+        /// Explicit reasoning preference for this temporary selection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<colossus_contracts::ReasoningEffort>,
+        /// Revalidate reasoning for an already issued choice in this session.
+        #[serde(default, skip_serializing_if = "is_false")]
+        use_pinned: bool,
+    },
     /// Show configured explicit model profiles.
     ModelProfiles,
     /// Exercise one explicit model generation diagnostic.
@@ -430,6 +451,9 @@ pub enum WorkerOperation {
         /// Immutable configured model preferences for root user-facing agent turns.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model_options: Option<colossus_contracts::WorkflowAgentOptions>,
+        /// Session-local model selection validated against the terminal catalog.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminal_model: Option<colossus_contracts::TerminalModelProfile>,
         /// Strict application request carried by the interactive channel.
         request: InteractiveWorkerRequest,
         /// Optional client-scoped approval handling for this one interactive operation.

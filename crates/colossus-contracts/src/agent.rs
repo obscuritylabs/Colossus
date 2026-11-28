@@ -533,6 +533,20 @@ pub struct ProviderModelInfo {
     pub supported_reasoning_efforts: Vec<ReasoningEffort>,
 }
 
+/// A discovered model selected for a local terminal conversation.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalModelProfile {
+    /// Exact existing provider connection profile.
+    pub provider_profile: String,
+    /// Exact identifier released by that provider's catalog.
+    pub model: String,
+    /// User-selected total context window.
+    pub context_window_tokens: u64,
+    /// User-selected generation limit reserved from the context window.
+    pub max_output_tokens: u64,
+}
+
 /// Explicitly requested, bounded diagnostics for one non-success provider response.
 ///
 /// This contract is released only by explicitly requested local diagnostics after post-effect

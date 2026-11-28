@@ -93,6 +93,34 @@ fn host() -> Arc<dyn InteractiveHost> {
     Arc::new(NoWorkHost)
 }
 
+#[tokio::test]
+async fn background_model_picker_submission_preserves_an_existing_approval() {
+    let mut state = TuiState::from_snapshot(source("current"));
+    let (response, mut answer) = oneshot::channel();
+    crate::app::handle_host_event(
+        &mut state,
+        HostEvent::Prompt(InteractivePrompt {
+            id: "existing-approval".into(),
+            kind: InteractivePromptKind::Approval,
+            title: "Approval required".into(),
+            document: PresentationDocument::new(),
+            choices: vec!["Allow once".into(), "Deny".into()],
+            initial_choice: Some(1),
+            allow_free_form: false,
+            response,
+        }),
+    );
+    let (events, _) = mpsc::channel(8);
+    crate::app::submit_line(&mut state, "/models".into(), host(), events);
+    assert!(
+        matches!(&state.overlay, Some(Overlay::Prompt { request, .. }) if request.id == "existing-approval")
+    );
+    assert!(matches!(
+        answer.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+}
+
 fn open_snapshot(workspace: &mut Workspace, id: &str) {
     workspace.receive(WorkspaceEvent::Opened(Box::new(Ok(source(id)))), host());
 }

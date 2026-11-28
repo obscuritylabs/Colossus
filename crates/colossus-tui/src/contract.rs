@@ -1,4 +1,5 @@
 use super::*;
+use colossus_contracts::{ModelRoute, ProviderModelInfo, TerminalModelProfile};
 
 /// TUI startup and terminal-ownership failure.
 #[derive(Debug, Error)]
@@ -39,6 +40,8 @@ pub struct FooterState {
     pub role: String,
     /// Resolved model/provider label.
     pub route: String,
+    /// Host-local model selection revision for this conversation.
+    pub model_revision: u64,
     /// Current used and maximum provider context tokens.
     pub context: Option<(u64, u64)>,
     /// Provider-reported counters for the latest direct run in this session.
@@ -845,6 +848,15 @@ pub enum HostEvent {
         /// Optional snapshot for hosts supporting the status panel.
         result: Result<Option<SidebarSnapshot>, String>,
     },
+    /// Result from the catalog picker that originated an asynchronous request.
+    ModelCatalogUpdated {
+        /// Exact conversation that requested the update.
+        session_id: String,
+        /// Picker lifetime identifier within the originating terminal session.
+        generation: u64,
+        /// Normalized data or an acknowledged model selection.
+        update: ModelCatalogUpdate,
+    },
     /// Device-local recording result, isolated by recording generation.
     Dictation {
         /// Identity of the local draft's recording generation.
@@ -933,6 +945,35 @@ pub enum OperationResult {
 /// Embedded and worker-backed application boundary consumed by the TUI.
 #[async_trait]
 pub trait InteractiveHost: Send + Sync {
+    /// Read configured models and provider names without upstream requests.
+    async fn model_catalog_overview(
+        &self,
+        _session_id: &str,
+    ) -> Result<InteractiveModelCatalog, String> {
+        Err("Model browsing is unavailable in this host.".into())
+    }
+
+    /// Load one configured provider's normalized catalog.
+    async fn provider_model_catalog(
+        &self,
+        _provider: &str,
+        _refresh: bool,
+    ) -> Result<Vec<ProviderModelInfo>, String> {
+        Err("Provider model catalogs are unavailable in this host.".into())
+    }
+
+    /// Drain in-process catalog effects before their runtime shuts down.
+    async fn finish_model_catalog_reads(&self) {}
+
+    /// Apply the chosen route to the next turn in this conversation.
+    async fn select_catalog_model(
+        &self,
+        _session_id: &str,
+        _selection: ModelCatalogSelection,
+    ) -> Result<ModelCatalogApplied, String> {
+        Err("Model selection is unavailable in this host.".into())
+    }
+
     /// Explicit opt-in auxiliary model request; never appends a conversation turn.
     async fn predict_next_prompt(
         &self,
@@ -1098,6 +1139,56 @@ pub trait InteractiveHost: Send + Sync {
         session_id: &str,
         before_sequence: u64,
     ) -> Result<SessionMessagePage, String>;
+}
+
+/// Local model choices and catalog-capable connections for one browser.
+#[derive(Default)]
+pub struct InteractiveModelCatalog {
+    /// Exact configured model profiles released by the local host.
+    pub configured: Vec<ModelRoute>,
+    /// Configured provider profile names with a catalog endpoint.
+    pub providers: Vec<String>,
+    /// Named configuration currently selected, if any.
+    pub selected_profile: Option<String>,
+    /// Discovered model settings applied for this conversation, if any.
+    pub selected_terminal_model: Option<TerminalModelProfile>,
+}
+
+/// Typed, explicit selection from the terminal catalog.
+pub enum ModelCatalogSelection {
+    /// Restore the configured role route.
+    RoleDefault,
+    /// Use one existing named profile.
+    Configured(String),
+    /// Use one configured provider's discovered model with operator-edited limits.
+    Discovered(TerminalModelProfile),
+}
+
+/// Validated next-turn model metadata for updating the terminal footer.
+pub struct ModelCatalogApplied {
+    /// Resolved role.
+    pub role: String,
+    /// User-visible model and provider label.
+    pub route: String,
+    /// Available input tokens after the output reserve.
+    pub input_budget_tokens: u64,
+    /// Host-local model selection revision.
+    pub revision: u64,
+}
+
+/// Asynchronous update to an open model catalog browser.
+pub enum ModelCatalogUpdate {
+    /// Local snapshot before any provider discovery.
+    Overview(Result<InteractiveModelCatalog, String>),
+    /// One provider's independently completed catalog request.
+    Provider {
+        /// Exact configured provider requested by the operator.
+        profile: String,
+        /// Released provider models or a provider-local failure.
+        result: Result<Vec<ProviderModelInfo>, String>,
+    },
+    /// The host finished applying the explicit next-turn model choice.
+    Applied(Result<ModelCatalogApplied, String>),
 }
 
 /// Terminal viewport selection.

@@ -45,7 +45,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     let mut refresh_startup_skills = true;
     let mut pending_input = None;
 
-    loop {
+    let terminal_loop = loop {
         state.process_action(Arc::clone(&host));
         while let Ok(host_event) = event_rx.try_recv() {
             state.receive(host_event, Arc::clone(&host));
@@ -56,7 +56,9 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         state.refresh_agents(Arc::clone(&host));
         state.sync_rows();
         let (active, companion) = state.draw_parts();
-        terminal.draw(active, companion)?;
+        if let Err(error) = terminal.draw(active, companion) {
+            break Err(error);
+        }
         if std::mem::take(&mut refresh_startup_skills)
             && host.refreshes_skill_completions(SkillCompletionRefresh::Startup)
         {
@@ -77,12 +79,15 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         );
         state.drain_queues(Arc::clone(&host));
         if state.should_exit {
-            break;
+            break Ok(());
         }
         observe_lifecycle(&state, lifecycle.as_deref());
         let input = match pending_input.take() {
             Some(input) => Some(input),
-            None => read_terminal_input(Duration::from_millis(33))?,
+            None => match read_terminal_input(Duration::from_millis(33)) {
+                Ok(input) => input,
+                Err(error) => break Err(error),
+            },
         };
         if let Some(input) = input {
             let composer_focused = state.overlay.is_none()
@@ -91,7 +96,7 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
                 && !state.dictation.active
                 && !state.selecting_text
                 && !state.text_selection.active();
-            dispatch_terminal_batch(
+            if let Err(error) = dispatch_terminal_batch(
                 input,
                 &mut pending_input,
                 composer_focused,
@@ -100,9 +105,11 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
                     apply_terminal_input(&mut state, input, &host, &event_tx, screen_mode);
                     observe_lifecycle(&state, lifecycle.as_deref());
                 },
-            )?;
+            ) {
+                break Err(error);
+            }
         }
-    }
+    };
     state.cancel_all();
     let shutdown = Instant::now();
     while state.any_busy() && shutdown.elapsed() < Duration::from_secs(5) {
@@ -114,7 +121,11 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
         }
         state.support_report.poll();
     }
-    terminal.finish()?;
+    let terminal_result = terminal.finish();
+    drop(terminal);
+    host.finish_model_catalog_reads().await;
+    terminal_loop?;
+    terminal_result?;
     Ok(())
 }
 
@@ -234,6 +245,7 @@ pub(super) fn observe_lifecycle(
                 Some(
                     Overlay::Prompt { .. }
                         | Overlay::SessionBrowser(_)
+                        | Overlay::ModelCatalog(_)
                         | Overlay::ThemePicker(_)
                         | Overlay::SettingsPicker(_)
                         | Overlay::PlanExecutionChoice { .. }
@@ -518,6 +530,10 @@ pub(super) fn handle_key(
     }
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         state.interrupt_or_exit();
+        return;
+    }
+    if matches!(state.overlay, Some(Overlay::ModelCatalog(_))) {
+        crate::model_catalog::key(state, key, host, event_tx);
         return;
     }
     if state.overlay.is_some() {
@@ -941,7 +957,10 @@ pub(super) fn handle_overlay_key(state: &mut TuiState, key: KeyEvent) {
             }
             _ => {}
         },
-        Overlay::ToolDetails(_) | Overlay::SessionBrowser(_) | Overlay::ThemePicker(_) => {}
+        Overlay::ToolDetails(_)
+        | Overlay::ModelCatalog(_)
+        | Overlay::SessionBrowser(_)
+        | Overlay::ThemePicker(_) => {}
     }
 }
 
@@ -1188,6 +1207,8 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
                 browser.query.push_str(&text);
                 browser.reconcile_selection();
             }
+            Overlay::ModelCatalog(browser) if !state.model_catalog_applying => browser.paste(&text),
+            Overlay::ModelCatalog(_) => {}
             Overlay::ThemePicker(picker) if picker.search_active => {
                 picker.query.push_str(&text);
                 picker.reconcile_selection();
@@ -1238,6 +1259,19 @@ pub(super) fn submit_line(
     state.support_report.clear_notice();
     state.dismiss_welcome();
     state.remember_history(&line);
+    if line == "/models" {
+        if state.overlay.is_some() || state.model_catalog_applying {
+            return;
+        }
+        persist_display_input(
+            state.session_id.clone(),
+            line,
+            Arc::clone(&host),
+            event_tx.clone(),
+        );
+        crate::model_catalog::open(state, host, event_tx);
+        return;
+    }
     let command = parse_interactive_command(&line);
     if !starts_work(&command) {
         persist_display_input(
@@ -1855,6 +1889,11 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
                 state.sidebar.refresh(result);
             }
         }
+        HostEvent::ModelCatalogUpdated {
+            session_id,
+            generation,
+            update,
+        } => crate::model_catalog::updated(state, session_id, generation, update),
         HostEvent::Dictation {
             generation,
             action,
@@ -2184,7 +2223,10 @@ pub(super) fn handle_host_event(state: &mut TuiState, event: HostEvent) {
 
 fn receive_prompt(state: &mut TuiState, request: InteractivePrompt) {
     // Read-only inspection must never postpone an authority decision.
-    if matches!(state.overlay, Some(Overlay::ToolDetails(_))) {
+    if matches!(
+        state.overlay,
+        Some(Overlay::ToolDetails(_) | Overlay::ModelCatalog(_))
+    ) {
         state.overlay = None;
         state.text_selection.clear();
     }
@@ -2434,6 +2476,8 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
             state.agents = crate::agents::AgentTree::default();
             state.run_usage = RunUsageState::restored(&session_id, None);
             state.footer.usage = None;
+            state.footer.model_revision = 0;
+            state.model_catalog_applying = false;
         }
         state.session_id = session_id;
         state.provider_recovery = None;

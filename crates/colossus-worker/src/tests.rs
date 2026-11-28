@@ -112,6 +112,7 @@ fn approval_mode_control_is_an_explicit_authenticated_operation() {
 fn sandbox_boundary_acknowledgement_is_session_and_mode_bound() {
     let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
         model_options: None,
+        terminal_model: None,
         request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
             session_id: "session-1".into(),
             mode: SandboxBoundaryMode::External,
@@ -121,6 +122,7 @@ fn sandbox_boundary_acknowledgement_is_session_and_mode_bound() {
     })
     .expect("serialize sandbox boundary acknowledgement");
     assert_eq!(encoded["operation"], "run_interactive");
+    assert!(encoded.get("terminal_model").is_none());
     assert_eq!(encoded["request"]["kind"], "sandbox_boundary_acknowledge");
     assert_eq!(encoded["request"]["session_id"], "session-1");
     assert_eq!(encoded["request"]["mode"], "external");
@@ -130,6 +132,7 @@ fn sandbox_boundary_acknowledgement_is_session_and_mode_bound() {
         decoded,
         WorkerOperation::RunInteractive {
             model_options: None,
+            terminal_model: None,
             request: InteractiveWorkerRequest::SandboxBoundaryAcknowledge {
                 session_id,
                 mode: SandboxBoundaryMode::External,
@@ -220,6 +223,7 @@ fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
     const CAPABILITY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     let operation = WorkerOperation::RunInteractive {
         model_options: None,
+        terminal_model: None,
         request: InteractiveWorkerRequest::Run {
             mode: AgentRunMode::Execute,
             role: "primary".into(),
@@ -256,6 +260,7 @@ fn interactive_run_diagnostics_are_explicit_and_backward_compatible() {
         decoded,
         WorkerOperation::RunInteractive {
             model_options: None,
+            terminal_model: None,
             request: InteractiveWorkerRequest::Run {
                 include_provider_response_diagnostics: false,
                 ..
@@ -274,6 +279,7 @@ fn interactive_shell_preserves_exact_source_and_session_without_accepting_author
     let command = "source ./env.sh && printf '%s\\n' 'two  spaces'\nprintf done";
     let operation = WorkerOperation::RunInteractive {
         model_options: None,
+        terminal_model: None,
         request: InteractiveWorkerRequest::ShellRun {
             session_id: "session-1".into(),
             command: command.into(),
@@ -301,6 +307,7 @@ fn interactive_github_read_has_a_fixed_operation_identity() {
     let arguments = json!({"owner": "owner", "repo": "repository", "number": 42});
     let operation = WorkerOperation::RunInteractive {
         model_options: None,
+        terminal_model: None,
         request: InteractiveWorkerRequest::GitHubPullRequest {
             arguments: arguments.clone(),
         },
@@ -332,6 +339,7 @@ fn interactive_github_read_has_a_fixed_operation_identity() {
 fn interactive_presentation_requests_bind_the_acknowledged_session() {
     let history = WorkerOperation::RunInteractive {
         model_options: None,
+        terminal_model: None,
         request: InteractiveWorkerRequest::PresentationHistoryAppend {
             session_id: "session-1".into(),
             entry: "hello".into(),
@@ -350,6 +358,7 @@ fn interactive_presentation_requests_bind_the_acknowledged_session() {
         serde_json::from_value::<WorkerOperation>(encoded).expect("history request"),
         WorkerOperation::RunInteractive {
             model_options: None,
+            terminal_model: None,
             request: InteractiveWorkerRequest::PresentationHistoryAppend {
                 session_id,
                 entry,
@@ -364,6 +373,7 @@ fn interactive_presentation_requests_bind_the_acknowledged_session() {
     };
     let save = WorkerOperation::RunInteractive {
         model_options: None,
+        terminal_model: None,
         request: InteractiveWorkerRequest::PresentationSave {
             session_id: "session-1".into(),
             preferences: preferences.clone(),
@@ -378,6 +388,7 @@ fn interactive_presentation_requests_bind_the_acknowledged_session() {
         serde_json::from_value::<WorkerOperation>(encoded).expect("preference request"),
         WorkerOperation::RunInteractive {
             model_options: None,
+            terminal_model: None,
             request: InteractiveWorkerRequest::PresentationSave {
                 session_id,
                 preferences: decoded,
@@ -391,6 +402,7 @@ fn interactive_presentation_requests_bind_the_acknowledged_session() {
 fn interactive_plan_run_binds_the_selected_revision() {
     let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
         model_options: None,
+        terminal_model: None,
         request: InteractiveWorkerRequest::Run {
             mode: AgentRunMode::Plan(colossus_contracts::PlanDraftTarget::Update {
                 plan_id: "plan".into(),
@@ -447,6 +459,7 @@ fn interactive_plan_lifecycle_requests_round_trip_strictly() {
     ] {
         let encoded = serde_json::to_value(WorkerOperation::RunInteractive {
             model_options: None,
+            terminal_model: None,
             request: request.clone(),
             approval_mode: None,
             sandbox_boundary_acknowledgement: None,
@@ -472,6 +485,7 @@ fn interactive_plan_lifecycle_requests_round_trip_strictly() {
     assert_eq!(
         operation_name(&WorkerOperation::RunInteractive {
             model_options: None,
+            terminal_model: None,
             request: InteractiveWorkerRequest::PlanExecute {
                 role: "primary".into(),
                 session_id: "session".into(),
@@ -1146,6 +1160,7 @@ async fn authenticated_draft_settings_prompt_authorizes_only_the_selected_save()
     };
     let operation = || WorkerOperation::RunInteractive {
         model_options: None,
+        terminal_model: None,
         request: InteractiveWorkerRequest::TuiDraftPresentationSave {
             session_id: draft.clone(),
             preferences: updated.clone(),
@@ -1307,6 +1322,28 @@ async fn native_provider_and_model_diagnostics_authenticate_against_the_real_wor
     let fixture = hosted_worker_fixture().await;
     let provider = fixture.control.provider_doctor("echo").await;
     let model = fixture.control.model_doctor("echo").await;
+    let catalog = fixture
+        .client
+        .call(WorkerOperation::TerminalModelCatalog {
+            profile: "echo".into(),
+            refresh: false,
+        })
+        .await;
+    let terminal = fixture
+        .client
+        .call(WorkerOperation::TerminalModelRoute {
+            session_id: "terminal-model-test".into(),
+            profile: colossus_contracts::TerminalModelProfile {
+                provider_profile: "echo".into(),
+                model: "echo".into(),
+                context_window_tokens: 8_192,
+                max_output_tokens: 512,
+            },
+            reasoning_effort: None,
+            use_pinned: false,
+        })
+        .await;
+    let saved_models = fixture.client.call(WorkerOperation::ModelProfiles).await;
     fixture.stop().await;
 
     let provider = provider.expect("native provider diagnostic authenticates");
@@ -1315,6 +1352,28 @@ async fn native_provider_and_model_diagnostics_authenticate_against_the_real_wor
     assert_eq!(model["ready"], true);
     assert!(!provider.to_string().contains("provider_response"));
     assert!(!model.to_string().contains("provider_response"));
+    assert!(
+        catalog
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["id"] == "echo")
+    );
+    let terminal: colossus_contracts::ModelRoute =
+        serde_json::from_value(terminal.expect("terminal model route authenticates"))
+            .expect("normalized model route");
+    assert_eq!(terminal.model, "echo");
+    assert_eq!(terminal.limits.context_window_tokens, 8_192);
+    assert_eq!(terminal.limits.max_output_tokens, 512);
+    assert!(
+        saved_models
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["model_profile"] != terminal.model_profile.as_str())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1529,6 +1588,7 @@ async fn hosted_direct_plan_execute_polls_snapshot_scoped_agent_on_worker_stack(
             .call_interactive::<colossus_contracts::PlanExecutionOutcome>(
                 WorkerOperation::RunInteractive {
                     model_options: None,
+                    terminal_model: None,
                     request: InteractiveWorkerRequest::PlanExecute {
                         role: "primary".into(),
                         session_id,

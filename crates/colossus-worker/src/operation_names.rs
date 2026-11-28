@@ -27,6 +27,8 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::ProviderProfiles => "provider_profiles",
         WorkerOperation::ProviderDoctor { .. } => "provider_doctor",
         WorkerOperation::ProviderModels { .. } => "provider_models",
+        WorkerOperation::TerminalModelCatalog { .. } => "terminal_model_catalog",
+        WorkerOperation::TerminalModelRoute { .. } => "terminal_model_route",
         WorkerOperation::ModelProfiles => "model_profiles",
         WorkerOperation::ModelDoctor { .. } => "model_doctor",
         WorkerOperation::ProviderRoutes => "provider_routes",
