@@ -29,6 +29,9 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::ProviderModels { .. } => "provider_models",
         WorkerOperation::TerminalModelCatalog { .. } => "terminal_model_catalog",
         WorkerOperation::TerminalModelRoute { .. } => "terminal_model_route",
+        WorkerOperation::TerminalModelCards => "terminal_model_cards",
+        WorkerOperation::TerminalModelCard { .. } => "terminal_model_card",
+        WorkerOperation::SavedTerminalModelRoute { .. } => "saved_terminal_model_route",
         WorkerOperation::ModelProfiles => "model_profiles",
         WorkerOperation::ModelDoctor { .. } => "model_doctor",
         WorkerOperation::ProviderRoutes => "provider_routes",
@@ -42,6 +45,7 @@ pub(super) fn operation_name(operation: &WorkerOperation) -> &'static str {
         WorkerOperation::ArtifactDownload { .. } => "artifact_download",
         WorkerOperation::RunModel { .. } => "run_model",
         WorkerOperation::RunInteractive { request, .. } => match request {
+            InteractiveWorkerRequest::TerminalModelCardSave { .. } => "terminal_model_card_save",
             InteractiveWorkerRequest::PluginManage { .. } => "run_interactive.plugin_manage",
             InteractiveWorkerRequest::ShellRun { .. } => "run_interactive.shell_run",
             InteractiveWorkerRequest::GitHubPullRequest { .. } => {

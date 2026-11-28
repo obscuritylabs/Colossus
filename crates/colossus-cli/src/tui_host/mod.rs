@@ -9,9 +9,9 @@ use colossus_contracts::{
     PlanExecutionOutcome, PlanRecord, PlanStatus, PluginInventoryEntry, PolicyDecision,
     ProviderModelInfo, ProviderReadiness, ProviderReadinessCheck, ProviderRoute, ReasoningEffort,
     ResearchDepth, ResearchSourceKind, RiskReviewFallbackNotice, RunEventEnvelope, RunTokenUsage,
-    SandboxBoundaryMode, SessionMessagePage, SessionSummary, TerminalModelProfile,
-    TerminalPreferences, UserPromptRequest, UserPromptResponse, WorkStateSnapshot,
-    WorkflowAgentOptions,
+    SandboxBoundaryMode, SavedTerminalModelRef, SessionMessagePage, SessionSummary,
+    TerminalModelCard, TerminalModelProfile, TerminalModelTarget, TerminalPreferences,
+    UserPromptRequest, UserPromptResponse, WorkStateSnapshot, WorkflowAgentOptions,
 };
 use colossus_policy::AllowApproval;
 use colossus_ports::{

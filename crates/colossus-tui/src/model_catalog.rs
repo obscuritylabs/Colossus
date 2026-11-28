@@ -1,5 +1,10 @@
 use super::*;
-use colossus_contracts::{ProviderModelInfo, TerminalModelProfile};
+use colossus_contracts::{
+    ProviderModelInfo, TerminalModelCard, TerminalModelProfile, TerminalModelTarget,
+};
+
+mod editor;
+use editor::{EditorAction, ModelEditor};
 
 #[cfg(test)]
 mod tests;
@@ -8,6 +13,7 @@ mod tests;
 enum Row {
     RoleDefault,
     Configured(usize),
+    Saved(usize),
     CurrentConversation,
     Provider(String),
     Model { provider: String, id: String },
@@ -22,6 +28,14 @@ struct ProviderGroup {
     error: Option<String>,
 }
 
+enum CatalogAction {
+    Keep,
+    Close,
+    Edit(TerminalModelTarget),
+    Select(ModelCatalogSelection),
+    Load { profile: String, refresh: bool },
+}
+
 pub(super) struct ModelCatalogState {
     generation: u64,
     overview: Option<InteractiveModelCatalog>,
@@ -30,54 +44,9 @@ pub(super) struct ModelCatalogState {
     query: String,
     selected: usize,
     editor: Option<ModelEditor>,
+    next_editor_request: u64,
+    loading_editor: Option<(u64, TerminalModelTarget)>,
     error: Option<String>,
-}
-
-struct ModelEditor {
-    provider: String,
-    model: String,
-    context: String,
-    output: String,
-    editing_output: bool,
-}
-
-impl ModelEditor {
-    fn new(provider: String, card: &ProviderModelInfo) -> Self {
-        let context = card.context_window_tokens.unwrap_or(32_768);
-        let output = card.max_output_tokens.unwrap_or(4_096).min(context / 2);
-        Self {
-            provider,
-            model: card.id.clone(),
-            context: context.to_string(),
-            output: output.to_string(),
-            editing_output: false,
-        }
-    }
-
-    fn active_field(&mut self) -> &mut String {
-        if self.editing_output {
-            &mut self.output
-        } else {
-            &mut self.context
-        }
-    }
-
-    fn selection(&self) -> Result<ModelCatalogSelection, String> {
-        let context_window_tokens = self
-            .context
-            .parse()
-            .map_err(|_| "Enter a whole number for the context window.")?;
-        let max_output_tokens = self
-            .output
-            .parse()
-            .map_err(|_| "Enter a whole number for max output tokens.")?;
-        Ok(ModelCatalogSelection::Discovered(TerminalModelProfile {
-            provider_profile: self.provider.clone(),
-            model: self.model.clone(),
-            context_window_tokens,
-            max_output_tokens,
-        }))
-    }
 }
 
 impl ModelCatalogState {
@@ -90,6 +59,8 @@ impl ModelCatalogState {
             query: String::new(),
             selected: 0,
             editor: None,
+            next_editor_request: 0,
+            loading_editor: None,
             error: None,
         }
     }
@@ -115,6 +86,23 @@ impl ModelCatalogState {
                         || matches(&model.model)
                         || matches(&model.provider_profile))
                     .then_some(Row::Configured(index))
+                }),
+        );
+        self.rows.extend(
+            overview
+                .saved
+                .iter()
+                .enumerate()
+                .filter_map(|(index, card)| {
+                    (matches!(card.target, TerminalModelTarget::Discovered { .. })
+                        && (matches(&card.route.model)
+                            || matches(&card.route.provider_profile)
+                            || card
+                                .advertised
+                                .as_ref()
+                                .and_then(|reported| reported.display_name.as_deref())
+                                .is_some_and(matches)))
+                    .then_some(Row::Saved(index))
                 }),
         );
         if let Some(profile) = &overview.selected_terminal_model
@@ -149,14 +137,8 @@ impl ModelCatalogState {
 
     pub(super) fn paste(&mut self, text: &str) {
         if let Some(editor) = self.editor.as_mut() {
-            let field = editor.active_field();
-            field.extend(
-                text.chars()
-                    .filter(char::is_ascii_digit)
-                    .take(10_usize.saturating_sub(field.len())),
-            );
-            self.error = None;
-        } else {
+            self.error = editor.paste(text).err();
+        } else if self.loading_editor.is_none() {
             for character in text.chars().filter(|character| !character.is_control()) {
                 if self.query.len() + character.len_utf8() > 128 {
                     break;
@@ -164,6 +146,156 @@ impl ModelCatalogState {
                 self.query.push(character);
             }
             self.rebuild_rows();
+        }
+    }
+
+    fn saved_card(&self, target: &TerminalModelTarget) -> Option<&TerminalModelCard> {
+        self.overview
+            .as_ref()?
+            .saved
+            .iter()
+            .find(|card| &card.target == target)
+    }
+
+    fn target(&self, row: &Row) -> Option<TerminalModelTarget> {
+        let overview = self.overview.as_ref()?;
+        match row {
+            Row::Configured(index) => Some(TerminalModelTarget::Configured {
+                profile: overview.configured[*index].model_profile.clone(),
+            }),
+            Row::Saved(index) => Some(overview.saved[*index].target.clone()),
+            Row::CurrentConversation => {
+                let current = overview.selected_terminal_model.as_ref()?;
+                Some(TerminalModelTarget::Discovered {
+                    provider_profile: current.provider_profile.clone(),
+                    model: current.model.clone(),
+                })
+            }
+            Row::Model { provider, id } => Some(TerminalModelTarget::Discovered {
+                provider_profile: provider.clone(),
+                model: id.clone(),
+            }),
+            Row::RoleDefault | Row::Provider(_) => None,
+        }
+    }
+
+    fn browse_key(&mut self, key: KeyEvent) -> CatalogAction {
+        match key.code {
+            KeyCode::Esc => return CatalogAction::Close,
+            KeyCode::Up | KeyCode::BackTab => {
+                self.selected = self.selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                self.selected = (self.selected + 1).min(self.rows.len().saturating_sub(1));
+            }
+            KeyCode::Home => self.selected = 0,
+            KeyCode::End => self.selected = self.rows.len().saturating_sub(1),
+            KeyCode::Backspace => {
+                self.query.pop();
+                self.rebuild_rows();
+            }
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return self
+                    .rows
+                    .get(self.selected)
+                    .and_then(|row| self.target(row))
+                    .map_or(CatalogAction::Keep, CatalogAction::Edit);
+            }
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let profile = self.rows.get(self.selected).and_then(|row| match row {
+                    Row::Provider(profile) => Some(profile.clone()),
+                    row => match self.target(row) {
+                        Some(TerminalModelTarget::Discovered {
+                            provider_profile, ..
+                        }) => Some(provider_profile),
+                        _ => None,
+                    },
+                });
+                if let Some(profile) = profile {
+                    return CatalogAction::Load {
+                        profile,
+                        refresh: true,
+                    };
+                }
+            }
+            KeyCode::Char(character)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.paste(character.encode_utf8(&mut [0; 4]));
+            }
+            KeyCode::Enter => return self.activate_row(),
+            _ => {}
+        }
+        CatalogAction::Keep
+    }
+
+    fn activate_row(&mut self) -> CatalogAction {
+        let Some(row) = self.rows.get(self.selected).cloned() else {
+            return CatalogAction::Keep;
+        };
+        match row {
+            Row::RoleDefault => CatalogAction::Select(ModelCatalogSelection::RoleDefault),
+            Row::Provider(profile) => {
+                let group = self.groups.get_mut(&profile).expect("provider row");
+                group.expanded = !group.expanded;
+                if group.expanded && !group.loaded {
+                    CatalogAction::Load {
+                        profile,
+                        refresh: false,
+                    }
+                } else {
+                    self.rebuild_rows();
+                    CatalogAction::Keep
+                }
+            }
+            row => {
+                let Some(target) = self.target(&row) else {
+                    return CatalogAction::Keep;
+                };
+                if let Some(card) = self.saved_card(&target) {
+                    CatalogAction::Select(ModelCatalogSelection::Saved(card.saved_ref()))
+                } else if let TerminalModelTarget::Configured { profile } = target {
+                    CatalogAction::Select(ModelCatalogSelection::Configured(profile))
+                } else if self
+                    .overview
+                    .as_ref()
+                    .is_some_and(|view| view.supports_model_cards)
+                {
+                    CatalogAction::Edit(target)
+                } else {
+                    self.legacy_discovery(&row)
+                        .map_or(CatalogAction::Keep, |profile| {
+                            CatalogAction::Select(ModelCatalogSelection::Discovered(profile))
+                        })
+                }
+            }
+        }
+    }
+
+    fn legacy_discovery(&self, row: &Row) -> Option<TerminalModelProfile> {
+        match row {
+            Row::CurrentConversation => self.overview.as_ref()?.selected_terminal_model.clone(),
+            Row::Model { provider, id } => {
+                let card = self.groups.get(provider)?.cards.get(id)?;
+                let context = card
+                    .context_window_tokens
+                    .filter(|limit| *limit >= 1_024)
+                    .unwrap_or(32_768);
+                let available = context - context.div_ceil(10).max(512) - 1;
+                Some(TerminalModelProfile {
+                    provider_profile: provider.clone(),
+                    model: id.clone(),
+                    context_window_tokens: context,
+                    max_output_tokens: card
+                        .max_output_tokens
+                        .unwrap_or(4_096)
+                        .min(context / 2)
+                        .min(available),
+                })
+            }
+            _ => None,
         }
     }
 
@@ -196,6 +328,40 @@ impl ModelCatalogState {
                     Err(error) => group.error = Some(error),
                 }
                 self.rebuild_rows();
+            }
+            ModelCatalogUpdate::Card { request, result } => {
+                if self
+                    .loading_editor
+                    .as_ref()
+                    .is_none_or(|(current, _)| *current != request)
+                {
+                    return;
+                }
+                let (_, target) = self
+                    .loading_editor
+                    .take()
+                    .expect("outstanding model editor");
+                match result {
+                    Ok(mut card) if card.target == target => {
+                        if card.revision == 0
+                            && let Some(current) = self
+                                .overview
+                                .as_ref()
+                                .and_then(|overview| overview.selected_terminal_model.as_ref())
+                            && current.provider_profile == card.route.provider_profile
+                            && current.model == card.route.model
+                        {
+                            card.overrides.context_window_tokens =
+                                Some(current.context_window_tokens);
+                            card.overrides.max_output_tokens = Some(current.max_output_tokens);
+                        }
+                        self.editor = Some(ModelEditor::new(*card));
+                    }
+                    Ok(_) => {
+                        self.error = Some("The host returned another model's settings.".into())
+                    }
+                    Err(error) => self.error = Some(error),
+                }
             }
             ModelCatalogUpdate::Applied(Err(error)) => {
                 self.error = Some(error);
@@ -240,7 +406,7 @@ pub(super) fn updated(
     if generation == state.model_catalog_generation
         && matches!(update, ModelCatalogUpdate::Applied(_))
     {
-        state.model_catalog_applying = false;
+        state.model_catalog_control = None;
     }
     if let ModelCatalogUpdate::Applied(Ok(applied)) = update {
         if applied.revision >= state.footer.model_revision {
@@ -284,139 +450,88 @@ pub(super) fn key(
     let Some(Overlay::ModelCatalog(browser)) = state.overlay.as_mut() else {
         return;
     };
-    if state.model_catalog_applying {
+    if let Some(control) = &state.model_catalog_control {
+        if key.code == KeyCode::Esc {
+            control.cancel();
+        }
         return;
     }
-    let mut selection = None;
-    if let Some(editor) = browser.editor.as_mut() {
-        browser.error = None;
-        match key.code {
-            KeyCode::Esc => browser.editor = None,
-            KeyCode::Tab | KeyCode::BackTab | KeyCode::Up | KeyCode::Down => {
-                editor.editing_output = !editor.editing_output;
+    browser.error = None;
+    let action = if let Some(editor) = browser.editor.as_mut() {
+        match editor.key(key) {
+            Ok(EditorAction::Back) => {
+                browser.editor = None;
+                CatalogAction::Keep
             }
-            KeyCode::Enter => match editor.selection() {
-                Ok(choice) => selection = Some(choice),
-                Err(error) => browser.error = Some(error),
-            },
-            KeyCode::Backspace => {
-                editor.active_field().pop();
+            Ok(EditorAction::Save(update)) => {
+                CatalogAction::Select(ModelCatalogSelection::SaveCard(update))
             }
-            KeyCode::Delete => editor.active_field().clear(),
-            KeyCode::Char(character) if character.is_ascii_digit() => {
-                let field = editor.active_field();
-                if field.len() < 10 {
-                    field.push(character);
-                }
+            Ok(EditorAction::Continue) => CatalogAction::Keep,
+            Err(error) => {
+                browser.error = Some(error);
+                CatalogAction::Keep
             }
-            _ => {}
         }
+    } else if browser.loading_editor.is_some() {
+        if key.code == KeyCode::Esc {
+            browser.loading_editor = None;
+        }
+        CatalogAction::Keep
     } else {
-        match key.code {
-            KeyCode::Esc => {
-                state.overlay = None;
-                return;
-            }
-            KeyCode::Up | KeyCode::BackTab => {
-                browser.selected = browser.selected.saturating_sub(1);
-            }
-            KeyCode::Down | KeyCode::Tab => {
-                browser.selected = (browser.selected + 1).min(browser.rows.len().saturating_sub(1));
-            }
-            KeyCode::Home => browser.selected = 0,
-            KeyCode::End => browser.selected = browser.rows.len().saturating_sub(1),
-            KeyCode::Backspace => {
-                browser.query.pop();
-                browser.rebuild_rows();
-            }
-            KeyCode::Char('r') if key.modifiers == KeyModifiers::CONTROL => {
-                let profile = match browser.rows.get(browser.selected) {
-                    Some(
-                        Row::Provider(profile)
-                        | Row::Model {
-                            provider: profile, ..
-                        },
-                    ) => profile,
-                    _ => return,
-                };
-                load_provider(
-                    browser,
-                    &state.session_id,
-                    profile.clone(),
-                    true,
-                    host,
-                    events,
-                );
-                return;
-            }
-            KeyCode::Char(character)
-                if !key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                browser.paste(character.encode_utf8(&mut [0; 4]));
-            }
-            KeyCode::Enter => match browser.rows.get(browser.selected).cloned() {
-                Some(Row::RoleDefault) => selection = Some(ModelCatalogSelection::RoleDefault),
-                Some(Row::Configured(index)) => {
-                    let model = &browser
-                        .overview
-                        .as_ref()
-                        .expect("configured model rows")
-                        .configured[index];
-                    selection = Some(ModelCatalogSelection::Configured(
-                        model.model_profile.clone(),
-                    ));
-                }
-                Some(Row::CurrentConversation) => {
-                    let profile = browser
-                        .overview
-                        .as_ref()
-                        .and_then(|overview| overview.selected_terminal_model.as_ref())
-                        .expect("current conversation model row");
-                    browser.editor = Some(ModelEditor {
-                        provider: profile.provider_profile.clone(),
-                        model: profile.model.clone(),
-                        context: profile.context_window_tokens.to_string(),
-                        output: profile.max_output_tokens.to_string(),
-                        editing_output: false,
-                    });
-                }
-                Some(Row::Provider(profile)) => {
-                    let group = browser.groups.get_mut(&profile).expect("provider row");
-                    group.expanded = !group.expanded;
-                    if group.expanded && !group.loaded {
-                        load_provider(browser, &state.session_id, profile, false, host, events);
-                        return;
-                    }
-                    browser.rebuild_rows();
-                }
-                Some(Row::Model { provider, id }) => {
-                    if let Some(card) = browser.groups[&provider].cards.get(&id) {
-                        browser.editor = Some(ModelEditor::new(provider, card));
-                        browser.error = None;
-                    }
-                }
-                None => {}
-            },
-            _ => {}
+        browser.browse_key(key)
+    };
+    match action {
+        CatalogAction::Close => state.overlay = None,
+        CatalogAction::Edit(target) => {
+            load_editor(browser, &state.session_id, target, host, events)
         }
+        CatalogAction::Select(selection) => {
+            let control = RunControl::default();
+            state.model_catalog_control = Some(control.clone());
+            let generation = browser.generation;
+            let session_id = state.session_id.clone();
+            tokio::spawn(async move {
+                let result = host
+                    .select_catalog_model(&session_id, selection, events.clone(), control)
+                    .await;
+                let _ = events
+                    .send(HostEvent::ModelCatalogUpdated {
+                        session_id,
+                        generation,
+                        update: ModelCatalogUpdate::Applied(result),
+                    })
+                    .await;
+            });
+        }
+        CatalogAction::Load { profile, refresh } => {
+            load_provider(browser, &state.session_id, profile, refresh, host, events);
+        }
+        CatalogAction::Keep => {}
     }
-    if let Some(selection) = selection {
-        state.model_catalog_applying = true;
-        let generation = browser.generation;
-        let session_id = state.session_id.clone();
-        tokio::spawn(async move {
-            let result = host.select_catalog_model(&session_id, selection).await;
-            let _ = events
-                .send(HostEvent::ModelCatalogUpdated {
-                    session_id,
-                    generation,
-                    update: ModelCatalogUpdate::Applied(result),
-                })
-                .await;
-        });
-    }
+}
+
+fn load_editor(
+    browser: &mut ModelCatalogState,
+    session_id: &str,
+    target: TerminalModelTarget,
+    host: Arc<dyn InteractiveHost>,
+    events: mpsc::Sender<HostEvent>,
+) {
+    browser.next_editor_request = browser.next_editor_request.wrapping_add(1);
+    let request = browser.next_editor_request;
+    browser.loading_editor = Some((request, target.clone()));
+    let generation = browser.generation;
+    let session_id = session_id.to_owned();
+    tokio::spawn(async move {
+        let result = host.terminal_model_card(target).await.map(Box::new);
+        let _ = events
+            .send(HostEvent::ModelCatalogUpdated {
+                session_id,
+                generation,
+                update: ModelCatalogUpdate::Card { request, result },
+            })
+            .await;
+    });
 }
 
 fn load_provider(
@@ -455,19 +570,28 @@ pub(super) fn render(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
     };
     let palette = TerminalPalette::for_preferences(&state.preferences);
     if let Some(editor) = &browser.editor {
-        render_editor(
+        editor.render(
             frame,
             &palette,
             area,
-            editor,
-            state.model_catalog_applying,
+            state.model_catalog_control.is_some(),
             browser.error.as_deref(),
         );
         return;
     }
     let count = browser.overview.as_ref().map_or_else(
         || "Loading configured models".to_owned(),
-        |overview| format!("{} configured", overview.configured.len()),
+        |overview| {
+            if overview.saved.is_empty() {
+                format!("{} configured", overview.configured.len())
+            } else {
+                format!(
+                    "{} configured · {} saved",
+                    overview.configured.len(),
+                    overview.saved.len()
+                )
+            }
+        },
     );
     let areas = render_browser_shell(
         frame,
@@ -479,11 +603,20 @@ pub(super) fn render(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
             count,
             search_hint: "Type to search",
             query: &browser.query,
-            search_active: !browser.query.is_empty() && !state.model_catalog_applying,
+            search_active: !browser.query.is_empty()
+                && browser.loading_editor.is_none()
+                && state.model_catalog_control.is_none(),
         },
     );
-    let (list, preview) = if areas.preview.is_none() && areas.list.height >= 5 {
-        let split = Layout::vertical([Constraint::Min(1), Constraint::Length(3)]).split(areas.list);
+    let status_visible = browser.error.is_some()
+        || browser.loading_editor.is_some()
+        || state.model_catalog_control.is_some();
+    let (list, preview) = if areas.preview.is_none()
+        && (areas.list.height >= 5 || (status_visible && areas.list.height >= 2))
+    {
+        let detail_rows = if areas.list.height >= 5 { 3 } else { 1 };
+        let split = Layout::vertical([Constraint::Min(1), Constraint::Length(detail_rows)])
+            .split(areas.list);
         (split[0], Some(split[1]))
     } else {
         (areas.list, areas.preview)
@@ -517,8 +650,10 @@ pub(super) fn render(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
     }
     frame.render_widget(Paragraph::new(rows), list);
     if let Some(preview) = preview {
-        let details = if state.model_catalog_applying {
+        let details = if state.model_catalog_control.is_some() {
             "Applying model…".to_owned()
+        } else if browser.loading_editor.is_some() {
+            "Loading model settings…".to_owned()
         } else if let Some(error) = &browser.error {
             sanitize_approval_field(error)
         } else {
@@ -535,64 +670,10 @@ pub(super) fn render(frame: &mut Frame<'_>, state: &TuiState, area: Rect) {
         areas.controls,
         &[
             ("↑/↓", "Browse"),
-            ("Enter", "Open or select"),
-            ("Ctrl+R", "Refresh provider"),
+            ("Enter", "Open or use"),
+            ("Ctrl+E", "Edit"),
+            ("Ctrl+R", "Refresh"),
             ("Esc", "Close"),
-        ],
-    );
-}
-
-fn render_editor(
-    frame: &mut Frame<'_>,
-    palette: &TerminalPalette,
-    area: Rect,
-    editor: &ModelEditor,
-    applying: bool,
-    error: Option<&str>,
-) {
-    frame.render_widget(Clear, area);
-    let inner = area.inner(ratatui::layout::Margin::new(2, 1));
-    let rows = Layout::vertical([Constraint::Min(6), Constraint::Length(3)]).split(inner);
-    let model = truncate_width_with_ellipsis(
-        &sanitize_approval_field(&format!("{} · {}", editor.model, editor.provider)),
-        usize::from(rows[0].width),
-    );
-    let field = |name, value, editing| {
-        let (marker, style) = if editing {
-            ("› ", palette.user_style())
-        } else {
-            ("  ", palette.meta_style())
-        };
-        Line::from(Span::styled(
-            format!("{marker}{name}  {value}"),
-            ratatui_style(style),
-        ))
-    };
-    let mut details = vec![
-        Line::from(Span::styled(
-            "Configure model",
-            ratatui_style(palette.assistant_style()).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(model),
-        Line::default(),
-        field("Context window", &editor.context, !editor.editing_output),
-        field("Max output    ", &editor.output, editor.editing_output),
-    ];
-    if applying {
-        details.push(Line::from("Applying model…"));
-    } else if let Some(error) = error {
-        details.push(Line::from(sanitize_approval_field(error)));
-    }
-    frame.render_widget(Paragraph::new(details).wrap(Wrap { trim: false }), rows[0]);
-    render_browser_controls(
-        frame,
-        palette,
-        rows[1],
-        &[
-            ("Tab", "Next field"),
-            ("Del", "Clear field"),
-            ("Enter", "Use in conversation"),
-            ("Esc", "Back"),
         ],
     );
 }
@@ -605,20 +686,44 @@ fn row_label(browser: &ModelCatalogState, row: &Row) -> String {
     match row {
         Row::RoleDefault
             if overview.selected_profile.is_none()
-                && overview.selected_terminal_model.is_none() =>
+                && overview.selected_terminal_model.is_none()
+                && overview.selected_saved_model.is_none() =>
         {
             "Configured role default · selected".into()
         }
         Row::RoleDefault => "Configured role default".into(),
         Row::Configured(index) => {
             let route = &overview.configured[*index];
-            let current =
-                overview.selected_profile.as_deref() == Some(route.model_profile.as_str());
+            let target = TerminalModelTarget::Configured {
+                profile: route.model_profile.clone(),
+            };
+            let saved = browser.saved_card(&target);
+            let current = overview.selected_profile.as_deref()
+                == Some(route.model_profile.as_str())
+                || saved.is_some_and(|card| selected_saved_card(overview, card));
             format!(
-                "{} · {}{}",
+                "{} · {}{}{}",
                 route.model_profile,
                 route.model,
+                if saved.is_some() {
+                    " · saved settings"
+                } else {
+                    ""
+                },
                 if current { " · selected" } else { "" }
+            )
+        }
+        Row::Saved(index) => {
+            let card = &overview.saved[*index];
+            format!(
+                "{} · {} · saved{}",
+                card.route.model,
+                card.route.provider_profile,
+                if selected_saved_card(overview, card) {
+                    " · selected"
+                } else {
+                    ""
+                }
             )
         }
         Row::CurrentConversation => {
@@ -658,22 +763,29 @@ fn row_details(browser: &ModelCatalogState, row: &Row) -> String {
         Row::RoleDefault => "Use the configured role for the next turn.".into(),
         Row::Configured(index) => {
             let route = &overview.configured[*index];
-            format!(
-                "{}\n{}\n\nContext {}\nOutput budget {}",
-                sanitize_approval_field(&route.model),
-                sanitize_approval_field(&route.provider_profile),
-                route.limits.context_window_tokens,
-                route.limits.max_output_tokens
+            let target = TerminalModelTarget::Configured {
+                profile: route.model_profile.clone(),
+            };
+            route_details(
+                browser
+                    .saved_card(&target)
+                    .map_or(route, |card| &card.route),
             )
         }
-        Row::CurrentConversation => {
-            "Edit the current conversation’s context and output limits.".into()
-        }
+        Row::Saved(index) => route_details(&overview.saved[*index].route),
+        Row::CurrentConversation => "Edit and save the current model’s settings.".into(),
         Row::Provider(profile) => browser.groups[profile].error.as_deref().map_or_else(
-            || "Enter expands the provider’s model catalog.".into(),
+            || "Enter opens or collapses this provider’s catalog.".into(),
             sanitize_approval_field,
         ),
         Row::Model { provider, id } => {
+            let target = TerminalModelTarget::Discovered {
+                provider_profile: provider.clone(),
+                model: id.clone(),
+            };
+            if let Some(card) = browser.saved_card(&target) {
+                return route_details(&card.route);
+            }
             let card = &browser.groups[provider].cards[id];
             let label =
                 |tokens: Option<u64>| tokens.map_or_else(|| "unknown".into(), |n| n.to_string());
@@ -686,4 +798,22 @@ fn row_details(browser: &ModelCatalogState, row: &Row) -> String {
             )
         }
     }
+}
+
+fn selected_saved_card(overview: &InteractiveModelCatalog, card: &TerminalModelCard) -> bool {
+    overview
+        .selected_saved_model
+        .as_ref()
+        .is_some_and(|selected| selected.target == card.target && selected.binding == card.binding)
+}
+
+fn route_details(route: &colossus_contracts::ModelRoute) -> String {
+    format!(
+        "{}\n{}\n\nContext {}\nInput budget {}\nOutput budget {}",
+        sanitize_approval_field(&route.model),
+        sanitize_approval_field(&route.provider_profile),
+        route.limits.context_window_tokens,
+        route.limits.input_budget_tokens,
+        route.limits.max_output_tokens,
+    )
 }

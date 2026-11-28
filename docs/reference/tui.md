@@ -181,7 +181,7 @@ Use `/help` for arguments and commands available in your installed version.
 | Sessions | `/sessions`, `/session show`, `/session new`, `/session resume [SESSION_ID]`, `/resume [SESSION_ID]` |
 | Conversation export | `/session export PATH [--format FORMAT]`, `/export PATH [--format FORMAT]` export the current saved session to a new file. Quote paths containing spaces. |
 | Permissions | `/permissions` opens a chooser; `/permissions deny\|ask\|risk-auto\|full-access` sets a mode directly |
-| Model selection | `/models` opens configured profiles and provider catalogs. `/model` and `/effort` open focused pickers. `/model PROFILE` and `/effort high` set a value directly. Use `default` to restore the configured setting. |
+| Model selection | `/models` opens configured profiles, saved cards, and provider catalogs. Ctrl-E opens the model card editor. `/model PROFILE` selects a configured profile with its saved terminal settings. `/effort high` sets the conversation’s reasoning override. |
 | Tools and work | `/tools`, `/work`, `/tasks`, `/decisions`, `/plans`, `/goals`, `/goal`, `/goal resume GOAL_ID`, `/agents`, `/agents drain` |
 | Planning | `/plan`, `/plan on`, `/plan off`, `/plan status`, `/plan new`, `/plan list`, `/plan use PLAN_ID`, `/plan show [PLAN_ID]`, `/plan approve`, `/plan discard`, `/plan execute [direct\|goal [ITERATIONS]]` |
 | Context | `/context status`, `/context list`, `/context compact`, `/context restore` |
@@ -218,22 +218,30 @@ messages outside the viewport. `FORMAT` accepts `markdown` (default), `text`, or
 `json`. It requires a file destination; standard output is
 available only through the CLI. See [export formats, scope, and recovery](../use/sessions.md#export-a-conversation).
 
-`/context status` shows the current session's model input budget and active
-snapshot. See [Context and snapshots](../use/sessions-context.md) to interpret it.
+The footer shows the selected model’s input budget. `/context status` shows the
+active snapshot and budget for the configured primary role. See
+[Context and snapshots](../use/sessions-context.md) to interpret it.
 
 ### Browse provider models
 
-Use Up/Down to browse, Enter to expand a provider or choose a model, and Esc to
-return. Search includes configured profiles and models in expanded provider
-catalogs. Provider discovery starts on expansion and follows the runtime's
-provider policy. The last successful response is cached in the running runtime.
-Ctrl-R requests a fresh catalog for the selected provider.
+Use Up/Down to browse and Enter to expand a provider or choose a model. Search
+includes configured profiles, saved discoveries, and expanded catalogs.
+Discovery starts when you expand a provider and uses its existing policy and
+runtime cache. Ctrl-R requests a fresh catalog from the selected provider.
 
-Discovered models use the provider's advertised token limits when available.
-The editor starts with a 32,768-token context window or a 4,096-token output
-budget when the corresponding limit is unknown and reduces the initial output
-budget to fit the context window. The selected limits apply to this TUI
-conversation for the current process.
+Open the editor with Ctrl-E, or with Enter on a newly discovered model. Set the
+context window, input token budget, max output, tool calls, streaming, image
+inputs, server compaction, and reasoning effort. An automatic input budget
+reserves room for output and the runtime’s safety margin. An explicit input
+budget must fit in the remaining context. Discovered models use advertised
+token values when available and fall back to a 32,768-token context and
+4,096-token output budget when those values are absent. The initial output
+budget is adjusted to fit the context.
+
+Delete restores the focused field to its default. Ctrl-R resets the editor.
+**Save and use** records the edits for that exact model and connection in the
+runtime’s journal. Pick the saved card after restart to use the same settings.
+`/effort` can override the saved reasoning effort for the current conversation.
 
 ### Save a support report
 

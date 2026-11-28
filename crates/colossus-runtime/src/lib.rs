@@ -51,6 +51,7 @@ pub use colossus_mcp::{McpOAuthBrowserCallbackPolicy, McpOAuthBrowserLogin};
 mod mcp_search;
 mod memory;
 mod model_selection;
+mod terminal_model_cards;
 mod terminal_model_catalog;
 pub use mcp_diagnostics::McpHealthCheck;
 #[cfg(test)]

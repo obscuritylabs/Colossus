@@ -221,6 +221,13 @@ pub enum InteractiveWorkerRequest {
         /// Profile observed by the host when preparing the replacement.
         expected_preferences: Box<TerminalPreferences>,
     },
+    /// Save a bounded operator model card from the attached terminal.
+    TerminalModelCardSave {
+        /// Current terminal conversation, including an unmaterialized draft.
+        session_id: String,
+        /// Complete replacement of the card's operator overrides.
+        update: colossus_contracts::TerminalModelCardUpdate,
+    },
     /// Approve one exact optimistic Plan revision.
     PlanApprove {
         /// Exact durable session that selected the Plan.
@@ -373,6 +380,21 @@ pub enum WorkerOperation {
         #[serde(default, skip_serializing_if = "is_false")]
         use_pinned: bool,
     },
+    /// List this workspace's saved terminal model cards.
+    TerminalModelCards,
+    /// Open an editable terminal model card.
+    TerminalModelCard {
+        /// Exact configured or discovered model.
+        target: colossus_contracts::TerminalModelTarget,
+    },
+    /// Resolve an explicit saved terminal model choice and optional effort override.
+    SavedTerminalModelRoute {
+        /// Exact configured or saved discovered model identity.
+        model: colossus_contracts::SavedTerminalModelRef,
+        /// Optional conversation reasoning preference.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<colossus_contracts::ReasoningEffort>,
+    },
     /// Show configured explicit model profiles.
     ModelProfiles,
     /// Exercise one explicit model generation diagnostic.
@@ -454,6 +476,9 @@ pub enum WorkerOperation {
         /// Session-local model selection validated against the terminal catalog.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         terminal_model: Option<colossus_contracts::TerminalModelProfile>,
+        /// Explicit saved terminal-only model card for this operation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        saved_terminal_model: Option<Box<colossus_contracts::SavedTerminalModelRef>>,
         /// Strict application request carried by the interactive channel.
         request: InteractiveWorkerRequest,
         /// Optional client-scoped approval handling for this one interactive operation.

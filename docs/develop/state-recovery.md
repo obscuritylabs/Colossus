@@ -112,6 +112,14 @@ may inspect the immediately preceding protected settled record and restore it on
 after canonical and provider bindings validate. It never fabricates private blocks
 or repeats tool execution.
 
+### Terminal model cards
+
+Local terminal model card overrides use a bounded canonical snapshot. Opening
+the model picker or resolving an explicit saved card reads the newest record in
+its indexed stream. Each card binds the configured connection and exact model
+identity. Writes use optimistic revisions, and restored discoveries reuse
+previously released catalog metadata without requesting the provider.
+
 ## Process ownership
 
 File-backed redb permits one writer lease. The worker may own that lease and coordinate

@@ -545,7 +545,7 @@ pub struct TuiState {
     pub(super) native_history_pages_loaded: usize,
     pub(super) transcript_epoch: u64,
     pub(super) model_catalog_generation: u64,
-    pub(super) model_catalog_applying: bool,
+    pub(super) model_catalog_control: Option<RunControl>,
     pub(super) welcome_visible: bool,
     pub(super) security_posture_entry: Option<usize>,
     pub(super) should_exit: bool,
@@ -666,7 +666,7 @@ impl TuiState {
             native_history_pages_loaded: 0,
             transcript_epoch: 0,
             model_catalog_generation: 0,
-            model_catalog_applying: false,
+            model_catalog_control: None,
             welcome_visible,
             security_posture_entry,
             should_exit: false,
@@ -855,7 +855,7 @@ impl TuiState {
     pub const fn is_busy(&self) -> bool {
         self.operation.is_some()
             || self.sandbox_boundary_acknowledgement_in_progress
-            || self.model_catalog_applying
+            || self.model_catalog_control.is_some()
     }
 
     /// Append an older page without duplicating or exposing system messages.
@@ -1242,14 +1242,20 @@ impl TuiState {
             return;
         }
         if self.is_busy()
-            && self
-                .control
-                .as_ref()
-                .is_some_and(|control| !control.is_cancelled())
+            && [&self.control, &self.model_catalog_control]
+                .into_iter()
+                .any(|control| {
+                    control
+                        .as_ref()
+                        .is_some_and(|control| !control.is_cancelled())
+                })
         {
             self.cancel_overlay();
             self.cancel_pending_prompts();
             if let Some(control) = &self.control {
+                control.cancel();
+            }
+            if let Some(control) = &self.model_catalog_control {
                 control.cancel();
             }
             self.provider_retry = None;

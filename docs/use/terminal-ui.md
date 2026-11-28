@@ -145,11 +145,17 @@ filter by model name or ID. Provider requests run while you browse, and reopenin
 a provider uses its latest successful catalog in this runtime when it is cached.
 Press Ctrl-R on a provider or one of its models to refresh that catalog.
 
-Enter applies a configured profile. For a discovered model, Enter opens the
-context window and max output fields. Tab moves between fields, Delete clears the
-current field, and Enter applies the edited limits to the next turn. You can
-reopen the **Current** row to edit them again. The choice stays with that
-conversation until you switch models or exit the TUI.
+Enter applies a configured or saved model. For a new discovery, Enter opens its
+model card. To edit any model card, highlight it and press Ctrl-E. Use Tab to move
+between fields, type token counts, and use Left/Right to change capability or
+reasoning settings. Delete restores the highlighted field’s default. Ctrl-R
+restores all defaults in the editor.
+
+Choose **Save and use** to keep the overrides in the runtime’s journal and use
+them on the next turn. Saved discoveries appear in `/models` after restarting,
+before you open a provider catalog. You can choose the same saved model in
+another conversation using that runtime. The active choice applies to the
+current TUI conversation.
 
 Use `/model` and `/effort` to change the next turn without leaving the current
 conversation. Up/Down selects a choice, Enter applies it, and Esc keeps the current

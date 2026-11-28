@@ -123,6 +123,8 @@ pub async fn run_tui(host: Arc<dyn InteractiveHost>, options: TuiOptions) -> Res
     }
     let terminal_result = terminal.finish();
     drop(terminal);
+    drop(state);
+    drop(event_rx);
     host.finish_model_catalog_reads().await;
     terminal_loop?;
     terminal_result?;
@@ -1207,7 +1209,9 @@ pub(super) fn insert_active_text(state: &mut TuiState, text: &str) {
                 browser.query.push_str(&text);
                 browser.reconcile_selection();
             }
-            Overlay::ModelCatalog(browser) if !state.model_catalog_applying => browser.paste(&text),
+            Overlay::ModelCatalog(browser) if state.model_catalog_control.is_none() => {
+                browser.paste(&text)
+            }
             Overlay::ModelCatalog(_) => {}
             Overlay::ThemePicker(picker) if picker.search_active => {
                 picker.query.push_str(&text);
@@ -1260,7 +1264,7 @@ pub(super) fn submit_line(
     state.dismiss_welcome();
     state.remember_history(&line);
     if line == "/models" {
-        if state.overlay.is_some() || state.model_catalog_applying {
+        if state.overlay.is_some() || state.model_catalog_control.is_some() {
             return;
         }
         persist_display_input(
@@ -2477,7 +2481,9 @@ pub(super) fn apply_command_result(state: &mut TuiState, result: HostCommandResu
             state.run_usage = RunUsageState::restored(&session_id, None);
             state.footer.usage = None;
             state.footer.model_revision = 0;
-            state.model_catalog_applying = false;
+            if let Some(control) = state.model_catalog_control.take() {
+                control.cancel();
+            }
         }
         state.session_id = session_id;
         state.provider_recovery = None;

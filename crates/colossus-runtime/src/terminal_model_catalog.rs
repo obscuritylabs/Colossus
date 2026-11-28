@@ -57,6 +57,16 @@ impl CachedCatalog {
 }
 
 impl TerminalModelCatalog {
+    pub(super) fn released_model(
+        &self,
+        provider: &str,
+        model: &str,
+    ) -> Result<Option<ProviderModelInfo>, RuntimeError> {
+        Ok(self
+            .current(provider)?
+            .and_then(|catalog| catalog.iter().find(|card| card.id == model).cloned()))
+    }
+
     fn entry(&self, profile: &str) -> Result<Arc<CachedCatalog>, RuntimeError> {
         let mut entries = self.entries.lock().map_err(|_| cache_error())?;
         if let Some(index) = entries.iter().position(|(name, _)| name == profile) {

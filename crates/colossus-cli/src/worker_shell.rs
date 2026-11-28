@@ -681,6 +681,7 @@ pub(super) async fn worker_line_runner(
                         WorkerOperation::RunInteractive {
                             model_options: None,
                             terminal_model: None,
+                            saved_terminal_model: None,
                             request: InteractiveWorkerRequest::Run {
                                 mode,
                                 role: "primary".into(),
@@ -887,6 +888,7 @@ async fn run_worker_plan_command(
                     WorkerOperation::RunInteractive {
                         model_options: None,
                         terminal_model: None,
+                        saved_terminal_model: None,
                         request: InteractiveWorkerRequest::PlanApprove {
                             session_id: active_session_id.into(),
                             plan_id: selected.id.clone(),
@@ -933,6 +935,7 @@ async fn run_worker_plan_command(
                     WorkerOperation::RunInteractive {
                         model_options: None,
                         terminal_model: None,
+                        saved_terminal_model: None,
                         request: InteractiveWorkerRequest::PlanDiscard {
                             session_id: active_session_id.into(),
                             plan_id: selected.id.clone(),
@@ -1003,6 +1006,7 @@ async fn run_worker_plan_command(
                     WorkerOperation::RunInteractive {
                         model_options: None,
                         terminal_model: None,
+                        saved_terminal_model: None,
                         request: InteractiveWorkerRequest::PlanExecute {
                             role: "primary".into(),
                             session_id: active_session_id.into(),
@@ -1179,6 +1183,7 @@ async fn resume_worker_goal(
             WorkerOperation::RunInteractive {
                 model_options: None,
                 terminal_model: None,
+                saved_terminal_model: None,
                 request: InteractiveWorkerRequest::GoalResume {
                     role: "primary".into(),
                     session_id: active_session_id.into(),

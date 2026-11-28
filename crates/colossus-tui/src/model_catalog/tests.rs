@@ -1,5 +1,6 @@
 use super::*;
 use crate::tests::snapshot;
+use colossus_contracts::{ModelCapabilities, ModelFeatureMode, ModelLimits, ModelRoute};
 use ratatui::backend::TestBackend;
 
 fn card(id: &str) -> ProviderModelInfo {
@@ -10,6 +11,47 @@ fn card(id: &str) -> ProviderModelInfo {
         max_output_tokens: Some(8_192),
         ..ProviderModelInfo::default()
     }
+}
+
+fn editable_card() -> TerminalModelCard {
+    let limits = ModelLimits {
+        context_window_tokens: 65_536,
+        max_output_tokens: 8_192,
+        safety_margin_tokens: 6_554,
+        input_budget_tokens: 50_790,
+    };
+    TerminalModelCard {
+        target: TerminalModelTarget::Discovered {
+            provider_profile: "first".into(),
+            model: "first/model".into(),
+        },
+        binding: "1".repeat(64),
+        route: ModelRoute {
+            role: "primary".into(),
+            profile: "first-model".into(),
+            model_profile: "first-model".into(),
+            provider_profile: "first".into(),
+            provider: "open_ai_compatible".into(),
+            model: "first/model".into(),
+            limits,
+            capabilities: ModelCapabilities {
+                tool_calls: true,
+                streaming: true,
+                image_inputs: true,
+            },
+            reasoning_effort: None,
+        },
+        default_limits: limits,
+        default_features: Default::default(),
+        default_reasoning_effort: None,
+        advertised: Some(card("first/model")),
+        overrides: Default::default(),
+        revision: 7,
+    }
+}
+
+fn editor_key(editor: &mut ModelEditor, code: KeyCode) -> EditorAction {
+    editor.key(KeyEvent::new(code, KeyModifiers::NONE)).unwrap()
 }
 
 #[test]
@@ -87,7 +129,7 @@ fn delayed_picker_results_require_the_same_session_and_generation() {
 fn a_failed_confirmation_with_the_picker_gone_pauses_waiting_turns() {
     let mut state = TuiState::from_snapshot(snapshot());
     state.model_catalog_generation = 2;
-    state.model_catalog_applying = true;
+    state.model_catalog_control = Some(RunControl::default());
     state.queue.push_back("Use the chosen model".into());
     let session_id = state.session_id.clone();
     updated(
@@ -96,7 +138,7 @@ fn a_failed_confirmation_with_the_picker_gone_pauses_waiting_turns() {
         2,
         ModelCatalogUpdate::Applied(Err("Worker disconnected".into())),
     );
-    assert!(!state.model_catalog_applying);
+    assert!(state.model_catalog_control.is_none());
     assert!(state.queue_paused);
     assert!(matches!(state.overlay, Some(Overlay::QueuePaused)));
     assert_eq!(state.queue.len(), 1);
@@ -104,17 +146,34 @@ fn a_failed_confirmation_with_the_picker_gone_pauses_waiting_turns() {
 }
 
 #[test]
-fn discovered_model_editor_renders_both_limits_in_a_compact_terminal() {
+fn full_editor_saves_limits_and_capabilities_and_scrolls_in_a_compact_terminal() {
     let mut state = TuiState::from_snapshot(snapshot());
     let mut browser = ModelCatalogState::new(1);
-    let mut editor = ModelEditor::new("first".into(), &card("first/model"));
-    editor.output = "2048".into();
-    let ModelCatalogSelection::Discovered(profile) = editor.selection().unwrap() else {
-        panic!("expected a discovered model");
+    let mut editor = ModelEditor::new(editable_card());
+    assert!(editor.paste("65k").is_err());
+    editor_key(&mut editor, KeyCode::Tab);
+    editor.paste("48,000").unwrap();
+    editor_key(&mut editor, KeyCode::Tab);
+    editor.paste("2048").unwrap();
+    editor_key(&mut editor, KeyCode::Tab);
+    editor_key(&mut editor, KeyCode::Tab);
+    editor_key(&mut editor, KeyCode::Left);
+    editor_key(&mut editor, KeyCode::Tab);
+    editor_key(&mut editor, KeyCode::Right);
+    editor_key(&mut editor, KeyCode::Right);
+    let EditorAction::Save(update) = editor_key(&mut editor, KeyCode::Enter) else {
+        panic!("expected an editable model update");
     };
-    assert_eq!(profile.model, "first/model");
-    assert_eq!(profile.context_window_tokens, 65_536);
-    assert_eq!(profile.max_output_tokens, 2_048);
+    assert_eq!(update.target, editable_card().target);
+    assert_eq!(update.expected_revision, 7);
+    assert_eq!(update.expected_binding, editable_card().binding);
+    assert_eq!(update.overrides.context_window_tokens, None);
+    assert_eq!(update.overrides.input_budget_tokens, Some(48_000));
+    assert_eq!(update.overrides.max_output_tokens, Some(2_048));
+    assert_eq!(update.overrides.streaming, Some(ModelFeatureMode::Off));
+    assert_eq!(update.overrides.image_inputs, Some(ModelFeatureMode::On));
+    editor_key(&mut editor, KeyCode::Tab);
+    editor_key(&mut editor, KeyCode::Tab);
     browser.editor = Some(editor);
     state.overlay = Some(Overlay::ModelCatalog(Box::new(browser)));
     let mut terminal = ratatui::Terminal::new(TestBackend::new(40, 12)).unwrap();
@@ -122,7 +181,72 @@ fn discovered_model_editor_renders_both_limits_in_a_compact_terminal() {
         .draw(|frame| render(frame, &state, frame.area()))
         .unwrap();
     let screen = terminal.backend().to_string();
-    for visible in ["Configure model", "65536", "2048", "Use in conversation"] {
+    for visible in [
+        "Configure model",
+        "Image inputs",
+        "Server compaction",
+        "Reasoning effort",
+        "Save and use",
+    ] {
         assert!(screen.contains(visible), "{screen}");
     }
+}
+
+#[test]
+fn saved_discoveries_can_be_selected_before_the_first_provider_request() {
+    let mut browser = ModelCatalogState::new(1);
+    let saved = editable_card();
+    let target = saved.target.clone();
+    browser.update(ModelCatalogUpdate::Overview(Ok(InteractiveModelCatalog {
+        providers: vec!["first".into()],
+        saved: vec![saved],
+        supports_model_cards: true,
+        ..InteractiveModelCatalog::default()
+    })));
+    browser.paste("discovered model");
+    assert!(matches!(
+        browser.activate_row(),
+        CatalogAction::Select(ModelCatalogSelection::Saved(selected))
+            if selected.target == target && selected.binding == editable_card().binding
+    ));
+    let edit = browser.browse_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+    assert!(matches!(edit, CatalogAction::Edit(selected) if selected == target));
+    assert!(!browser.groups["first"].loaded && !browser.groups["first"].loading);
+    browser.loading_editor = Some((4, target));
+    browser.update(ModelCatalogUpdate::Card {
+        request: 3,
+        result: Ok(Box::new(editable_card())),
+    });
+    assert!(browser.editor.is_none());
+    browser.update(ModelCatalogUpdate::Card {
+        request: 4,
+        result: Ok(Box::new(editable_card())),
+    });
+    assert!(browser.editor.is_some());
+}
+
+#[test]
+fn a_legacy_worker_can_still_select_one_of_its_discovered_models() {
+    let mut browser = ModelCatalogState::new(1);
+    browser.update(ModelCatalogUpdate::Overview(Ok(InteractiveModelCatalog {
+        providers: vec!["first".into()],
+        ..InteractiveModelCatalog::default()
+    })));
+    browser.groups.get_mut("first").unwrap().expanded = true;
+    browser.update(ModelCatalogUpdate::Provider {
+        profile: "first".into(),
+        result: Ok(vec![ProviderModelInfo {
+            context_window_tokens: Some(1_024),
+            max_output_tokens: Some(512),
+            ..card("first/model")
+        }]),
+    });
+    browser.selected = browser.rows.len() - 1;
+    assert!(matches!(
+        browser.activate_row(),
+        CatalogAction::Select(ModelCatalogSelection::Discovered(profile))
+            if profile.model == "first/model"
+                && profile.context_window_tokens == 1_024
+                && profile.max_output_tokens == 511
+    ));
 }
